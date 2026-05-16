@@ -167,8 +167,8 @@ func (s *Service) Publish(ctx context.Context, subject string, data []byte, opts
 	}, opts...)
 
 	values := map[string]any{
-		"data":                       data,
-		events.HeaderEnqueuedAt:      time.Now().UTC().Format(time.RFC3339Nano),
+		"data":                  data,
+		events.HeaderEnqueuedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	if resolved.MessageID != "" {
 		values[events.HeaderMessageID] = resolved.MessageID

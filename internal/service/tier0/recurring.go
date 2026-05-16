@@ -53,11 +53,11 @@ func NewRecurringDetector() *RecurringDetector {
 	return &RecurringDetector{
 		localPartRegex: defaultRecurringRegex,
 		extraDomains: map[string]struct{}{
-			"mailer-daemon":               {},
-			"daemon":                      {},
-			"bounce":                      {},
-			"bounce-no-reply":             {},
-			"postmaster":                  {},
+			"mailer-daemon":                 {},
+			"daemon":                        {},
+			"bounce":                        {},
+			"bounce-no-reply":               {},
+			"postmaster":                    {},
 			"sender_address_does_not_exist": {},
 		},
 	}

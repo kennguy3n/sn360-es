@@ -62,21 +62,21 @@ type Config struct {
 	Environment Environment
 	AppName     string
 
-	Log       Log
-	HTTP      HTTP
-	EventBus  EventBusType
-	NATS      NATS
-	Redis     Redis
-	Postgres  Postgres
-	AWS       AWS
-	Rspamd    Rspamd
-	AI        AI
-	Tier1     Tier1
-	Tier0     Tier0
-	CB        CircuitBreaker
-	Privacy   Privacy
-	Banner    Banner
-	Score     ScoreThresholds
+	Log        Log
+	HTTP       HTTP
+	EventBus   EventBusType
+	NATS       NATS
+	Redis      Redis
+	Postgres   Postgres
+	AWS        AWS
+	Rspamd     Rspamd
+	AI         AI
+	Tier1      Tier1
+	Tier0      Tier0
+	CB         CircuitBreaker
+	Privacy    Privacy
+	Banner     Banner
+	Score      ScoreThresholds
 	URLRewrite URLRewrite
 }
 
@@ -125,17 +125,17 @@ type NATS struct {
 
 // Redis carries Redis client + optional event-bus config.
 type Redis struct {
-	Addr              string
-	Password          string
-	DB                int
-	PoolSize          int
-	MinIdleConns      int
-	DialTimeout       time.Duration
-	ReadTimeout       time.Duration
-	WriteTimeout      time.Duration
-	ReconnectTimeout  time.Duration
-	MinRetryBackoff   time.Duration
-	ConsumerBlock     time.Duration
+	Addr             string
+	Password         string
+	DB               int
+	PoolSize         int
+	MinIdleConns     int
+	DialTimeout      time.Duration
+	ReadTimeout      time.Duration
+	WriteTimeout     time.Duration
+	ReconnectTimeout time.Duration
+	MinRetryBackoff  time.Duration
+	ConsumerBlock    time.Duration
 }
 
 // Postgres carries database connection config.
@@ -186,18 +186,18 @@ type AI struct {
 
 // Tier1 configures the Tier 1 (encoder) client.
 type Tier1 struct {
-	URL            string
-	Timeout        time.Duration
-	BatchSize      int
-	PassThreshold  int
-	FlagThreshold  int
+	URL           string
+	Timeout       time.Duration
+	BatchSize     int
+	PassThreshold int
+	FlagThreshold int
 }
 
 // Tier0 controls the Tier 0 classification gates.
 type Tier0 struct {
-	SkipInternal       bool
-	SkipVendor         bool
-	SkipRecurring      bool
+	SkipInternal         bool
+	SkipVendor           bool
+	SkipRecurring        bool
 	HighVolumeRspamdOnly bool
 }
 
@@ -222,11 +222,11 @@ type Banner struct {
 
 // ScoreThresholds defines the default per-tier score boundaries.
 type ScoreThresholds struct {
-	Blocked    int
-	HighRisk   int
-	Warning    int
-	Caution    int
-	Info       int
+	Blocked  int
+	HighRisk int
+	Warning  int
+	Caution  int
+	Info     int
 }
 
 // URLRewrite configures the URL-rewriter interstitial.

@@ -54,12 +54,12 @@ type LabelProvider interface {
 
 // LabelApplyRequest is the input to LabelApplier.Apply.
 type LabelApplyRequest struct {
-	Tenant         string
-	Provider       LabelProviderKind
-	Email          string
-	MessageID      string
-	NewTier        constant.Tier
-	PreviousTier   constant.Tier // empty / Trusted when not transitioning
+	Tenant          string
+	Provider        LabelProviderKind
+	Email           string
+	MessageID       string
+	NewTier         constant.Tier
+	PreviousTier    constant.Tier // empty / Trusted when not transitioning
 	PrimaryCategory constant.Category
 }
 

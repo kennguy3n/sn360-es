@@ -120,7 +120,7 @@ type RewriteRequest struct {
 
 // RewriteResult records what changed.
 type RewriteResult struct {
-	HTMLBody    string
+	HTMLBody     string
 	RewriteCount int
 	// URLHashes lists the hashes of original URLs that were
 	// rewritten. Useful for telemetry; carries no PII.

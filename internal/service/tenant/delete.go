@@ -22,11 +22,11 @@ type AuditWriter interface {
 
 // AuditEvent is the canonical audit-log shape.
 type AuditEvent struct {
-	TenantID  string         `json:"tenant_id"`
-	Action    string         `json:"action"`
-	OccurredAt time.Time     `json:"occurred_at"`
-	Actor     string         `json:"actor,omitempty"`
-	Details   map[string]any `json:"details,omitempty"`
+	TenantID   string         `json:"tenant_id"`
+	Action     string         `json:"action"`
+	OccurredAt time.Time      `json:"occurred_at"`
+	Actor      string         `json:"actor,omitempty"`
+	Details    map[string]any `json:"details,omitempty"`
 }
 
 // TenantWriter marks a tenant as deleted in the canonical metadata
@@ -38,11 +38,11 @@ type TenantWriter interface {
 
 // DeleteServiceConfig holds the inputs to NewDeleteService.
 type DeleteServiceConfig struct {
-	Eraser      *privacy.Eraser
-	Tenants     TenantWriter
-	Audit       AuditWriter
-	Actor       string
-	Logger      *slog.Logger
+	Eraser  *privacy.Eraser
+	Tenants TenantWriter
+	Audit   AuditWriter
+	Actor   string
+	Logger  *slog.Logger
 }
 
 // DeleteService orchestrates cryptographic erasure plus metadata cleanup
@@ -90,15 +90,15 @@ func (s *DeleteService) Delete(ctx context.Context, tenantID, reason string) err
 	}
 	if s.cfg.Audit != nil {
 		_ = s.cfg.Audit.Write(ctx, AuditEvent{
-			TenantID:  tenantID,
-			Action:    "tenant.deleted",
+			TenantID:   tenantID,
+			Action:     "tenant.deleted",
 			OccurredAt: now,
-			Actor:     s.cfg.Actor,
+			Actor:      s.cfg.Actor,
 			Details: map[string]any{
-				"reason":        reason,
-				"hooks_run":     rec.HooksRun,
-				"started_at":    rec.StartedAt,
-				"completed_at":  rec.CompletedAt,
+				"reason":       reason,
+				"hooks_run":    rec.HooksRun,
+				"started_at":   rec.StartedAt,
+				"completed_at": rec.CompletedAt,
 			},
 		})
 	}

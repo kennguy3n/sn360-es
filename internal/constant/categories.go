@@ -9,22 +9,22 @@ package constant
 type Category string
 
 const (
-	CategoryLikelyPhishing            Category = "LIKELY_PHISHING"
-	CategoryBECImpersonation          Category = "BEC_IMPERSONATION"
-	CategoryLookalikeDomain           Category = "LOOKALIKE_DOMAIN"
-	CategorySuspiciousURL             Category = "SUSPICIOUS_URL"
-	CategorySuspiciousAttachment      Category = "SUSPICIOUS_ATTACHMENT"
-	CategoryFirstContactExternal      Category = "FIRST_CONTACT_EXTERNAL"
-	CategoryAccountTakeoverSuspected  Category = "ACCOUNT_TAKEOVER_SUSPECTED"
-	CategoryVendorCompromise          Category = "VENDOR_COMPROMISE"
-	CategoryCredentialHarvesting      Category = "CREDENTIAL_HARVESTING"
-	CategoryInvoiceFraud              Category = "INVOICE_FRAUD"
-	CategoryQRPhishing                Category = "QR_PHISHING"
-	CategoryScamFraud                 Category = "SCAM_FRAUD"
-	CategoryAuthFailed                Category = "AUTH_FAILED"
-	CategoryInternalTrusted           Category = "INTERNAL_TRUSTED"
-	CategoryVendorTrusted             Category = "VENDOR_TRUSTED"
-	CategoryNewsletter                Category = "NEWSLETTER"
+	CategoryLikelyPhishing           Category = "LIKELY_PHISHING"
+	CategoryBECImpersonation         Category = "BEC_IMPERSONATION"
+	CategoryLookalikeDomain          Category = "LOOKALIKE_DOMAIN"
+	CategorySuspiciousURL            Category = "SUSPICIOUS_URL"
+	CategorySuspiciousAttachment     Category = "SUSPICIOUS_ATTACHMENT"
+	CategoryFirstContactExternal     Category = "FIRST_CONTACT_EXTERNAL"
+	CategoryAccountTakeoverSuspected Category = "ACCOUNT_TAKEOVER_SUSPECTED"
+	CategoryVendorCompromise         Category = "VENDOR_COMPROMISE"
+	CategoryCredentialHarvesting     Category = "CREDENTIAL_HARVESTING"
+	CategoryInvoiceFraud             Category = "INVOICE_FRAUD"
+	CategoryQRPhishing               Category = "QR_PHISHING"
+	CategoryScamFraud                Category = "SCAM_FRAUD"
+	CategoryAuthFailed               Category = "AUTH_FAILED"
+	CategoryInternalTrusted          Category = "INTERNAL_TRUSTED"
+	CategoryVendorTrusted            Category = "VENDOR_TRUSTED"
+	CategoryNewsletter               Category = "NEWSLETTER"
 )
 
 // AllCategories lists every category in a fixed order. Tests iterate this

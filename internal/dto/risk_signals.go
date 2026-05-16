@@ -10,11 +10,11 @@ package dto
 type RelationshipCategory string
 
 const (
-	RelationshipUnknown          RelationshipCategory = ""
-	RelationshipPartner          RelationshipCategory = "Partner"
-	RelationshipCustomer         RelationshipCategory = "Customer"
+	RelationshipUnknown           RelationshipCategory = ""
+	RelationshipPartner           RelationshipCategory = "Partner"
+	RelationshipCustomer          RelationshipCategory = "Customer"
 	RelationshipFirstTimeExternal RelationshipCategory = "FirstTimeExternal"
-	RelationshipLapsedContact    RelationshipCategory = "LapsedContact"
+	RelationshipLapsedContact     RelationshipCategory = "LapsedContact"
 )
 
 // Valid reports whether r is one of the known relationship categories.
@@ -52,19 +52,19 @@ func (r RelationshipCategory) Valid() bool {
 //   - HasFailedAuth: SPF, DKIM, or DMARC failed.
 //   - HasQuotaSpike: sender's send rate exceeds historical baseline.
 type RiskSignals struct {
-	IsExternal         bool `json:"is_external"`
-	IsInternal         bool `json:"is_internal"`
-	IsFromVendor       bool `json:"is_from_vendor"`
-	IsFreeDomain       bool `json:"is_free_domain"`
-	IsDisposableDomain bool `json:"is_disposable_domain"`
-	IsHighVolumeSender bool `json:"is_high_volume_sender"`
-	IsRecurringService bool `json:"is_recurring_service"`
-	HasAttachment      bool `json:"has_attachment"`
-	HasSuspiciousURL   bool `json:"has_suspicious_url"`
+	IsExternal              bool `json:"is_external"`
+	IsInternal              bool `json:"is_internal"`
+	IsFromVendor            bool `json:"is_from_vendor"`
+	IsFreeDomain            bool `json:"is_free_domain"`
+	IsDisposableDomain      bool `json:"is_disposable_domain"`
+	IsHighVolumeSender      bool `json:"is_high_volume_sender"`
+	IsRecurringService      bool `json:"is_recurring_service"`
+	HasAttachment           bool `json:"has_attachment"`
+	HasSuspiciousURL        bool `json:"has_suspicious_url"`
 	HasSuspiciousAttachment bool `json:"has_suspicious_attachment"`
-	HasLookalikeDomain bool `json:"has_lookalike_domain"`
-	HasFailedAuth      bool `json:"has_failed_auth"`
-	HasQuotaSpike      bool `json:"has_quota_spike"`
+	HasLookalikeDomain      bool `json:"has_lookalike_domain"`
+	HasFailedAuth           bool `json:"has_failed_auth"`
+	HasQuotaSpike           bool `json:"has_quota_spike"`
 
 	// Set by Tier 0 / prefilter when specific content classes are detected.
 	HasQRCode        bool `json:"has_qr_code,omitempty"`

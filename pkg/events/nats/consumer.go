@@ -266,8 +266,8 @@ type message struct {
 	terminal bool
 }
 
-func (m *message) Data() []byte     { return m.raw.Data() }
-func (m *message) Subject() string  { return m.raw.Subject() }
+func (m *message) Data() []byte    { return m.raw.Data() }
+func (m *message) Subject() string { return m.raw.Subject() }
 
 func (m *message) Headers() map[string]string {
 	out := map[string]string{}

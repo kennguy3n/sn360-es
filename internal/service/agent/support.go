@@ -14,9 +14,9 @@ import (
 
 // SupportConfig wires the support agent's dependencies.
 type SupportConfig struct {
-	Lookup   EvaluationLookup
-	Audit    AuditLog
-	Events   EventPublisher
+	Lookup EvaluationLookup
+	Audit  AuditLog
+	Events EventPublisher
 	// SecOpsSubject is the NATS subject for low-confidence escalations
 	// (default "es.action.escalate.secops").
 	SecOpsSubject string

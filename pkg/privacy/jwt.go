@@ -33,11 +33,11 @@ type JWTConfig struct {
 // tokens. The intent is to carry zero PII so a leaked token cannot be
 // used to enumerate users or messages from a third party.
 type ActionClaims struct {
-	TenantID              string `json:"tid"`
-	PseudonymizedMessage  string `json:"pmid"`
-	Tier                  string `json:"tier,omitempty"`
-	Action                string `json:"act,omitempty"`
-	OriginalURLHash       string `json:"urlh,omitempty"`
+	TenantID             string `json:"tid"`
+	PseudonymizedMessage string `json:"pmid"`
+	Tier                 string `json:"tier,omitempty"`
+	Action               string `json:"act,omitempty"`
+	OriginalURLHash      string `json:"urlh,omitempty"`
 	jwt.RegisteredClaims
 }
 

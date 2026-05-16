@@ -84,13 +84,13 @@ func (a *OnboardingAgent) Name() string { return "onboarding" }
 // OnboardingResult captures everything the agent did during a single
 // run. Returned for tests + audit consumers.
 type OnboardingResult struct {
-	TenantID       string
-	UsersDiscovered int
+	TenantID         string
+	UsersDiscovered  int
 	GroupsDiscovered int
-	LabelsApplied  int
-	VendorsSeeded  int
-	StartedAt      time.Time
-	CompletedAt    time.Time
+	LabelsApplied    int
+	VendorsSeeded    int
+	StartedAt        time.Time
+	CompletedAt      time.Time
 }
 
 // Onboard executes the full onboarding flow for tctx.
@@ -227,10 +227,10 @@ func (a *OnboardingAgent) publishVendorSeed(ctx context.Context, tctx TenantCont
 		return nil
 	}
 	payload := map[string]any{
-		"tenant_id":  tctx.TenantID,
-		"domain":     c.Domain,
-		"confidence": c.Confidence,
-		"seen_count": c.SeenCount,
+		"tenant_id":   tctx.TenantID,
+		"domain":      c.Domain,
+		"confidence":  c.Confidence,
+		"seen_count":  c.SeenCount,
 		"occurred_at": time.Now().UTC(),
 	}
 	blob, err := json.Marshal(payload)
@@ -256,12 +256,12 @@ func indexGroups(groups []DiscoveredGroup) map[string]DiscoveredGroup {
 //
 // Sensitivity matrix (in priority order):
 //
-//   * C-suite, founders, owners → Max
-//   * Finance, treasury, AP/AR → High
-//   * HR, legal, compliance → High
-//   * Admin assistants, executive assistants → Elevated
-//   * Procurement, vendor management → Elevated
-//   * Everyone else → Default
+//   - C-suite, founders, owners → Max
+//   - Finance, treasury, AP/AR → High
+//   - HR, legal, compliance → High
+//   - Admin assistants, executive assistants → Elevated
+//   - Procurement, vendor management → Elevated
+//   - Everyone else → Default
 func ClassifyUserSensitivity(u DiscoveredUser, groups map[string]DiscoveredGroup) Sensitivity {
 	hay := strings.ToLower(u.JobTitle + " " + u.Department + " " + u.DisplayName)
 	for _, gID := range u.GroupIDs {

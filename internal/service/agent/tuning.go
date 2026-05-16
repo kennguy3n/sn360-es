@@ -141,10 +141,10 @@ func (a *TuningAgent) Tune(ctx context.Context, tenantID string) (TuningDecision
 			Reason:     summariseNotes(decision.Notes),
 			OccurredAt: now,
 			Detail: map[string]any{
-				"total":        snap.TotalEvaluations,
-				"fp":           snap.FalsePositives,
-				"fn":           snap.FalseNegatives,
-				"new_weights":  decision.NewWeights,
+				"total":          snap.TotalEvaluations,
+				"fp":             snap.FalsePositives,
+				"fn":             snap.FalseNegatives,
+				"new_weights":    decision.NewWeights,
 				"new_thresholds": decision.NewThresholds,
 			},
 		})

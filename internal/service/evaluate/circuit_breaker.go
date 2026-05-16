@@ -64,8 +64,8 @@ type CircuitBreaker struct {
 	openedAt            time.Time
 
 	// totals are atomics so metrics can be sampled without taking the lock.
-	totalSuccess  atomic.Uint64
-	totalFailure  atomic.Uint64
+	totalSuccess      atomic.Uint64
+	totalFailure      atomic.Uint64
 	totalShortCircuit atomic.Uint64
 }
 

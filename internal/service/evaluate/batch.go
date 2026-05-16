@@ -287,9 +287,9 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 			if err == nil {
 				res = full
 			} else {
-					o.log.Warn("evaluate: fallback failed",
-						slog.String("err", err.Error()),
-						slog.String("message_id", pendings[idx].req.MessageID))
+				o.log.Warn("evaluate: fallback failed",
+					slog.String("err", err.Error()),
+					slog.String("message_id", pendings[idx].req.MessageID))
 			}
 		}
 		if err := o.publishResult(ctx, res); err != nil {

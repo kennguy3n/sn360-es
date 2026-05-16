@@ -33,8 +33,8 @@ type EvaluateRequest struct {
 
 	// RawBodyHash is the SHA-256 of the canonical raw body; used as cache
 	// key for Rspamd and AI results.
-	RawBodyHash      string `json:"raw_body_hash,omitempty"`
-	NormalisedHash   string `json:"normalised_hash,omitempty"`
+	RawBodyHash    string `json:"raw_body_hash,omitempty"`
+	NormalisedHash string `json:"normalised_hash,omitempty"`
 
 	// Signals contains the prefilter risk signals — see RiskSignals.
 	Signals RiskSignals `json:"signals"`
@@ -67,10 +67,10 @@ type EvaluateResult struct {
 
 	// Per-stage scores. Each is 0-100 except where noted. Nil pointer
 	// indicates the stage was skipped or unavailable.
-	Tier0    *Tier0Outcome    `json:"tier0,omitempty"`
-	Tier1    *Tier1Outcome    `json:"tier1,omitempty"`
-	Tier2    *Tier2Outcome    `json:"tier2,omitempty"`
-	Rspamd   *RspamdOutcome   `json:"rspamd,omitempty"`
+	Tier0  *Tier0Outcome  `json:"tier0,omitempty"`
+	Tier1  *Tier1Outcome  `json:"tier1,omitempty"`
+	Tier2  *Tier2Outcome  `json:"tier2,omitempty"`
+	Rspamd *RspamdOutcome `json:"rspamd,omitempty"`
 
 	// ReasonCodes are compact tokens (e.g. "lookalike_domain",
 	// "auth_failed_dmarc") explaining why this verdict was reached.
@@ -107,14 +107,14 @@ type Tier0Outcome struct {
 
 // Tier1Outcome is the encoder's structured output.
 type Tier1Outcome struct {
-	Score       int     `json:"score"`
-	Confidence  float64 `json:"confidence"`
-	Language    string  `json:"language,omitempty"`
-	ModelName   string  `json:"model_name,omitempty"`
-	Pass        bool    `json:"pass"`
-	Flag        bool    `json:"flag"`
-	Escalate    bool    `json:"escalate"`
-	LatencyMs   int64   `json:"latency_ms"`
+	Score      int     `json:"score"`
+	Confidence float64 `json:"confidence"`
+	Language   string  `json:"language,omitempty"`
+	ModelName  string  `json:"model_name,omitempty"`
+	Pass       bool    `json:"pass"`
+	Flag       bool    `json:"flag"`
+	Escalate   bool    `json:"escalate"`
+	LatencyMs  int64   `json:"latency_ms"`
 }
 
 // Tier2Outcome is the LLM / SLM verdict.
@@ -129,9 +129,9 @@ type Tier2Outcome struct {
 
 // RspamdOutcome captures the Rspamd response.
 type RspamdOutcome struct {
-	Score     float64           `json:"score"`
-	Threshold float64           `json:"threshold"`
-	Action    string            `json:"action,omitempty"`
+	Score     float64            `json:"score"`
+	Threshold float64            `json:"threshold"`
+	Action    string             `json:"action,omitempty"`
 	Symbols   map[string]float64 `json:"symbols,omitempty"`
-	LatencyMs int64             `json:"latency_ms"`
+	LatencyMs int64              `json:"latency_ms"`
 }

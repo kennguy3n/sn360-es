@@ -64,15 +64,15 @@ func (c TenantContext) Validate() error {
 // struct so downstream consumers (label applier, role classifier) need
 // only handle one type.
 type DiscoveredUser struct {
-	ID            string
-	Email         string
-	DisplayName   string
-	Department    string
-	JobTitle      string
-	IsAdmin       bool
-	IsSuspended   bool
-	GroupIDs      []string
-	ManagerID     string
+	ID          string
+	Email       string
+	DisplayName string
+	Department  string
+	JobTitle    string
+	IsAdmin     bool
+	IsSuspended bool
+	GroupIDs    []string
+	ManagerID   string
 	// SensitivityHint is the per-role sensitivity boost applied during
 	// onboarding (e.g. C-suite / Finance / HR get higher sensitivity).
 	SensitivityHint Sensitivity
@@ -135,13 +135,13 @@ type Feedback struct {
 // TuningSnapshot captures the inputs to a tuning decision: aggregate
 // FP/FN counts plus the prior weights so the decision is deterministic.
 type TuningSnapshot struct {
-	TenantID         string
-	WindowStart      time.Time
-	WindowEnd        time.Time
-	TotalEvaluations int
-	FalsePositives   int
-	FalseNegatives   int
-	CurrentWeights   ScoreWeights
+	TenantID          string
+	WindowStart       time.Time
+	WindowEnd         time.Time
+	TotalEvaluations  int
+	FalsePositives    int
+	FalseNegatives    int
+	CurrentWeights    ScoreWeights
 	CurrentThresholds Thresholds
 }
 
@@ -175,12 +175,12 @@ type TuningDecision struct {
 
 // SupportQuery is the inbound shape a user sends to the support agent.
 type SupportQuery struct {
-	TenantID    string
-	UserEmail   string
-	MessageID   string
-	Question    string
-	Action      string // "explain", "release", "escalate"
-	Locale      string
+	TenantID  string
+	UserEmail string
+	MessageID string
+	Question  string
+	Action    string // "explain", "release", "escalate"
+	Locale    string
 }
 
 // SupportReply is the structured answer the support agent emits.
@@ -216,9 +216,9 @@ type VendorScanner interface {
 // VendorCandidate is a sender promoted to the vendor allowlist on first
 // onboarding. Real CRM-driven workflows can override this later.
 type VendorCandidate struct {
-	Domain   string
+	Domain     string
 	Confidence float64
-	SeenCount int
+	SeenCount  int
 }
 
 // LabelApplier creates / applies tier labels per mailbox. The signature

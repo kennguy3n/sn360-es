@@ -20,15 +20,15 @@ import (
 // AIResult is the cached AI verdict. It is intentionally minimal so the
 // cache stays small and the schema is stable.
 type AIResult struct {
-	Tier        constant.Tier      `json:"tier"`
-	Category    constant.Category  `json:"category"`
+	Tier        constant.Tier       `json:"tier"`
+	Category    constant.Category   `json:"category"`
 	Secondary   []constant.Category `json:"secondary,omitempty"`
-	Score       int                `json:"score"`
-	Confidence  float64            `json:"confidence,omitempty"`
-	ReasonCodes []string           `json:"reason_codes,omitempty"`
-	Language    string             `json:"language,omitempty"`
-	ModelTag    string             `json:"model_tag,omitempty"`
-	StoredAt    time.Time          `json:"stored_at"`
+	Score       int                 `json:"score"`
+	Confidence  float64             `json:"confidence,omitempty"`
+	ReasonCodes []string            `json:"reason_codes,omitempty"`
+	Language    string              `json:"language,omitempty"`
+	ModelTag    string              `json:"model_tag,omitempty"`
+	StoredAt    time.Time           `json:"stored_at"`
 }
 
 // AICacheConfig configures AICache.

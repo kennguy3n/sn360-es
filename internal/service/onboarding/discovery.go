@@ -80,16 +80,16 @@ type OrgGraph struct {
 
 // Employee is the projected node for a single user.
 type Employee struct {
-	ID           string
-	Email        string
-	DisplayName  string
-	Department   string
-	JobTitle     string
-	ManagerID    string
-	Reports      []string
-	Groups       []string
-	IsHighRisk   bool
-	Sensitivity  agent.Sensitivity
+	ID          string
+	Email       string
+	DisplayName string
+	Department  string
+	JobTitle    string
+	ManagerID   string
+	Reports     []string
+	Groups      []string
+	IsHighRisk  bool
+	Sensitivity agent.Sensitivity
 }
 
 // Group is the projected node for a directory group.
