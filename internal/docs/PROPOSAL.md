@@ -297,7 +297,7 @@ Thresholds (configurable per tenant via score engine):
 
 **Tier 2 escalation rate: 10-20% of Tier 1 input.**
 
-### Tier 2 — Full LLM (cost: ~$0.001-0.01, latency: 2-10s)
+### Tier 2 — Full LLM (cost: ~$0.001-0.005, latency: 2-5s)
 
 Current AI service, invoked only for ambiguous emails:
 - Full contextual analysis with aspect-level reasoning
