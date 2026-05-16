@@ -24,7 +24,12 @@ function sn360HomepageTrigger() {
 
 function sn360PreSendTrigger(e) {
   var tenantId = tenantIdFromUser_();
-  var draft = e && e.gmail ? e.gmail.draftMetadata : null;
+  // Workspace Add-on compose triggers deliver the draft metadata at
+  // the top level (e.draftMetadata). e.gmail.* is only populated for
+  // contextual (message-read) triggers, so the previous lookup never
+  // matched anything and the pre-send card was never shown. We keep
+  // the e.gmail fallback so any classic Add-on deployment still works.
+  var draft = e ? (e.draftMetadata || (e.gmail && e.gmail.draftMetadata)) : null;
   if (!draft || !draft.toRecipients) return [];
   var senderEmail = Session.getActiveUser().getEmail();
   var recipients = (draft.toRecipients || []).concat(draft.ccRecipients || []);
