@@ -224,7 +224,13 @@ func (s *Span) SetError(err error) {
 	s.data.Err = err.Error()
 }
 
-// End closes the span and pushes it to the exporter.
+// End closes the span and pushes it to the exporter when the
+// sampling decision recorded in StartSpan was positive. Unsampled
+// spans are still created and propagated via SpanContext (the W3C
+// traceparent header) so downstream services can join the trace, but
+// the body of the span never reaches the exporter — matching the
+// OpenTelemetry semantic that ProbabilitySampler / NeverOn should
+// reduce export volume rather than just flip a wire flag.
 func (s *Span) End() {
 	if s == nil {
 		return
@@ -241,7 +247,11 @@ func (s *Span) End() {
 		s.data.Status = "ok"
 	}
 	cp := s.data
+	sampled := s.sampled
 	s.mu.Unlock()
+	if !sampled {
+		return
+	}
 	if s.tracer != nil && s.tracer.cfg.Exporter != nil {
 		s.tracer.cfg.Exporter.ExportSpan(cp)
 	}

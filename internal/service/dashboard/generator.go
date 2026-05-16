@@ -164,9 +164,14 @@ func DeterministicNarrative(s dto.DashboardSummary) string {
 	if s.EmailsProcessed == 0 {
 		return "SN360 processed no email traffic in this window. No threats observed."
 	}
+	// Compare on a normalised key so this works for both the canonical
+	// constant.Tier values ("Blocked", "HighRisk", "Warning") that the
+	// production metrics source emits and the lowercase / snake_case
+	// variants used in tests and add-in payloads.
 	threats := 0
 	for _, t := range s.ThreatsByTier {
-		if t.Tier == "blocked" || t.Tier == "high_risk" || t.Tier == "warning" {
+		switch strings.ToLower(t.Tier) {
+		case "blocked", "highrisk", "high_risk", "warning":
 			threats += t.Count
 		}
 	}
