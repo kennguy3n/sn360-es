@@ -52,11 +52,23 @@ type RecipientRequest struct {
 }
 
 // RecipientCandidate represents a single recipient under consideration.
+//
+// IsKnownContact is a pointer so callers can distinguish three states:
+//   - nil      → caller does not know (e.g. add-ins that have no
+//     contact-store access). The server treats this as "no signal"
+//     and does NOT emit unusual_external_recipient.
+//   - &false   → caller has explicit signal that this is NOT a known
+//     contact; emit unusual_external_recipient on external recipients.
+//   - &true    → caller has explicit signal that this IS a known
+//     contact; suppress unusual_external_recipient even on externals.
+//
+// Treating "unknown" as "not a contact" would warn on every external
+// recipient and flood the response payload with low-signal cautions.
 type RecipientCandidate struct {
-	UserHash string `json:"user_hash"`
-	Domain   string `json:"domain"`
-	IsExternal bool `json:"is_external"`
-	IsKnownContact bool `json:"is_known_contact"`
+	UserHash       string `json:"user_hash"`
+	Domain         string `json:"domain"`
+	IsExternal     bool   `json:"is_external"`
+	IsKnownContact *bool  `json:"is_known_contact,omitempty"`
 }
 
 // RecipientWarning is the per-recipient finding returned to the add-in.
@@ -146,8 +158,12 @@ func (s *RecipientService) checkRecipient(ctx context.Context, req RecipientRequ
 			Message:  "You're adding an external recipient to a previously internal thread.",
 		}
 	}
-	// Unusual external recipient (no prior contact history).
-	if r.IsExternal && !r.IsKnownContact {
+	// Unusual external recipient (no prior contact history). Only emit
+	// when the caller has explicit signal that this is NOT a known
+	// contact. Callers without contact-store access (e.g. add-ins)
+	// should omit the field; treating "unknown" as "not a contact"
+	// would warn on every external recipient.
+	if r.IsExternal && r.IsKnownContact != nil && !*r.IsKnownContact {
 		return RecipientWarning{
 			UserHash: r.UserHash,
 			Level:    WarnCaution,

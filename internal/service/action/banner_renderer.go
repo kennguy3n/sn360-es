@@ -317,13 +317,20 @@ const bannerCSS = `.sn360-banner{font-family:-apple-system,BlinkMacSystemFont,Se
 // Accessibility:
 //   - role attribute is "alert" for Blocked/HighRisk and "status" for
 //     softer tiers so assistive tech announces severity immediately.
+//     We intentionally do NOT set aria-live: role="alert" has an
+//     implicit aria-live="assertive" + aria-atomic="true" and
+//     role="status" has an implicit aria-live="polite", so the implicit
+//     behavior is exactly what we want. Setting aria-live="polite"
+//     explicitly would override the assertive behavior of "alert" and
+//     cause Blocked/HighRisk banners to be queued instead of
+//     interrupting screen readers.
 //   - aria-label on the root mirrors the visible severity headline.
 //   - aria-hidden on the icon glyph so screen readers don't speak it.
 //   - dir attribute is set explicitly for RTL locales.
 //   - Focus order follows reading order: title -> body -> reasons ->
 //     auth chip -> action buttons.
 var bannerTemplate = `<style>` + bannerCSS + `</style>
-<div class="{{ .TierClass }}" role="{{ .AriaRole }}" aria-live="polite" aria-label="{{ .AriaLabel }}" dir="{{ .Dir }}" data-sn360-tier="{{ .Tier }}" data-sn360-locale="{{ .Locale }}">
+<div class="{{ .TierClass }}" role="{{ .AriaRole }}" aria-label="{{ .AriaLabel }}" dir="{{ .Dir }}" data-sn360-tier="{{ .Tier }}" data-sn360-locale="{{ .Locale }}">
   <h1>{{ if .IconGlyph }}<span class="sn360-icon" aria-hidden="true">{{ .IconGlyph }}</span>{{ end }}<span class="sn360-sr-only">{{ .AriaLabel }}: </span>{{ .Title }}</h1>
   <p>{{ .Body }}</p>
   {{ if .PrimaryCopy }}<p><strong>{{ .PrimaryCopy }}</strong></p>{{ end }}

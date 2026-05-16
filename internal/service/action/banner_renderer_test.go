@@ -155,6 +155,11 @@ func TestBannerRendererInjectsDegradedNotice(t *testing.T) {
 //   - aria-label mirrors the localised severity headline.
 //   - icon glyph is aria-hidden (decorative) but conveys severity.
 //   - dir attribute is rendered explicitly (defaults to ltr).
+//   - aria-live is NOT set explicitly: role="alert" has an implicit
+//     aria-live="assertive" and role="status" has an implicit
+//     aria-live="polite", so an explicit attribute would override
+//     the assertive behaviour we want on Blocked / HighRisk. The
+//     negative assertion below locks this in.
 func TestBannerRendererAccessibility(t *testing.T) {
 	r := mustRenderer(t)
 	cases := []struct {
@@ -192,6 +197,15 @@ func TestBannerRendererAccessibility(t *testing.T) {
 			}
 			if !strings.Contains(s, `aria-label="`) {
 				t.Errorf("missing aria-label on root\n%s", s)
+			}
+			// Negative assertion: aria-live must NOT be set explicitly.
+			// role="alert" implies aria-live="assertive" and
+			// role="status" implies aria-live="polite"; setting either
+			// explicitly overrides the implicit behaviour. The previous
+			// template hardcoded aria-live="polite" which silently
+			// downgraded Blocked / HighRisk banners.
+			if strings.Contains(s, "aria-live") {
+				t.Errorf("aria-live should not be set explicitly (role=%q implies it)\n%s", tc.wantRole, s)
 			}
 			if !strings.Contains(s, `dir="ltr"`) {
 				t.Errorf("missing dir=ltr on root\n%s", s)

@@ -37,11 +37,19 @@ function sn360PreSendTrigger(e) {
     tenant_id: tenantId,
     sender_hash: sha256Hex_(tenantId + "|" + senderEmail.toLowerCase()),
     recipients: recipients.map(function (r) {
+      // is_known_contact is intentionally omitted: the Gmail Add-on
+      // API does not expose the user's contact graph cheaply enough
+      // for the 300ms p95 budget. The server treats nil as "no
+      // signal" and suppresses unusual_external_recipient for this
+      // caller; sending false here would instead cause the backend
+      // to emit unusual_external_recipient on every external
+      // recipient (low-signal noise). When a server-side contact
+      // store is wired up later (currently TODO), this client can
+      // keep omitting the field and let the server enrich.
       return {
         user_hash: sha256Hex_(tenantId + "|" + (r || "").toLowerCase()),
         domain: domainOf_(r),
         is_external: !sameDomain_(r, senderEmail),
-        is_known_contact: false,
       };
     }),
     thread_is_internal: false,

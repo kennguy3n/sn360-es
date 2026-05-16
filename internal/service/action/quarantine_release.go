@@ -76,10 +76,16 @@ type ReleaseConfig struct {
 	// ReleaseSubject is the NATS subject used for release outcomes
 	// (default "es.action.quarantine.release").
 	ReleaseSubject string
-	// MinReleaseTier is the lowest tier that still triggers a refusal.
-	// Defaults to TierBlocked: if the new verdict is below blocking,
-	// the message is restored. Configurable so SecOps can tighten the
-	// gate (e.g. require Caution or lower).
+	// MinReleaseTier is the lowest tier severity that still triggers a
+	// refusal. Defaults to TierBlocked. The comparison is inclusive: a
+	// new verdict whose severity is >= MinReleaseTier.Severity() is
+	// refused; verdicts strictly below MinReleaseTier are released.
+	//
+	// SecOps tighten the gate by configuring a less-severe tier: e.g.
+	// MinReleaseTier=TierWarning causes any verdict at Warning, HighRisk,
+	// or Blocked to be refused (only Caution / Informational / Trusted
+	// release). MinReleaseTier=TierTrusted is technically valid but
+	// refuses every release (logged at WARN in NewReleaseService).
 	MinReleaseTier constant.Tier
 }
 
@@ -116,6 +122,15 @@ func NewReleaseService(cfg ReleaseConfig) (*ReleaseService, error) {
 	min := cfg.MinReleaseTier
 	if !min.Valid() {
 		min = constant.TierBlocked
+	}
+	// TierTrusted is severity 0, so isStillBlocked(tier, TierTrusted)
+	// is true for every valid tier — every release request is refused.
+	// This is rarely intended; surface a one-time warning rather than
+	// silently disabling the release flow.
+	if min == constant.TierTrusted {
+		logger.Warn(
+			"release: MinReleaseTier is TierTrusted; every release request will be refused. Verify the SecOps configuration.",
+		)
 	}
 	return &ReleaseService{
 		logger:         logger,
@@ -201,10 +216,12 @@ func (s *ReleaseService) Release(ctx context.Context, req ReleaseRequest) (Relea
 
 // isStillBlocked reports whether tier is still at or above the
 // configured release gate. minTier is inclusive: when the new
-// verdict equals minTier the release is refused. SecOps can tighten
-// the gate by lowering minTier (e.g. require HighRisk or below to
-// release), so the comparison is severity-based and does not depend
-// on whether minTier itself is the Blocked tier.
+// verdict equals minTier the release is refused. SecOps tighten the
+// gate by configuring a less-severe minTier (e.g. TierWarning), in
+// which case any verdict at Warning or worse continues to be blocked
+// and only verdicts strictly below it release. The comparison is
+// severity-based and does not depend on whether minTier itself is the
+// Blocked tier.
 func isStillBlocked(tier, minTier constant.Tier) bool {
 	if !tier.Valid() {
 		// Be conservative: treat invalid verdicts as still blocked.

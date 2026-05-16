@@ -28,12 +28,13 @@ func TestRecipient_LookalikeWins(t *testing.T) {
 }
 
 func TestRecipient_ExternalOnInternalThread(t *testing.T) {
+	known := true
 	svc := NewRecipientService(RecipientServiceConfig{})
 	res, _ := svc.Predict(context.Background(), RecipientRequest{
 		TenantID: "acme",
 		ThreadIsInternal: true,
 		Recipients: []RecipientCandidate{
-			{UserHash: "u1", Domain: "outside.com", IsExternal: true, IsKnownContact: true},
+			{UserHash: "u1", Domain: "outside.com", IsExternal: true, IsKnownContact: &known},
 		},
 	})
 	if res.OverallLevel != WarnWarning {
@@ -45,11 +46,12 @@ func TestRecipient_ExternalOnInternalThread(t *testing.T) {
 }
 
 func TestRecipient_UnusualExternalRecipient(t *testing.T) {
+	notKnown := false
 	svc := NewRecipientService(RecipientServiceConfig{})
 	res, _ := svc.Predict(context.Background(), RecipientRequest{
 		TenantID: "acme",
 		Recipients: []RecipientCandidate{
-			{UserHash: "u1", Domain: "fresh.com", IsExternal: true, IsKnownContact: false},
+			{UserHash: "u1", Domain: "fresh.com", IsExternal: true, IsKnownContact: &notKnown},
 		},
 	})
 	if res.OverallLevel != WarnCaution {
@@ -57,12 +59,34 @@ func TestRecipient_UnusualExternalRecipient(t *testing.T) {
 	}
 }
 
-func TestRecipient_KnownContactNoWarning(t *testing.T) {
+// TestRecipient_UnknownContactStatusNoWarning verifies that omitting
+// IsKnownContact (nil pointer) suppresses unusual_external_recipient.
+// This matches the add-in calling convention: clients that have no
+// way to determine contact status omit the field and let the server
+// fall back to its own contact-store lookup elsewhere.
+func TestRecipient_UnknownContactStatusNoWarning(t *testing.T) {
 	svc := NewRecipientService(RecipientServiceConfig{})
 	res, _ := svc.Predict(context.Background(), RecipientRequest{
 		TenantID: "acme",
 		Recipients: []RecipientCandidate{
-			{UserHash: "u1", Domain: "vendor.com", IsExternal: true, IsKnownContact: true},
+			{UserHash: "u1", Domain: "fresh.com", IsExternal: true, IsKnownContact: nil},
+		},
+	})
+	if res.OverallLevel != WarnNone {
+		t.Fatalf("level: %d want=%d", res.OverallLevel, WarnNone)
+	}
+	if len(res.Warnings) != 0 {
+		t.Fatalf("warnings: %+v", res.Warnings)
+	}
+}
+
+func TestRecipient_KnownContactNoWarning(t *testing.T) {
+	known := true
+	svc := NewRecipientService(RecipientServiceConfig{})
+	res, _ := svc.Predict(context.Background(), RecipientRequest{
+		TenantID: "acme",
+		Recipients: []RecipientCandidate{
+			{UserHash: "u1", Domain: "vendor.com", IsExternal: true, IsKnownContact: &known},
 		},
 	})
 	if res.OverallLevel != WarnNone {

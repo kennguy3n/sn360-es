@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kennguy3n/sn360-es/internal/constant"
 	"github.com/kennguy3n/sn360-es/internal/dto"
 )
 
@@ -164,14 +165,20 @@ func DeterministicNarrative(s dto.DashboardSummary) string {
 	if s.EmailsProcessed == 0 {
 		return "SN360 processed no email traffic in this window. No threats observed."
 	}
-	// Compare on a normalised key so this works for both the canonical
-	// constant.Tier values ("Blocked", "HighRisk", "Warning") that the
-	// production metrics source emits and the lowercase / snake_case
-	// variants used in tests and add-in payloads.
+	// "Threats" = anything at Warning severity or worse. The threshold
+	// is expressed in terms of constant.Tier.Severity() so that adding
+	// a new tier between Warning and HighRisk later automatically
+	// rolls into this count without touching this code. canonicalTier
+	// folds the lowercase / snake_case variants that tests and add-in
+	// payloads sometimes emit back to the canonical PascalCase form.
+	threshold := constant.TierWarning.Severity()
 	threats := 0
 	for _, t := range s.ThreatsByTier {
-		switch strings.ToLower(t.Tier) {
-		case "blocked", "highrisk", "high_risk", "warning":
+		tier := canonicalTier(t.Tier)
+		if tier == "" {
+			continue
+		}
+		if tier.Severity() >= threshold {
 			threats += t.Count
 		}
 	}
@@ -190,4 +197,24 @@ func DeterministicNarrative(s dto.DashboardSummary) string {
 		s.FalsePositive,
 		s.FalseNegative,
 	)
+}
+
+// canonicalTier maps a free-form tier string back to its constant.Tier
+// equivalent. It accepts the canonical PascalCase form ("HighRisk")
+// emitted by the production MetricsSource as well as the lowercase /
+// snake_case variants ("high_risk", "highrisk") used in tests and
+// add-in payloads. Returns "" if the input doesn't match any known
+// tier so callers can decide how to handle unknown tiers (the
+// dashboard treats them as "not a threat" rather than guessing).
+func canonicalTier(raw string) constant.Tier {
+	norm := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(raw)), "_", "")
+	if norm == "" {
+		return ""
+	}
+	for _, t := range constant.AllTiers {
+		if strings.ToLower(string(t)) == norm {
+			return t
+		}
+	}
+	return ""
 }
