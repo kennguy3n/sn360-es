@@ -170,7 +170,13 @@ func (t *Tracer) StartSpan(ctx context.Context, name string, attrs ...Attribute)
 	if hasParent {
 		sampled = parent.Sampled
 	} else {
-		sampled = t.cfg.Sampler.ShouldSample(ctx, name)
+		// Inject a preliminary SpanContext carrying the freshly
+		// generated trace ID so samplers that key off the trace ID
+		// (e.g. ProbabilitySampler) can derive a deterministic
+		// decision for root spans. The Sampled flag is left zero —
+		// the sampler is the one deciding it.
+		sampleCtx := ContextWithSpanContext(ctx, SpanContext{TraceID: traceID, SpanID: spanID})
+		sampled = t.cfg.Sampler.ShouldSample(sampleCtx, name)
 	}
 	sc := SpanContext{TraceID: traceID, SpanID: spanID, Sampled: sampled}
 	s := &Span{

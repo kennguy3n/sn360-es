@@ -17,19 +17,38 @@
     return Office.context.mailbox.diagnostics ? Office.context.mailbox.diagnostics.hostName : "outlook";
   }
 
+  function parseBannerHeader(value) {
+    // Format: "tier=<tier>; category=<cat>; pmid=<id>".
+    var meta = { tier: "", category: "", pseudo_message_id: "" };
+    if (!value) return meta;
+    var parts = String(value).split(";");
+    for (var i = 0; i < parts.length; i++) {
+      var kv = parts[i].split("=");
+      if (kv.length !== 2) continue;
+      var key = kv[0].trim().toLowerCase();
+      var val = kv[1].trim();
+      if (key === "tier") meta.tier = val;
+      else if (key === "category") meta.category = val;
+      else if (key === "pmid") meta.pseudo_message_id = val;
+    }
+    return meta;
+  }
+
   function readBannerMeta(item) {
     // The banner injector embeds (tier, category, pseudo_message_id)
     // in an X-SN360-Banner internet header. The add-in surfaces it
-    // via the InternetHeaders API.
+    // via the Office.js InternetHeaders API (requires MailboxEnums
+    // Mailbox 1.8+; the manifest sets MinimumVersion=1.8).
     return new Promise((resolve) => {
       try {
-        item.getCustomPropertiesAsync((res) => {
-          if (res.status !== "succeeded" || !res.value) return resolve(null);
-          resolve({
-            tier: res.value.get("sn360-tier") || "",
-            category: res.value.get("sn360-category") || "",
-            pseudo_message_id: res.value.get("sn360-pmid") || "",
-          });
+        if (!item || !item.internetHeaders || typeof item.internetHeaders.getAsync !== "function") {
+          return resolve(null);
+        }
+        item.internetHeaders.getAsync(["x-sn360-banner"], (res) => {
+          if (!res || res.status !== "succeeded" || !res.value) return resolve(null);
+          var raw = res.value["x-sn360-banner"] || res.value["X-SN360-Banner"];
+          if (!raw) return resolve(null);
+          resolve(parseBannerHeader(raw));
         });
       } catch (_) {
         resolve(null);
