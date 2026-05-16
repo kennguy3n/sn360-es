@@ -15,6 +15,7 @@ const (
 	RelationshipCustomer          RelationshipCategory = "Customer"
 	RelationshipFirstTimeExternal RelationshipCategory = "FirstTimeExternal"
 	RelationshipLapsedContact     RelationshipCategory = "LapsedContact"
+	RelationshipRecurringService  RelationshipCategory = "RecurringService"
 )
 
 // Valid reports whether r is one of the known relationship categories.
@@ -24,7 +25,8 @@ func (r RelationshipCategory) Valid() bool {
 		RelationshipPartner,
 		RelationshipCustomer,
 		RelationshipFirstTimeExternal,
-		RelationshipLapsedContact:
+		RelationshipLapsedContact,
+		RelationshipRecurringService:
 		return true
 	}
 	return false
@@ -127,8 +129,14 @@ func (r RiskSignals) EvaluateBypass() bool {
 
 // ForceEscalate reports whether the relationship category dictates that
 // the message must reach Tier 2 (LLM) regardless of Tier 1 score.
+//
+// FirstTimeExternal is always escalated because the model has no prior
+// communication context. LapsedContact is escalated because re-emerging
+// senders after long silence are a classic account-takeover (ATO)
+// vector (PROPOSAL.md §7).
 func (r RiskSignals) ForceEscalate() bool {
-	return r.RelationshipCategory == RelationshipFirstTimeExternal
+	return r.RelationshipCategory == RelationshipFirstTimeExternal ||
+		r.RelationshipCategory == RelationshipLapsedContact
 }
 
 // LowerTier1Threshold reports whether the relationship category should

@@ -198,26 +198,65 @@ make lint               # gofmt + go vet
 
 ```
 sn360-es/
-├── cmd/                    # Service entrypoints
-├── internal/               # Private application code
-│   ├── config/             # Environment-based configuration
-│   ├── constant/           # Event types, Redis keys, categories
-│   ├── dto/                # Request/response DTOs
-│   ├── handler/            # HTTP handlers
-│   ├── middleware/          # Auth, CORS, logging
-│   ├── repository/         # Database repositories
-│   ├── service/            # Business logic
-│   ├── docs/               # Internal documentation
-│   │   ├── PROPOSAL.md     # v2 proposal with tiered ML + optimizations
-│   │   ├── ARCHITECTURE.md # System architecture document
-│   │   └── PROGRESS.md     # Changelog and progress tracker
-│   └── translation/        # i18n (en, vi, th, ja, etc.)
-├── pkg/                    # Shared libraries
-│   ├── events/nats/        # NATS JetStream client
-│   ├── httpclient/         # External API clients
-│   ├── storage/            # Redis, PostgreSQL, S3 clients
-│   └── privacy/            # PII stripping, pseudonymization, encryption
-├── migrations/             # Atlas database migrations
+├── cmd/                                 # Service entrypoints
+├── deployments/
+│   └── addins/
+│       ├── outlook/                     # Outlook Office Add-in (Manifest v3)
+│       └── gmail/                       # Gmail Add-on (Apps Script)
+├── internal/
+│   ├── config/                          # Environment-based configuration
+│   ├── constant/                        # Event types, Redis keys, categories
+│   ├── dto/                             # Request/response DTOs
+│   │   ├── dashboard.go                 # Dashboard summary DTOs
+│   │   ├── education.go                 # Education + simulation DTOs
+│   │   ├── escalation.go                # SN360 SecOps escalation DTOs
+│   │   ├── risk_signals.go              # RelationshipCategory + timing-anomaly score
+│   │   └── ...
+│   ├── handler/                         # HTTP handlers
+│   │   ├── dashboard.go                 # GET /v1/dashboard/summary
+│   │   ├── education.go                 # GET /v1/education/lesson/{category}
+│   │   ├── escalation.go                # POST /v1/escalation/resolve
+│   │   ├── predict.go                   # POST /v1/predict/recipient + /open
+│   │   ├── quarantine.go                # POST /v1/quarantine/release
+│   │   └── ...
+│   ├── middleware/                      # Auth, CORS, logging, log sanitiser
+│   ├── repository/                      # Database repositories
+│   ├── service/
+│   │   ├── action/                      # 6-tier banner / labels / quarantine / feedback
+│   │   │   ├── catalogs/                # en, vi, th, ja, ko, zh i18n catalogs
+│   │   │   ├── banner_renderer.go       # role="alert" + dir="rtl" WCAG 2.1 AA
+│   │   │   ├── quarantine.go            # Hidden label + stub body
+│   │   │   ├── quarantine_release.go    # Tier 0 + Tier 1 re-eval gate
+│   │   │   └── report_workflow.go       # User-reported phishing workflow
+│   │   ├── agent/                       # AI agents
+│   │   │   ├── onboarding.go
+│   │   │   ├── tuning.go
+│   │   │   ├── support.go
+│   │   │   └── escalation.go            # SN360 SecOps escalation service
+│   │   ├── dashboard/                   # AI-generated admin dashboard
+│   │   ├── education/                   # Micro-lessons, simulation, resilience, adaptive
+│   │   ├── evaluate/                    # Tier 0/1/2 + score + URL + attachment pre-scan
+│   │   │   ├── url_scanner.go           # VirusTotal-backed URL pre-screen
+│   │   │   └── attachment_scanner.go    # YARA + ClamAV INSTREAM pre-screen
+│   │   ├── predict/                     # Pre-send / pre-open recipient analysis
+│   │   ├── relationship/                # Categories, vulnerability, vendor, timing
+│   │   ├── tier0/                       # Pure-CPU classification gates
+│   │   ├── tier1/                       # Encoder client + batch orchestration
+│   │   ├── onboarding/                  # OAuth flow + org graph builder
+│   │   └── tenant/                      # Tenant CRUD + cryptographic erasure
+│   ├── docs/                            # Internal documentation
+│   │   ├── PROPOSAL.md                  # v2 proposal (8 phases, 51 tasks)
+│   │   ├── ARCHITECTURE.md              # System architecture document
+│   │   ├── PHASES.md                    # Phase-level rollup with code pointers
+│   │   └── PROGRESS.md                  # Per-task tracker + changelog
+│   └── translation/                     # Cross-service i18n bundles
+├── pkg/
+│   ├── events/nats/                     # NATS JetStream client + DLQ
+│   ├── httpclient/                      # External API clients
+│   ├── storage/                         # Redis, PostgreSQL, S3 clients
+│   ├── privacy/                         # Pseudonymisation, KMS, encryption, JWT, erasure
+│   └── telemetry/                       # OpenTelemetry tracer + HTTP / NATS propagation
+├── migrations/                          # Atlas database migrations
 ├── docker-compose.yml
 ├── Dockerfile
 ├── Makefile

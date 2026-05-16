@@ -1,0 +1,43 @@
+{
+  "tier.Blocked.title": "ブロック済み: このメールは危険です",
+  "tier.Blocked.body": "このメールはフィッシングやその他の脅威の可能性が非常に高いためブロックしました。添付ファイルを開いたり、リンクをクリックしたりしないでください。",
+  "tier.HighRisk.title": "高リスク: このメールに対応しないでください",
+  "tier.HighRisk.body": "このメールは、なりすまし・詐欺・アカウント侵害の強い兆候を示しています。何らかの対応を取る前に、別の手段で送信者を確認してください。",
+  "tier.Warning.title": "警告: このメールは疑わしいです",
+  "tier.Warning.body": "このメールには、誰かがあなたを騙そうとしている兆候が含まれています。リンクをクリックしたり返信したりする前に送信者を慎重に確認してください。",
+  "tier.Caution.title": "注意: 送信者または内容が通常と異なります",
+  "tier.Caution.body": "このメールには通常と異なる点があります。リンク、添付ファイル、依頼内容は慎重に扱ってください。",
+  "tier.Informational.title": "初めての外部送信者",
+  "tier.Informational.body": "この送信者からのメールを初めて確認しました。依頼に応じる前に本人確認を行ってください。",
+  "tier.Trusted.title": "信頼できる送信者",
+  "tier.Trusted.body": "このメッセージは、組織が既に信頼している送信者から送られています。対応の必要はありません。",
+
+  "category.LIKELY_PHISHING": "フィッシングの可能性",
+  "category.BEC_IMPERSONATION": "なりすましの可能性 (BEC)",
+  "category.LOOKALIKE_DOMAIN": "類似ドメイン",
+  "category.SUSPICIOUS_URL": "疑わしいリンク",
+  "category.SUSPICIOUS_ATTACHMENT": "疑わしい添付ファイル",
+  "category.FIRST_CONTACT_EXTERNAL": "組織外からの初回連絡",
+  "category.ACCOUNT_TAKEOVER_SUSPECTED": "アカウント乗っ取りの疑い",
+  "category.VENDOR_COMPROMISE": "ベンダー侵害の疑い",
+  "category.CREDENTIAL_HARVESTING": "認証情報の窃取",
+  "category.INVOICE_FRAUD": "請求書詐欺",
+  "category.QR_PHISHING": "QRコードフィッシング",
+  "category.SCAM_FRAUD": "詐欺",
+  "category.AUTH_FAILED": "送信者認証失敗",
+  "category.INTERNAL_TRUSTED": "社内送信者",
+  "category.VENDOR_TRUSTED": "信頼できるベンダー",
+  "category.NEWSLETTER": "ニュースレター",
+
+  "auth.verified": "送信者が確認されました",
+  "auth.unverified": "送信者は未確認です",
+  "auth.failed": "送信者認証に失敗しました",
+  "auth.unknown": "送信者認証は不明です",
+
+  "action.report": "フィッシングを報告",
+  "action.mark_safe": "安全としてマーク",
+  "action.trust_sender": "この送信者を信頼する",
+  "action.learn_more": "詳細を見る",
+
+  "banner.degraded": "評価中に一部の検出サービスが利用できませんでした。"
+}

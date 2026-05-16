@@ -57,6 +57,24 @@ func NewJSONCatalogFromFS(fsys fs.FS, root, fallback string) (*JSONCatalog, erro
 	return c, nil
 }
 
+// NewJSONCatalog constructs an in-memory catalog from a pre-built
+// table. Useful in tests and for callers that compose translations
+// programmatically rather than loading from disk.
+func NewJSONCatalog(tables map[string]map[string]string, fallback string) *JSONCatalog {
+	if fallback == "" {
+		fallback = "en"
+	}
+	c := &JSONCatalog{tables: map[string]map[string]string{}, fallback: fallback}
+	for locale, t := range tables {
+		copyT := make(map[string]string, len(t))
+		for k, v := range t {
+			copyT[k] = v
+		}
+		c.tables[locale] = copyT
+	}
+	return c
+}
+
 // Locales returns the sorted list of locales loaded.
 func (c *JSONCatalog) Locales() []string {
 	c.mu.RLock()

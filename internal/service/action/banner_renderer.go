@@ -37,6 +37,62 @@ type BannerInput struct {
 	Degraded bool
 }
 
+// rtlLocales is the set of BCP-47 language codes that render right-to-left.
+// Used to inject dir="rtl" on the banner root for accessibility.
+var rtlLocales = map[string]struct{}{
+	"ar": {},
+	"he": {},
+	"fa": {},
+	"ur": {},
+}
+
+// isRTLLocale reports whether locale renders right-to-left. The
+// language-only prefix is consulted (e.g. "ar-EG" -> "ar").
+func isRTLLocale(locale string) bool {
+	if locale == "" {
+		return false
+	}
+	lang := locale
+	if dash := strings.IndexByte(locale, '-'); dash > 0 {
+		lang = locale[:dash]
+	}
+	_, ok := rtlLocales[strings.ToLower(lang)]
+	return ok
+}
+
+// tierIcon returns a short text glyph that conveys severity
+// independently of color. Falls back to an empty string for unknown
+// tiers so the template renders no icon span.
+func tierIcon(t constant.Tier) string {
+	switch t {
+	case constant.TierBlocked:
+		return "\u26d4" // no-entry
+	case constant.TierHighRisk:
+		return "\u26a0" // warning sign
+	case constant.TierWarning:
+		return "!"
+	case constant.TierCaution:
+		return "\u24d8" // circled i
+	case constant.TierInformational:
+		return "\u2139" // information source
+	case constant.TierTrusted:
+		return "\u2713" // check mark
+	}
+	return ""
+}
+
+// ariaRoleFor returns the ARIA live-region role for the tier. High-
+// severity tiers use "alert" (assertive, immediate); softer tiers use
+// "status" (polite, queued).
+func ariaRoleFor(t constant.Tier) string {
+	switch t {
+	case constant.TierBlocked, constant.TierHighRisk:
+		return "alert"
+	default:
+		return "status"
+	}
+}
+
 // Validate sanity-checks the input.
 func (b BannerInput) Validate() error {
 	if !b.Tier.Valid() {
@@ -86,10 +142,11 @@ func (r *BannerRenderer) Render(in BannerInput) ([]byte, error) {
 	if locale == "" {
 		locale = "en"
 	}
+	title := r.tr.Translate(locale, "tier."+string(in.Tier)+".title")
 	view := bannerView{
 		Tier:          in.Tier,
 		TierClass:     tierClassFor(in.Tier),
-		Title:         r.tr.Translate(locale, "tier."+string(in.Tier)+".title"),
+		Title:         title,
 		Body:          r.tr.Translate(locale, "tier."+string(in.Tier)+".body"),
 		Primary:       in.Primary,
 		PrimaryCopy:   r.tr.Translate(locale, in.Primary.CopyKey()),
@@ -100,6 +157,10 @@ func (r *BannerRenderer) Render(in BannerInput) ([]byte, error) {
 		SenderDisplay: in.SenderDisplay,
 		SenderDomain:  in.SenderDomain,
 		Locale:        locale,
+		Dir:           dirFor(locale),
+		AriaRole:      ariaRoleFor(in.Tier),
+		AriaLabel:     title,
+		IconGlyph:     tierIcon(in.Tier),
 		ActionToken:   in.ActionToken,
 		ShowReport:    in.Tier.Severity() >= constant.TierInformational.Severity(),
 		ShowMarkSafe:  in.Tier.AllowsMarkSafe(),
@@ -140,6 +201,10 @@ type bannerView struct {
 	SenderDisplay string
 	SenderDomain  string
 	Locale        string
+	Dir           string
+	AriaRole      string
+	AriaLabel     string
+	IconGlyph     string
 	ActionToken   string
 	ShowReport    bool
 	ShowMarkSafe  bool
@@ -151,6 +216,16 @@ type bannerView struct {
 	TrustLabel    string
 	LearnLabel    string
 	DegradedLabel string
+}
+
+// dirFor returns "rtl" for RTL locales and "ltr" otherwise. Always
+// emits an explicit direction so screen readers and CSS layout do not
+// need to infer from content.
+func dirFor(locale string) string {
+	if isRTLLocale(locale) {
+		return "rtl"
+	}
+	return "ltr"
 }
 
 func tierClassFor(t constant.Tier) string {
@@ -197,49 +272,69 @@ func hasClass(class string, classes ...string) bool {
 // bannerCSS is the inline stylesheet shared by all banner tiers. It is
 // declared separately so the Go file can use a single backtick-quoted
 // string without nesting (Go does not allow nested backtick literals).
-const bannerCSS = `.sn360-banner{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.4;border-radius:8px;padding:12px 16px;margin:8px 0;border:1px solid transparent;color:#111;background:#f5f5f5}
-.sn360-banner h1{font-size:14px;font-weight:600;margin:0 0 4px 0;letter-spacing:0.01em}
+//
+// All color combinations satisfy WCAG 2.1 AA contrast (4.5:1 for normal
+// text, 3:1 for large text and graphical objects). Text colors are
+// darkened relative to the v1 palette so the contrast targets are met
+// in both light and dark modes.
+const bannerCSS = `.sn360-banner{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.4;border-radius:8px;padding:12px 16px;margin:8px 0;border:1px solid transparent;color:#0a0a0a;background:#f5f5f5}
+.sn360-banner h1{font-size:14px;font-weight:700;margin:0 0 4px 0;letter-spacing:0.01em}
 .sn360-banner p{margin:0 0 6px 0}
-.sn360-banner .sn360-secondary{color:#555;font-size:12px;margin-top:4px}
-.sn360-banner .sn360-reasons{color:#666;font-size:12px;margin-top:4px;font-style:italic}
+.sn360-banner .sn360-icon{display:inline-block;margin-right:6px;font-size:16px;line-height:1;vertical-align:middle;font-weight:700}
+.sn360-banner[dir="rtl"] .sn360-icon{margin-right:0;margin-left:6px}
+.sn360-banner .sn360-secondary{color:#3a3a3a;font-size:12px;margin-top:4px}
+.sn360-banner .sn360-reasons{color:#3a3a3a;font-size:12px;margin-top:4px;font-style:italic}
 .sn360-banner .sn360-actions{margin-top:8px;display:flex;flex-wrap:wrap;gap:8px}
-.sn360-banner .sn360-actions a{display:inline-block;padding:6px 12px;border-radius:6px;text-decoration:none;font-weight:500;font-size:12px;color:#fff;background:#444}
-.sn360-banner .sn360-chip{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;margin-right:6px;vertical-align:middle}
-.sn360-banner .sn360-chip-verified{background:#0a7a3d;color:#fff}
-.sn360-banner .sn360-chip-failed{background:#b00020;color:#fff}
-.sn360-banner .sn360-chip-unverified{background:#7a7a7a;color:#fff}
-.sn360-blocked{background:#fce8e6;border-color:#b00020;color:#5a0014}
-.sn360-blocked .sn360-actions a{background:#b00020}
-.sn360-high{background:#fff1e5;border-color:#cc5500;color:#5a2400}
-.sn360-high .sn360-actions a{background:#cc5500}
-.sn360-warning{background:#fff8e1;border-color:#b58a00;color:#5a4400}
-.sn360-warning .sn360-actions a{background:#7a5a00}
-.sn360-caution{background:#eef6ff;border-color:#1565c0;color:#0a3a78}
-.sn360-caution .sn360-actions a{background:#1565c0}
-.sn360-info{background:#f1f5f9;border-color:#5a6b80;color:#1f2a36}
-.sn360-info .sn360-actions a{background:#5a6b80}
-.sn360-trusted{background:#e6f4ea;border-color:#0a7a3d;color:#1f4a2c}
-.sn360-trusted .sn360-actions a{background:#0a7a3d}
-.sn360-degraded{color:#666;font-size:11px;margin-top:6px;font-style:italic}
-@media (prefers-color-scheme:dark){.sn360-banner{color:#f5f5f5;background:#222}.sn360-banner .sn360-secondary,.sn360-banner .sn360-reasons,.sn360-degraded{color:#bbb}}`
+.sn360-banner .sn360-actions a{display:inline-block;padding:6px 12px;border-radius:6px;text-decoration:none;font-weight:600;font-size:12px;color:#fff;background:#262626;border:1px solid transparent}
+.sn360-banner .sn360-actions a:focus{outline:2px solid #0050b3;outline-offset:2px}
+.sn360-banner .sn360-actions a:hover{text-decoration:underline}
+.sn360-banner .sn360-chip{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;margin-right:6px;vertical-align:middle;color:#fff}
+.sn360-banner[dir="rtl"] .sn360-chip{margin-right:0;margin-left:6px}
+.sn360-banner .sn360-chip-verified{background:#08642f}
+.sn360-banner .sn360-chip-failed{background:#9b0019}
+.sn360-banner .sn360-chip-unverified{background:#595959}
+.sn360-blocked{background:#fce8e6;border-color:#9b0019;color:#3d0010}
+.sn360-blocked .sn360-actions a{background:#9b0019}
+.sn360-high{background:#fff1e5;border-color:#a64600;color:#3d1900}
+.sn360-high .sn360-actions a{background:#a64600}
+.sn360-warning{background:#fff8e1;border-color:#6e4d00;color:#3d2c00}
+.sn360-warning .sn360-actions a{background:#6e4d00}
+.sn360-caution{background:#eef6ff;border-color:#0d4ea0;color:#062a59}
+.sn360-caution .sn360-actions a{background:#0d4ea0}
+.sn360-info{background:#f1f5f9;border-color:#4a566a;color:#16202c}
+.sn360-info .sn360-actions a{background:#4a566a}
+.sn360-trusted{background:#e6f4ea;border-color:#08642f;color:#143d24}
+.sn360-trusted .sn360-actions a{background:#08642f}
+.sn360-degraded{color:#3a3a3a;font-size:11px;margin-top:6px;font-style:italic}
+.sn360-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media (prefers-color-scheme:dark){.sn360-banner{color:#f5f5f5;background:#1a1a1a}.sn360-banner .sn360-secondary,.sn360-banner .sn360-reasons,.sn360-degraded{color:#cfcfcf}}`
 
 // bannerTemplate is the single self-contained template used for all
 // tiers. Variants are switched purely via CSS class. The template
 // intentionally inlines all CSS so the banner survives provider HTML
 // sanitisers.
+//
+// Accessibility:
+//   - role attribute is "alert" for Blocked/HighRisk and "status" for
+//     softer tiers so assistive tech announces severity immediately.
+//   - aria-label on the root mirrors the visible severity headline.
+//   - aria-hidden on the icon glyph so screen readers don't speak it.
+//   - dir attribute is set explicitly for RTL locales.
+//   - Focus order follows reading order: title -> body -> reasons ->
+//     auth chip -> action buttons.
 var bannerTemplate = `<style>` + bannerCSS + `</style>
-<div class="{{ .TierClass }}" data-sn360-tier="{{ .Tier }}" data-sn360-locale="{{ .Locale }}">
-  <h1>{{ .Title }}</h1>
+<div class="{{ .TierClass }}" role="{{ .AriaRole }}" aria-live="polite" aria-label="{{ .AriaLabel }}" dir="{{ .Dir }}" data-sn360-tier="{{ .Tier }}" data-sn360-locale="{{ .Locale }}">
+  <h1>{{ if .IconGlyph }}<span class="sn360-icon" aria-hidden="true">{{ .IconGlyph }}</span>{{ end }}<span class="sn360-sr-only">{{ .AriaLabel }}: </span>{{ .Title }}</h1>
   <p>{{ .Body }}</p>
   {{ if .PrimaryCopy }}<p><strong>{{ .PrimaryCopy }}</strong></p>{{ end }}
   {{ if .SecondaryCopy }}<p class="sn360-secondary">{{ range $i, $s := .SecondaryCopy }}{{ if $i }} · {{ end }}{{ $s }}{{ end }}</p>{{ end }}
   {{ if .ReasonCodes }}<p class="sn360-reasons">{{ range $i, $r := .ReasonCodes }}{{ if $i }} · {{ end }}{{ $r }}{{ end }}</p>{{ end }}
-  {{ if .AuthLabel }}<p><span class="{{ chipClass .AuthVerdict }}">{{ .AuthLabel }}</span>{{ if .SenderDomain }} <span class="sn360-secondary">{{ .SenderDomain }}</span>{{ end }}</p>{{ end }}
-  <div class="sn360-actions">
-    {{ if .ShowReport }}<a href="https://l.sn360.io/action/report_phishing?token={{ .ActionToken }}">{{ .ReportLabel }}</a>{{ end }}
-    {{ if .ShowMarkSafe }}<a href="https://l.sn360.io/action/mark_safe?token={{ .ActionToken }}">{{ .MarkSafeLabel }}</a>{{ end }}
-    {{ if .ShowTrust }}<a href="https://l.sn360.io/action/trust_sender?token={{ .ActionToken }}">{{ .TrustLabel }}</a>{{ end }}
-    {{ if .MicroLesson }}<a href="{{ .MicroLesson }}">{{ .LearnLabel }}</a>{{ end }}
+  {{ if .AuthLabel }}<p><span class="{{ chipClass .AuthVerdict }}" role="img" aria-label="{{ .AuthLabel }}">{{ .AuthLabel }}</span>{{ if .SenderDomain }} <span class="sn360-secondary">{{ .SenderDomain }}</span>{{ end }}</p>{{ end }}
+  <div class="sn360-actions" role="group" aria-label="{{ .AriaLabel }}">
+    {{ if .ShowReport }}<a href="https://l.sn360.io/action/report_phishing?token={{ .ActionToken }}" aria-label="{{ .ReportLabel }}">{{ .ReportLabel }}</a>{{ end }}
+    {{ if .ShowMarkSafe }}<a href="https://l.sn360.io/action/mark_safe?token={{ .ActionToken }}" aria-label="{{ .MarkSafeLabel }}">{{ .MarkSafeLabel }}</a>{{ end }}
+    {{ if .ShowTrust }}<a href="https://l.sn360.io/action/trust_sender?token={{ .ActionToken }}" aria-label="{{ .TrustLabel }}">{{ .TrustLabel }}</a>{{ end }}
+    {{ if .MicroLesson }}<a href="{{ .MicroLesson }}" aria-label="{{ .LearnLabel }}">{{ .LearnLabel }}</a>{{ end }}
   </div>
   {{ if .Degraded }}<p class="sn360-degraded">{{ .DegradedLabel }}</p>{{ end }}
 </div>

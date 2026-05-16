@@ -1,0 +1,43 @@
+{
+  "tier.Blocked.title": "차단됨: 이 메일은 위험합니다",
+  "tier.Blocked.body": "피싱이나 기타 위협일 가능성이 매우 높아 이 메일을 차단했습니다. 첨부 파일을 열거나 링크를 클릭하지 마세요.",
+  "tier.HighRisk.title": "높은 위험: 이 메일에 응답하지 마세요",
+  "tier.HighRisk.body": "이 메일은 사칭, 사기 또는 계정 침해의 강력한 징후를 보입니다. 어떤 조치를 취하기 전에 다른 경로로 발신자를 확인하세요.",
+  "tier.Warning.title": "경고: 이 메일이 의심스럽습니다",
+  "tier.Warning.body": "이 메일에는 누군가가 당신을 속이려는 징후가 포함되어 있습니다. 링크를 클릭하거나 답장하기 전에 발신자를 신중히 확인하세요.",
+  "tier.Caution.title": "주의: 발신자 또는 내용이 특이합니다",
+  "tier.Caution.body": "이 메일에 평소와 다른 점이 있습니다. 링크, 첨부 파일, 요청 사항을 주의해서 처리하세요.",
+  "tier.Informational.title": "처음 외부 발신자",
+  "tier.Informational.body": "이 발신자로부터 받은 첫 번째 메일입니다. 요청에 응답하기 전에 신원을 확인하세요.",
+  "tier.Trusted.title": "신뢰할 수 있는 발신자",
+  "tier.Trusted.body": "이 메시지는 조직이 이미 신뢰하는 발신자로부터 온 것입니다. 별도의 조치가 필요하지 않습니다.",
+
+  "category.LIKELY_PHISHING": "피싱 가능성",
+  "category.BEC_IMPERSONATION": "사칭 가능성 (BEC)",
+  "category.LOOKALIKE_DOMAIN": "유사 도메인",
+  "category.SUSPICIOUS_URL": "의심스러운 링크",
+  "category.SUSPICIOUS_ATTACHMENT": "의심스러운 첨부 파일",
+  "category.FIRST_CONTACT_EXTERNAL": "조직 외부에서의 첫 연락",
+  "category.ACCOUNT_TAKEOVER_SUSPECTED": "계정 탈취 의심",
+  "category.VENDOR_COMPROMISE": "공급업체 침해 의심",
+  "category.CREDENTIAL_HARVESTING": "자격 증명 탈취",
+  "category.INVOICE_FRAUD": "송장 사기",
+  "category.QR_PHISHING": "QR 코드 피싱",
+  "category.SCAM_FRAUD": "사기",
+  "category.AUTH_FAILED": "발신자 인증 실패",
+  "category.INTERNAL_TRUSTED": "내부 발신자",
+  "category.VENDOR_TRUSTED": "신뢰할 수 있는 공급업체",
+  "category.NEWSLETTER": "뉴스레터",
+
+  "auth.verified": "발신자 확인됨",
+  "auth.unverified": "발신자 미확인",
+  "auth.failed": "발신자 인증 실패",
+  "auth.unknown": "발신자 인증 알 수 없음",
+
+  "action.report": "피싱 신고",
+  "action.mark_safe": "안전으로 표시",
+  "action.trust_sender": "이 발신자 신뢰",
+  "action.learn_more": "자세히 알아보기",
+
+  "banner.degraded": "평가 중 일부 탐지 서비스를 사용할 수 없었습니다."
+}

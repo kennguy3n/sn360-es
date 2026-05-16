@@ -1,0 +1,200 @@
+[
+  {
+    "template_id": "bec.easy.ceo_gift_card",
+    "attack_type": "bec",
+    "difficulty": "easy",
+    "subject_template": "Quick favour, {{.target_name}}?",
+    "body_template": "<p>Hi {{.target_name}},</p><p>Are you at your desk? I need you to pick up some gift cards for client appreciation. Reply ASAP — I'm going into a meeting.</p><p>Thanks,<br>{{.ceo_name}}</p>",
+    "sender_display_template": "{{.ceo_name}}",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": ["display-name spoof", "urgency", "out-of-process request"]
+  },
+  {
+    "template_id": "bec.medium.wire_change",
+    "attack_type": "bec",
+    "difficulty": "medium",
+    "subject_template": "Updated banking instructions for {{.vendor_name}}",
+    "body_template": "<p>Dear {{.target_name}},</p><p>Please note that our banking details have changed effective immediately. Kindly use the attached new wire instructions for any outstanding payments.</p><p>Regards,<br>{{.vendor_name}}</p>",
+    "sender_display_template": "Accounts Receivable — {{.vendor_name}}",
+    "sender_domain_template": "{{.vendor_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": ["banking change", "vendor impersonation", "look at attachment policy"]
+  },
+  {
+    "template_id": "bec.hard.thread_hijack",
+    "attack_type": "bec",
+    "difficulty": "hard",
+    "subject_template": "Re: {{.thread_subject}}",
+    "body_template": "<p>Hi {{.target_name}},</p><p>Following up on our discussion below — could you action the payment to the updated account before close of business? I'll be travelling and may be slow to respond.</p><p>{{.original_quoted_thread}}</p>",
+    "sender_display_template": "{{.ceo_name}}",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": ["thread context reuse", "lookalike domain", "subtle reply-to swap"]
+  },
+  {
+    "template_id": "credential_phishing.easy.office365",
+    "attack_type": "credential_phishing",
+    "difficulty": "easy",
+    "subject_template": "Your mailbox is almost full",
+    "body_template": "<p>Your mailbox has reached 95% of its limit. Click below to expand your quota.</p><p><a href=\"{{.landing_url}}\">Expand Mailbox</a></p>",
+    "sender_display_template": "Office 365 Support",
+    "sender_domain_template": "{{.fake_o365_domain}}",
+    "landing_page_type": "office_365_login",
+    "expected_detection_points": ["fake quota alert", "generic greeting"]
+  },
+  {
+    "template_id": "credential_phishing.medium.sharepoint",
+    "attack_type": "credential_phishing",
+    "difficulty": "medium",
+    "subject_template": "{{.colleague_name}} shared a file with you",
+    "body_template": "<p>{{.colleague_name}} has shared a SharePoint document with you. <a href=\"{{.landing_url}}\">Open the document</a> to review.</p>",
+    "sender_display_template": "Microsoft SharePoint",
+    "sender_domain_template": "{{.fake_o365_domain}}",
+    "landing_page_type": "sharepoint_login",
+    "expected_detection_points": ["impersonates SaaS", "colleague-as-bait"]
+  },
+  {
+    "template_id": "credential_phishing.hard.mfa_fatigue",
+    "attack_type": "credential_phishing",
+    "difficulty": "hard",
+    "subject_template": "Unusual sign-in attempt from {{.city}}",
+    "body_template": "<p>We detected a sign-in to your {{.tenant_name}} account from {{.city}}. If this wasn't you, please <a href=\"{{.landing_url}}\">secure your account</a>.</p>",
+    "sender_display_template": "{{.tenant_name}} Security",
+    "sender_domain_template": "{{.fake_security_domain}}",
+    "landing_page_type": "security_review",
+    "expected_detection_points": ["security-themed lure", "tenant-personalised content"]
+  },
+  {
+    "template_id": "qr_phishing.easy.benefits_qr",
+    "attack_type": "qr_phishing",
+    "difficulty": "easy",
+    "subject_template": "Action required: confirm 2026 benefits enrolment",
+    "body_template": "<p>Scan the QR code to confirm your benefits enrolment by Friday.</p><img src=\"{{.qr_inline_data}}\" alt=\"QR\"/>",
+    "sender_display_template": "HR Benefits",
+    "sender_domain_template": "{{.fake_hr_domain}}",
+    "landing_page_type": "qr_landing",
+    "expected_detection_points": ["QR vector", "HR theme"]
+  },
+  {
+    "template_id": "qr_phishing.medium.mfa_qr",
+    "attack_type": "qr_phishing",
+    "difficulty": "medium",
+    "subject_template": "Re-enrol MFA for {{.tenant_name}}",
+    "body_template": "<p>Your authenticator needs to be re-paired. Scan this code with your phone to complete re-enrolment.</p><img src=\"{{.qr_inline_data}}\" alt=\"QR\"/>",
+    "sender_display_template": "IT Helpdesk",
+    "sender_domain_template": "{{.fake_helpdesk_domain}}",
+    "landing_page_type": "qr_landing",
+    "expected_detection_points": ["MFA pretext", "QR vector"]
+  },
+  {
+    "template_id": "qr_phishing.hard.shared_doc_qr",
+    "attack_type": "qr_phishing",
+    "difficulty": "hard",
+    "subject_template": "Updated procurement contract — confidential",
+    "body_template": "<p>The procurement team has uploaded the revised contract. Use the secure code below to authenticate.</p><img src=\"{{.qr_inline_data}}\" alt=\"QR\"/>",
+    "sender_display_template": "{{.vendor_name}} Procurement",
+    "sender_domain_template": "{{.vendor_domain}}",
+    "landing_page_type": "qr_landing",
+    "expected_detection_points": ["legitimate-looking pretext", "QR vector"]
+  },
+  {
+    "template_id": "invoice_fraud.easy.overdue",
+    "attack_type": "invoice_fraud",
+    "difficulty": "easy",
+    "subject_template": "Overdue invoice — please pay today",
+    "body_template": "<p>Hello, please find attached our overdue invoice. Settle immediately to avoid service interruption.</p>",
+    "sender_display_template": "Accounts",
+    "sender_domain_template": "{{.fake_finance_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": ["urgency", "generic greeting"]
+  },
+  {
+    "template_id": "invoice_fraud.medium.po_followup",
+    "attack_type": "invoice_fraud",
+    "difficulty": "medium",
+    "subject_template": "PO #{{.po_number}} — payment status",
+    "body_template": "<p>Hi {{.target_name}},</p><p>Following up on PO #{{.po_number}}. Our updated banking details are attached. Please ensure the funds are transferred to the new account.</p>",
+    "sender_display_template": "{{.vendor_name}}",
+    "sender_domain_template": "{{.vendor_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": ["banking detail change", "looks legitimate"]
+  },
+  {
+    "template_id": "invoice_fraud.hard.thread_takeover",
+    "attack_type": "invoice_fraud",
+    "difficulty": "hard",
+    "subject_template": "Re: Invoice {{.invoice_number}}",
+    "body_template": "<p>Hi {{.target_name}},</p><p>Quick update — our finance team has migrated to a new account. Could you re-issue payment to the IBAN below? I've quoted the prior thread for context.</p><p>{{.original_quoted_thread}}</p>",
+    "sender_display_template": "{{.vendor_name}} Finance",
+    "sender_domain_template": "{{.vendor_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": ["thread takeover", "vendor impersonation", "new banking details"]
+  },
+  {
+    "template_id": "lookalike_domain.easy.support",
+    "attack_type": "lookalike_domain",
+    "difficulty": "easy",
+    "subject_template": "We tried to deliver your package",
+    "body_template": "<p>Track your shipment <a href=\"{{.landing_url}}\">here</a>.</p>",
+    "sender_display_template": "Postal Services",
+    "sender_domain_template": "{{.lookalike_logistics_domain}}",
+    "landing_page_type": "tracking",
+    "expected_detection_points": ["lookalike postal domain", "package lure"]
+  },
+  {
+    "template_id": "lookalike_domain.medium.bank_alert",
+    "attack_type": "lookalike_domain",
+    "difficulty": "medium",
+    "subject_template": "Important account notification",
+    "body_template": "<p>We have detected unusual activity on your account. Please <a href=\"{{.landing_url}}\">verify</a>.</p>",
+    "sender_display_template": "{{.bank_name}} Online Security",
+    "sender_domain_template": "{{.lookalike_bank_domain}}",
+    "landing_page_type": "bank_login",
+    "expected_detection_points": ["lookalike bank domain", "security pretext"]
+  },
+  {
+    "template_id": "lookalike_domain.hard.partner",
+    "attack_type": "lookalike_domain",
+    "difficulty": "hard",
+    "subject_template": "Updated MSA — please countersign",
+    "body_template": "<p>Please find attached the updated MSA between {{.tenant_name}} and {{.partner_name}}. Kindly countersign and return.</p>",
+    "sender_display_template": "{{.partner_legal_name}}",
+    "sender_domain_template": "{{.lookalike_partner_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": ["near-identical partner domain", "plausible business context"]
+  },
+  {
+    "template_id": "account_takeover.easy.password_reset",
+    "attack_type": "account_takeover",
+    "difficulty": "easy",
+    "subject_template": "Password reset required",
+    "body_template": "<p>Click <a href=\"{{.landing_url}}\">here</a> to reset your password before it expires.</p>",
+    "sender_display_template": "IT Helpdesk",
+    "sender_domain_template": "{{.fake_helpdesk_domain}}",
+    "landing_page_type": "password_reset",
+    "expected_detection_points": ["generic IT theme", "urgency"]
+  },
+  {
+    "template_id": "account_takeover.medium.unusual_signin",
+    "attack_type": "account_takeover",
+    "difficulty": "medium",
+    "subject_template": "Sign-in attempt blocked",
+    "body_template": "<p>An attempted sign-in from {{.city}} was blocked. If this was you, click <a href=\"{{.landing_url}}\">approve sign-in</a>.</p>",
+    "sender_display_template": "{{.tenant_name}} Security",
+    "sender_domain_template": "{{.fake_security_domain}}",
+    "landing_page_type": "security_review",
+    "expected_detection_points": ["fake-security alert", "approve-sign-in trap"]
+  },
+  {
+    "template_id": "account_takeover.hard.peer_request",
+    "attack_type": "account_takeover",
+    "difficulty": "hard",
+    "subject_template": "Could you approve my access request?",
+    "body_template": "<p>Hey {{.target_name}}, I'm locked out of the build pipeline. Could you click <a href=\"{{.landing_url}}\">approve</a> so I can re-deploy before the demo? I'll explain later.</p>",
+    "sender_display_template": "{{.colleague_name}}",
+    "sender_domain_template": "{{.lookalike_internal_domain}}",
+    "landing_page_type": "approval_landing",
+    "expected_detection_points": ["peer-as-attacker", "internal context"]
+  }
+]

@@ -149,3 +149,154 @@ func TestBannerRendererInjectsDegradedNotice(t *testing.T) {
 		t.Errorf("expected degraded notice in HTML:\n%s", html)
 	}
 }
+
+// TestBannerRendererAccessibility verifies WCAG 2.1 AA hooks:
+//   - role="alert" on Blocked / HighRisk, "status" on softer tiers.
+//   - aria-label mirrors the localised severity headline.
+//   - icon glyph is aria-hidden (decorative) but conveys severity.
+//   - dir attribute is rendered explicitly (defaults to ltr).
+func TestBannerRendererAccessibility(t *testing.T) {
+	r := mustRenderer(t)
+	cases := []struct {
+		name      string
+		tier      constant.Tier
+		wantRole  string
+		wantIcon  string
+		showIcon  bool
+		showToken bool
+	}{
+		{"blocked uses alert role", constant.TierBlocked, "alert", "\u26d4", true, true},
+		{"high risk uses alert role", constant.TierHighRisk, "alert", "\u26a0", true, true},
+		{"warning uses status role", constant.TierWarning, "status", "!", true, true},
+		{"caution uses status role", constant.TierCaution, "status", "\u24d8", true, true},
+		{"informational uses status role", constant.TierInformational, "status", "\u2139", true, true},
+		{"trusted uses status role", constant.TierTrusted, "status", "\u2713", true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := BannerInput{
+				Tier:    tc.tier,
+				Primary: constant.CategoryFirstContactExternal,
+				Locale:  "en",
+			}
+			if tc.showToken {
+				in.ActionToken = "tok"
+			}
+			html, err := r.Render(in)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			s := string(html)
+			if !strings.Contains(s, `role="`+tc.wantRole+`"`) {
+				t.Errorf("missing role=%q\n%s", tc.wantRole, s)
+			}
+			if !strings.Contains(s, `aria-label="`) {
+				t.Errorf("missing aria-label on root\n%s", s)
+			}
+			if !strings.Contains(s, `dir="ltr"`) {
+				t.Errorf("missing dir=ltr on root\n%s", s)
+			}
+			if tc.showIcon {
+				if !strings.Contains(s, tc.wantIcon) {
+					t.Errorf("missing icon glyph %q\n%s", tc.wantIcon, s)
+				}
+				if !strings.Contains(s, `aria-hidden="true"`) {
+					t.Errorf("icon glyph should be aria-hidden\n%s", s)
+				}
+			}
+			if !strings.Contains(s, "sn360-sr-only") {
+				t.Errorf("missing screen-reader-only severity prefix\n%s", s)
+			}
+		})
+	}
+}
+
+// TestBannerRendererRTL verifies that the renderer emits dir="rtl"
+// for locales whose primary language is RTL even if the locale string
+// is region-qualified.
+func TestBannerRendererRTL(t *testing.T) {
+	cat := NewJSONCatalog(map[string]map[string]string{
+		"ar": {
+			"tier.HighRisk.title":              "خطر مرتفع",
+			"tier.HighRisk.body":               "لا تتفاعل مع هذه الرسالة.",
+			"category.BEC_IMPERSONATION":       "احتيال انتحال شخصية",
+			"auth.failed":                      "فشل التحقق",
+			"action.report":                    "إبلاغ",
+			"action.mark_safe":                 "آمن",
+			"action.trust_sender":              "ثقة",
+			"action.learn_more":                "اعرف المزيد",
+			"banner.degraded":                  "تدهور",
+		},
+	}, "en")
+	// Layer onto the default English catalog so missing keys still resolve.
+	def, err := DefaultBannerCatalog()
+	if err != nil {
+		t.Fatalf("default catalog: %v", err)
+	}
+	r, err := NewBannerRenderer(stackedCatalog{primary: cat, fallback: def})
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+	html, err := r.Render(BannerInput{
+		Tier:        constant.TierHighRisk,
+		Primary:     constant.CategoryBECImpersonation,
+		Locale:      "ar-EG",
+		ActionToken: "tok",
+		SenderAuth:  AuthFailed,
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	s := string(html)
+	if !strings.Contains(s, `dir="rtl"`) {
+		t.Errorf("expected dir=rtl for ar-EG\n%s", s)
+	}
+}
+
+// stackedCatalog is a tiny test helper that consults a primary
+// catalog then falls back to a secondary one when the primary returns
+// the key unchanged (the i18n catalog's missing-key behaviour).
+type stackedCatalog struct {
+	primary  Translator
+	fallback Translator
+}
+
+func (s stackedCatalog) Translate(locale, key string) string {
+	v := s.primary.Translate(locale, key)
+	if v == "" || v == key {
+		return s.fallback.Translate(locale, key)
+	}
+	return v
+}
+
+// TestBannerRendererNewLocales renders banners in every newly added
+// locale and checks the output is non-empty and carries the locale
+// marker.
+func TestBannerRendererNewLocales(t *testing.T) {
+	r := mustRenderer(t)
+	cases := []string{"th", "ja", "ko", "zh"}
+	for _, loc := range cases {
+		t.Run(loc, func(t *testing.T) {
+			html, err := r.Render(BannerInput{
+				Tier:        constant.TierWarning,
+				Primary:     constant.CategoryLikelyPhishing,
+				Locale:      loc,
+				ActionToken: "tok",
+			})
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			s := string(html)
+			if !strings.Contains(s, `data-sn360-locale="`+loc+`"`) {
+				t.Errorf("missing locale marker for %q\n%s", loc, s)
+			}
+			if !strings.Contains(s, `data-sn360-tier="Warning"`) {
+				t.Errorf("missing tier marker for %q\n%s", loc, s)
+			}
+			// Ensure we are not echoing the i18n key back.
+			if strings.Contains(s, "tier.Warning.title") {
+				t.Errorf("untranslated key leaked for %q\n%s", loc, s)
+			}
+		})
+	}
+}

@@ -1,0 +1,114 @@
+{
+  "LIKELY_PHISHING": {
+    "lesson_id": "lesson.phishing.en",
+    "category": "LIKELY_PHISHING",
+    "title": "Spotting a phishing email",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Spotting a phishing email</h3><p>Phishing messages try to trick you into clicking a malicious link, opening an attachment, or revealing a password. Before acting, ask:</p><ul style=\"margin:6px 0 0 18px;padding:0\"><li>Do I recognise the sender?</li><li>Does the request feel urgent or unusual?</li><li>Does the link go where it claims?</li></ul><p style=\"margin-top:8px\">When in doubt, report the message and verify out-of-band.</p></section>",
+    "estimated_seconds": 25
+  },
+  "BEC_IMPERSONATION": {
+    "lesson_id": "lesson.bec.en",
+    "category": "BEC_IMPERSONATION",
+    "title": "Business-email-compromise (BEC)",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Business email compromise</h3><p>BEC attackers impersonate executives or vendors to redirect payments or steal data. Red flags:</p><ul style=\"margin:6px 0 0 18px;padding:0\"><li>Urgency around payment changes</li><li>Reply-to address differs from the sender</li><li>New banking instructions</li></ul><p style=\"margin-top:8px\">Confirm payment changes by phone using a number you already know.</p></section>",
+    "estimated_seconds": 30
+  },
+  "LOOKALIKE_DOMAIN": {
+    "lesson_id": "lesson.lookalike.en",
+    "category": "LOOKALIKE_DOMAIN",
+    "title": "Lookalike domains",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Lookalike domains</h3><p>Attackers register near-miss domains like <strong>example-corp.com</strong> instead of <strong>example.com</strong>. Hover over the sender to inspect the full address before replying.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_URL": {
+    "lesson_id": "lesson.url.en",
+    "category": "SUSPICIOUS_URL",
+    "title": "Suspicious links",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Suspicious links</h3><p>Hover before clicking. Watch out for shortened URLs, mismatched display text, and domains you don't recognise. SN360 routes risky links through a safety check.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_ATTACHMENT": {
+    "lesson_id": "lesson.attachment.en",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "title": "Suspicious attachments",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Suspicious attachments</h3><p>Don't open attachments you weren't expecting — especially Office docs that ask to enable macros, or .iso/.html files. Verify with the sender first.</p></section>",
+    "estimated_seconds": 25
+  },
+  "FIRST_CONTACT_EXTERNAL": {
+    "lesson_id": "lesson.first_contact.en",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "title": "First-time external sender",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">First-time external sender</h3><p>You haven't received email from this address before. Take a moment to confirm the sender's identity before taking action or sharing information.</p></section>",
+    "estimated_seconds": 15
+  },
+  "ACCOUNT_TAKEOVER_SUSPECTED": {
+    "lesson_id": "lesson.ato.en",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "title": "Possible account takeover",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Possible account takeover</h3><p>This sender's behaviour looks different than usual. Their account may be compromised. Avoid replying with sensitive data and confirm via another channel.</p></section>",
+    "estimated_seconds": 25
+  },
+  "VENDOR_COMPROMISE": {
+    "lesson_id": "lesson.vendor.en",
+    "category": "VENDOR_COMPROMISE",
+    "title": "Vendor compromise",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Vendor compromise</h3><p>A known vendor's account may be impersonated. Re-verify any payment instructions or sensitive requests through a phone number from a prior, trusted record.</p></section>",
+    "estimated_seconds": 25
+  },
+  "CREDENTIAL_HARVESTING": {
+    "lesson_id": "lesson.credential.en",
+    "category": "CREDENTIAL_HARVESTING",
+    "title": "Credential harvesting",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Credential harvesting</h3><p>Real services never ask you to confirm a password by clicking a link. If you're unsure, navigate directly to the service in your browser — don't use the email's link.</p></section>",
+    "estimated_seconds": 20
+  },
+  "INVOICE_FRAUD": {
+    "lesson_id": "lesson.invoice.en",
+    "category": "INVOICE_FRAUD",
+    "title": "Invoice fraud",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Invoice fraud</h3><p>Be cautious of last-minute banking-detail changes, unfamiliar PO numbers, or urgent payment requests. Always verify by calling a known finance contact.</p></section>",
+    "estimated_seconds": 25
+  },
+  "QR_PHISHING": {
+    "lesson_id": "lesson.qr.en",
+    "category": "QR_PHISHING",
+    "title": "QR-code phishing",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">QR-code phishing</h3><p>Attackers embed malicious URLs in QR codes to bypass link inspection. Don't scan QR codes from unverified emails — open the linked service directly instead.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SCAM_FRAUD": {
+    "lesson_id": "lesson.scam.en",
+    "category": "SCAM_FRAUD",
+    "title": "Scams and fraud",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Scams and fraud</h3><p>Promises of money, prizes, romance, or threats demanding payment are classic scam patterns. If it feels too good — or too scary — to be true, it usually is.</p></section>",
+    "estimated_seconds": 25
+  },
+  "AUTH_FAILED": {
+    "lesson_id": "lesson.auth.en",
+    "category": "AUTH_FAILED",
+    "title": "Failed sender authentication",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Failed sender authentication</h3><p>The sender's domain failed SPF/DKIM/DMARC checks. The message may be spoofed. Treat any links or requests with extra caution.</p></section>",
+    "estimated_seconds": 20
+  },
+  "INTERNAL_TRUSTED": {
+    "lesson_id": "lesson.internal.en",
+    "category": "INTERNAL_TRUSTED",
+    "title": "Internal email",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">Internal email</h3><p>This message is from within your organisation. Even so, accounts can be compromised — treat unusual requests with the same care you would for external email.</p></section>",
+    "estimated_seconds": 15
+  },
+  "VENDOR_TRUSTED": {
+    "lesson_id": "lesson.vendor_trusted.en",
+    "category": "VENDOR_TRUSTED",
+    "title": "Trusted vendor",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">Trusted vendor</h3><p>This sender is on your tenant's vendor allowlist. SN360 still watches for vendor-compromise patterns — flag anything that looks out of character.</p></section>",
+    "estimated_seconds": 15
+  },
+  "NEWSLETTER": {
+    "lesson_id": "lesson.newsletter.en",
+    "category": "NEWSLETTER",
+    "title": "Newsletter / bulk email",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">Newsletter / bulk email</h3><p>Newsletters are usually safe to read but rarely require urgent action. Use the unsubscribe link rather than reporting bulk senders as phishing.</p></section>",
+    "estimated_seconds": 15
+  }
+}
