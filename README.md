@@ -17,8 +17,8 @@ education — all operated by AI agents.
 | Multilingual workforce | XLM-RoBERTa encoder handles 100+ languages natively |
 | Privacy regulations | Zero-knowledge architecture — no PII stored, all data encrypted |
 | Easy but comprehensive onboarding | One-click OAuth consent, auto-discovery of users and groups |
-| Vendor lock-in | Works across Google Workspace and Microsoft 365 simultaneously |
-| Confusing alerts | Tiered, color-coded banners + native labels (not just "FYI") |
+| Meet SMEs where they are | Works across Google Workspace and Microsoft 365 simultaneously |
+| Intuitive alerts | Tiered, color-coded banners + native labels (not just "FYI") |
 
 ## Architecture at a Glance
 
