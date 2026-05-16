@@ -92,10 +92,18 @@ func (g *Gate) Apply(req dto.EvaluateRequest) dto.Tier0Outcome {
 	}
 
 	// 5. Relationship-category modifiers don't bypass; they tune the
-	//    downstream pipeline.
+	//    downstream pipeline. The reason string mirrors the actual
+	//    relationship category so audit logs and metrics keep the
+	//    correct escalation cause (FirstTimeExternal vs LapsedContact
+	//    are both ATO-relevant but for different reasons).
 	if req.Signals.ForceEscalate() {
 		out.ForceEscalate = true
-		out.Reason = "first_time_external"
+		switch req.Signals.RelationshipCategory {
+		case dto.RelationshipLapsedContact:
+			out.Reason = "lapsed_contact"
+		default:
+			out.Reason = "first_time_external"
+		}
 	}
 	if req.Signals.LowerTier1Threshold() && g.cfg.Tier1PartnerThreshold > 0 {
 		out.Tier1ThresholdOverride = g.cfg.Tier1PartnerThreshold

@@ -1,0 +1,92 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "8cdd9e69-680e-40d1-9bb7-7dfa0bb33165",
+  "developer": {
+    "name": "SN360",
+    "websiteUrl": "https://sn360.example.com",
+    "privacyUrl": "https://sn360.example.com/privacy",
+    "termsOfUseUrl": "https://sn360.example.com/terms"
+  },
+  "icons": {
+    "color": "icon-color.png",
+    "outline": "icon-outline.png"
+  },
+  "name": {
+    "short": "SN360",
+    "full": "SN360 Email Security"
+  },
+  "description": {
+    "short": "Pre-send and pre-open phishing warnings.",
+    "full": "SN360 protects users from phishing and BEC by warning before suspicious sends and before opening risky messages. Runs entirely against your tenant's SN360 API; no message contents leave the mailbox."
+  },
+  "accentColor": "#1f3a8a",
+  "permissions": [
+    "identity",
+    "messageTeamMembers"
+  ],
+  "validDomains": [
+    "*.sn360.example.com"
+  ],
+  "composeExtensions": [],
+  "extensions": [
+    {
+      "requirements": {
+        "scopes": ["mail"],
+        "capabilities": [
+          { "name": "Mailbox", "minVersion": "1.10" }
+        ]
+      },
+      "runtimes": [
+        {
+          "id": "sn360-presend-runtime",
+          "type": "general",
+          "code": {
+            "page": "https://sn360.example.com/addin/outlook/presend.html",
+            "script": "https://sn360.example.com/addin/outlook/presend.js"
+          },
+          "lifetime": "short",
+          "actions": [
+            {
+              "id": "sn360-on-message-send",
+              "type": "executeFunction",
+              "displayName": "SN360 Pre-Send Check"
+            },
+            {
+              "id": "sn360-on-message-recipients-changed",
+              "type": "executeFunction",
+              "displayName": "SN360 Recipient Check"
+            }
+          ]
+        },
+        {
+          "id": "sn360-preopen-runtime",
+          "type": "general",
+          "code": {
+            "page": "https://sn360.example.com/addin/outlook/preopen.html",
+            "script": "https://sn360.example.com/addin/outlook/preopen.js"
+          },
+          "lifetime": "short",
+          "actions": [
+            {
+              "id": "sn360-on-message-read",
+              "type": "executeFunction",
+              "displayName": "SN360 Pre-Open Check"
+            }
+          ]
+        }
+      ],
+      "ribbons": [],
+      "autoRunEvents": [
+        {
+          "events": [
+            { "type": "messageSending",  "actionId": "sn360-on-message-send" },
+            { "type": "messageRecipientsChanged", "actionId": "sn360-on-message-recipients-changed" },
+            { "type": "messageRead",     "actionId": "sn360-on-message-read" }
+          ]
+        }
+      ]
+    }
+  ]
+}

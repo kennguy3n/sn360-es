@@ -1,0 +1,43 @@
+{
+  "tier.Blocked.title": "已拦截: 此邮件存在危险",
+  "tier.Blocked.body": "我们拦截了此邮件，因为它极有可能是网络钓鱼或其他威胁。请勿打开附件或点击任何链接。",
+  "tier.HighRisk.title": "高风险: 请勿响应此邮件",
+  "tier.HighRisk.body": "此邮件显示出强烈的冒充、欺诈或账户入侵迹象。在采取任何行动之前，请通过其他渠道验证发件人。",
+  "tier.Warning.title": "警告: 此邮件可疑",
+  "tier.Warning.body": "此邮件存在他人可能试图欺骗您的迹象。在点击链接或回复之前，请仔细核实发件人。",
+  "tier.Caution.title": "注意: 发件人或内容异常",
+  "tier.Caution.body": "此邮件存在异常情况。请谨慎处理其中的链接、附件或请求。",
+  "tier.Informational.title": "首次外部发件人",
+  "tier.Informational.body": "这是我们看到的来自该发件人的第一封邮件。在响应任何请求之前，请先确认其身份。",
+  "tier.Trusted.title": "受信任发件人",
+  "tier.Trusted.body": "此邮件来自贵组织已经信任的发件人。无需采取任何操作。",
+
+  "category.LIKELY_PHISHING": "可能为网络钓鱼",
+  "category.BEC_IMPERSONATION": "可能存在冒充 (BEC)",
+  "category.LOOKALIKE_DOMAIN": "仿冒域名",
+  "category.SUSPICIOUS_URL": "可疑链接",
+  "category.SUSPICIOUS_ATTACHMENT": "可疑附件",
+  "category.FIRST_CONTACT_EXTERNAL": "首次来自组织外部的联系",
+  "category.ACCOUNT_TAKEOVER_SUSPECTED": "疑似账户被接管",
+  "category.VENDOR_COMPROMISE": "疑似供应商账户失陷",
+  "category.CREDENTIAL_HARVESTING": "窃取凭据",
+  "category.INVOICE_FRAUD": "发票欺诈",
+  "category.QR_PHISHING": "二维码网络钓鱼",
+  "category.SCAM_FRAUD": "诈骗 / 欺诈",
+  "category.AUTH_FAILED": "发件人认证失败",
+  "category.INTERNAL_TRUSTED": "内部发件人",
+  "category.VENDOR_TRUSTED": "受信任供应商",
+  "category.NEWSLETTER": "新闻通讯",
+
+  "auth.verified": "发件人已验证",
+  "auth.unverified": "发件人未验证",
+  "auth.failed": "发件人认证失败",
+  "auth.unknown": "发件人认证未知",
+
+  "action.report": "举报网络钓鱼",
+  "action.mark_safe": "标记为安全",
+  "action.trust_sender": "信任此发件人",
+  "action.learn_more": "了解详情",
+
+  "banner.degraded": "评估期间部分检测服务不可用。"
+}

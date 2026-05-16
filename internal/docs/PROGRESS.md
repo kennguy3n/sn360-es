@@ -33,7 +33,7 @@
 
 ### v2 (SN360-ES) — Planned Features
 
-**Overall v2 Status**: In progress | ~59% (30/51 tasks complete — Phase 1-4 complete, Phase 5 partial)
+**Overall v2 Status**: Complete | 100% (51/51 tasks complete — all phases complete)
 
 | Area | Status | Priority | Phase |
 |---|---|---|---|
@@ -68,30 +68,54 @@
 | **Action token service (signed JWT)** | ✅ Done | High | Phase 5 |
 | **URL rewriting (High Risk + Blocked)** | ✅ Done | High | Phase 5 |
 | **URL interstitial service** | ✅ Done | High | Phase 5 |
-| **Quarantine + release flow** | 🔲 Not started | High | Phase 5 |
-| **Banner accessibility (WCAG 2.1 AA)** | 🔲 Not started | Medium | Phase 5 |
-| **Banner i18n expansion (th, ja, ko, zh)** | 🔲 Not started | Medium | Phase 5 |
-| **Education micro-lessons** | 🔲 Not started | High | Phase 6 |
-| **Phishing simulation engine** | 🔲 Not started | High | Phase 6 |
-| **Resilience scoring** | 🔲 Not started | Medium | Phase 6 |
-| **Adaptive simulation difficulty** | 🔲 Not started | Medium | Phase 6 |
-| **Simulation template library** | 🔲 Not started | Medium | Phase 6 |
-| **Expanded relationship categories** | 🔲 Not started | High | Phase 7 |
-| **Employee vulnerability scoring** | 🔲 Not started | Medium | Phase 7 |
-| **Vendor auto-discovery** | 🔲 Not started | Medium | Phase 7 |
-| **Timing anomaly detection** | 🔲 Not started | Medium | Phase 7 |
-| **Pre-send warning add-in (Tessian-style)** | 🔲 Not started | High | Phase 8 |
-| **Pre-open warning add-in** | 🔲 Not started | Medium | Phase 8 |
-| **Admin dashboard (AI-generated)** | 🔲 Not started | High | Phase 8 |
-| **User-reported phishing workflow** | 🔲 Not started | Medium | Phase 8 |
-| **SN360 SecOps escalation** | 🔲 Not started | Medium | Phase 8 |
-| **Distributed tracing (OTel)** | 🔲 Not started | Medium | Phase 8 |
-| **URL pre-scanning (VirusTotal)** | 🔲 Not started | Medium | Phase 8 |
-| **Attachment pre-screen (YARA/ClamAV)** | 🔲 Not started | Medium | Phase 8 |
+| **Quarantine + release flow** | ✅ Done | High | Phase 5 |
+| **Banner accessibility (WCAG 2.1 AA)** | ✅ Done | Medium | Phase 5 |
+| **Banner i18n expansion (th, ja, ko, zh)** | ✅ Done | Medium | Phase 5 |
+| **Education micro-lessons** | ✅ Done | High | Phase 6 |
+| **Phishing simulation engine** | ✅ Done | High | Phase 6 |
+| **Resilience scoring** | ✅ Done | Medium | Phase 6 |
+| **Adaptive simulation difficulty** | ✅ Done | Medium | Phase 6 |
+| **Simulation template library** | ✅ Done | Medium | Phase 6 |
+| **Expanded relationship categories** | ✅ Done | High | Phase 7 |
+| **Employee vulnerability scoring** | ✅ Done | Medium | Phase 7 |
+| **Vendor auto-discovery** | ✅ Done | Medium | Phase 7 |
+| **Timing anomaly detection** | ✅ Done | Medium | Phase 7 |
+| **Pre-send warning add-in (Tessian-style)** | ✅ Done | High | Phase 8 |
+| **Pre-open warning add-in** | ✅ Done | Medium | Phase 8 |
+| **Admin dashboard (AI-generated)** | ✅ Done | High | Phase 8 |
+| **User-reported phishing workflow** | ✅ Done | Medium | Phase 8 |
+| **SN360 SecOps escalation** | ✅ Done | Medium | Phase 8 |
+| **Distributed tracing (OTel)** | ✅ Done | Medium | Phase 8 |
+| **URL pre-scanning (VirusTotal)** | ✅ Done | Medium | Phase 8 |
+| **Attachment pre-screen (YARA/ClamAV)** | ✅ Done | Medium | Phase 8 |
 
 ---
 
 ## Changelog (Reverse Chronological)
+
+### 2026-05-16 (v2 / SN360-ES — Phases 5-8)
+
+- **Phase 5**: Quarantine + release flow (`internal/service/action/quarantine.go`, `quarantine_release.go`, `internal/handler/quarantine.go`) — hidden `SN360 / Blocked` label, stub body, AES-GCM-protected provider reference in Redis with TTL, AI Support Agent `ReleaseQuarantine` hook with Tier 0 + Tier 1 re-eval, `es.action.quarantine.release` events
+- **Phase 5**: Banner accessibility hardening (`internal/service/action/banner_renderer.go`) — `role="alert"` on High Risk + Blocked, severity-prefixed `aria-label`s, contrast-safe 6-tier palette, focus order (severity → reasons → auth chip → buttons), `dir="rtl"` injection for RTL locales
+- **Phase 5**: Banner i18n expansion (`internal/service/action/catalogs/{th,ja,ko,zh}.json`) — Thai / Japanese / Korean / Simplified Chinese catalogs for all 6 tiers, 16 categories, auth chip, action buttons, micro-lesson prompts
+- **Phase 6**: Education micro-lessons (`internal/service/education/micro_lesson.go`, `lessons/en.json`) — 16-category catalog with locale fallback, inline-CSS lesson bodies, `es.education.lesson.trigger` events, `GET /v1/education/lesson/{category}` endpoint
+- **Phase 6**: Phishing simulation engine (`internal/service/education/simulation.go`, `simulation_tracker.go`) — campaign lifecycle, target dispatch, interaction tracking (clicked / submitted / reported / ignored / opened), pseudonymised per-user results, `es.education.simulation.{send,result}` events
+- **Phase 6**: Resilience scoring (`internal/service/education/resilience.go`) — per-user score `0.4*sim + 0.25*report_rate + 0.20*lesson_engagement + 0.15*incident_history`, Redis-backed 24 h cache, group aggregation, feedback into detection sensitivity
+- **Phase 6**: Adaptive simulation difficulty (`internal/service/education/adaptive.go`) — Easy / Medium / Hard selection by resilience band with progression tracking and template filtering
+- **Phase 6**: Simulation template library (`internal/service/education/templates.go`) — parameterised BEC, credential, QR, invoice, lookalike, and ATO templates across all difficulty levels with deterministic rendering
+- **Phase 7**: Expanded relationship categories (`internal/service/relationship/categories.go`) — Partner, Customer, FirstTimeExternal, LapsedContact, RecurringService with Tier 0 / Tier 1 threshold modifiers and force-escalate on FirstTimeExternal + LapsedContact
+- **Phase 7**: Employee vulnerability scoring (`internal/service/relationship/vulnerability.go`) — `0.30*role + 0.20*volume + 0.10*first_contact + 0.15*incidents + 0.25*inverse_resilience`, Redis 24 h cache, per-user sensitivity adjustment
+- **Phase 7**: Vendor auto-discovery (`internal/service/relationship/vendor_discovery.go`) — 30-day history scan, bidirectional + frequency heuristics, confidence-scored auto-approval or admin review queue, weekly job hook
+- **Phase 7**: Timing anomaly detection (`internal/service/relationship/timing.go`) — per-sender hour-of-day baseline with circular distance, `TimingAnomalyScore` signal feeding the scorer
+- **Phase 8**: Pre-send + pre-open add-ins (`deployments/addins/{outlook,gmail}`, `internal/handler/predict.go`, `internal/service/predict/recipient.go`) — `POST /v1/predict/recipient` + `POST /v1/predict/open`, Outlook MailboxItem hooks and Gmail Apps Script, <300 ms p95 latency budget
+- **Phase 8**: Admin dashboard (`internal/service/dashboard/generator.go`, `internal/handler/dashboard.go`) — `GET /v1/dashboard/summary?range=7d`, per-tenant aggregation of emails / tiers / categories / feedback / quarantine / simulation / FP-FN, AI-generated narrative with deterministic fallback
+- **Phase 8**: User-reported phishing workflow (`internal/service/action/report_workflow.go`) — multi-user aggregation with reporter dedup, forced Tier 1 + Tier 2 re-eval, tenant-wide auto-quarantine, `es.action.feedback.report_{confirmed,dismissed}` events
+- **Phase 8**: SN360 SecOps escalation (`internal/service/agent/escalation.go`, `internal/handler/escalation.go`, `internal/dto/escalation.go`) — auto-triggers on breach / ATO / zero-day / low-confidence, anonymised context packages, `POST /v1/escalation/resolve` for SOC outcome feedback, `es.action.escalation.{created,resolved}` events
+- **Phase 8**: Distributed tracing (`pkg/telemetry/tracer.go`, `middleware.go`, `nats.go`) — W3C `traceparent` propagation, HTTP middleware with 5xx span errors, NATS header inject / extract helpers, pluggable sampler + exporter
+- **Phase 8**: URL pre-scanning (`internal/service/evaluate/url_scanner.go`) — bounded-concurrency batch scanner, VirusTotal v3 provider, `url_scan:{sha256}` Redis cache with 1 h TTL, dedup, `links` weight category integration
+- **Phase 8**: Attachment pre-screen (`internal/service/evaluate/attachment_scanner.go`) — YARA (zero-dep default rules) + ClamAV INSTREAM over TCP, suspicious extension guard, oversize guard, only suspicious / malicious results escalate to ShieldNet sandbox
+- **Tests**: Table-driven unit tests added for every new service (quarantine, banner i18n / a11y, micro_lesson, simulation, resilience, adaptive, templates, relationship categories / vulnerability / vendor / timing, predict, dashboard, report workflow, escalation, telemetry, url scanner, attachment scanner)
+- **Docs**: `internal/docs/PHASES.md` and this file updated to 100% (51/51) — see Phases 5-8 deliverable maps for code pointers
 
 ### 2026-05-16 (v2 / SN360-ES)
 
