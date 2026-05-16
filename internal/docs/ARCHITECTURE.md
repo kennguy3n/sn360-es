@@ -195,7 +195,7 @@ graph TD
     end
 
     subgraph "Tier 2: Full LLM (2-10s)"
-        LLM["GPT-4o / Claude / DeepSeek"]
+        LLM["SLM / Claude / DeepSeek"]
         Aspects["Aspect-level reasoning"]
         Reasons["Human-readable reasons"]
     end
@@ -248,7 +248,7 @@ Formula: `final_score = Σ(category_weight × normalized_category_score)`, clamp
 |---|---|
 | **Tier 0** | Language-agnostic (metadata-based rules) |
 | **Tier 1** | XLM-RoBERTa: 100+ languages native, code-switching aware |
-| **Tier 2** | GPT-4o/Claude multilingual; receives language hint from Tier 1 |
+| **Tier 2** | SLM (Claude / DeepSeek class) multilingual; receives language hint from Tier 1 |
 | **Rspamd** | Language-agnostic heuristics (SPF/DKIM/RBL) |
 | **Banners** | i18n templates (en, vi, th, ja, ko, zh, etc.) |
 | **Education** | Simulations and lessons in employee's language |

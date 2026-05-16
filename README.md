@@ -173,8 +173,26 @@ Built-in security awareness that teaches through the email experience:
 cp .env.example .env
 docker-compose up -d        # NATS, Redis, PostgreSQL, Rspamd
 make migrate-up             # Apply database migrations
+make test                   # Unit tests
 make run                    # Start service
 ```
+
+## Running Tests
+
+```bash
+make test               # Unit tests (fast, no external deps)
+make test-integration   # Integration tests (NATS / Redis / PG via testcontainers)
+make lint               # gofmt + go vet
+```
+
+## Documentation
+
+| Doc | Purpose |
+|---|---|
+| [`internal/docs/PROPOSAL.md`](./internal/docs/PROPOSAL.md) | Full v2 product + technical specification (8 phases, 51 tasks) |
+| [`internal/docs/ARCHITECTURE.md`](./internal/docs/ARCHITECTURE.md) | System architecture: streams, consumer groups, services, data flow |
+| [`internal/docs/PHASES.md`](./internal/docs/PHASES.md) | Phase-level rollup with code pointers and remaining scope |
+| [`internal/docs/PROGRESS.md`](./internal/docs/PROGRESS.md) | Per-task checkbox tracker and changelog |
 
 ## Repository Structure
 

@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    container_name: sn360es-nats
+    command:
+      - "-js"
+      - "-sd"
+      - "/data"
+      - "-m"
+      - "8222"
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats-data:/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: sn360es-redis
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: sn360es-postgres
+    environment:
+      POSTGRES_USER: sn360es
+      POSTGRES_PASSWORD: sn360es
+      POSTGRES_DB: sn360es
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  rspamd:
+    image: rspamd/rspamd:3.14
+    container_name: sn360es-rspamd
+    ports:
+      - "11333:11333"
+      - "11334:11334"
+
+  unbound:
+    image: mvance/unbound:latest
+    container_name: sn360es-unbound
+    ports:
+      - "5335:53/udp"
+
+volumes:
+  nats-data:
+  redis-data:
+  postgres-data:

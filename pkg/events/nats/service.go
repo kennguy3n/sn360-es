@@ -1,0 +1,200 @@
+package nats
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+
+	"github.com/kennguy3n/sn360-es/pkg/events"
+)
+
+// Service is the events.EventService implementation backed by NATS
+// JetStream. It wires the Client + Publisher + Consumer together and
+// manages the lifecycle of all subscriptions.
+type Service struct {
+	client    *Client
+	publisher *Publisher
+	logger    *slog.Logger
+
+	mu   sync.Mutex
+	subs []*Consumer
+
+	// streamFor maps a published subject to its target stream. The map is
+	// derived from the StreamSpecs at construction time so the service does
+	// not need a JetStream round-trip to figure out which stream owns a
+	// subscription.
+	streamFor map[string]string
+}
+
+// NewService builds a Service from a Config. It creates the connection,
+// ensures all default streams exist, and returns the ready-to-use service.
+func NewService(ctx context.Context, cfg Config, source string, logger *slog.Logger) (*Service, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	client, err := NewClient(ctx, cfg, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	specs := DefaultStreamSpecs(cfg)
+	if err := EnsureAllStreams(ctx, client.JetStream(), specs); err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("nats: ensure streams: %w", err)
+	}
+
+	streamFor := map[string]string{}
+	for _, spec := range specs {
+		for _, subj := range spec.Subjects {
+			streamFor[subj] = spec.Name
+		}
+	}
+
+	s := &Service{
+		client:    client,
+		publisher: NewPublisher(client, source),
+		logger:    logger,
+		streamFor: streamFor,
+	}
+	return s, nil
+}
+
+// NewServiceWithClient wraps an existing Client, useful for tests.
+func NewServiceWithClient(client *Client, source string) *Service {
+	return &Service{
+		client:    client,
+		publisher: NewPublisher(client, source),
+		logger:    client.logger,
+		streamFor: map[string]string{},
+	}
+}
+
+// Publish implements events.EventService.
+func (s *Service) Publish(ctx context.Context, subject string, data []byte, opts ...events.PublishOption) error {
+	return s.publisher.Publish(ctx, subject, data, opts...)
+}
+
+// Subscribe implements events.EventService.
+//
+// It resolves the target JetStream stream from the subject (based on the
+// stream specs ensured at startup), creates a durable consumer if one does
+// not yet exist, and starts the long-running consume loop.
+func (s *Service) Subscribe(ctx context.Context, subject string, handler events.MessageHandler, opts ...events.SubscribeOption) (events.Subscription, error) {
+	if subject == "" {
+		return nil, errors.New("nats: subject required")
+	}
+	resolved := events.ResolveSubscribeOptions(events.SubscribeOptions{
+		MaxDeliver:    5,
+		BatchSize:     s.client.cfg.FetchBatchSize,
+		MaxWait:       s.client.cfg.FetchMaxWait,
+		MaxAckPending: 256,
+	}, opts...)
+	if resolved.Durable == "" {
+		return nil, errors.New("nats: WithDurable(name) is required for subscribe")
+	}
+
+	stream := s.streamForSubject(subject)
+	if stream == "" {
+		return nil, fmt.Errorf("nats: no stream matches subject %q", subject)
+	}
+
+	cons, err := NewConsumer(ctx, s.client, stream, subject, handler, s.publisher, resolved, s.logger)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	s.subs = append(s.subs, cons)
+	s.mu.Unlock()
+	return cons, nil
+}
+
+// Close drains all subscriptions and the underlying client.
+func (s *Service) Close() error {
+	s.mu.Lock()
+	subs := s.subs
+	s.subs = nil
+	s.mu.Unlock()
+
+	var firstErr error
+	for _, c := range subs {
+		if err := c.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if err := s.client.Close(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
+}
+
+// Client exposes the underlying NATS client. Use sparingly; tests need this
+// to inspect raw connection state and to publish "out-of-band" messages
+// when verifying DLQ flows.
+func (s *Service) Client() *Client { return s.client }
+
+// Publisher exposes the underlying Publisher, primarily so DLQ replays can
+// re-use the same retry policy.
+func (s *Service) Publisher() *Publisher { return s.publisher }
+
+// streamForSubject finds the stream that owns subject. It tolerates wildcard
+// subjects in the spec (e.g. "es.evaluate.>" matches "es.evaluate.request").
+func (s *Service) streamForSubject(subject string) string {
+	if name, ok := s.streamFor[subject]; ok {
+		return name
+	}
+	for pattern, name := range s.streamFor {
+		if subjectMatches(pattern, subject) {
+			return name
+		}
+	}
+	// Fall back to the canonical mapping for the well-known prefixes; this
+	// keeps the service useful even when subjects are added without being
+	// registered as stream specs (operationally common during testing).
+	return StreamForSubject(subject)
+}
+
+// subjectMatches mirrors JetStream's wildcard rules:
+//
+//	"*" matches a single token
+//	">" matches one or more tokens (only allowed as the last token)
+func subjectMatches(pattern, subject string) bool {
+	if pattern == subject {
+		return true
+	}
+	pTokens := splitTokens(pattern)
+	sTokens := splitTokens(subject)
+	for i, pt := range pTokens {
+		if pt == ">" {
+			return i < len(sTokens)
+		}
+		if i >= len(sTokens) {
+			return false
+		}
+		if pt == "*" {
+			continue
+		}
+		if pt != sTokens[i] {
+			return false
+		}
+	}
+	return len(pTokens) == len(sTokens)
+}
+
+func splitTokens(s string) []string {
+	if s == "" {
+		return nil
+	}
+	out := make([]string, 0, 4)
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '.' {
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	out = append(out, s[start:])
+	return out
+}

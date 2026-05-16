@@ -1,0 +1,43 @@
+{
+  "tier.Blocked.title": "Blocked: this message is dangerous",
+  "tier.Blocked.body": "We blocked this email because it is very likely a phishing attempt or other threat. Do not open attachments or click any links.",
+  "tier.HighRisk.title": "High risk: do not act on this email",
+  "tier.HighRisk.body": "This email shows strong signs of impersonation, fraud, or account compromise. Verify the sender out-of-band before taking any action.",
+  "tier.Warning.title": "Warning: this email looks suspicious",
+  "tier.Warning.body": "This email contains signs that someone may be trying to deceive you. Check the sender carefully before clicking links or replying.",
+  "tier.Caution.title": "Caution: unusual sender or content",
+  "tier.Caution.body": "Something about this email is unusual. Treat any links, attachments, or requests with care.",
+  "tier.Informational.title": "First-time external sender",
+  "tier.Informational.body": "This is the first email we've seen from this sender. Confirm their identity before acting on any requests.",
+  "tier.Trusted.title": "Trusted sender",
+  "tier.Trusted.body": "This message comes from a sender your organisation already trusts. No action required.",
+
+  "category.LIKELY_PHISHING": "Likely phishing",
+  "category.BEC_IMPERSONATION": "Possible impersonation (BEC)",
+  "category.LOOKALIKE_DOMAIN": "Lookalike domain",
+  "category.SUSPICIOUS_URL": "Suspicious link",
+  "category.SUSPICIOUS_ATTACHMENT": "Suspicious attachment",
+  "category.FIRST_CONTACT_EXTERNAL": "First contact from outside your organisation",
+  "category.ACCOUNT_TAKEOVER_SUSPECTED": "Possible account takeover",
+  "category.VENDOR_COMPROMISE": "Possible vendor compromise",
+  "category.CREDENTIAL_HARVESTING": "Credential harvesting",
+  "category.INVOICE_FRAUD": "Invoice fraud",
+  "category.QR_PHISHING": "QR-code phishing",
+  "category.SCAM_FRAUD": "Scam / fraud",
+  "category.AUTH_FAILED": "Failed sender authentication",
+  "category.INTERNAL_TRUSTED": "Internal sender",
+  "category.VENDOR_TRUSTED": "Trusted vendor",
+  "category.NEWSLETTER": "Newsletter",
+
+  "auth.verified": "Sender verified",
+  "auth.unverified": "Sender not verified",
+  "auth.failed": "Sender authentication failed",
+  "auth.unknown": "Sender authentication unknown",
+
+  "action.report": "Report phishing",
+  "action.mark_safe": "Mark as safe",
+  "action.trust_sender": "Trust this sender",
+  "action.learn_more": "Learn more",
+
+  "banner.degraded": "Some detection services were unavailable during evaluation."
+}

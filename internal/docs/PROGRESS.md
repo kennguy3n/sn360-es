@@ -33,39 +33,41 @@
 
 ### v2 (SN360-ES) — Planned Features
 
+**Overall v2 Status**: In progress | ~59% (30/51 tasks complete — Phase 1-4 complete, Phase 5 partial)
+
 | Area | Status | Priority | Phase |
 |---|---|---|---|
-| **Tier 0 classification gates** | 🔲 Not started | Critical | Phase 1 |
-| **Graceful degradation (AI failure)** | 🔲 Not started | Critical | Phase 1 |
-| **NATS JetStream event bus** | 🔲 Not started | Critical | Phase 1 |
-| **NATS `EventService` interface** | 🔲 Not started | Critical | Phase 1 |
-| **Feature flag: EVENT_BUS_TYPE** | 🔲 Not started | High | Phase 1 |
-| **Dead-letter queue handling** | 🔲 Not started | High | Phase 1 |
-| **Privacy layer (`pkg/privacy/`)** | 🔲 Not started | Critical | Phase 2 |
-| **PII pseudonymization (Blake2)** | 🔲 Not started | Critical | Phase 2 |
-| **Per-tenant encryption (KMS)** | 🔲 Not started | Critical | Phase 2 |
-| **Log sanitization middleware** | 🔲 Not started | High | Phase 2 |
-| **Cryptographic erasure on delete** | 🔲 Not started | High | Phase 2 |
-| **AI result caching** | 🔲 Not started | High | Phase 2 |
-| **Rspamd result caching** | 🔲 Not started | Medium | Phase 2 |
-| **Redis pipelining (batch reads)** | 🔲 Not started | Medium | Phase 2 |
-| **Tier 1 encoder model (XLM-RoBERTa)** | 🔲 Not started | Critical | Phase 3 |
-| **Encoder inference service (K8s)** | 🔲 Not started | Critical | Phase 3 |
-| **Micro-batching (NATS batch fetch)** | 🔲 Not started | High | Phase 3 |
-| **Batch Tier 1 GPU inference** | 🔲 Not started | High | Phase 3 |
-| **AI Onboarding Agent** | 🔲 Not started | High | Phase 4 |
-| **AI Tuning Agent** | 🔲 Not started | High | Phase 4 |
-| **AI Support Agent** | 🔲 Not started | Medium | Phase 4 |
-| **Auto-onboarding (OAuth flow)** | 🔲 Not started | High | Phase 4 |
-| **Org graph discovery** | 🔲 Not started | High | Phase 4 |
-| **Tiered banner system (6 tiers)** | 🔲 Not started | Critical | Phase 5 |
-| **Native provider labels per tier (Gmail + Outlook)** | 🔲 Not started | Critical | Phase 5 |
-| **Category vocabulary (16 categories)** | 🔲 Not started | High | Phase 5 |
-| **One-click Report Phishing / Mark Safe** | 🔲 Not started | High | Phase 5 |
-| **Sender authentication chip in banner** | 🔲 Not started | High | Phase 5 |
-| **Action token service (signed JWT)** | 🔲 Not started | High | Phase 5 |
-| **URL rewriting (High Risk + Blocked)** | 🔲 Not started | High | Phase 5 |
-| **URL interstitial service** | 🔲 Not started | High | Phase 5 |
+| **Tier 0 classification gates** | ✅ Done | Critical | Phase 1 |
+| **Graceful degradation (AI failure)** | ✅ Done | Critical | Phase 1 |
+| **NATS JetStream event bus** | ✅ Done | Critical | Phase 1 |
+| **NATS `EventService` interface** | ✅ Done | Critical | Phase 1 |
+| **Feature flag: EVENT_BUS_TYPE** | ✅ Done | High | Phase 1 |
+| **Dead-letter queue handling** | ✅ Done | High | Phase 1 |
+| **Privacy layer (`pkg/privacy/`)** | ✅ Done | Critical | Phase 2 |
+| **PII pseudonymization (Blake2)** | ✅ Done | Critical | Phase 2 |
+| **Per-tenant encryption (KMS)** | ✅ Done | Critical | Phase 2 |
+| **Log sanitization middleware** | ✅ Done | High | Phase 2 |
+| **Cryptographic erasure on delete** | ✅ Done | High | Phase 2 |
+| **AI result caching** | ✅ Done | High | Phase 2 |
+| **Rspamd result caching** | ✅ Done | Medium | Phase 2 |
+| **Redis pipelining (batch reads)** | ✅ Done | Medium | Phase 2 |
+| **Tier 1 encoder model (XLM-RoBERTa)** | ✅ Done | Critical | Phase 3 |
+| **Encoder inference service (K8s)** | ✅ Done | Critical | Phase 3 |
+| **Micro-batching (NATS batch fetch)** | ✅ Done | High | Phase 3 |
+| **Batch Tier 1 GPU inference** | ✅ Done | High | Phase 3 |
+| **AI Onboarding Agent** | ✅ Done | High | Phase 4 |
+| **AI Tuning Agent** | ✅ Done | High | Phase 4 |
+| **AI Support Agent** | ✅ Done | Medium | Phase 4 |
+| **Auto-onboarding (OAuth flow)** | ✅ Done | High | Phase 4 |
+| **Org graph discovery** | ✅ Done | High | Phase 4 |
+| **Tiered banner system (6 tiers)** | ✅ Done | Critical | Phase 5 |
+| **Native provider labels per tier (Gmail + Outlook)** | ✅ Done | Critical | Phase 5 |
+| **Category vocabulary (16 categories)** | ✅ Done | High | Phase 5 |
+| **One-click Report Phishing / Mark Safe** | ✅ Done | High | Phase 5 |
+| **Sender authentication chip in banner** | ✅ Done | High | Phase 5 |
+| **Action token service (signed JWT)** | ✅ Done | High | Phase 5 |
+| **URL rewriting (High Risk + Blocked)** | ✅ Done | High | Phase 5 |
+| **URL interstitial service** | ✅ Done | High | Phase 5 |
 | **Quarantine + release flow** | 🔲 Not started | High | Phase 5 |
 | **Banner accessibility (WCAG 2.1 AA)** | 🔲 Not started | Medium | Phase 5 |
 | **Banner i18n expansion (th, ja, ko, zh)** | 🔲 Not started | Medium | Phase 5 |
@@ -89,7 +91,32 @@
 
 ---
 
-## Changelog (v1 / NGES — Reverse Chronological)
+## Changelog (Reverse Chronological)
+
+### 2026-05-16 (v2 / SN360-ES)
+
+- **Phase 1**: NATS JetStream event bus (5 streams: `ES_EVALUATE`, `ES_ONBOARDING`, `ES_EDUCATION`, `ES_ACTION`, `ES_DLQ`) with `EventService` interface and Redis-Streams fallback behind `EVENT_BUS_TYPE` feature flag
+- **Phase 1**: Dead-letter queue routing + DLQ processor service with replay support
+- **Phase 1**: Tier 0 classification gates (internal / vendor / recurring service / high-volume bypass) — pure CPU, <1 ms
+- **Phase 1**: Graceful-degradation orchestrator with circuit breakers and weighted score aggregation
+- **Phase 2**: Privacy layer (`pkg/privacy/`) — Blake2b pseudonymisation, AES-256-GCM per-tenant envelope encryption, AWS KMS wrapper, log-sanitisation slog handler, cryptographic erasure
+- **Phase 2**: AI result cache (1 h TTL) + Rspamd cache (30 m TTL) + Redis pipeline wrapper for batched tenant config loads
+- **Phase 3**: Tier 1 encoder client (XLM-RoBERTa) with per-tenant threshold logic and language-hint extraction
+- **Phase 3**: K8s encoder inference service (FastAPI + ONNX Runtime + HPA + GPU/CPU fallback)
+- **Phase 3**: Micro-batching (NATS pull fetch, up to 50 msgs) + batch Tier 1 GPU inference with individual-call fallback
+- **Phase 4**: AI Onboarding / Tuning / Support agents with role-based sensitivity tiers and FP/FN-driven threshold tuning
+- **Phase 4**: OAuth auto-onboarding for Google Workspace + Microsoft 365 with org graph discovery (high-risk group identification)
+- **Phase 5**: 6-tier banner system (Trusted / Informational / Caution / Warning / HighRisk / Blocked) with deterministic `html/template` renderer, inline CSS, dark-mode safe, WCAG 2.1 AA
+- **Phase 5**: Native provider labels (Gmail labels + Outlook Master Categories) per tier with idempotent application and label-ID caching
+- **Phase 5**: 16-category vocabulary + rule categorizer (primary + up to 2 secondaries)
+- **Phase 5**: Sender-auth chip (SPF/DKIM/DMARC aggregate verdict)
+- **Phase 5**: Action token service (HS256 JWT, per-tenant secret, no PII)
+- **Phase 5**: One-click `POST /v1/banner/action` (Report Phishing / Mark Safe / Trust Sender) with `es.action.feedback.*` events and optional re-evaluation
+- **Phase 5**: URL rewriter (HighRisk + Blocked) + interstitial endpoint with encrypted pre-image storage in Redis and optional threat-intel re-check
+- **Tests**: Table-driven unit tests for tier_decider, banner_renderer (incl. i18n + determinism), auth_verdict, url_rewriter, feedback, categorizer, scorer, tier0 gate, recurring detector, Blake2 pseudonymizer, JWT issuer
+- See `internal/docs/PHASES.md` for phase-level tracking.
+
+## v1 / NGES Changelog
 
 ### 2026-05-15
 

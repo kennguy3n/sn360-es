@@ -1,0 +1,474 @@
+// Package config loads SN360-ES runtime configuration from the environment.
+//
+// All configuration is environment-driven (12-factor). A `.env` file is loaded
+// up front if present, but real values are read from the process environment so
+// that container deployments (k8s, ECS) work without source changes.
+//
+// The package deliberately has no external dependencies beyond the Go standard
+// library so it can be safely imported from tests, tools, and migrations.
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Environment is the deployment stage the service is running in.
+type Environment string
+
+const (
+	EnvironmentLocal Environment = "local"
+	EnvironmentDev   Environment = "dev"
+	EnvironmentQA    Environment = "qa"
+	EnvironmentUAT   Environment = "uat"
+	EnvironmentProd  Environment = "prod"
+)
+
+// IsDevelopment reports whether the environment is local or dev.
+func (e Environment) IsDevelopment() bool {
+	return e == EnvironmentLocal || e == EnvironmentDev
+}
+
+// String implements fmt.Stringer.
+func (e Environment) String() string { return string(e) }
+
+// EventBusType selects the event-bus implementation (`pkg/events`).
+type EventBusType string
+
+const (
+	EventBusNATS  EventBusType = "nats"
+	EventBusRedis EventBusType = "redis"
+)
+
+// Valid reports whether the value is a recognised event bus.
+func (t EventBusType) Valid() bool {
+	switch t {
+	case EventBusNATS, EventBusRedis:
+		return true
+	default:
+		return false
+	}
+}
+
+// Config is the top-level service configuration.
+//
+// All sub-structs are exported so that tests and helper packages can build
+// custom configurations without re-reading the environment.
+type Config struct {
+	Environment Environment
+	AppName     string
+
+	Log        Log
+	HTTP       HTTP
+	EventBus   EventBusType
+	NATS       NATS
+	Redis      Redis
+	Postgres   Postgres
+	AWS        AWS
+	Rspamd     Rspamd
+	AI         AI
+	Tier1      Tier1
+	Tier0      Tier0
+	CB         CircuitBreaker
+	Privacy    Privacy
+	Banner     Banner
+	Score      ScoreThresholds
+	URLRewrite URLRewrite
+}
+
+// Log carries structured-logging configuration.
+type Log struct {
+	Level  string
+	Format string // "json" or "text"
+}
+
+// HTTP holds the HTTP server config.
+type HTTP struct {
+	Host         string
+	Port         int
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+}
+
+// Addr returns the listen address (host:port).
+func (h HTTP) Addr() string {
+	return fmt.Sprintf("%s:%d", h.Host, h.Port)
+}
+
+// NATS contains all NATS / JetStream connection settings.
+type NATS struct {
+	URL                  string
+	Name                 string
+	User                 string
+	Password             string
+	Token                string
+	CredsFile            string
+	TLSCAFile            string
+	TLSCertFile          string
+	TLSKeyFile           string
+	TLSInsecure          bool
+	ReconnectWait        time.Duration
+	MaxReconnects        int
+	RequestTimeout       time.Duration
+	PublishRetryAttempts int
+	PublishRetryDelay    time.Duration
+	DedupWindow          time.Duration
+	Replicas             int
+	Storage              string // "file" or "memory"
+	FetchBatchSize       int
+	FetchMaxWait         time.Duration
+}
+
+// Redis carries Redis client + optional event-bus config.
+type Redis struct {
+	Addr             string
+	Password         string
+	DB               int
+	PoolSize         int
+	MinIdleConns     int
+	DialTimeout      time.Duration
+	ReadTimeout      time.Duration
+	WriteTimeout     time.Duration
+	ReconnectTimeout time.Duration
+	MinRetryBackoff  time.Duration
+	ConsumerBlock    time.Duration
+}
+
+// Postgres carries database connection config.
+type Postgres struct {
+	Host            string
+	Port            int
+	User            string
+	Password        string
+	Database        string
+	SSLMode         string
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+}
+
+// DSN returns a libpq connection string.
+func (p Postgres) DSN() string {
+	return fmt.Sprintf(
+		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+		p.Host, p.Port, p.User, p.Password, p.Database, p.SSLMode,
+	)
+}
+
+// AWS holds AWS-related configuration (KMS, S3).
+type AWS struct {
+	Region              string
+	KMSMasterKeyID      string
+	S3CredentialsBucket string
+	KMSUseMock          bool
+	KMSMockKeyHex       string
+}
+
+// Rspamd configures the Rspamd HTTP client.
+type Rspamd struct {
+	URL      string
+	Password string
+	Timeout  time.Duration
+	CacheTTL time.Duration
+}
+
+// AI configures the Tier 2 LLM client.
+type AI struct {
+	URL      string
+	APIKey   string
+	Timeout  time.Duration
+	CacheTTL time.Duration
+}
+
+// Tier1 configures the Tier 1 (encoder) client.
+type Tier1 struct {
+	URL           string
+	Timeout       time.Duration
+	BatchSize     int
+	PassThreshold int
+	FlagThreshold int
+}
+
+// Tier0 controls the Tier 0 classification gates.
+type Tier0 struct {
+	SkipInternal         bool
+	SkipVendor           bool
+	SkipRecurring        bool
+	HighVolumeRspamdOnly bool
+}
+
+// CircuitBreaker holds shared circuit-breaker defaults.
+type CircuitBreaker struct {
+	FailureThreshold int
+	SuccessThreshold int
+	OpenTimeout      time.Duration
+}
+
+// Privacy holds privacy-layer toggles.
+type Privacy struct {
+	PseudonymizeLogs bool
+}
+
+// Banner holds banner / action-token configuration.
+type Banner struct {
+	TokenSecret   string
+	TokenTTL      time.Duration
+	DefaultLocale string
+}
+
+// ScoreThresholds defines the default per-tier score boundaries.
+type ScoreThresholds struct {
+	Blocked  int
+	HighRisk int
+	Warning  int
+	Caution  int
+	Info     int
+}
+
+// URLRewrite configures the URL-rewriter interstitial.
+type URLRewrite struct {
+	Base string
+}
+
+// Load reads configuration from the environment.
+//
+// It loads ".env" if present in the working directory (best-effort) and
+// then parses all known variables, returning a populated [Config].
+//
+// Required variables: APP_NAME, ENVIRONMENT. Other variables fall back to
+// sensible defaults so that scripts and unit tests can run without a full
+// environment.
+func Load() (Config, error) {
+	_ = loadDotEnv(".env")
+
+	cfg := Config{
+		Environment: Environment(getStr("ENVIRONMENT", string(EnvironmentLocal))),
+		AppName:     getStr("APP_NAME", "sn360-es"),
+
+		Log: Log{
+			Level:  getStr("LOG_LEVEL", "info"),
+			Format: getStr("LOG_FORMAT", "json"),
+		},
+		HTTP: HTTP{
+			Host:         getStr("HTTP_HOST", "0.0.0.0"),
+			Port:         getInt("HTTP_PORT", 8080),
+			ReadTimeout:  getDuration("HTTP_READ_TIMEOUT", 15*time.Second),
+			WriteTimeout: getDuration("HTTP_WRITE_TIMEOUT", 30*time.Second),
+		},
+		EventBus: EventBusType(strings.ToLower(getStr("EVENT_BUS_TYPE", string(EventBusNATS)))),
+		NATS: NATS{
+			URL:                  getStr("NATS_URL", "nats://127.0.0.1:4222"),
+			Name:                 getStr("NATS_NAME", "sn360-es"),
+			User:                 getStr("NATS_USER", ""),
+			Password:             getStr("NATS_PASSWORD", ""),
+			Token:                getStr("NATS_TOKEN", ""),
+			CredsFile:            getStr("NATS_CREDS_FILE", ""),
+			TLSCAFile:            getStr("NATS_TLS_CA", ""),
+			TLSCertFile:          getStr("NATS_TLS_CERT", ""),
+			TLSKeyFile:           getStr("NATS_TLS_KEY", ""),
+			TLSInsecure:          getBool("NATS_TLS_INSECURE", false),
+			ReconnectWait:        getDuration("NATS_RECONNECT_WAIT", 2*time.Second),
+			MaxReconnects:        getInt("NATS_MAX_RECONNECTS", -1),
+			RequestTimeout:       getDuration("NATS_REQUEST_TIMEOUT", 5*time.Second),
+			PublishRetryAttempts: getInt("NATS_PUBLISH_RETRY_ATTEMPTS", 3),
+			PublishRetryDelay:    getDuration("NATS_PUBLISH_RETRY_DELAY", 200*time.Millisecond),
+			DedupWindow:          getDuration("NATS_DEDUP_WINDOW", 2*time.Minute),
+			Replicas:             getInt("NATS_REPLICAS", 1),
+			Storage:              getStr("NATS_STORAGE", "file"),
+			FetchBatchSize:       getInt("NATS_FETCH_BATCH_SIZE", 50),
+			FetchMaxWait:         getDuration("NATS_FETCH_MAX_WAIT", 200*time.Millisecond),
+		},
+		Redis: Redis{
+			Addr:             getStr("REDIS_ADDR", "127.0.0.1:6379"),
+			Password:         getStr("REDIS_PASSWORD", ""),
+			DB:               getInt("REDIS_DB", 0),
+			PoolSize:         getInt("REDIS_POOL_SIZE", 20),
+			MinIdleConns:     getInt("REDIS_MIN_IDLE_CONNS", 4),
+			DialTimeout:      getDuration("REDIS_DIAL_TIMEOUT", 5*time.Second),
+			ReadTimeout:      getDuration("REDIS_READ_TIMEOUT", 2*time.Second),
+			WriteTimeout:     getDuration("REDIS_WRITE_TIMEOUT", 2*time.Second),
+			ReconnectTimeout: getDuration("REDIS_RECONNECT_TIMEOUT", 30*time.Second),
+			MinRetryBackoff:  getDuration("REDIS_MIN_RETRY_BACKOFF", 100*time.Millisecond),
+			ConsumerBlock:    getDuration("REDIS_CONSUMER_BLOCK", 0),
+		},
+		Postgres: Postgres{
+			Host:            getStr("PG_HOST", "127.0.0.1"),
+			Port:            getInt("PG_PORT", 5432),
+			User:            getStr("PG_USER", "sn360es"),
+			Password:        getStr("PG_PASSWORD", "sn360es"),
+			Database:        getStr("PG_DATABASE", "sn360es"),
+			SSLMode:         getStr("PG_SSLMODE", "disable"),
+			MaxOpenConns:    getInt("PG_MAX_OPEN_CONNS", 20),
+			MaxIdleConns:    getInt("PG_MAX_IDLE_CONNS", 5),
+			ConnMaxLifetime: getDuration("PG_CONN_MAX_LIFETIME", time.Hour),
+		},
+		AWS: AWS{
+			Region:              getStr("AWS_REGION", "ap-southeast-1"),
+			KMSMasterKeyID:      getStr("AWS_KMS_MASTER_KEY_ID", ""),
+			S3CredentialsBucket: getStr("AWS_S3_BUCKET_CREDENTIALS", ""),
+			KMSUseMock:          getBool("KMS_USE_MOCK", true),
+			KMSMockKeyHex:       getStr("KMS_MOCK_KEY_HEX", ""),
+		},
+		Rspamd: Rspamd{
+			URL:      getStr("RSPAMD_URL", "http://127.0.0.1:11333"),
+			Password: getStr("RSPAMD_PASSWORD", ""),
+			Timeout:  getDuration("RSPAMD_TIMEOUT", 5*time.Second),
+			CacheTTL: getDuration("RSPAMD_CACHE_TTL", 30*time.Minute),
+		},
+		AI: AI{
+			URL:      getStr("AI_URL", "http://127.0.0.1:9000"),
+			APIKey:   getStr("AI_API_KEY", ""),
+			Timeout:  getDuration("AI_TIMEOUT", 30*time.Second),
+			CacheTTL: getDuration("AI_CACHE_TTL", time.Hour),
+		},
+		Tier1: Tier1{
+			URL:           getStr("TIER1_URL", "http://127.0.0.1:9100"),
+			Timeout:       getDuration("TIER1_TIMEOUT", 5*time.Second),
+			BatchSize:     getInt("TIER1_BATCH_SIZE", 64),
+			PassThreshold: getInt("TIER1_PASS_THRESHOLD", 20),
+			FlagThreshold: getInt("TIER1_FLAG_THRESHOLD", 60),
+		},
+		Tier0: Tier0{
+			SkipInternal:         getBool("TIER0_SKIP_INTERNAL", true),
+			SkipVendor:           getBool("TIER0_SKIP_VENDOR", true),
+			SkipRecurring:        getBool("TIER0_SKIP_RECURRING", true),
+			HighVolumeRspamdOnly: getBool("TIER0_HIGH_VOLUME_RSPAMD_ONLY", true),
+		},
+		CB: CircuitBreaker{
+			FailureThreshold: getInt("CB_FAILURE_THRESHOLD", 5),
+			SuccessThreshold: getInt("CB_SUCCESS_THRESHOLD", 2),
+			OpenTimeout:      getDuration("CB_OPEN_TIMEOUT", 30*time.Second),
+		},
+		Privacy: Privacy{
+			PseudonymizeLogs: getBool("PRIVACY_PSEUDONYMIZE_LOGS", true),
+		},
+		Banner: Banner{
+			TokenSecret:   getStr("BANNER_TOKEN_SECRET", ""),
+			TokenTTL:      getDuration("BANNER_TOKEN_TTL", 7*24*time.Hour),
+			DefaultLocale: getStr("BANNER_DEFAULT_LOCALE", "en"),
+		},
+		Score: ScoreThresholds{
+			Blocked:  getInt("SCORE_BLOCKED_THRESHOLD", 85),
+			HighRisk: getInt("SCORE_HIGH_RISK_THRESHOLD", 70),
+			Warning:  getInt("SCORE_WARNING_THRESHOLD", 50),
+			Caution:  getInt("SCORE_CAUTION_THRESHOLD", 30),
+			Info:     getInt("SCORE_INFO_THRESHOLD", 15),
+		},
+		URLRewrite: URLRewrite{
+			Base: getStr("URL_REWRITER_BASE", "https://l.sn360.io"),
+		},
+	}
+
+	if err := cfg.validate(); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+// MustLoad calls [Load] and panics on error. Useful in main() only.
+func MustLoad() Config {
+	cfg, err := Load()
+	if err != nil {
+		panic(err)
+	}
+	return cfg
+}
+
+// validate enforces minimal correctness invariants.
+func (c Config) validate() error {
+	if c.AppName == "" {
+		return errors.New("APP_NAME must be set")
+	}
+	if c.Environment == "" {
+		return errors.New("ENVIRONMENT must be set")
+	}
+	if !c.EventBus.Valid() {
+		return fmt.Errorf("EVENT_BUS_TYPE: invalid value %q (expected nats or redis)", c.EventBus)
+	}
+	if c.HTTP.Port <= 0 || c.HTTP.Port > 65535 {
+		return fmt.Errorf("HTTP_PORT out of range: %d", c.HTTP.Port)
+	}
+	if c.Score.Blocked <= c.Score.HighRisk ||
+		c.Score.HighRisk <= c.Score.Warning ||
+		c.Score.Warning <= c.Score.Caution ||
+		c.Score.Caution <= c.Score.Info {
+		return errors.New("SCORE_*_THRESHOLD must be strictly decreasing: blocked > high > warning > caution > info")
+	}
+	return nil
+}
+
+// --- env helpers ------------------------------------------------------------
+
+func getStr(key, def string) string {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		return v
+	}
+	return def
+}
+
+func getInt(key string, def int) int {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		n, err := strconv.Atoi(v)
+		if err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+func getBool(key string, def bool) bool {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		b, err := strconv.ParseBool(v)
+		if err == nil {
+			return b
+		}
+	}
+	return def
+}
+
+func getDuration(key string, def time.Duration) time.Duration {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		d, err := time.ParseDuration(v)
+		if err == nil {
+			return d
+		}
+	}
+	return def
+}
+
+// loadDotEnv parses a minimal .env file and assigns variables that aren't
+// already in the process environment. Lines beginning with `#` and blank
+// lines are ignored. Values may be optionally quoted.
+//
+// This is intentionally tiny: production deployments should source the
+// environment from the orchestrator (k8s ConfigMap/Secret, ECS env, etc.).
+func loadDotEnv(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		eq := strings.IndexByte(line, '=')
+		if eq <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:eq])
+		val := strings.TrimSpace(line[eq+1:])
+		if len(val) >= 2 && (val[0] == '"' || val[0] == '\'') && val[0] == val[len(val)-1] {
+			val = val[1 : len(val)-1]
+		}
+		if _, ok := os.LookupEnv(key); ok {
+			continue
+		}
+		_ = os.Setenv(key, val)
+	}
+	return nil
+}

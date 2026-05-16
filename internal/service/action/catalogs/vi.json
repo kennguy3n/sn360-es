@@ -1,0 +1,43 @@
+{
+  "tier.Blocked.title": "Đã chặn: email này nguy hiểm",
+  "tier.Blocked.body": "Chúng tôi đã chặn email này vì có khả năng cao là tấn công lừa đảo hoặc mối đe doạ khác. Không mở tệp đính kèm hoặc nhấp vào bất kỳ liên kết nào.",
+  "tier.HighRisk.title": "Rủi ro cao: đừng hành động theo email này",
+  "tier.HighRisk.body": "Email này có dấu hiệu mạnh của giả mạo, gian lận hoặc tài khoản bị xâm phạm. Xác minh người gửi qua kênh khác trước khi thực hiện bất kỳ hành động nào.",
+  "tier.Warning.title": "Cảnh báo: email này có dấu hiệu đáng ngờ",
+  "tier.Warning.body": "Email này có một số dấu hiệu cho thấy người gửi có thể đang cố lừa bạn. Kiểm tra kỹ người gửi trước khi nhấp liên kết hoặc trả lời.",
+  "tier.Caution.title": "Thận trọng: người gửi hoặc nội dung bất thường",
+  "tier.Caution.body": "Có điều gì đó bất thường ở email này. Hãy cẩn trọng với mọi liên kết, tệp đính kèm hoặc yêu cầu.",
+  "tier.Informational.title": "Người gửi bên ngoài lần đầu",
+  "tier.Informational.body": "Đây là email đầu tiên chúng tôi thấy từ người gửi này. Hãy xác nhận danh tính trước khi hành động theo bất kỳ yêu cầu nào.",
+  "tier.Trusted.title": "Người gửi tin cậy",
+  "tier.Trusted.body": "Email này đến từ một người gửi mà tổ chức của bạn đã tin cậy. Không cần hành động.",
+
+  "category.LIKELY_PHISHING": "Có khả năng là lừa đảo",
+  "category.BEC_IMPERSONATION": "Có thể giả mạo nội bộ (BEC)",
+  "category.LOOKALIKE_DOMAIN": "Tên miền giả mạo",
+  "category.SUSPICIOUS_URL": "Liên kết đáng ngờ",
+  "category.SUSPICIOUS_ATTACHMENT": "Tệp đính kèm đáng ngờ",
+  "category.FIRST_CONTACT_EXTERNAL": "Liên hệ đầu tiên từ bên ngoài",
+  "category.ACCOUNT_TAKEOVER_SUSPECTED": "Nghi tài khoản bị chiếm",
+  "category.VENDOR_COMPROMISE": "Nghi nhà cung cấp bị xâm phạm",
+  "category.CREDENTIAL_HARVESTING": "Thu thập thông tin đăng nhập",
+  "category.INVOICE_FRAUD": "Gian lận hoá đơn",
+  "category.QR_PHISHING": "Lừa đảo qua mã QR",
+  "category.SCAM_FRAUD": "Lừa đảo / gian lận",
+  "category.AUTH_FAILED": "Xác thực người gửi thất bại",
+  "category.INTERNAL_TRUSTED": "Người gửi nội bộ",
+  "category.VENDOR_TRUSTED": "Nhà cung cấp tin cậy",
+  "category.NEWSLETTER": "Bản tin",
+
+  "auth.verified": "Đã xác minh người gửi",
+  "auth.unverified": "Chưa xác minh người gửi",
+  "auth.failed": "Xác thực người gửi thất bại",
+  "auth.unknown": "Chưa rõ trạng thái xác thực",
+
+  "action.report": "Báo cáo lừa đảo",
+  "action.mark_safe": "Đánh dấu an toàn",
+  "action.trust_sender": "Tin tưởng người gửi",
+  "action.learn_more": "Tìm hiểu thêm",
+
+  "banner.degraded": "Một số dịch vụ phát hiện không khả dụng khi đánh giá."
+}

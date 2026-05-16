@@ -1,0 +1,17 @@
+# SN360-ES Tier 1 encoder inference service dependencies.
+fastapi==0.115.5
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+numpy==1.26.4
+onnxruntime==1.19.2
+# Hugging Face stack — used to load XLM-RoBERTa tokenizers + (optionally)
+# export a fine-tuned classifier to ONNX. transformers is pinned to a
+# version compatible with both torch (CPU dev) and onnxruntime.
+transformers==4.46.3
+tokenizers==0.20.3
+sentencepiece==0.2.0
+# Torch is optional at runtime; only loaded if FORCE_TORCH=1. It is kept
+# off the default install path because the ONNX wheel is ~1/10 the size.
+# torch==2.4.1
+prometheus-client==0.21.0
+langdetect==1.0.9
