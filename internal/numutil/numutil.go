@@ -20,9 +20,11 @@ func ClampPct(v float64) float64 {
 
 // IntClamp rounds v to the nearest integer and clamps it to 0..100.
 // Used by scorers that publish integer breakdown fields on a 0..100
-// scale.
+// scale. NaN inputs collapse to 0 (matching ClampPct) so callers that
+// forget to pre-sanitise still get a defined 0..100 result instead of
+// an implementation-dependent int conversion.
 func IntClamp(v float64) int {
-	if v < 0 {
+	if math.IsNaN(v) || v < 0 {
 		return 0
 	}
 	if v > 100 {

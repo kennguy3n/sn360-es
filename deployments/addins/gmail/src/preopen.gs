@@ -83,10 +83,13 @@ function parseBannerHeader_(headerBlock) {
   var parts = headerLine.substring("x-sn360-banner:".length).split(";");
   var meta = { tier: "", category: "", pseudo_message_id: "" };
   for (var j = 0; j < parts.length; j++) {
-    var kv = parts[j].split("=");
-    if (kv.length !== 2) continue;
-    var key = kv[0].trim().toLowerCase();
-    var value = kv[1].trim();
+    // Split on the first "=" only so future values containing "="
+    // (e.g. base64-encoded pseudo_message_ids) aren't silently
+    // dropped.
+    var eq = parts[j].indexOf("=");
+    if (eq <= 0) continue;
+    var key = parts[j].substring(0, eq).trim().toLowerCase();
+    var value = parts[j].substring(eq + 1).trim();
     if (key === "tier") meta.tier = value;
     else if (key === "category") meta.category = value;
     else if (key === "pmid") meta.pseudo_message_id = value;

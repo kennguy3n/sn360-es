@@ -29,10 +29,13 @@
     if (!value) return meta;
     var parts = String(value).split(";");
     for (var i = 0; i < parts.length; i++) {
-      var kv = parts[i].split("=");
-      if (kv.length !== 2) continue;
-      var key = kv[0].trim().toLowerCase();
-      var val = kv[1].trim();
+      // Split on the first "=" only so future values containing "="
+      // (e.g. base64-encoded pseudo_message_ids) aren't silently
+      // dropped.
+      var eq = parts[i].indexOf("=");
+      if (eq <= 0) continue;
+      var key = parts[i].substring(0, eq).trim().toLowerCase();
+      var val = parts[i].substring(eq + 1).trim();
       if (key === "tier") meta.tier = val;
       else if (key === "category") meta.category = val;
       else if (key === "pmid") meta.pseudo_message_id = val;
@@ -43,8 +46,9 @@
   function readBannerMeta(item) {
     // The banner injector embeds (tier, category, pseudo_message_id)
     // in an X-SN360-Banner internet header. The add-in surfaces it
-    // via the Office.js InternetHeaders API (requires MailboxEnums
-    // Mailbox 1.8+; the manifest sets MinimumVersion=1.8).
+    // via the Office.js InternetHeaders API (requires Mailbox 1.8+;
+    // the manifest pins minVersion=1.10 for InternetHeaders.getAsync
+    // stability across Outlook on the web / desktop / mobile).
     return new Promise((resolve) => {
       try {
         if (!item || !item.internetHeaders || typeof item.internetHeaders.getAsync !== "function") {
