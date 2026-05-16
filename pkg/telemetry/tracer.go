@@ -161,7 +161,17 @@ func (t *Tracer) StartSpan(ctx context.Context, name string, attrs ...Attribute)
 	if !hasParent || traceID == "" {
 		traceID, _ = newID(16)
 	}
-	sampled := hasParent && parent.Sampled || t.cfg.Sampler.ShouldSample(ctx, name)
+	// Parent-based propagation: when a parent span context is present
+	// the child inherits its sampling decision verbatim. Only root
+	// spans consult the local Sampler. This matches the W3C
+	// traceparent semantics ("child spans inherit the parent
+	// decision") referenced by ProbabilitySampler.
+	var sampled bool
+	if hasParent {
+		sampled = parent.Sampled
+	} else {
+		sampled = t.cfg.Sampler.ShouldSample(ctx, name)
+	}
 	sc := SpanContext{TraceID: traceID, SpanID: spanID, Sampled: sampled}
 	s := &Span{
 		tracer: t,

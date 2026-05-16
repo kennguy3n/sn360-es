@@ -201,13 +201,16 @@ func (s *ReleaseService) Release(ctx context.Context, req ReleaseRequest) (Relea
 
 // isStillBlocked reports whether tier is still at or above the
 // configured release gate. minTier is inclusive: when the new
-// verdict equals minTier the release is refused.
+// verdict equals minTier the release is refused. SecOps can tighten
+// the gate by lowering minTier (e.g. require HighRisk or below to
+// release), so the comparison is severity-based and does not depend
+// on whether minTier itself is the Blocked tier.
 func isStillBlocked(tier, minTier constant.Tier) bool {
 	if !tier.Valid() {
 		// Be conservative: treat invalid verdicts as still blocked.
 		return true
 	}
-	return tier.Severity() >= minTier.Severity() && minTier.IsBlocking()
+	return tier.Severity() >= minTier.Severity()
 }
 
 // defaultRestoredBody is the placeholder body the provider injects

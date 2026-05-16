@@ -18,6 +18,12 @@
     return Office.context.mailbox.diagnostics ? Office.context.mailbox.diagnostics.hostName : "outlook";
   }
 
+  function senderEmail() {
+    if (typeof Office === "undefined" || !Office.context || !Office.context.mailbox) return "";
+    var profile = Office.context.mailbox.userProfile;
+    return (profile && profile.emailAddress) ? profile.emailAddress : "";
+  }
+
   async function sha256Hex(str) {
     const buf = new TextEncoder().encode(str);
     const hash = await crypto.subtle.digest("SHA-256", buf);
@@ -34,7 +40,7 @@
     return at < 0 ? "" : email.substring(at + 1).toLowerCase();
   }
 
-  async function buildRequest(tenant, recipients, threadIsInternal) {
+  async function buildRequest(tenant, sender, recipients, threadIsInternal) {
     const list = [];
     for (const r of recipients) {
       const dom = domainOf(r.emailAddress);
@@ -45,9 +51,10 @@
         is_known_contact: !!r.isKnownContact,
       });
     }
+    const senderKey = (sender || "").toLowerCase().trim();
     return {
       tenant_id: tenant,
-      sender_hash: await sha256Hex(tenant + "|sender"),
+      sender_hash: await sha256Hex(tenant + "|" + senderKey),
       recipients: list,
       thread_is_internal: !!threadIsInternal,
     };
@@ -100,7 +107,7 @@
         eventArgs.completed({ allowEvent: true });
         return;
       }
-      const body = await buildRequest(tenantId(), recipients, false);
+      const body = await buildRequest(tenantId(), senderEmail(), recipients, false);
       const resp = await callPredict(body);
       showSendConfirmation(eventArgs, resp);
     } catch (err) {

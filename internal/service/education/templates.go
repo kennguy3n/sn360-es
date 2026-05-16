@@ -65,9 +65,12 @@ func (l *TemplateLibrary) Register(t dto.SimulationTemplate) error {
 	if _, ok := l.byAttack[t.AttackType]; !ok {
 		l.byAttack[t.AttackType] = map[dto.DifficultyLevel][]string{}
 	}
-	// Avoid duplicate index entries on re-register.
+	// Avoid duplicate index entries on re-register. We allocate a
+	// fresh slice rather than reslicing `existing` (with
+	// `existing[:0]`) so the underlying array of any retained
+	// reference is not mutated by subsequent appends.
 	existing := l.byAttack[t.AttackType][t.Difficulty]
-	dedup := existing[:0]
+	dedup := make([]string, 0, len(existing)+1)
 	for _, id := range existing {
 		if id != t.TemplateID {
 			dedup = append(dedup, id)

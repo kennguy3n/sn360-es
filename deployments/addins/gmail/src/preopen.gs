@@ -7,7 +7,10 @@
  * user opens the body.
  */
 
-var SN360_API_BASE = SN360_API_BASE || "https://api.sn360.example.com";
+// SN360_API_BASE is declared in presend.gs so both files share the
+// same global. Apps Script loads all `.gs` files into a single global
+// scope, so duplicating the declaration with `var` here would shadow
+// any value set elsewhere. We intentionally do NOT redeclare it.
 
 function sn360PreOpenTrigger(e) {
   if (!e || !e.gmail || !e.gmail.messageId) return [];
@@ -16,7 +19,7 @@ function sn360PreOpenTrigger(e) {
   GmailApp.setCurrentMessageAccessToken(accessToken);
   var msg = GmailApp.getMessageById(e.gmail.messageId);
   if (!msg) return [];
-  var meta = parseBannerHeader_(msg.getRawContent());
+  var meta = parseBannerHeader_(readMessageHeaders_(msg));
   if (!meta || !meta.pseudo_message_id) return [];
   var tenant = tenantIdFromUser_();
   var resp = callPredict_("/v1/predict/open", {
@@ -39,10 +42,25 @@ function buildOpenWarningCard_(resp) {
     .build();
 }
 
-function parseBannerHeader_(raw) {
-  if (!raw) return null;
+// readMessageHeaders_ returns just the header block of an RFC 2822
+// message. Apps Script does not expose a per-header accessor for
+// custom (X-) headers, so we fall back to getRawContent — but we
+// truncate after the first blank line so the message body and any
+// attachments are never parsed. Large messages with attachments would
+// otherwise burn Apps Script execution quota for no benefit.
+function readMessageHeaders_(msg) {
+  var raw = msg.getRawContent();
+  if (!raw) return "";
+  var sep = raw.indexOf("\r\n\r\n");
+  if (sep < 0) sep = raw.indexOf("\n\n");
+  if (sep < 0) return raw;
+  return raw.substring(0, sep);
+}
+
+function parseBannerHeader_(headerBlock) {
+  if (!headerBlock) return null;
   // Format: "X-SN360-Banner: tier=<tier>; category=<cat>; pmid=<id>"
-  var lines = raw.split(/\r?\n/);
+  var lines = headerBlock.split(/\r?\n/);
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i];
     if (line.toLowerCase().indexOf("x-sn360-banner:") !== 0) continue;

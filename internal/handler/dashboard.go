@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -66,15 +68,25 @@ func (h *DashboardHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, summary)
 }
 
+// errInvalidRange is returned by parseRange for any malformed or
+// non-positive input. It is intentionally a plain error sentinel so
+// callers can write their own HTTP response — using
+// http.ErrAbortHandler here would abort the connection if the error
+// ever propagated to the net/http recovery handler.
+var errInvalidRange = errors.New("dashboard: invalid range")
+
 func parseRange(s string) (time.Duration, error) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	if len(s) < 2 {
-		return 0, http.ErrAbortHandler
+		return 0, errInvalidRange
 	}
 	unit := s[len(s)-1]
 	n, err := strconv.Atoi(s[:len(s)-1])
-	if err != nil || n <= 0 {
-		return 0, err
+	if err != nil {
+		return 0, fmt.Errorf("%w: %v", errInvalidRange, err)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("%w: value must be positive", errInvalidRange)
 	}
 	switch unit {
 	case 'd':
@@ -84,5 +96,5 @@ func parseRange(s string) (time.Duration, error) {
 	case 'm':
 		return time.Duration(n) * time.Minute, nil
 	}
-	return 0, http.ErrAbortHandler
+	return 0, fmt.Errorf("%w: unknown unit %q", errInvalidRange, unit)
 }
