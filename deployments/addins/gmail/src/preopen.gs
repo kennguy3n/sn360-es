@@ -60,22 +60,36 @@ function readMessageHeaders_(msg) {
 function parseBannerHeader_(headerBlock) {
   if (!headerBlock) return null;
   // Format: "X-SN360-Banner: tier=<tier>; category=<cat>; pmid=<id>"
+  // RFC 2822 allows headers to be folded across multiple lines;
+  // continuation lines start with whitespace (SP or HTAB). We unfold
+  // the header value before parsing so long pseudo_message_ids or
+  // future fields don't silently break parsing.
   var lines = headerBlock.split(/\r?\n/);
+  var headerLine = null;
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i];
-    if (line.toLowerCase().indexOf("x-sn360-banner:") !== 0) continue;
-    var parts = line.substring("x-sn360-banner:".length).split(";");
-    var meta = { tier: "", category: "", pseudo_message_id: "" };
-    for (var j = 0; j < parts.length; j++) {
-      var kv = parts[j].split("=");
-      if (kv.length !== 2) continue;
-      var key = kv[0].trim().toLowerCase();
-      var value = kv[1].trim();
-      if (key === "tier") meta.tier = value;
-      else if (key === "category") meta.category = value;
-      else if (key === "pmid") meta.pseudo_message_id = value;
+    if (headerLine !== null) {
+      if (line.length > 0 && (line.charAt(0) === " " || line.charAt(0) === "\t")) {
+        headerLine += " " + line.substring(1);
+        continue;
+      }
+      break;
     }
-    return meta;
+    if (line.toLowerCase().indexOf("x-sn360-banner:") === 0) {
+      headerLine = line;
+    }
   }
-  return null;
+  if (headerLine === null) return null;
+  var parts = headerLine.substring("x-sn360-banner:".length).split(";");
+  var meta = { tier: "", category: "", pseudo_message_id: "" };
+  for (var j = 0; j < parts.length; j++) {
+    var kv = parts[j].split("=");
+    if (kv.length !== 2) continue;
+    var key = kv[0].trim().toLowerCase();
+    var value = kv[1].trim();
+    if (key === "tier") meta.tier = value;
+    else if (key === "category") meta.category = value;
+    else if (key === "pmid") meta.pseudo_message_id = value;
+  }
+  return meta;
 }

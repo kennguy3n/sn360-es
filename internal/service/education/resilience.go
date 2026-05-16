@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"sync"
 	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/dto"
+	"github.com/kennguy3n/sn360-es/internal/numutil"
 )
 
 // ResilienceSignals is the bundle of per-user / per-group metrics the
@@ -133,11 +133,11 @@ func (s *ResilienceScorer) ComputeGroupScore(ctx context.Context, tenantID, grou
 	n := float64(len(members))
 	score := dto.ResilienceScore{
 		Subject:         groupID,
-		Score:           intClamp(sumTotal / n),
-		SimulationScore: intClamp(sumSim / n),
-		ReportRateScore: intClamp(sumReport / n),
-		EngagementScore: intClamp(sumEng / n),
-		IncidentScore:   intClamp(sumInc / n),
+		Score:           numutil.IntClamp(sumTotal / n),
+		SimulationScore: numutil.IntClamp(sumSim / n),
+		ReportRateScore: numutil.IntClamp(sumReport / n),
+		EngagementScore: numutil.IntClamp(sumEng / n),
+		IncidentScore:   numutil.IntClamp(sumInc / n),
 		ComputedAt:      s.now(),
 	}
 	score.Tier = dto.BucketTier(score.Score)
@@ -169,11 +169,11 @@ func computeFromSignals(subject string, sig ResilienceSignals, now time.Time) dt
 	total := 0.40*sim + 0.25*report + 0.20*engagement + 0.15*incidents
 	score := dto.ResilienceScore{
 		Subject:         subject,
-		Score:           intClamp(total),
-		SimulationScore: intClamp(sim),
-		ReportRateScore: intClamp(report),
-		EngagementScore: intClamp(engagement),
-		IncidentScore:   intClamp(incidents),
+		Score:           numutil.IntClamp(total),
+		SimulationScore: numutil.IntClamp(sim),
+		ReportRateScore: numutil.IntClamp(report),
+		EngagementScore: numutil.IntClamp(engagement),
+		IncidentScore:   numutil.IntClamp(incidents),
 		ComputedAt:      now,
 	}
 	score.Tier = dto.BucketTier(score.Score)
@@ -186,14 +186,14 @@ func simulationPerformance(sig ResilienceSignals) float64 {
 	if sig.SimulationsSent <= 0 {
 		return 50
 	}
-	return clampPct(float64(sig.SimulationsDetected) / float64(sig.SimulationsSent) * 100)
+	return numutil.ClampPct(float64(sig.SimulationsDetected) / float64(sig.SimulationsSent) * 100)
 }
 
 func reportRate(sig ResilienceSignals) float64 {
 	if sig.RealPhishingReceived <= 0 {
 		return 50
 	}
-	return clampPct(float64(sig.RealPhishingReported) / float64(sig.RealPhishingReceived) * 100)
+	return numutil.ClampPct(float64(sig.RealPhishingReported) / float64(sig.RealPhishingReceived) * 100)
 }
 
 func lessonEngagement(sig ResilienceSignals) float64 {
@@ -204,33 +204,13 @@ func lessonEngagement(sig ResilienceSignals) float64 {
 	if ratio > 1 {
 		ratio = 1
 	}
-	return clampPct(ratio * 100)
+	return numutil.ClampPct(ratio * 100)
 }
 
 func incidentHistory(sig ResilienceSignals) float64 {
 	// Each incident knocks 25 points off a starting 100. Floor at 0.
 	score := 100 - float64(sig.IncidentCount)*25
-	return clampPct(score)
-}
-
-func clampPct(v float64) float64 {
-	if v < 0 || math.IsNaN(v) {
-		return 0
-	}
-	if v > 100 {
-		return 100
-	}
-	return v
-}
-
-func intClamp(v float64) int {
-	if v < 0 {
-		return 0
-	}
-	if v > 100 {
-		return 100
-	}
-	return int(math.Round(v))
+	return numutil.ClampPct(score)
 }
 
 func neutralScore(subject string, now time.Time) dto.ResilienceScore {

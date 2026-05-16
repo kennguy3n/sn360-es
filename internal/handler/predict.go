@@ -53,7 +53,8 @@ func (h *PredictHandler) ServeRecipient(w http.ResponseWriter, r *http.Request) 
 		h.logger.WarnContext(r.Context(), "predict: recipient failed",
 			slog.Any("error", err),
 		)
-		writeError(w, http.StatusBadRequest, err.Error())
+		// Generic public message; full error stays in the logs.
+		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -78,7 +79,11 @@ func (h *PredictHandler) ServeOpen(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := h.open.Predict(r.Context(), req)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		h.logger.WarnContext(r.Context(), "predict: open failed",
+			slog.Any("error", err),
+		)
+		// Generic public message; full error stays in the logs.
+		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 	writeJSON(w, http.StatusOK, res)

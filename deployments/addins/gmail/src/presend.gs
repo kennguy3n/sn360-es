@@ -90,7 +90,8 @@ function domainOf_(email) {
 }
 
 function sameDomain_(a, b) {
-  return domainOf_(a) && domainOf_(a) === domainOf_(b);
+  var da = domainOf_(a);
+  return da !== "" && da === domainOf_(b);
 }
 
 function sha256Hex_(s) {

@@ -15,7 +15,10 @@
 
   function tenantId() {
     if (typeof Office === "undefined" || !Office.context || !Office.context.mailbox) return "";
-    return Office.context.mailbox.diagnostics ? Office.context.mailbox.diagnostics.hostName : "outlook";
+    var profile = Office.context.mailbox.userProfile;
+    var email = (profile && profile.emailAddress) ? profile.emailAddress : "";
+    var at = email.indexOf("@");
+    return at < 0 ? "outlook" : email.substring(at + 1).toLowerCase();
   }
 
   function senderEmail() {

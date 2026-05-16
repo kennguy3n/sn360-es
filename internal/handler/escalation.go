@@ -61,7 +61,11 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 			slog.String("ticket_id", req.TicketID),
 			slog.Any("error", err),
 		)
-		writeError(w, http.StatusBadRequest, err.Error())
+		// Don't echo the wrapped store/db error to clients — the
+		// logger above keeps the diagnostic detail, and the public
+		// response stays generic to avoid leaking implementation
+		// hints (db rows, table names, internal IDs, ...).
+		writeError(w, http.StatusBadRequest, "resolve failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, ticket)

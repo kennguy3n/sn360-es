@@ -14,6 +14,7 @@ package evaluate
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -301,27 +302,7 @@ func (p *VirusTotalProvider) LookupURL(ctx context.Context, raw string) (URLScan
 // of the SHA-256 of the URL with no padding.
 func vtURLID(raw string) string {
 	h := sha256.Sum256([]byte(raw))
-	out := make([]byte, 0, 64)
-	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-	// Re-implement base64url-no-padding using the standard library
-	// alphabet to keep the dependency surface zero.
-	for i := 0; i < len(h); i += 3 {
-		var v uint32
-		var n int
-		for j := 0; j < 3 && i+j < len(h); j++ {
-			v |= uint32(h[i+j]) << uint32((2-j)*8)
-			n++
-		}
-		switch n {
-		case 1:
-			out = append(out, alphabet[(v>>18)&0x3F], alphabet[(v>>12)&0x3F])
-		case 2:
-			out = append(out, alphabet[(v>>18)&0x3F], alphabet[(v>>12)&0x3F], alphabet[(v>>6)&0x3F])
-		case 3:
-			out = append(out, alphabet[(v>>18)&0x3F], alphabet[(v>>12)&0x3F], alphabet[(v>>6)&0x3F], alphabet[v&0x3F])
-		}
-	}
-	return string(out)
+	return base64.RawURLEncoding.EncodeToString(h[:])
 }
 
 type vtResponse struct {

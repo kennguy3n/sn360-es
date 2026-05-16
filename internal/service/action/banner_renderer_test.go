@@ -215,7 +215,11 @@ func TestBannerRendererAccessibility(t *testing.T) {
 // for locales whose primary language is RTL even if the locale string
 // is region-qualified.
 func TestBannerRendererRTL(t *testing.T) {
-	cat := NewJSONCatalog(map[string]map[string]string{
+	// The "ar" catalog is the only locale provided; we use "ar" as
+	// the fallback so the constructor's fallback-presence check
+	// passes. Missing English strings then layer in via stackedCatalog
+	// below.
+	cat, err := NewJSONCatalog(map[string]map[string]string{
 		"ar": {
 			"tier.HighRisk.title":              "خطر مرتفع",
 			"tier.HighRisk.body":               "لا تتفاعل مع هذه الرسالة.",
@@ -227,7 +231,10 @@ func TestBannerRendererRTL(t *testing.T) {
 			"action.learn_more":                "اعرف المزيد",
 			"banner.degraded":                  "تدهور",
 		},
-	}, "en")
+	}, "ar")
+	if err != nil {
+		t.Fatalf("new catalog: %v", err)
+	}
 	// Layer onto the default English catalog so missing keys still resolve.
 	def, err := DefaultBannerCatalog()
 	if err != nil {

@@ -123,6 +123,7 @@ type Span struct {
 	tracer    *Tracer
 	data      SpanData
 	startTime time.Time
+	sampled   bool
 	closed    bool
 	mu        sync.Mutex
 }
@@ -191,6 +192,7 @@ func (t *Tracer) StartSpan(ctx context.Context, name string, attrs ...Attribute)
 			Attributes: map[string]string{},
 		},
 		startTime: now,
+		sampled:   sampled,
 	}
 	for _, a := range attrs {
 		s.data.Attributes[a.Key] = a.Value
@@ -245,12 +247,17 @@ func (s *Span) End() {
 	}
 }
 
-// Context returns the live SpanContext for the span.
+// Context returns the live SpanContext for the span, including the
+// sampling decision computed in StartSpan. This is the value that
+// callers serialize into outbound W3C traceparent headers, so
+// returning the actual Sampled flag (not a hardcoded true) is
+// required for downstream propagation to honour ProbabilitySampler /
+// NeverOn decisions.
 func (s *Span) Context() SpanContext {
 	if s == nil {
 		return SpanContext{}
 	}
-	return SpanContext{TraceID: s.data.TraceID, SpanID: s.data.SpanID, Sampled: true}
+	return SpanContext{TraceID: s.data.TraceID, SpanID: s.data.SpanID, Sampled: s.sampled}
 }
 
 // Attribute is one key/value pair on a span.
