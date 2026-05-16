@@ -84,7 +84,7 @@ graph LR
 |---|---|---|---|---|
 | **Tier 0** | Rule-based classification | <1ms | ~$0 | Every email — skips ML for internal, vendor, newsletter |
 | **Tier 1** | XLM-RoBERTa encoder (self-hosted) | 50-200ms | ~$0.00005 | External unknown emails surviving Tier 0 |
-| **Tier 2** | GPT-4o / Claude / DeepSeek | 2-10s | ~$0.001-0.01 | Ambiguous emails from Tier 1 (10-20% of Tier 1 input) |
+| **Tier 2** | SLM | 2-5s | ~$0.001-0.005 | Ambiguous emails from Tier 1 (10-20% of Tier 1 input) |
 | **Rspamd** | Heuristics (SPF/DKIM/DMARC/RBL) | 100-500ms | ~$0 | Always-on, parallel with ML tiers |
 
 ## End-User Experience — Tiered Banners & Native Labels
