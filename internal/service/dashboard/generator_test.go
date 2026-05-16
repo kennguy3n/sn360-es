@@ -88,6 +88,47 @@ func TestDashboard_GenerateSummary_Aggregates(t *testing.T) {
 	if out.Narrative == "" {
 		t.Fatal("expected narrative")
 	}
+	// 70 threats = 50 warning + 20 high_risk. Asserting the count is
+	// present in the narrative catches future regressions of the tier
+	// matching logic in DeterministicNarrative (which previously
+	// silently dropped canonical PascalCase tiers).
+	if !strings.Contains(out.Narrative, "70 as Warning+") {
+		t.Fatalf("narrative missing threat count %q: %q", "70 as Warning+", out.Narrative)
+	}
+}
+
+// TestDashboard_DeterministicNarrative_CanonicalTiers exercises
+// DeterministicNarrative against the canonical PascalCase constant.Tier
+// values that the production MetricsSource emits. The previous version
+// of the function only matched lowercase / snake_case variants, so
+// production traffic collapsed the threat count to 0. Keeping this
+// test alongside the snake_case case above prevents regression in
+// either direction.
+func TestDashboard_DeterministicNarrative_CanonicalTiers(t *testing.T) {
+	src := &fakeSource{
+		emails: 500,
+		tiers: []dto.TierCount{
+			{Tier: "Trusted", Count: 400},
+			{Tier: "Warning", Count: 40},
+			{Tier: "HighRisk", Count: 25},
+			{Tier: "Blocked", Count: 5},
+		},
+		cats: []dto.CategoryCount{
+			{Category: "BEC_Suspect", Count: 70},
+		},
+	}
+	gen, _ := NewDashboardGenerator(DashboardGeneratorConfig{
+		Source: src,
+		Clock:  func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+	})
+	out, err := gen.GenerateSummary(context.Background(), "acme", dto.TimeRange{})
+	if err != nil {
+		t.Fatalf("GenerateSummary: %v", err)
+	}
+	// Warning (40) + HighRisk (25) + Blocked (5) = 70 threats.
+	if !strings.Contains(out.Narrative, "70 as Warning+") {
+		t.Fatalf("narrative missing canonical-tier threat count: %q", out.Narrative)
+	}
 }
 
 func TestDashboard_RequiresTenant(t *testing.T) {

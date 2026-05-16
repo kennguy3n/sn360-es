@@ -37,11 +37,16 @@ function sn360PreSendTrigger(e) {
     tenant_id: tenantId,
     sender_hash: sha256Hex_(tenantId + "|" + senderEmail.toLowerCase()),
     recipients: recipients.map(function (r) {
+      // is_known_contact is intentionally omitted: the Gmail Add-on
+      // API does not expose the user's contact graph cheaply enough
+      // for the 300ms p95 budget, so we let the server fall back to
+      // its own contact-store lookup. Sending false here would cause
+      // the backend to emit unusual_external_recipient on every
+      // external recipient (low-signal noise).
       return {
         user_hash: sha256Hex_(tenantId + "|" + (r || "").toLowerCase()),
         domain: domainOf_(r),
         is_external: !sameDomain_(r, senderEmail),
-        is_known_contact: false,
       };
     }),
     thread_is_internal: false,

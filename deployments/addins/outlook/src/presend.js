@@ -47,11 +47,16 @@
     const list = [];
     for (const r of recipients) {
       const dom = domainOf(r.emailAddress);
+      // is_known_contact is intentionally omitted. Office.js's
+      // RecipientObject does not expose contact-store membership, so
+      // the previous !!r.isKnownContact always evaluated to false and
+      // caused the backend to emit unusual_external_recipient on every
+      // external recipient. Let the server fall back to its own
+      // contact-store lookup instead.
       list.push({
         user_hash: await hashRecipient(tenant, r.emailAddress),
         domain: dom,
         is_external: r.recipientType !== "Internal",
-        is_known_contact: !!r.isKnownContact,
       });
     }
     const senderKey = (sender || "").toLowerCase().trim();
