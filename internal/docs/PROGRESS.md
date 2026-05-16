@@ -89,9 +89,50 @@
 | **URL pre-scanning (VirusTotal)** | ✅ Done | Medium | Phase 8 |
 | **Attachment pre-screen (YARA/ClamAV)** | ✅ Done | Medium | Phase 8 |
 
+### Cross-Cutting / Infrastructure Tasks
+
+**Overall status**: 8/8 task groups complete
+
+| Area | Status | Notes |
+|---|---|---|
+| **Database migrations (golang-migrate)** | ✅ Done | `migrations/0001_init.{up,down}.sql`, `cmd/sn360-es-migrate/`, `make migrate-up/-down/-check` |
+| **NATS integration tests** | ✅ Done | `pkg/events/nats/nats_integration_test.go` (testcontainers, `//go:build integration`) |
+| **Redis integration tests** | ✅ Done | `pkg/storage/redis/redis_integration_test.go` (pipeline + TTL coverage) |
+| **PostgreSQL integration tests** | ✅ Done | `pkg/storage/postgres/postgres_integration_test.go` (migrations + repository CRUD) |
+| **Bus factory integration tests** | ✅ Done | `pkg/events/bus/bus_integration_test.go` (NATS + Redis backends) |
+| **E2E pipeline integration test** | ✅ Done | `internal/service/evaluate/pipeline_integration_test.go` (request → tier 0/1/2 → action) |
+| **OpenAPI 3.1 spec** | ✅ Done | `api/openapi.yaml` documents every public handler |
+| **Swagger UI + spec serving** | ✅ Done | `GET /docs`, `GET /openapi.yaml` (`internal/handler/docs.go`) |
+| **Prometheus metrics package** | ✅ Done | `pkg/telemetry/metrics.go` + `/metrics` endpoint |
+| **Pipeline instrumentation** | ✅ Done | Tier 0 / Tier 1 / Tier 2 / Rspamd / banner / education metrics |
+| **Helm chart** | ✅ Done | `deployments/helm/sn360-es/` with NATS subchart and HPA/ServiceMonitor |
+| **ArgoCD applications** | ✅ Done | `deployments/argocd/application.yaml` (dev / qa / uat / prod) |
+| **`pkg/httpclient/`** | ✅ Done | HTTP/2 pooled client, retry, circuit breaker, used by VT / encoder / LLM |
+| **`pkg/storage/{postgres,redis,s3}/`** | ✅ Done | pgx-backed PostgreSQL, Redis pipeline wrapper, AWS S3 client |
+| **`internal/repository/`** | ✅ Done | Postgres + in-memory implementations for all domain entities |
+| **`internal/translation/`** | ✅ Done | Banner i18n bundles re-exported from action catalogs |
+| **Subject-line tag (optional)** | ✅ Done | `internal/service/action/subject_tag.go` (default off, configurable prefix) |
+| **AI / Rspamd cache tests** | ✅ Done | `internal/service/cache/{ai,rspamd}_cache_test.go` (miniredis) |
+| **Docker-compose completeness** | ✅ Done | NATS + Postgres + Redis + Rspamd + ClamAV |
+| **Health / readiness endpoints** | ✅ Done | `/healthz`, `/readyz` with NATS / Redis / PG probes |
+
 ---
 
 ## Changelog (Reverse Chronological)
+
+### 2026-05-16 (v2 / SN360-ES — Cross-cutting / Infrastructure)
+
+- **Migrations**: golang-migrate v4 wired into `make migrate-up/-down/-check` via `cmd/sn360-es-migrate/`; initial schema (`migrations/0001_init.{up,down}.sql`) for tenants, users, groups, labels, score_engine, email_classifications, vendors, evaluation_results, communication_histories, campaigns, simulation_results, escalation_tickets, audit_logs.
+- **Persistence packages**: `pkg/storage/postgres/` (pgx wrapper + config), `pkg/storage/redis/` (pipeline + scan helpers), `pkg/storage/s3/` (AWS S3 client). `internal/repository/` exposes Postgres + in-memory implementations for every domain entity.
+- **HTTP client**: `pkg/httpclient/` provides a shared HTTP/2 pooled client with retry, circuit breaker, and per-call timeout — used by URL pre-scanner, encoder client, LLM client, and tenant API clients.
+- **Telemetry**: `pkg/telemetry/metrics.go` adds Prometheus counters / histograms for banner rendering, banner actions, quarantine releases, URL clicks, pre-send prompts, Tier 0/1/2 verdicts, Rspamd, education simulations and resilience. `/metrics` endpoint wired in `cmd/sn360-es/main.go`.
+- **API documentation**: `api/openapi.yaml` (OpenAPI 3.1) documents every public handler; `internal/handler/docs.go` serves Swagger UI at `/docs` and the raw spec at `/openapi.yaml`.
+- **Health probes**: `/healthz` (liveness, always 200) and `/readyz` (NATS / Redis / PG connectivity probes with 2 s timeout) in `internal/handler/health.go`.
+- **Subject-line tag**: `internal/service/action/subject_tag.go` adds an opt-in `[SN360: WARN]`-style prefix at Warning+ tiers; per-tenant `subject_tag_enabled` + `subject_tag_prefix` columns.
+- **Caches**: `internal/service/cache/{ai,rspamd}_cache_test.go` cover serialization, TTL, and miss paths using miniredis.
+- **Helm + ArgoCD**: `deployments/helm/sn360-es/` (Deployment, Service, HPA, ConfigMap, Secret, ServiceAccount, ServiceMonitor, migration Job, NATS subchart) and `deployments/argocd/application.yaml` for dev / qa / uat / prod.
+- **Integration tests**: testcontainers-based suites under `//go:build integration` for NATS, Redis, PostgreSQL, bus factory, and an end-to-end pipeline test that runs the full evaluator over a real NATS server.
+- **Docker compose**: adds ClamAV alongside NATS / Postgres / Redis / Rspamd so the attachment pre-screen path runs end-to-end locally.
 
 ### 2026-05-16 (v2 / SN360-ES — Phases 5-8)
 

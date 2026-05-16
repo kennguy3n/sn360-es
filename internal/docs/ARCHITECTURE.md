@@ -315,9 +315,19 @@ Email arrives → Fetch via API
 **Dual-mode**: API (REST management) + Listener (event processing + workers)
 
 - **Domain entities**: Tenants, Users, Groups, Labels, Score Engine, Email Classifications, Vendors, Evaluation Results, Communication History
+- **Persistence**: `internal/repository/` exposes one interface per entity backed by both a Postgres (pgx) implementation and an in-memory fixture for tests. The Postgres schema is defined under `migrations/` and applied via `make migrate-up`.
 - **Relationship Aggregation Worker**: Runs every 4h, computes 7d/30d sender→receiver stats, caches in Redis
 - **AI Agent Controller**: Orchestrates auto-tuning, onboarding, support agents
 - **Cleanup Worker**: Stream + data retention enforcement
+
+### 5.5 Shared Packages
+
+- **`pkg/httpclient/`**: HTTP/2 pooled client with retry, circuit breaker, and per-call timeout. Shared by the VirusTotal URL scanner, the encoder client (Tier 1), the LLM client (Tier 2), and tenant provider clients.
+- **`pkg/storage/postgres/`**: pgx-based PostgreSQL connection helper with structured `Config` and `Open` / `Close` / `Ping` / `Driver` accessors.
+- **`pkg/storage/redis/`**: Redis pipeline wrapper, scan / prefix helpers, and JSON serialization helpers used by the `internal/service/cache/` AI + Rspamd caches and the action-token cache.
+- **`pkg/storage/s3/`**: AWS S3 client wrapper for raw-body offload (optional).
+- **`pkg/events/bus/`**: Bus factory that selects between `pkg/events/nats/` (default) and `pkg/events/redis/` based on the `EVENT_BUS_TYPE` config flag.
+- **`internal/translation/banners/`**: Banner i18n bundles re-exported from `internal/service/action/catalogs/` so other services can reuse the same wording.
 
 ### 5.4 Education Service
 
@@ -343,12 +353,30 @@ Email arrives → Fetch via API
 
 ### 6.2 Observability
 
-- **Logging**: Structured JSON via `slog`, PII-sanitized
-- **Tracing**: OpenTelemetry W3C Trace Context (end-to-end)
-- **Metrics**: Prometheus + Grafana (latency histograms, throughput, error rates per tier)
-- **Alerting**: AI agent monitors metrics, auto-escalates to SN360 SecOps
+- **Logging**: Structured JSON via `slog`, PII-sanitized through `pkg/privacy/`.
+- **Tracing**: OpenTelemetry W3C Trace Context (HTTP + NATS propagation) from `pkg/telemetry/tracer.go`.
+- **Metrics**: Prometheus counters / histograms registered in `pkg/telemetry/metrics.go` (namespace `sn360`, subsystem `es`). The metrics handler is exposed at `GET /metrics` from `cmd/sn360-es/main.go`. A `ServiceMonitor` ships in the Helm chart for scrape config.
+- **Health probes**: `GET /healthz` (liveness — always 200) and `GET /readyz` (readiness — runs NATS / Redis / PG probes with a 2 s timeout) via `internal/handler/health.go`. Wired into the Helm chart's `livenessProbe` / `readinessProbe`.
+- **Alerting**: AI agent monitors metrics, auto-escalates to SN360 SecOps.
 
-### 6.3 Scaling
+### 6.3 API Documentation
+
+- **Spec**: `api/openapi.yaml` (OpenAPI 3.1) documents every public handler, including `/v1/banner/action`, `/v1/education/lesson/{category}`, `/v1/escalation/resolve`, `/v1/dashboard/summary`, `/v1/predict/{recipient,open}`, `/v1/quarantine/release`, and the health / metrics endpoints.
+- **Serving**: `internal/handler/docs.go` exposes Swagger UI at `/docs` (pinned to 5.17.14 for reproducibility) and the raw spec at `/openapi.yaml`.
+
+### 6.4 Database Migrations
+
+- **Tool**: `golang-migrate/migrate` v4 (PostgreSQL driver).
+- **CLI**: `cmd/sn360-es-migrate/` wraps the library so deployments can run migrations as a Kubernetes Job (template included in the Helm chart).
+- **Make targets**: `make migrate-up`, `make migrate-down`, `make migrate-check` (validates SQL syntax in CI).
+- **Schema**: `migrations/0001_init.{up,down}.sql` provisions all 13 tables (tenants, users, groups, labels, score_engine, email_classifications, vendors, evaluation_results, communication_histories, campaigns, simulation_results, escalation_tickets, audit_logs).
+
+### 6.5 Deployment Artifacts
+
+- **Helm chart**: `deployments/helm/sn360-es/` with templates for Deployment, Service, ConfigMap, Secret, HPA, ServiceAccount, ServiceMonitor, Ingress, and a migration Job. NATS is wired in as a Helm dependency chart configured to match the JetStream stream layout in §2.
+- **ArgoCD applications**: `deployments/argocd/application.yaml` defines one Application per environment (`dev`, `qa`, `uat`, `prod`) and points each at the in-repo Helm chart with per-env overrides (`values.dev.yaml`, `values.prod.yaml`).
+
+### 6.6 Scaling
 
 | Component | Strategy |
 |---|---|
@@ -558,11 +586,21 @@ Optional Outlook (Office Add-in) and Gmail (Add-on) modules:
 
 ### 8.10 Observability for Banner UX
 
+All metrics are registered in `pkg/telemetry/metrics.go` under namespace `sn360`, subsystem `es`, and exposed via `GET /metrics`.
+
 | Metric | Type | Purpose |
 |---|---|---|
-| `banner_rendered_total{tier,category}` | Counter | Tier distribution per tenant |
-| `banner_action_total{action,tier}` | Counter | User feedback rates (FP/FN tuning) |
-| `quarantine_release_total{outcome}` | Counter | Release approval / refusal rates |
-| `url_rewrite_click_total{verdict}` | Counter | Interstitial click-through rates |
-| `presend_prompt_total{outcome}` | Counter | Add-in pre-send confirmations |
-| `banner_render_latency_seconds` | Histogram | Action-pipeline p95 latency |
+| `sn360_es_banner_rendered_total{tier,category}` | Counter | Tier distribution per tenant |
+| `sn360_es_banner_action_total{action,tier}` | Counter | User feedback rates (FP/FN tuning) |
+| `sn360_es_quarantine_release_total{outcome}` | Counter | Release approval / refusal rates |
+| `sn360_es_url_rewrite_click_total{verdict}` | Counter | Interstitial click-through rates |
+| `sn360_es_presend_prompt_total{outcome}` | Counter | Add-in pre-send confirmations |
+| `sn360_es_banner_render_latency_seconds` | Histogram | Action-pipeline p95 latency |
+| `sn360_es_tier0_bypass_total{reason}` | Counter | Tier 0 short-circuit reasons |
+| `sn360_es_tier1_verdict_total{verdict}` | Counter | Tier 1 pass / flag / escalate distribution |
+| `sn360_es_tier1_latency_seconds` | Histogram | Tier 1 encoder latency |
+| `sn360_es_tier2_outcome_total{outcome}` | Counter | Tier 2 LLM categorical outcome |
+| `sn360_es_rspamd_latency_seconds` | Histogram | Rspamd round-trip latency |
+| `sn360_es_evaluate_latency_seconds{tier}` | Histogram | End-to-end evaluator latency |
+| `sn360_es_education_simulation_sent_total` | Counter | Education simulation send rate |
+| `sn360_es_education_resilience_score` | Gauge | Per-tenant aggregate resilience score |

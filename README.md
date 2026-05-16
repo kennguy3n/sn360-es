@@ -198,11 +198,17 @@ make lint               # gofmt + go vet
 
 ```
 sn360-es/
-├── cmd/                                 # Service entrypoints
+├── api/                                 # OpenAPI 3.1 spec (api/openapi.yaml)
+├── cmd/
+│   ├── sn360-es/                        # Main service entrypoint
+│   └── sn360-es-migrate/                # golang-migrate runner CLI
 ├── deployments/
-│   └── addins/
-│       ├── outlook/                     # Outlook Office Add-in (Manifest v3)
-│       └── gmail/                       # Gmail Add-on (Apps Script)
+│   ├── addins/
+│   │   ├── outlook/                     # Outlook Office Add-in (Manifest v3)
+│   │   └── gmail/                       # Gmail Add-on (Apps Script)
+│   ├── encoder/                         # Tier 1 encoder service skeleton
+│   ├── helm/sn360-es/                   # Helm chart (Deployment, Service, HPA, NATS subchart)
+│   └── argocd/                          # ArgoCD Application manifests (dev/qa/uat/prod)
 ├── internal/
 │   ├── config/                          # Environment-based configuration
 │   ├── constant/                        # Event types, Redis keys, categories
@@ -213,52 +219,63 @@ sn360-es/
 │   │   ├── risk_signals.go              # RelationshipCategory + timing-anomaly score
 │   │   └── ...
 │   ├── handler/                         # HTTP handlers
+│   │   ├── banner_action.go             # POST /v1/banner/action
 │   │   ├── dashboard.go                 # GET /v1/dashboard/summary
 │   │   ├── education.go                 # GET /v1/education/lesson/{category}
 │   │   ├── escalation.go                # POST /v1/escalation/resolve
 │   │   ├── predict.go                   # POST /v1/predict/recipient + /open
 │   │   ├── quarantine.go                # POST /v1/quarantine/release
-│   │   └── ...
+│   │   ├── health.go                    # GET /healthz, /readyz
+│   │   └── docs.go                      # GET /docs (Swagger UI), /openapi.yaml
 │   ├── middleware/                      # Auth, CORS, logging, log sanitiser
-│   ├── repository/                      # Database repositories
+│   ├── numutil/                         # Small numeric helpers
+│   ├── repository/                      # Database repositories (Postgres + in-memory)
 │   ├── service/
 │   │   ├── action/                      # 6-tier banner / labels / quarantine / feedback
 │   │   │   ├── catalogs/                # en, vi, th, ja, ko, zh i18n catalogs
 │   │   │   ├── banner_renderer.go       # role="alert" + dir="rtl" WCAG 2.1 AA
 │   │   │   ├── quarantine.go            # Hidden label + stub body
 │   │   │   ├── quarantine_release.go    # Tier 0 + Tier 1 re-eval gate
-│   │   │   └── report_workflow.go       # User-reported phishing workflow
+│   │   │   ├── report_workflow.go       # User-reported phishing workflow
+│   │   │   └── subject_tag.go           # Optional [SN360: WARN] subject-line prefix
 │   │   ├── agent/                       # AI agents
 │   │   │   ├── onboarding.go
 │   │   │   ├── tuning.go
 │   │   │   ├── support.go
 │   │   │   └── escalation.go            # SN360 SecOps escalation service
+│   │   ├── cache/                       # AI + Rspamd Redis-backed result caches
 │   │   ├── dashboard/                   # AI-generated admin dashboard
 │   │   ├── education/                   # Micro-lessons, simulation, resilience, adaptive
 │   │   ├── evaluate/                    # Tier 0/1/2 + score + URL + attachment pre-scan
 │   │   │   ├── url_scanner.go           # VirusTotal-backed URL pre-screen
 │   │   │   └── attachment_scanner.go    # YARA + ClamAV INSTREAM pre-screen
+│   │   ├── onboarding/                  # OAuth flow + org graph builder
 │   │   ├── predict/                     # Pre-send / pre-open recipient analysis
 │   │   ├── relationship/                # Categories, vulnerability, vendor, timing
+│   │   ├── tenant/                      # Tenant CRUD + cryptographic erasure
 │   │   ├── tier0/                       # Pure-CPU classification gates
-│   │   ├── tier1/                       # Encoder client + batch orchestration
-│   │   ├── onboarding/                  # OAuth flow + org graph builder
-│   │   └── tenant/                      # Tenant CRUD + cryptographic erasure
+│   │   └── tier1/                       # Encoder client + batch orchestration
 │   ├── docs/                            # Internal documentation
 │   │   ├── PROPOSAL.md                  # v2 proposal (8 phases, 51 tasks)
 │   │   ├── ARCHITECTURE.md              # System architecture document
 │   │   ├── PHASES.md                    # Phase-level rollup with code pointers
 │   │   └── PROGRESS.md                  # Per-task tracker + changelog
-│   └── translation/                     # Cross-service i18n bundles
+│   └── translation/                     # Cross-service i18n bundles (banners/)
 ├── pkg/
-│   ├── events/nats/                     # NATS JetStream client + DLQ
-│   ├── httpclient/                      # External API clients
-│   ├── storage/                         # Redis, PostgreSQL, S3 clients
+│   ├── events/
+│   │   ├── bus/                         # Event-bus factory (nats|redis selector)
+│   │   ├── nats/                        # NATS JetStream client + DLQ
+│   │   └── redis/                       # Redis Streams fallback bus
+│   ├── httpclient/                      # HTTP/2 pooled client + circuit breaker
 │   ├── privacy/                         # Pseudonymisation, KMS, encryption, JWT, erasure
-│   └── telemetry/                       # OpenTelemetry tracer + HTTP / NATS propagation
-├── migrations/                          # Atlas database migrations
-├── docker-compose.yml
+│   ├── storage/
+│   │   ├── postgres/                    # pgx-based PostgreSQL wrapper
+│   │   ├── redis/                       # Redis pipeline wrapper + helpers
+│   │   └── s3/                          # AWS S3 client wrapper
+│   └── telemetry/                       # OpenTelemetry tracer, propagation, Prometheus metrics
+├── migrations/                          # golang-migrate SQL files (0001_init.{up,down}.sql, ...)
+├── docker-compose.yml                   # Local NATS + Postgres + Redis + Rspamd + ClamAV
 ├── Dockerfile
-├── Makefile
+├── Makefile                             # test, lint, migrate-up/-down/-check targets
 └── README.md
 ```

@@ -234,8 +234,11 @@ These are not phases per se but apply across all phases:
 
 | Track | Status | Notes |
 |---|---|---|
-| Unit tests | ✅ Complete | Phases 1-8 unit tests covered: tier_decider, auth_verdict, categorizer, banner_renderer (incl. a11y + RTL + locales), url_rewriter, feedback, scorer, tier0 gate, recurring, pseudonymizer, jwt, quarantine + release, education (lessons, simulation, resilience, adaptive, templates), relationship (categories, vulnerability, vendor, timing), predict (recipient + open), dashboard, report workflow, escalation, telemetry, url scanner (incl. VirusTotal HTTP), attachment scanner (incl. clamd protocol). Integration tests for NATS / Redis / PG still pending. |
+| Unit tests | ✅ Complete | Phases 1-8 unit tests covered: tier_decider, auth_verdict, categorizer, banner_renderer (incl. a11y + RTL + locales), url_rewriter, feedback, scorer, tier0 gate, recurring, pseudonymizer, jwt, quarantine + release, education (lessons, simulation, resilience, adaptive, templates), relationship (categories, vulnerability, vendor, timing), predict (recipient + open), dashboard, report workflow, escalation, telemetry, url scanner (incl. VirusTotal HTTP), attachment scanner (incl. clamd protocol), AI + Rspamd caches, subject-line tag, Prometheus metrics. |
+| Integration tests | ✅ Complete | testcontainers-based suites for NATS JetStream, Redis pipeline, PostgreSQL + golang-migrate, bus factory (NATS / Redis), and an end-to-end pipeline test. Behind `//go:build integration` and `make test-integration`. |
 | Lint (`gofmt -l`, `go vet`) | ✅ Clean | `make lint` gate enforced in CI. |
-| Observability (metrics, tracing) | ✅ Complete | `pkg/telemetry/` provides W3C tracing across HTTP + NATS. Metrics still pending. |
-| API documentation (OpenAPI / Huma) | 🔲 Not started | Will follow service surface stabilising. |
-| Helm charts + ArgoCD | 🔲 Not started | Will reuse patterns from `uneycom/nges-k8s-assets`. |
+| Database migrations | ✅ Complete | `cmd/sn360-es-migrate/` wraps golang-migrate v4; `make migrate-up/-down/-check`; initial schema covers all 13 tables. |
+| Observability (metrics, tracing) | ✅ Complete | `pkg/telemetry/` provides W3C tracing across HTTP + NATS and Prometheus metrics for banners, pipeline stages, education, and quarantine releases. `/metrics` exposed by the API server. |
+| API documentation (OpenAPI 3.1) | ✅ Complete | `api/openapi.yaml` documents every public handler; Swagger UI is served at `/docs` and the raw spec at `/openapi.yaml` (`internal/handler/docs.go`). |
+| Helm charts + ArgoCD | ✅ Complete | `deployments/helm/sn360-es/` with NATS Helm subchart, HPA, ServiceMonitor, migration Job. `deployments/argocd/application.yaml` covers dev / qa / uat / prod. |
+| Health / readiness probes | ✅ Complete | `/healthz` (liveness) and `/readyz` (NATS / Redis / PG connectivity probes) in `internal/handler/health.go`, wired into the Helm chart. |
