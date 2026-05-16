@@ -1,0 +1,286 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/kennguy3n/sn360-es/internal/constant"
+	"github.com/kennguy3n/sn360-es/internal/dto"
+)
+
+// SupportConfig wires the support agent's dependencies.
+type SupportConfig struct {
+	Lookup   EvaluationLookup
+	Audit    AuditLog
+	Events   EventPublisher
+	// SecOpsSubject is the NATS subject for low-confidence escalations
+	// (default "es.action.escalate.secops").
+	SecOpsSubject string
+	// ReleaseSubject is the NATS subject emitted when a user requests
+	// quarantine release (default "es.action.release.request").
+	ReleaseSubject string
+	// EscalationConfidence is the lower bound of the verdict confidence
+	// below which the support agent escalates rather than answering.
+	// Default 0.45.
+	EscalationConfidence float64
+
+	Logger *slog.Logger
+}
+
+// SupportAgent handles user queries about flagged emails. It is
+// deliberately rule-based + templated (not LLM-driven) so explanations
+// are deterministic and auditable.
+type SupportAgent struct {
+	cfg SupportConfig
+	log *slog.Logger
+}
+
+// NewSupportAgent constructs a SupportAgent. Lookup is required.
+func NewSupportAgent(cfg SupportConfig) (*SupportAgent, error) {
+	if cfg.Lookup == nil {
+		return nil, errors.New("agent: support requires Lookup")
+	}
+	if cfg.SecOpsSubject == "" {
+		cfg.SecOpsSubject = "es.action.escalate.secops"
+	}
+	if cfg.ReleaseSubject == "" {
+		cfg.ReleaseSubject = "es.action.release.request"
+	}
+	if cfg.EscalationConfidence <= 0 {
+		cfg.EscalationConfidence = 0.45
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
+	return &SupportAgent{cfg: cfg, log: cfg.Logger}, nil
+}
+
+// Name implements Agent.
+func (a *SupportAgent) Name() string { return "support" }
+
+// Answer processes a query and returns a structured reply.
+//
+// Branches:
+//   - action="explain" → fetch verdict, render explanation.
+//   - action="release" → emit release-request event, return optimistic ack.
+//   - action="escalate" or low-confidence verdict → emit secops escalation.
+func (a *SupportAgent) Answer(ctx context.Context, q SupportQuery) (SupportReply, error) {
+	if q.TenantID == "" || q.MessageID == "" {
+		return SupportReply{}, errors.New("agent: support requires TenantID + MessageID")
+	}
+	log := a.log.With(slog.String("tenant_id", q.TenantID), slog.String("message_id", q.MessageID))
+
+	verdict, err := a.cfg.Lookup.FindResult(ctx, q.TenantID, q.MessageID)
+	if err != nil {
+		return SupportReply{}, fmt.Errorf("support: lookup verdict: %w", err)
+	}
+
+	action := strings.ToLower(q.Action)
+	if action == "" {
+		action = "explain"
+	}
+
+	rep := SupportReply{}
+	switch action {
+	case "explain":
+		rep = a.explain(q, verdict)
+	case "release":
+		rep, err = a.release(ctx, q, verdict)
+		if err != nil {
+			return rep, err
+		}
+	case "escalate":
+		rep, err = a.escalate(ctx, q, verdict, "user_requested")
+		if err != nil {
+			return rep, err
+		}
+	default:
+		return SupportReply{}, fmt.Errorf("support: unknown action %q", action)
+	}
+
+	// If the verdict itself was low-confidence, escalate too.
+	if !rep.Escalated && verdictConfidence(verdict) < a.cfg.EscalationConfidence {
+		esc, err := a.escalate(ctx, q, verdict, "low_confidence")
+		if err == nil {
+			rep.Suggestion = esc.Suggestion
+			rep.Escalated = true
+		}
+	}
+
+	if a.cfg.Audit != nil {
+		_ = a.cfg.Audit.Record(ctx, AuditEntry{
+			Agent:      a.Name(),
+			TenantID:   q.TenantID,
+			Action:     "support." + action,
+			OccurredAt: time.Now().UTC(),
+			Detail: map[string]any{
+				"message_id": q.MessageID,
+				"escalated":  rep.Escalated,
+			},
+		})
+	}
+	log.Info("agent.support: handled", slog.String("action", action), slog.Bool("escalated", rep.Escalated))
+	return rep, nil
+}
+
+func (a *SupportAgent) explain(q SupportQuery, v dto.EvaluateResult) SupportReply {
+	conf := verdictConfidence(v)
+	exp := ExplainVerdict(v, q.Locale)
+	suggest := DefaultSuggestion(v.Tier)
+	return SupportReply{
+		Explanation: exp,
+		Confidence:  conf,
+		Suggestion:  suggest,
+	}
+}
+
+func (a *SupportAgent) release(ctx context.Context, q SupportQuery, v dto.EvaluateResult) (SupportReply, error) {
+	if a.cfg.Events == nil {
+		return SupportReply{}, errors.New("support: events publisher required for release")
+	}
+	payload := fmt.Sprintf(`{"tenant_id":%q,"message_id":%q,"user":%q,"requested_at":%q}`,
+		q.TenantID, q.MessageID, q.UserEmail, time.Now().UTC().Format(time.RFC3339))
+	if err := a.cfg.Events.Publish(ctx, a.cfg.ReleaseSubject, []byte(payload)); err != nil {
+		return SupportReply{}, fmt.Errorf("support: emit release: %w", err)
+	}
+	now := time.Now().UTC()
+	return SupportReply{
+		Explanation: ExplainVerdict(v, q.Locale),
+		Confidence:  verdictConfidence(v),
+		Suggestion:  "Your release request has been queued and will be processed within a few minutes.",
+		ReleasedAt:  &now,
+		ReleasedAs:  constant.CategoryInternalTrusted,
+	}, nil
+}
+
+func (a *SupportAgent) escalate(ctx context.Context, q SupportQuery, v dto.EvaluateResult, reason string) (SupportReply, error) {
+	if a.cfg.Events == nil {
+		return SupportReply{Escalated: true, Suggestion: "Escalated to your security team."}, nil
+	}
+	payload := fmt.Sprintf(`{"tenant_id":%q,"message_id":%q,"user":%q,"reason":%q,"verdict_tier":%q,"verdict_score":%d,"requested_at":%q}`,
+		q.TenantID, q.MessageID, q.UserEmail, reason, v.Tier, v.Score, time.Now().UTC().Format(time.RFC3339))
+	if err := a.cfg.Events.Publish(ctx, a.cfg.SecOpsSubject, []byte(payload)); err != nil {
+		return SupportReply{}, fmt.Errorf("support: emit escalate: %w", err)
+	}
+	return SupportReply{
+		Explanation: ExplainVerdict(v, q.Locale),
+		Confidence:  verdictConfidence(v),
+		Suggestion:  "Escalated to your security team for review.",
+		Escalated:   true,
+	}, nil
+}
+
+// ExplainVerdict produces a plain-language explanation for an evaluation
+// result. The output is deterministic so audit logs stay clean.
+//
+// Locale is currently advisory: the support agent always emits English
+// copy but downstream consumers (the support UI) can re-render using
+// the same template set as the banner renderer.
+func ExplainVerdict(v dto.EvaluateResult, locale string) string {
+	_ = locale
+	var b strings.Builder
+	switch v.Tier {
+	case constant.TierBlocked:
+		b.WriteString("This message was blocked because our detection systems classified it as a likely threat.")
+	case constant.TierHighRisk:
+		b.WriteString("This message was flagged as high-risk and routed to your security team.")
+	case constant.TierWarning:
+		b.WriteString("This message looks suspicious — please review carefully before acting.")
+	case constant.TierCaution:
+		b.WriteString("This message has some unusual characteristics worth checking.")
+	case constant.TierInformational:
+		b.WriteString("This message is informational — first contact from an external sender.")
+	case constant.TierTrusted:
+		b.WriteString("This message comes from a trusted sender.")
+	default:
+		b.WriteString("Verdict pending.")
+	}
+	if v.Primary != "" {
+		b.WriteString(" Primary signal: ")
+		b.WriteString(humanCategory(v.Primary))
+		b.WriteString(".")
+	}
+	if len(v.ReasonCodes) > 0 {
+		b.WriteString(" Contributing factors: ")
+		b.WriteString(strings.Join(v.ReasonCodes, ", "))
+		b.WriteString(".")
+	}
+	if v.Degraded {
+		b.WriteString(" Note: one or more detection services were unavailable during this evaluation.")
+	}
+	return b.String()
+}
+
+// DefaultSuggestion returns the standard call-to-action for tier.
+func DefaultSuggestion(tier constant.Tier) string {
+	switch tier {
+	case constant.TierBlocked, constant.TierHighRisk:
+		return "Do not interact with this message. Report it to your security team if anything looks legitimate."
+	case constant.TierWarning:
+		return "Verify the sender out-of-band before clicking links or replying."
+	case constant.TierCaution:
+		return "Treat any link or attachment with caution."
+	case constant.TierInformational:
+		return "First-time external sender — confirm before acting on requests."
+	case constant.TierTrusted:
+		return "No action required."
+	default:
+		return "No action required."
+	}
+}
+
+func humanCategory(c constant.Category) string {
+	switch c {
+	case constant.CategoryLikelyPhishing:
+		return "likely phishing"
+	case constant.CategoryBECImpersonation:
+		return "business-email-compromise / impersonation"
+	case constant.CategoryLookalikeDomain:
+		return "lookalike domain"
+	case constant.CategorySuspiciousURL:
+		return "suspicious URL"
+	case constant.CategorySuspiciousAttachment:
+		return "suspicious attachment"
+	case constant.CategoryFirstContactExternal:
+		return "first contact from outside your organisation"
+	case constant.CategoryAccountTakeoverSuspected:
+		return "account-takeover indicators"
+	case constant.CategoryVendorCompromise:
+		return "possible vendor compromise"
+	case constant.CategoryCredentialHarvesting:
+		return "credential harvesting"
+	case constant.CategoryInvoiceFraud:
+		return "invoice fraud"
+	case constant.CategoryQRPhishing:
+		return "QR-code phishing"
+	case constant.CategoryScamFraud:
+		return "scam / fraud"
+	case constant.CategoryAuthFailed:
+		return "failed sender authentication"
+	case constant.CategoryInternalTrusted:
+		return "internal trusted"
+	case constant.CategoryVendorTrusted:
+		return "trusted vendor"
+	case constant.CategoryNewsletter:
+		return "newsletter"
+	default:
+		return string(c)
+	}
+}
+
+func verdictConfidence(v dto.EvaluateResult) float64 {
+	if v.Tier2 != nil && v.Tier2.Confidence > 0 {
+		return v.Tier2.Confidence
+	}
+	if v.Tier1 != nil && v.Tier1.Confidence > 0 {
+		return v.Tier1.Confidence
+	}
+	if v.Tier0 != nil && v.Tier0.Bypass {
+		return 1.0
+	}
+	return 0.5
+}
