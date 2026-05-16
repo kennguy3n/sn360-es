@@ -4,7 +4,10 @@ GO              ?= go
 GOTEST_FLAGS    ?= -race -timeout 120s
 BIN_DIR         ?= bin
 APP_NAME        ?= sn360-es
+MIGRATE_BIN     ?= $(BIN_DIR)/sn360-es-migrate
+MIGRATIONS_DIR  ?= migrations
 DOCKER_COMPOSE  ?= docker compose
+VERSION         ?=
 
 .PHONY: all
 all: lint test build
@@ -34,7 +37,7 @@ cover:
 .PHONY: lint
 lint:
 	$(GO) vet ./...
-	gofmt -l . | tee /dev/stderr | (! read)
+	@out=$$(gofmt -l . 2>&1); if [ -n "$$out" ]; then echo "$$out"; exit 1; fi
 
 .PHONY: fmt
 fmt:
@@ -52,15 +55,37 @@ docker-up:
 docker-down:
 	$(DOCKER_COMPOSE) down
 
+# --- Migrations -----------------------------------------------------------
+#
+# All migration targets shell out to the in-tree `sn360-es-migrate` command,
+# which embeds the golang-migrate v4 library and the Postgres driver. No
+# external `migrate` binary is required.
+
+.PHONY: migrate-bin
+migrate-bin:
+	@mkdir -p $(BIN_DIR)
+	$(GO) build -o $(MIGRATE_BIN) ./cmd/sn360-es-migrate
+
 .PHONY: migrate-up
-migrate-up:
-	@echo "Apply migrations (Atlas/golang-migrate not yet wired in this scaffold)"
-	@ls migrations 2>/dev/null || true
+migrate-up: migrate-bin
+	$(MIGRATE_BIN) --path $(MIGRATIONS_DIR) up
 
 .PHONY: migrate-down
-migrate-down:
-	@echo "Rollback migrations (Atlas/golang-migrate not yet wired in this scaffold)"
-	@ls migrations 2>/dev/null || true
+migrate-down: migrate-bin
+	$(MIGRATE_BIN) --path $(MIGRATIONS_DIR) down 1
+
+.PHONY: migrate-status
+migrate-status: migrate-bin
+	$(MIGRATE_BIN) --path $(MIGRATIONS_DIR) status
+
+.PHONY: migrate-check
+migrate-check: migrate-bin
+	$(MIGRATE_BIN) --path $(MIGRATIONS_DIR) check
+
+.PHONY: migrate-force
+migrate-force: migrate-bin
+	@if [ -z "$(VERSION)" ]; then echo "VERSION=<n> required"; exit 1; fi
+	$(MIGRATE_BIN) --path $(MIGRATIONS_DIR) force $(VERSION)
 
 .PHONY: clean
 clean:
