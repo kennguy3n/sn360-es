@@ -61,9 +61,21 @@ type RiskSignals struct {
 	IsRecurringService bool `json:"is_recurring_service"`
 	HasAttachment      bool `json:"has_attachment"`
 	HasSuspiciousURL   bool `json:"has_suspicious_url"`
+	HasSuspiciousAttachment bool `json:"has_suspicious_attachment"`
 	HasLookalikeDomain bool `json:"has_lookalike_domain"`
 	HasFailedAuth      bool `json:"has_failed_auth"`
 	HasQuotaSpike      bool `json:"has_quota_spike"`
+
+	// Set by Tier 0 / prefilter when specific content classes are detected.
+	HasQRCode        bool `json:"has_qr_code,omitempty"`
+	HasInvoiceHint   bool `json:"has_invoice_hint,omitempty"`
+	HasCredentialLex bool `json:"has_credential_lex,omitempty"`
+
+	// Higher-level behavioural verdicts surfaced by the relationship
+	// aggregator. They feed the categoriser and the support agent.
+	AuthFailed                bool `json:"auth_failed,omitempty"`
+	LooksLikeAccountTakeover  bool `json:"looks_like_ato,omitempty"`
+	LooksLikeVendorCompromise bool `json:"looks_like_vendor_compromise,omitempty"`
 
 	RelationshipCategory RelationshipCategory `json:"relationship_category,omitempty"`
 
