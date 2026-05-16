@@ -51,8 +51,10 @@
       // RecipientObject does not expose contact-store membership, so
       // the previous !!r.isKnownContact always evaluated to false and
       // caused the backend to emit unusual_external_recipient on every
-      // external recipient. Let the server fall back to its own
-      // contact-store lookup instead.
+      // external recipient. The server treats nil as "no signal" and
+      // suppresses unusual_external_recipient for this caller; a
+      // server-side contact-store enrichment is the planned home for
+      // this signal (currently TODO).
       list.push({
         user_hash: await hashRecipient(tenant, r.emailAddress),
         domain: dom,
