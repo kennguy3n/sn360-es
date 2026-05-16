@@ -6,11 +6,11 @@ import "time"
 type EscalationReason string
 
 const (
-	EscalationReasonConfirmedBreach     EscalationReason = "confirmed_breach"
-	EscalationReasonAccountCompromise   EscalationReason = "account_compromise"
-	EscalationReasonZeroDayAttachment   EscalationReason = "zero_day_attachment"
-	EscalationReasonLowConfidence       EscalationReason = "ai_low_confidence"
-	EscalationReasonUserRequested       EscalationReason = "user_requested"
+	EscalationReasonConfirmedBreach   EscalationReason = "confirmed_breach"
+	EscalationReasonAccountCompromise EscalationReason = "account_compromise"
+	EscalationReasonZeroDayAttachment EscalationReason = "zero_day_attachment"
+	EscalationReasonLowConfidence     EscalationReason = "ai_low_confidence"
+	EscalationReasonUserRequested     EscalationReason = "user_requested"
 )
 
 // Valid reports whether r is a known escalation reason.
@@ -50,29 +50,29 @@ func (o EscalationOutcome) Valid() bool {
 // caller. It carries pseudonymised metadata only — no raw subject,
 // sender, or body content.
 type EscalationIncident struct {
-	PseudoMessageID     string           `json:"pseudo_message_id"`
-	Tier                string           `json:"tier"`
-	Category            string           `json:"category"`
-	Reason              EscalationReason `json:"reason"`
-	Score               float64          `json:"score"`
-	AffectedUserCount   int              `json:"affected_user_count"`
-	AISummary           string           `json:"ai_summary,omitempty"`
-	Indicators          []string         `json:"indicators,omitempty"`
-	DetectedAt          time.Time        `json:"detected_at"`
+	PseudoMessageID   string           `json:"pseudo_message_id"`
+	Tier              string           `json:"tier"`
+	Category          string           `json:"category"`
+	Reason            EscalationReason `json:"reason"`
+	Score             float64          `json:"score"`
+	AffectedUserCount int              `json:"affected_user_count"`
+	AISummary         string           `json:"ai_summary,omitempty"`
+	Indicators        []string         `json:"indicators,omitempty"`
+	DetectedAt        time.Time        `json:"detected_at"`
 }
 
 // EscalationTicket is the package handed off to SecOps.
 type EscalationTicket struct {
-	TicketID         string             `json:"ticket_id"`
-	TenantID         string             `json:"tenant_id"`
-	CreatedAt        time.Time          `json:"created_at"`
-	Reason           EscalationReason   `json:"reason"`
-	Incident         EscalationIncident `json:"incident"`
-	Timeline         []EscalationStep   `json:"timeline,omitempty"`
-	Outcome          EscalationOutcome  `json:"outcome,omitempty"`
-	ResolvedAt       time.Time          `json:"resolved_at,omitempty"`
-	ResolverHash     string             `json:"resolver_hash,omitempty"`
-	ResolutionNotes  string             `json:"resolution_notes,omitempty"`
+	TicketID        string             `json:"ticket_id"`
+	TenantID        string             `json:"tenant_id"`
+	CreatedAt       time.Time          `json:"created_at"`
+	Reason          EscalationReason   `json:"reason"`
+	Incident        EscalationIncident `json:"incident"`
+	Timeline        []EscalationStep   `json:"timeline,omitempty"`
+	Outcome         EscalationOutcome  `json:"outcome,omitempty"`
+	ResolvedAt      time.Time          `json:"resolved_at,omitempty"`
+	ResolverHash    string             `json:"resolver_hash,omitempty"`
+	ResolutionNotes string             `json:"resolution_notes,omitempty"`
 }
 
 // EscalationStep is one entry on the incident timeline.

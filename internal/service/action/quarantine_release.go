@@ -41,14 +41,14 @@ const (
 
 // ReleaseOutcome carries the resolved verdict back to the caller.
 type ReleaseOutcome struct {
-	Reason       ReleaseReason       `json:"reason"`
-	Verdict      dto.EvaluateResult  `json:"verdict"`
-	Original     constant.Tier       `json:"original_tier"`
-	Restored     bool                `json:"restored"`
-	ReportPath   string              `json:"report_path,omitempty"`
-	Explanations []string            `json:"explanations,omitempty"`
-	Record       QuarantineRecord    `json:"record,omitempty"`
-	OccurredAt   time.Time           `json:"occurred_at"`
+	Reason       ReleaseReason      `json:"reason"`
+	Verdict      dto.EvaluateResult `json:"verdict"`
+	Original     constant.Tier      `json:"original_tier"`
+	Restored     bool               `json:"restored"`
+	ReportPath   string             `json:"report_path,omitempty"`
+	Explanations []string           `json:"explanations,omitempty"`
+	Record       QuarantineRecord   `json:"record,omitempty"`
+	OccurredAt   time.Time          `json:"occurred_at"`
 }
 
 // ReleaseRequest is the input to ReleaseService.Release. RequestedBy
@@ -69,10 +69,10 @@ type ReleaseRequest struct {
 // service depends on a QuarantineService (for the persisted record
 // and provider lookup), a re-evaluator, and the event bus publisher.
 type ReleaseConfig struct {
-	Logger       *slog.Logger
-	Quarantine   *QuarantineService
-	Reevaluator  QuarantineReevaluator
-	Publisher    QuarantinePublisher
+	Logger      *slog.Logger
+	Quarantine  *QuarantineService
+	Reevaluator QuarantineReevaluator
+	Publisher   QuarantinePublisher
 	// ReleaseSubject is the NATS subject used for release outcomes
 	// (default "es.action.quarantine.release").
 	ReleaseSubject string
@@ -271,15 +271,15 @@ func (s *ReleaseService) publishOutcome(ctx context.Context, req ReleaseRequest,
 		return
 	}
 	envelope := struct {
-		TenantID             string         `json:"tenant_id"`
-		PseudonymizedMessage string         `json:"pseudonymized_message_id"`
-		RequestedBy          string         `json:"requested_by,omitempty"`
-		Reason               ReleaseReason  `json:"reason"`
-		Restored             bool           `json:"restored"`
-		Original             constant.Tier  `json:"original_tier,omitempty"`
-		NewTier              constant.Tier  `json:"new_tier,omitempty"`
-		Explanations         []string       `json:"explanations,omitempty"`
-		OccurredAt           time.Time      `json:"occurred_at"`
+		TenantID             string        `json:"tenant_id"`
+		PseudonymizedMessage string        `json:"pseudonymized_message_id"`
+		RequestedBy          string        `json:"requested_by,omitempty"`
+		Reason               ReleaseReason `json:"reason"`
+		Restored             bool          `json:"restored"`
+		Original             constant.Tier `json:"original_tier,omitempty"`
+		NewTier              constant.Tier `json:"new_tier,omitempty"`
+		Explanations         []string      `json:"explanations,omitempty"`
+		OccurredAt           time.Time     `json:"occurred_at"`
 	}{
 		TenantID:             req.TenantID,
 		PseudonymizedMessage: req.PseudonymizedMessage,

@@ -50,7 +50,27 @@ services:
     ports:
       - "5335:53/udp"
 
+  # ClamAV is used by the attachment pre-screening dev workflow.
+  # It exposes the clamd daemon on port 3310; the freshclam mirror is
+  # not exposed to the host so updates remain inside the container.
+  # First boot pulls signatures and may take a few minutes before the
+  # service becomes healthy.
+  clamav:
+    image: clamav/clamav:1.4
+    container_name: sn360es-clamav
+    ports:
+      - "3310:3310"
+    volumes:
+      - clamav-data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+
 volumes:
   nats-data:
   redis-data:
   postgres-data:
+  clamav-data:

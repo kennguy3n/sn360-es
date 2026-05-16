@@ -43,7 +43,10 @@ func (f *fakeSource) FalseRates(_ context.Context, _ string, _ dto.TimeRange) (i
 	return f.fp, f.fn, f.err
 }
 
-type fakeNarrative struct{ out string; err error }
+type fakeNarrative struct {
+	out string
+	err error
+}
 
 func (f *fakeNarrative) Generate(_ context.Context, _ dto.DashboardSummary) (string, error) {
 	return f.out, f.err

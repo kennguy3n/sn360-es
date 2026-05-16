@@ -235,15 +235,15 @@ func TestBannerRendererRTL(t *testing.T) {
 	// below.
 	cat, err := NewJSONCatalog(map[string]map[string]string{
 		"ar": {
-			"tier.HighRisk.title":              "خطر مرتفع",
-			"tier.HighRisk.body":               "لا تتفاعل مع هذه الرسالة.",
-			"category.BEC_IMPERSONATION":       "احتيال انتحال شخصية",
-			"auth.failed":                      "فشل التحقق",
-			"action.report":                    "إبلاغ",
-			"action.mark_safe":                 "آمن",
-			"action.trust_sender":              "ثقة",
-			"action.learn_more":                "اعرف المزيد",
-			"banner.degraded":                  "تدهور",
+			"tier.HighRisk.title":        "خطر مرتفع",
+			"tier.HighRisk.body":         "لا تتفاعل مع هذه الرسالة.",
+			"category.BEC_IMPERSONATION": "احتيال انتحال شخصية",
+			"auth.failed":                "فشل التحقق",
+			"action.report":              "إبلاغ",
+			"action.mark_safe":           "آمن",
+			"action.trust_sender":        "ثقة",
+			"action.learn_more":          "اعرف المزيد",
+			"banner.degraded":            "تدهور",
 		},
 	}, "ar")
 	if err != nil {

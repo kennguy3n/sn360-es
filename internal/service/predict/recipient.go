@@ -16,11 +16,11 @@ import (
 type WarningLevel int
 
 const (
-	WarnNone     WarningLevel = 0
-	WarnInfo     WarningLevel = 1
-	WarnCaution  WarningLevel = 2
-	WarnWarning  WarningLevel = 3
-	WarnHigh     WarningLevel = 4
+	WarnNone    WarningLevel = 0
+	WarnInfo    WarningLevel = 1
+	WarnCaution WarningLevel = 2
+	WarnWarning WarningLevel = 3
+	WarnHigh    WarningLevel = 4
 )
 
 // String returns the canonical name of the warning level.
@@ -44,11 +44,11 @@ func (l WarningLevel) String() string {
 // PII is never sent — recipients are referenced by pseudonymised hashes
 // and (optionally) their domains for lookalike checks.
 type RecipientRequest struct {
-	TenantID         string             `json:"tenant_id"`
-	SenderHash       string             `json:"sender_hash"`
+	TenantID         string               `json:"tenant_id"`
+	SenderHash       string               `json:"sender_hash"`
 	Recipients       []RecipientCandidate `json:"recipients"`
-	ThreadID         string             `json:"thread_id,omitempty"`
-	ThreadIsInternal bool               `json:"thread_is_internal,omitempty"`
+	ThreadID         string               `json:"thread_id,omitempty"`
+	ThreadIsInternal bool                 `json:"thread_is_internal,omitempty"`
 }
 
 // RecipientCandidate represents a single recipient under consideration.
@@ -178,10 +178,10 @@ func (s *RecipientService) checkRecipient(ctx context.Context, req RecipientRequ
 // a pseudonymised message ID and the tier/category the message already
 // received from the evaluation pipeline.
 type OpenRequest struct {
-	TenantID         string `json:"tenant_id"`
-	PseudoMessageID  string `json:"pseudo_message_id"`
-	Tier             string `json:"tier"`
-	Category         string `json:"category"`
+	TenantID        string `json:"tenant_id"`
+	PseudoMessageID string `json:"pseudo_message_id"`
+	Tier            string `json:"tier"`
+	Category        string `json:"category"`
 }
 
 // OpenResponse is returned by the pre-open predictor.
@@ -199,7 +199,9 @@ type OpenService struct {
 }
 
 // NewOpenService constructs the service.
-func NewOpenService() *OpenService { return &OpenService{now: func() time.Time { return time.Now().UTC() }} }
+func NewOpenService() *OpenService {
+	return &OpenService{now: func() time.Time { return time.Now().UTC() }}
+}
 
 // Predict returns the warning payload. For tiers below Warning, no
 // warning is returned (and the add-in renders the message normally).

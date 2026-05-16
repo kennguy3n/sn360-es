@@ -92,11 +92,11 @@ type QuarantinePublisher interface {
 // QuarantineConfig wires the quarantine service's dependencies and
 // tunables.
 type QuarantineConfig struct {
-	Logger     *slog.Logger
-	Providers  []QuarantineProvider
-	Store      QuarantineStore
-	Encryptor  QuarantineEncryptor
-	Publisher  QuarantinePublisher
+	Logger    *slog.Logger
+	Providers []QuarantineProvider
+	Store     QuarantineStore
+	Encryptor QuarantineEncryptor
+	Publisher QuarantinePublisher
 	// TTL is the lifetime of the encrypted reference in the store.
 	// Defaults to 30 days when zero.
 	TTL time.Duration

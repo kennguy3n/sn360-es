@@ -158,7 +158,7 @@ func (c *Catalog) Has(locale, key string) bool {
 // surface for the test).
 type osFS struct{}
 
-func (osFS) Open(name string) (fs.File, error)        { return openOS(name) }
+func (osFS) Open(name string) (fs.File, error) { return openOS(name) }
 func (osFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	return readDirOS(name)
 }

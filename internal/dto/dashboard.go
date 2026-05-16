@@ -47,16 +47,16 @@ type SimulationStats struct {
 // DashboardSummary is the structured aggregate that backs the AI
 // narrative. All counts cover the supplied time range.
 type DashboardSummary struct {
-	TenantID         string          `json:"tenant_id"`
-	Range            TimeRange       `json:"range"`
-	EmailsProcessed  int             `json:"emails_processed"`
-	ThreatsByTier    []TierCount     `json:"threats_by_tier"`
-	ThreatsByCat     []CategoryCount `json:"threats_by_category"`
-	FalsePositive    int             `json:"false_positives"`
-	FalseNegative    int             `json:"false_negatives"`
-	Feedback         FeedbackStats   `json:"feedback"`
-	Quarantine       QuarantineStats `json:"quarantine"`
-	Simulation       SimulationStats `json:"simulation"`
-	GeneratedAt      time.Time       `json:"generated_at"`
-	Narrative        string          `json:"narrative,omitempty"`
+	TenantID        string          `json:"tenant_id"`
+	Range           TimeRange       `json:"range"`
+	EmailsProcessed int             `json:"emails_processed"`
+	ThreatsByTier   []TierCount     `json:"threats_by_tier"`
+	ThreatsByCat    []CategoryCount `json:"threats_by_category"`
+	FalsePositive   int             `json:"false_positives"`
+	FalseNegative   int             `json:"false_negatives"`
+	Feedback        FeedbackStats   `json:"feedback"`
+	Quarantine      QuarantineStats `json:"quarantine"`
+	Simulation      SimulationStats `json:"simulation"`
+	GeneratedAt     time.Time       `json:"generated_at"`
+	Narrative       string          `json:"narrative,omitempty"`
 }

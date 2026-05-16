@@ -33,20 +33,20 @@ type Metrics struct {
 	BannerRenderLatency *prometheus.HistogramVec
 
 	// --- Detection pipeline (PROPOSAL §8) --------------------------
-	Tier0Bypass       *prometheus.CounterVec
-	Tier1Inferences   *prometheus.CounterVec
-	Tier1Latency      *prometheus.HistogramVec
-	Tier2Escalations  *prometheus.CounterVec
-	Tier2Latency      *prometheus.HistogramVec
-	RspamdLatency     *prometheus.HistogramVec
-	EvaluateLatency   *prometheus.HistogramVec
-	EvaluateOutcome   *prometheus.CounterVec
-	EvaluateDegraded  *prometheus.CounterVec
+	Tier0Bypass      *prometheus.CounterVec
+	Tier1Inferences  *prometheus.CounterVec
+	Tier1Latency     *prometheus.HistogramVec
+	Tier2Escalations *prometheus.CounterVec
+	Tier2Latency     *prometheus.HistogramVec
+	RspamdLatency    *prometheus.HistogramVec
+	EvaluateLatency  *prometheus.HistogramVec
+	EvaluateOutcome  *prometheus.CounterVec
+	EvaluateDegraded *prometheus.CounterVec
 
 	// --- Education service ----------------------------------------
-	SimulationSent          *prometheus.CounterVec
-	SimulationClick         *prometheus.CounterVec
-	ResilienceScore         *prometheus.HistogramVec
+	SimulationSent  *prometheus.CounterVec
+	SimulationClick *prometheus.CounterVec
+	ResilienceScore *prometheus.HistogramVec
 
 	// --- Event bus -------------------------------------------------
 	EventPublished  *prometheus.CounterVec
@@ -326,12 +326,12 @@ func NoopPipelineObserver() PipelineObserver { return noopPipelineObserver{} }
 
 type noopPipelineObserver struct{}
 
-func (noopPipelineObserver) ObserveTier0(string)                        {}
-func (noopPipelineObserver) ObserveTier1(string, time.Duration)         {}
-func (noopPipelineObserver) ObserveTier2(string, time.Duration)         {}
-func (noopPipelineObserver) ObserveRspamd(string, time.Duration)        {}
-func (noopPipelineObserver) ObserveEvaluate(string, time.Duration)      {}
-func (noopPipelineObserver) ObserveDegraded(string)                     {}
+func (noopPipelineObserver) ObserveTier0(string)                   {}
+func (noopPipelineObserver) ObserveTier1(string, time.Duration)    {}
+func (noopPipelineObserver) ObserveTier2(string, time.Duration)    {}
+func (noopPipelineObserver) ObserveRspamd(string, time.Duration)   {}
+func (noopPipelineObserver) ObserveEvaluate(string, time.Duration) {}
+func (noopPipelineObserver) ObserveDegraded(string)                {}
 
 // defaultMetrics is a process-wide lazily-instantiated Metrics set
 // shared by code that does not want to thread its own instance through

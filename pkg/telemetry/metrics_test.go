@@ -61,7 +61,10 @@ func TestMetrics_PipelineObserver(t *testing.T) {
 	// Round-trip through the HTTP handler so we exercise the gatherer.
 	srv := httptest.NewServer(m.HTTPHandler())
 	defer srv.Close()
-	resp, _ := http.Get(srv.URL)
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	expect := []string{

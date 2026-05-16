@@ -486,9 +486,9 @@ SELECT id, tenant_id, message_id_hash, COALESCE(correlation_id,''), score, tier,
 
 func scanEval(row *sql.Row) (*EvaluationResult, error) {
 	var (
-		r                                  EvaluationResult
-		secondary, reasons, degSvcs        pq.StringArray
-		t0, t1, t2, rsp                    string
+		r                           EvaluationResult
+		secondary, reasons, degSvcs pq.StringArray
+		t0, t1, t2, rsp             string
 	)
 	err := row.Scan(&r.ID, &r.TenantID, &r.MessageIDHash, &r.CorrelationID, &r.Score, &r.Tier,
 		&r.Primary, &secondary, &reasons, &r.Degraded, &degSvcs, &t0, &t1, &t2, &rsp,

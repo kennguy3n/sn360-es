@@ -91,20 +91,20 @@ type Label struct {
 
 // ScoreEngine holds per-tenant scoring weights and thresholds.
 type ScoreEngine struct {
-	TenantID           string
-	ScoreBase          int
-	WeightAI           int
-	WeightRspamd       int
-	WeightAttachments  int
-	WeightLinks        int
-	ThresholdBlocked   int
-	ThresholdHigh      int
-	ThresholdWarning   int
-	ThresholdCaution   int
-	ThresholdInfo      int
-	SubjectTagEnabled  bool
-	SubjectTagPrefix   string
-	UpdatedAt          time.Time
+	TenantID          string
+	ScoreBase         int
+	WeightAI          int
+	WeightRspamd      int
+	WeightAttachments int
+	WeightLinks       int
+	ThresholdBlocked  int
+	ThresholdHigh     int
+	ThresholdWarning  int
+	ThresholdCaution  int
+	ThresholdInfo     int
+	SubjectTagEnabled bool
+	SubjectTagPrefix  string
+	UpdatedAt         time.Time
 }
 
 // EmailClassification represents a domain-level classification list entry.
@@ -132,23 +132,23 @@ type Vendor struct {
 
 // EvaluationResult is the persisted output of a Tier 0/1/2 evaluation.
 type EvaluationResult struct {
-	ID                   string
-	TenantID             string
-	MessageIDHash        []byte
-	CorrelationID        string
-	Score                int
-	Tier                 string
-	Primary              string
-	Secondary            []string
-	ReasonCodes          []string
-	Degraded             bool
-	DegradedServices     []string
-	Tier0OutcomeJSON     []byte
-	Tier1OutcomeJSON     []byte
-	Tier2OutcomeJSON     []byte
-	RspamdOutcomeJSON    []byte
-	EvaluatedAt          time.Time
-	CreatedAt            time.Time
+	ID                string
+	TenantID          string
+	MessageIDHash     []byte
+	CorrelationID     string
+	Score             int
+	Tier              string
+	Primary           string
+	Secondary         []string
+	ReasonCodes       []string
+	Degraded          bool
+	DegradedServices  []string
+	Tier0OutcomeJSON  []byte
+	Tier1OutcomeJSON  []byte
+	Tier2OutcomeJSON  []byte
+	RspamdOutcomeJSON []byte
+	EvaluatedAt       time.Time
+	CreatedAt         time.Time
 }
 
 // CommunicationHistory is a relationship aggregate keyed by sender +

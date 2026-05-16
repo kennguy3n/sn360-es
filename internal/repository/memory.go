@@ -30,9 +30,9 @@ func NewInMemoryRegistry() *Registry {
 // --- tenants ------------------------------------------------------------
 
 type memoryTenants struct {
-	mu      sync.RWMutex
-	byID    map[string]Tenant
-	byName  map[string]string
+	mu     sync.RWMutex
+	byID   map[string]Tenant
+	byName map[string]string
 }
 
 func newMemoryTenants() *memoryTenants {
@@ -263,7 +263,9 @@ type memoryScoreEngines struct {
 	rows map[string]ScoreEngine
 }
 
-func newMemoryScoreEngines() *memoryScoreEngines { return &memoryScoreEngines{rows: map[string]ScoreEngine{}} }
+func newMemoryScoreEngines() *memoryScoreEngines {
+	return &memoryScoreEngines{rows: map[string]ScoreEngine{}}
+}
 
 func (m *memoryScoreEngines) Get(_ context.Context, tenantID string) (*ScoreEngine, error) {
 	m.mu.RLock()
@@ -368,9 +370,9 @@ func (m *memoryVendors) ListApproved(_ context.Context, tenantID string) ([]Vend
 // --- evaluation results -------------------------------------------------
 
 type memoryEvalResults struct {
-	mu      sync.RWMutex
-	rows    []EvaluationResult
-	byHash  map[string]int
+	mu     sync.RWMutex
+	rows   []EvaluationResult
+	byHash map[string]int
 }
 
 func newMemoryEvalResults() *memoryEvalResults {

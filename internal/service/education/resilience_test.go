@@ -26,13 +26,13 @@ func TestResilience_NoDataIsNeutral(t *testing.T) {
 func TestResilience_PerfectSignalsScoresHigh(t *testing.T) {
 	r := NewResilienceScorer(ResilienceScorerConfig{})
 	got, _ := r.ComputeScore(context.Background(), "acme", "u-1", ResilienceSignals{
-		SimulationsSent:       10,
-		SimulationsDetected:   10,
-		RealPhishingReceived:  5,
-		RealPhishingReported:  5,
-		LessonsServed:         8,
-		LessonsExpected:       8,
-		IncidentCount:         0,
+		SimulationsSent:      10,
+		SimulationsDetected:  10,
+		RealPhishingReceived: 5,
+		RealPhishingReported: 5,
+		LessonsServed:        8,
+		LessonsExpected:      8,
+		IncidentCount:        0,
 	})
 	if got.Score < 95 {
 		t.Fatalf("expected high score, got %d", got.Score)
@@ -45,11 +45,11 @@ func TestResilience_PerfectSignalsScoresHigh(t *testing.T) {
 func TestResilience_AllIncidentsScoresLow(t *testing.T) {
 	r := NewResilienceScorer(ResilienceScorerConfig{})
 	got, _ := r.ComputeScore(context.Background(), "acme", "u-1", ResilienceSignals{
-		SimulationsSent:     5,
-		SimulationsDetected: 0,
+		SimulationsSent:      5,
+		SimulationsDetected:  0,
 		RealPhishingReceived: 5,
 		RealPhishingReported: 0,
-		IncidentCount:       6, // > 4 → floors at 0
+		IncidentCount:        6, // > 4 → floors at 0
 	})
 	if got.Score > 30 {
 		t.Fatalf("expected low score, got %d", got.Score)

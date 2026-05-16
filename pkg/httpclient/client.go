@@ -349,12 +349,12 @@ func (s State) String() string {
 // as a trial. A successful trial closes the breaker; a failed trial
 // reopens it (and resets the cooldown).
 type breaker struct {
-	threshold  int32
-	timeout    time.Duration
-	mu         sync.Mutex
-	failures   int32
-	state      State
-	openedAt   time.Time
+	threshold    int32
+	timeout      time.Duration
+	mu           sync.Mutex
+	failures     int32
+	state        State
+	openedAt     time.Time
 	tripDisabled bool
 }
 

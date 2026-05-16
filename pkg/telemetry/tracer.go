@@ -131,9 +131,9 @@ type Span struct {
 // SpanContext is the propagation-only view of a span. It is the data
 // embedded in W3C traceparent headers.
 type SpanContext struct {
-	TraceID  string
-	SpanID   string
-	Sampled  bool
+	TraceID string
+	SpanID  string
+	Sampled bool
 }
 
 // NewTracer constructs a Tracer. A nil sampler defaults to AlwaysOn,
