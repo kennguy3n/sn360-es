@@ -15,9 +15,12 @@ import (
 	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/config"
+	"github.com/kennguy3n/sn360-es/internal/handler"
+	"github.com/kennguy3n/sn360-es/pkg/events"
 	"github.com/kennguy3n/sn360-es/pkg/events/bus"
 	natsbus "github.com/kennguy3n/sn360-es/pkg/events/nats"
 	redisbus "github.com/kennguy3n/sn360-es/pkg/events/redis"
+	"github.com/kennguy3n/sn360-es/pkg/telemetry"
 )
 
 func main() {
@@ -38,6 +41,8 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	metrics := telemetry.DefaultMetrics()
+
 	eventBus, err := bus.New(ctx, factoryConfigFromAppConfig(&cfg), logger)
 	if err != nil {
 		return fmt.Errorf("event bus: %w", err)
@@ -47,11 +52,15 @@ func run() error {
 			logger.Warn("sn360-es: event bus close error", slog.Any("error", cerr))
 		}
 	}()
-	_ = eventBus // future: register subscriptions before serving HTTP
+
+	mux, err := buildMux(&cfg, logger, metrics, eventBus)
+	if err != nil {
+		return fmt.Errorf("build mux: %w", err)
+	}
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTP.Port),
-		Handler:           buildMux(&cfg, logger),
+		Handler:           mux,
 		ReadHeaderTimeout: cfg.HTTP.ReadTimeout,
 		ReadTimeout:       cfg.HTTP.ReadTimeout,
 		WriteTimeout:      cfg.HTTP.WriteTimeout,
@@ -82,22 +91,42 @@ func run() error {
 
 // buildMux constructs the HTTP routing tree. Handlers from internal/handler
 // are wired here so future routes have one obvious place to register.
-func buildMux(cfg *config.Config, logger *slog.Logger) http.Handler {
+func buildMux(cfg *config.Config, logger *slog.Logger, metrics *telemetry.Metrics, eventBus events.EventService) (http.Handler, error) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ready"))
-	})
+
+	checkers := []handler.HealthChecker{
+		handler.HealthCheckerFunc{N: "event_bus", F: func(ctx context.Context) error {
+			if eventBus == nil {
+				return errors.New("event bus not configured")
+			}
+			// Round-trip the bus by publishing a self-test on the
+			// reserved system subject. Implementations that don't
+			// recognise the subject still return nil on healthy
+			// connections (cheap publish noop), which is the
+			// signal we want for readiness probes.
+			return eventBus.Publish(ctx, "sn360.system.healthcheck", nil)
+		}},
+	}
+	health := handler.NewHealthHandler(handler.HealthConfig{Logger: logger, Checkers: checkers})
+	mux.HandleFunc("/healthz", health.Liveness)
+	mux.HandleFunc("/readyz", health.Readiness)
+
+	mux.Handle("/metrics", metrics.HTTPHandler())
+
+	docs, err := handler.NewDocsHandler()
+	if err != nil {
+		return nil, fmt.Errorf("docs handler: %w", err)
+	}
+	mux.HandleFunc("/docs", docs.ServeSwaggerUI)
+	mux.HandleFunc("/docs/", docs.ServeSwaggerUI)
+	mux.HandleFunc("/openapi.yaml", docs.ServeOpenAPI)
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		logger.Debug("http: unmatched route", slog.String("path", r.URL.Path))
 		w.WriteHeader(http.StatusNotFound)
 	})
 	_ = cfg // future wiring will use cfg
-	return mux
+	return mux, nil
 }
 
 func factoryConfigFromAppConfig(cfg *config.Config) bus.Config {

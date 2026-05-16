@@ -9,6 +9,7 @@ import (
 
 	"github.com/kennguy3n/sn360-es/internal/constant"
 	"github.com/kennguy3n/sn360-es/internal/dto"
+	"github.com/kennguy3n/sn360-es/pkg/telemetry"
 )
 
 // Tier0Gate is the contract the orchestrator expects from the Tier 0
@@ -73,6 +74,10 @@ type Config struct {
 	Tier1FlagThreshold int
 
 	Logger *slog.Logger
+
+	// Observer receives per-tier latency and outcome metrics. Nil falls
+	// back to a no-op observer so existing tests don't need wiring.
+	Observer telemetry.PipelineObserver
 }
 
 // BreakerSet groups the three breakers the evaluator needs.
@@ -95,6 +100,9 @@ type Evaluator struct {
 func NewEvaluator(cfg Config) *Evaluator {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
+	}
+	if cfg.Observer == nil {
+		cfg.Observer = telemetry.NoopPipelineObserver()
 	}
 	if cfg.Tier1Timeout <= 0 {
 		cfg.Tier1Timeout = 5 * time.Second
@@ -121,12 +129,16 @@ func NewEvaluator(cfg Config) *Evaluator {
 // always populated, even when downstream services fail — Degraded reports
 // whether any service was unavailable.
 func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.EvaluateResult, error) {
+	evalStart := time.Now()
 	res := dto.EvaluateResult{
 		MessageID:     req.MessageID,
 		TenantID:      req.TenantID,
 		CorrelationID: req.CorrelationID,
 		EvaluatedAt:   time.Now().UTC(),
 	}
+	defer func() {
+		e.cfg.Observer.ObserveEvaluate(string(res.Tier), time.Since(evalStart))
+	}()
 
 	// 1. Tier 0 gate.
 	if e.cfg.Tier0 == nil {
@@ -134,6 +146,15 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 	}
 	tier0 := e.cfg.Tier0.Apply(req)
 	res.Tier0 = &tier0
+	if tier0.Bypass || tier0.SkipML || tier0.RspamdOnly {
+		reason := tier0.Reason
+		if reason == "" {
+			reason = "unknown_bypass"
+		}
+		e.cfg.Observer.ObserveTier0(reason)
+	} else {
+		e.cfg.Observer.ObserveTier0("none")
+	}
 
 	if tier0.Bypass {
 		// Short-circuit straight to verdict.
@@ -165,14 +186,18 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 			defer wg.Done()
 			cctx, cancel := context.WithTimeout(ctx, e.cfg.RspamdTimeout)
 			defer cancel()
+			start := time.Now()
 			outcome, err := e.runRspamd(cctx, req)
 			if err != nil {
 				markDegraded("rspamd")
+				e.cfg.Observer.ObserveRspamd("error", time.Since(start))
+				e.cfg.Observer.ObserveDegraded("rspamd")
 				e.log.Warn("evaluate: rspamd unavailable",
 					slog.String("message_id", req.MessageID),
 					slog.Any("error", err))
 				return
 			}
+			e.cfg.Observer.ObserveRspamd("ok", time.Since(start))
 			res.Rspamd = &outcome
 		}()
 	}
@@ -185,9 +210,12 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 			defer wg.Done()
 			cctx, cancel := context.WithTimeout(ctx, e.cfg.Tier1Timeout)
 			defer cancel()
+			start := time.Now()
 			outcome, err := e.runTier1(cctx, req)
 			if err != nil {
 				markDegraded("tier1")
+				e.cfg.Observer.ObserveTier1("error", time.Since(start))
+				e.cfg.Observer.ObserveDegraded("tier1")
 				e.log.Warn("evaluate: tier1 unavailable",
 					slog.String("message_id", req.MessageID),
 					slog.Any("error", err))
@@ -202,6 +230,14 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 			outcome.Pass = outcome.Score < pass
 			outcome.Flag = outcome.Score >= flag
 			outcome.Escalate = !outcome.Pass && !outcome.Flag
+			verdict := "escalate"
+			switch {
+			case outcome.Pass:
+				verdict = "pass"
+			case outcome.Flag:
+				verdict = "flag"
+			}
+			e.cfg.Observer.ObserveTier1(verdict, time.Since(start))
 			res.Tier1 = &outcome
 		}()
 	}
@@ -216,14 +252,22 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 		if res.Tier1 != nil {
 			hint = *res.Tier1
 		}
+		start := time.Now()
 		outcome, err := e.runTier2(cctx, req, hint)
 		cancel()
 		if err != nil {
 			markDegraded("tier2")
+			e.cfg.Observer.ObserveTier2("error", time.Since(start))
+			e.cfg.Observer.ObserveDegraded("tier2")
 			e.log.Warn("evaluate: tier2 unavailable",
 				slog.String("message_id", req.MessageID),
 				slog.Any("error", err))
 		} else {
+			outcomeLabel := "ok"
+			if len(outcome.Categories) > 0 {
+				outcomeLabel = string(outcome.Categories[0])
+			}
+			e.cfg.Observer.ObserveTier2(outcomeLabel, time.Since(start))
 			res.Tier2 = &outcome
 		}
 	}

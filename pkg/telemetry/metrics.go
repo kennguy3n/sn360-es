@@ -1,0 +1,356 @@
+package telemetry
+
+import (
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+// Metrics is the application-wide Prometheus instrument set.
+//
+// It is intentionally narrow: only the counters and histograms named in
+// ARCHITECTURE.md §6.3 ("Prometheus metrics") and PROPOSAL.md §8
+// ("Observability") plus the cross-tier latency histograms required for
+// SLO tracking. New metrics MUST be added here (not anonymously
+// registered) so cardinality and label conventions stay consistent.
+//
+// All counters / histograms are constructed against a private registry
+// when callers pass nil, which keeps tests hermetic. Production code
+// should wire prometheus.DefaultRegisterer.
+type Metrics struct {
+	registry prometheus.Registerer
+	gatherer prometheus.Gatherer
+
+	// --- User-facing banner / action counters (ARCHITECTURE §6.3) --
+	BannerRendered      *prometheus.CounterVec
+	BannerAction        *prometheus.CounterVec
+	QuarantineRelease   *prometheus.CounterVec
+	URLRewriteClick     *prometheus.CounterVec
+	PresendPrompt       *prometheus.CounterVec
+	BannerRenderLatency *prometheus.HistogramVec
+
+	// --- Detection pipeline (PROPOSAL §8) --------------------------
+	Tier0Bypass       *prometheus.CounterVec
+	Tier1Inferences   *prometheus.CounterVec
+	Tier1Latency      *prometheus.HistogramVec
+	Tier2Escalations  *prometheus.CounterVec
+	Tier2Latency      *prometheus.HistogramVec
+	RspamdLatency     *prometheus.HistogramVec
+	EvaluateLatency   *prometheus.HistogramVec
+	EvaluateOutcome   *prometheus.CounterVec
+	EvaluateDegraded  *prometheus.CounterVec
+
+	// --- Education service ----------------------------------------
+	SimulationSent          *prometheus.CounterVec
+	SimulationClick         *prometheus.CounterVec
+	ResilienceScore         *prometheus.HistogramVec
+
+	// --- Event bus -------------------------------------------------
+	EventPublished  *prometheus.CounterVec
+	EventConsumed   *prometheus.CounterVec
+	EventErrors     *prometheus.CounterVec
+	EventLagSeconds *prometheus.GaugeVec
+}
+
+// MetricsConfig configures the metric set. Subsystem maps to Prometheus
+// `subsystem`, Namespace to `namespace`. Sane defaults are filled in.
+type MetricsConfig struct {
+	Namespace  string
+	Subsystem  string
+	Registerer prometheus.Registerer
+	Gatherer   prometheus.Gatherer
+}
+
+// NewMetrics constructs a Metrics set and registers each instrument
+// against cfg.Registerer (or a new private registry when nil). Already
+// registered instruments are returned via prometheus.AlreadyRegisteredError
+// recovery so this is safe to call from multiple binaries that share the
+// default registerer.
+func NewMetrics(cfg MetricsConfig) *Metrics {
+	if cfg.Namespace == "" {
+		cfg.Namespace = "sn360"
+	}
+	if cfg.Subsystem == "" {
+		cfg.Subsystem = "es"
+	}
+	reg := cfg.Registerer
+	gatherer := cfg.Gatherer
+	if reg == nil {
+		r := prometheus.NewRegistry()
+		reg = r
+		if gatherer == nil {
+			gatherer = r
+		}
+	} else if gatherer == nil {
+		gatherer = prometheus.DefaultGatherer
+	}
+
+	b := builder{ns: cfg.Namespace, sub: cfg.Subsystem, reg: reg}
+
+	m := &Metrics{
+		registry: reg,
+		gatherer: gatherer,
+
+		BannerRendered: b.counterVec("banner_rendered_total",
+			"Banners rendered, partitioned by tier and provider.",
+			[]string{"tier", "provider"}),
+		BannerAction: b.counterVec("banner_action_total",
+			"Banner action button clicks (mark_safe / report / etc).",
+			[]string{"tier", "action"}),
+		QuarantineRelease: b.counterVec("quarantine_release_total",
+			"Quarantine release requests grouped by approver role.",
+			[]string{"role", "outcome"}),
+		URLRewriteClick: b.counterVec("url_rewrite_click_total",
+			"Rewritten URL click-throughs, partitioned by verdict.",
+			[]string{"verdict"}),
+		PresendPrompt: b.counterVec("presend_prompt_total",
+			"Pre-send prompts shown to senders.",
+			[]string{"reason"}),
+		BannerRenderLatency: b.histogramVec("banner_render_latency_seconds",
+			"Latency of banner rendering, end to end.",
+			latencyBuckets(),
+			[]string{"tier"}),
+
+		Tier0Bypass: b.counterVec("tier0_bypass_total",
+			"Tier 0 gate decisions; reason is one of the enum strings.",
+			[]string{"reason"}),
+		Tier1Inferences: b.counterVec("tier1_inferences_total",
+			"Tier 1 encoder inferences, partitioned by verdict.",
+			[]string{"verdict"}),
+		Tier1Latency: b.histogramVec("tier1_inference_latency_seconds",
+			"Tier 1 encoder inference latency.",
+			latencyBuckets(),
+			[]string{"verdict"}),
+		Tier2Escalations: b.counterVec("tier2_escalations_total",
+			"Tier 2 LLM escalations, partitioned by outcome.",
+			[]string{"outcome"}),
+		Tier2Latency: b.histogramVec("tier2_inference_latency_seconds",
+			"Tier 2 LLM inference latency.",
+			latencyBuckets(),
+			[]string{"outcome"}),
+		RspamdLatency: b.histogramVec("rspamd_latency_seconds",
+			"Rspamd scoring latency.",
+			latencyBuckets(),
+			[]string{"outcome"}),
+		EvaluateLatency: b.histogramVec("evaluate_latency_seconds",
+			"End-to-end evaluation latency per tier label.",
+			latencyBuckets(),
+			[]string{"tier"}),
+		EvaluateOutcome: b.counterVec("evaluate_outcome_total",
+			"Evaluation results, partitioned by tier label.",
+			[]string{"tier"}),
+		EvaluateDegraded: b.counterVec("evaluate_degraded_total",
+			"Number of evaluations that ran in degraded mode.",
+			[]string{"service"}),
+
+		SimulationSent: b.counterVec("simulation_sent_total",
+			"Phishing simulations sent, partitioned by template.",
+			[]string{"template"}),
+		SimulationClick: b.counterVec("simulation_click_total",
+			"Phishing simulation interactions (click / report / ignore).",
+			[]string{"template", "outcome"}),
+		ResilienceScore: b.histogramVec("resilience_score",
+			"User resilience score distribution.",
+			[]float64{0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100},
+			[]string{"cohort"}),
+
+		EventPublished: b.counterVec("event_published_total",
+			"Events published to the event bus.",
+			[]string{"bus", "stream"}),
+		EventConsumed: b.counterVec("event_consumed_total",
+			"Events consumed from the event bus.",
+			[]string{"bus", "stream"}),
+		EventErrors: b.counterVec("event_errors_total",
+			"Event bus errors, partitioned by stage.",
+			[]string{"bus", "stream", "stage"}),
+		EventLagSeconds: b.gaugeVec("event_lag_seconds",
+			"Estimated consumer lag in seconds.",
+			[]string{"bus", "stream"}),
+	}
+	return m
+}
+
+// Registerer returns the underlying registerer (useful for sub-component
+// wiring).
+func (m *Metrics) Registerer() prometheus.Registerer { return m.registry }
+
+// Gatherer returns the underlying gatherer.
+func (m *Metrics) Gatherer() prometheus.Gatherer { return m.gatherer }
+
+// HTTPHandler returns an http.Handler exposing the gathered metrics in
+// Prometheus exposition format. Wire it under `/metrics`.
+func (m *Metrics) HTTPHandler() http.Handler {
+	return promhttp.HandlerFor(m.gatherer, promhttp.HandlerOpts{
+		ErrorHandling: promhttp.ContinueOnError,
+		Registry:      m.registry,
+	})
+}
+
+// ObserveLatency is a small helper that captures the elapsed time since
+// start as a histogram observation. Usage:
+//
+//	defer m.ObserveLatency(m.EvaluateLatency.WithLabelValues(tier), time.Now())
+func (m *Metrics) ObserveLatency(h prometheus.Observer, start time.Time) {
+	if h == nil {
+		return
+	}
+	h.Observe(time.Since(start).Seconds())
+}
+
+// --- internal helpers -----------------------------------------------------
+
+type builder struct {
+	ns, sub string
+	reg     prometheus.Registerer
+}
+
+func (b builder) counterVec(name, help string, labels []string) *prometheus.CounterVec {
+	cv := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: b.ns, Subsystem: b.sub, Name: name, Help: help,
+	}, labels)
+	return register(b.reg, cv).(*prometheus.CounterVec)
+}
+
+func (b builder) histogramVec(name, help string, buckets []float64, labels []string) *prometheus.HistogramVec {
+	hv := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: b.ns, Subsystem: b.sub, Name: name, Help: help, Buckets: buckets,
+	}, labels)
+	return register(b.reg, hv).(*prometheus.HistogramVec)
+}
+
+func (b builder) gaugeVec(name, help string, labels []string) *prometheus.GaugeVec {
+	gv := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: b.ns, Subsystem: b.sub, Name: name, Help: help,
+	}, labels)
+	return register(b.reg, gv).(*prometheus.GaugeVec)
+}
+
+func register(reg prometheus.Registerer, c prometheus.Collector) prometheus.Collector {
+	err := reg.Register(c)
+	if err == nil {
+		return c
+	}
+	if are, ok := err.(prometheus.AlreadyRegisteredError); ok {
+		return are.ExistingCollector
+	}
+	// Fall back to a private registry so a misconfigured shared
+	// registry never crashes the service. The instrument is still
+	// usable, just not exported on the default endpoint.
+	private := prometheus.NewRegistry()
+	if rerr := private.Register(c); rerr != nil {
+		panic(rerr)
+	}
+	return c
+}
+
+func latencyBuckets() []float64 {
+	// 1 ms .. 30 s in roughly logarithmic steps. Matches the SLO
+	// budgets quoted in ARCHITECTURE.md §6 (p99 < 1.5 s for Tier 1,
+	// < 10 s for Tier 2 LLM).
+	return []float64{
+		0.001, 0.005, 0.01, 0.025, 0.05, 0.1,
+		0.25, 0.5, 1, 2.5, 5, 10, 30,
+	}
+}
+
+// --- accessors used by services ------------------------------------------
+
+// once-cached helpers so callers don't have to thread `labels` through
+// every code path.
+
+// PipelineObserver exposes the subset of metrics the evaluator and tier
+// services use. It hides the concrete prometheus types behind a small
+// interface so tests can supply a fake.
+type PipelineObserver interface {
+	ObserveTier0(reason string)
+	ObserveTier1(verdict string, latency time.Duration)
+	ObserveTier2(outcome string, latency time.Duration)
+	ObserveRspamd(outcome string, latency time.Duration)
+	ObserveEvaluate(tier string, latency time.Duration)
+	ObserveDegraded(service string)
+}
+
+type metricsPipelineObserver struct{ m *Metrics }
+
+// PipelineObserver returns a PipelineObserver implementation backed by m.
+func (m *Metrics) PipelineObserver() PipelineObserver {
+	return &metricsPipelineObserver{m: m}
+}
+
+func (p *metricsPipelineObserver) ObserveTier0(reason string) {
+	if reason == "" {
+		reason = "none"
+	}
+	p.m.Tier0Bypass.WithLabelValues(reason).Inc()
+}
+func (p *metricsPipelineObserver) ObserveTier1(verdict string, latency time.Duration) {
+	if verdict == "" {
+		verdict = "unknown"
+	}
+	p.m.Tier1Inferences.WithLabelValues(verdict).Inc()
+	p.m.Tier1Latency.WithLabelValues(verdict).Observe(latency.Seconds())
+}
+func (p *metricsPipelineObserver) ObserveTier2(outcome string, latency time.Duration) {
+	if outcome == "" {
+		outcome = "unknown"
+	}
+	p.m.Tier2Escalations.WithLabelValues(outcome).Inc()
+	p.m.Tier2Latency.WithLabelValues(outcome).Observe(latency.Seconds())
+}
+func (p *metricsPipelineObserver) ObserveRspamd(outcome string, latency time.Duration) {
+	if outcome == "" {
+		outcome = "ok"
+	}
+	p.m.RspamdLatency.WithLabelValues(outcome).Observe(latency.Seconds())
+}
+func (p *metricsPipelineObserver) ObserveEvaluate(tier string, latency time.Duration) {
+	if tier == "" {
+		tier = "unknown"
+	}
+	p.m.EvaluateLatency.WithLabelValues(tier).Observe(latency.Seconds())
+	p.m.EvaluateOutcome.WithLabelValues(tier).Inc()
+}
+func (p *metricsPipelineObserver) ObserveDegraded(service string) {
+	if service == "" {
+		service = "unknown"
+	}
+	p.m.EvaluateDegraded.WithLabelValues(service).Inc()
+}
+
+// NoopPipelineObserver returns a PipelineObserver that does nothing.
+// Useful for tests and bootstrapping when no metric set is wired.
+func NoopPipelineObserver() PipelineObserver { return noopPipelineObserver{} }
+
+type noopPipelineObserver struct{}
+
+func (noopPipelineObserver) ObserveTier0(string)                        {}
+func (noopPipelineObserver) ObserveTier1(string, time.Duration)         {}
+func (noopPipelineObserver) ObserveTier2(string, time.Duration)         {}
+func (noopPipelineObserver) ObserveRspamd(string, time.Duration)        {}
+func (noopPipelineObserver) ObserveEvaluate(string, time.Duration)      {}
+func (noopPipelineObserver) ObserveDegraded(string)                     {}
+
+// defaultMetrics is a process-wide lazily-instantiated Metrics set
+// shared by code that does not want to thread its own instance through
+// every constructor. It uses prometheus.DefaultRegisterer.
+var (
+	defaultMetricsOnce sync.Once
+	defaultMetricsVal  *Metrics
+)
+
+// DefaultMetrics returns the process-wide Metrics instance, lazily
+// initialising it against prometheus.DefaultRegisterer on first call.
+// Tests should always construct a private Metrics via NewMetrics and
+// avoid DefaultMetrics for hermeticity.
+func DefaultMetrics() *Metrics {
+	defaultMetricsOnce.Do(func() {
+		defaultMetricsVal = NewMetrics(MetricsConfig{
+			Registerer: prometheus.DefaultRegisterer,
+			Gatherer:   prometheus.DefaultGatherer,
+		})
+	})
+	return defaultMetricsVal
+}
