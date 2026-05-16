@@ -40,9 +40,13 @@
         }
       ],
       "composeTrigger": {
-        "selectActions": [],
-        "draftAccess": "METADATA",
-        "onTriggerFunction": "sn360PreSendTrigger"
+        "selectActions": [
+          {
+            "text": "SN360 Pre-Send Check",
+            "runFunction": "sn360PreSendTrigger"
+          }
+        ],
+        "draftAccess": "METADATA"
       }
     }
   }
