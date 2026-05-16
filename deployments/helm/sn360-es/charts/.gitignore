@@ -1,0 +1,4 @@
+# Downloaded chart dependencies are reproducible from Chart.lock via
+# `helm dependency build`. We keep this directory tracked but ignore
+# the resulting *.tgz so they are not committed to the repo.
+*.tgz

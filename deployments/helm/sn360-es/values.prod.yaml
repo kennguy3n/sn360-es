@@ -1,0 +1,41 @@
+# Production overlay — three-replica HA, autoscaling enabled, NATS
+# JetStream three-node cluster with persistent volumes.
+replicaCount: 3
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+config:
+  logLevel: info
+  eventBusType: nats
+  pgSSLMode: verify-full
+nats:
+  enabled: true
+  config:
+    cluster:
+      enabled: true
+      replicas: 3
+    jetstream:
+      enabled: true
+      fileStore:
+        pvc:
+          size: 50Gi
+serviceMonitor:
+  enabled: true
+ingress:
+  enabled: false
