@@ -1130,20 +1130,28 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 			ReasonCodes: res.ReasonCodes,
 			Locale:      locale,
 		}
-		// Mint an ActionToken so the Mark Safe / Report / Trust Sender
-		// CTAs in the rendered banner carry a usable JWT for posting
-		// feedback. We only attempt this when the JWT issuer is
-		// wired — in deployments without a feedback-token issuer the
-		// banner renderer suppresses the interactive CTAs and still
-		// emits the informational body, so the banner is published
-		// either way (see banner_renderer.go BannerInput.ActionToken).
-		// The action is left as "mark_safe" so the banner CTA matches
-		// the canonical FeedbackAction value enforced by the banner
-		// handler.
-		if input.Tier.AllowsMarkSafe() && a.jwtIssuer != nil {
+		// Mint an ActionToken so the banner CTAs (Report Phishing
+		// always; Mark Safe / Trust Sender on AllowsMarkSafe tiers)
+		// carry a usable JWT for posting feedback. The token is
+		// emitted with an *empty* Action claim so the same value
+		// works for any of the three FeedbackAction strings the user
+		// might click: feedback.FeedbackService.Process only rejects
+		// the request when claims.Action is non-empty AND mismatches
+		// the request action (internal/service/action/feedback.go).
+		// Binding the token to a single action would have made the
+		// other two buttons in the banner unusable — the template
+		// shares one token across all three anchor tags. We mint a
+		// token for any non-Trusted tier (not just AllowsMarkSafe)
+		// so Report Phishing keeps working on HighRisk and Blocked
+		// banners, where reporting matters most.
+		//
+		// In deployments without a feedback-token issuer the banner
+		// renderer suppresses the interactive CTAs and still emits
+		// the informational body, so the banner is published either
+		// way (see banner_renderer.go BannerInput.ActionToken).
+		if a.jwtIssuer != nil {
 			if tok, terr := a.jwtIssuer.Issue(res.TenantID, res.MessageID, privacy.IssueOptions{
-				Tier:   string(res.Tier),
-				Action: string(action.FeedbackMarkSafe),
+				Tier: string(res.Tier),
 			}); terr == nil {
 				input.ActionToken = tok
 			} else {

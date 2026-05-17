@@ -16,6 +16,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
 	"github.com/kennguy3n/sn360-es/internal/service/tier0"
 	"github.com/kennguy3n/sn360-es/pkg/events"
+	"github.com/kennguy3n/sn360-es/pkg/privacy"
 )
 
 // recordingBus is a richer test double than stubBus: it captures both
@@ -317,13 +318,11 @@ func TestHandleIngestionAction_RendersBannerForRiskyTiers(t *testing.T) {
 	// enough to exercise the publish path.
 	app.urlRewriter = &action.URLRewriter{}
 
-	// HighRisk is the cleanest non-Trusted tier to exercise the full
-	// banner path: it does not allow Mark Safe so BannerInput.Validate
-	// is satisfied without an ActionToken, but it is still risky enough
-	// to fire the URL-rewrite signal. Warning would also exercise the
-	// banner path, but only when a JWT issuer is wired to mint the
-	// ActionToken — that wiring is covered by handler-level tests in
-	// the privacy package, so we keep this fixture token-free.
+	// HighRisk is a useful tier here: it does not allow Mark Safe
+	// (so AllowsMarkSafe-only signals stay off) but it is risky
+	// enough to fire the URL-rewrite signal, and the Report Phishing
+	// CTA must still surface — covered by the dedicated regression
+	// test TestHandleIngestionAction_HighRiskSurfacesReportPhishing.
 	res := dto.EvaluateResult{
 		MessageID:     "msg-1",
 		TenantID:      "t-1",
@@ -508,6 +507,84 @@ func TestHandleIngestionAction_PublishesBannerWithoutJWTIssuer(t *testing.T) {
 	for _, banned := range []string{"report_phishing", "mark_safe", "trust_sender"} {
 		if contains(evt.HTML, banned) {
 			t.Errorf("banner without ActionToken still surfaced CTA %q\n%s", banned, evt.HTML)
+		}
+	}
+}
+
+// TestHandleIngestionAction_HighRiskSurfacesReportPhishing is the
+// regression test for BUG-0010: on HighRisk / Blocked verdicts the
+// ingestion-action consumer must still mint an ActionToken so the
+// Report Phishing CTA renders. The first cut at BUG-0009 gated token
+// minting on Tier.AllowsMarkSafe() — which is false for HighRisk and
+// Blocked — and the banner template then suppressed the Report
+// button exactly on the tiers where reporting matters most. We now
+// mint a generic (empty-Action) token for any non-Trusted tier, and
+// only the Mark Safe / Trust Sender buttons stay suppressed via
+// Tier.AllowsMarkSafe() inside the renderer.
+func TestHandleIngestionAction_HighRiskSurfacesReportPhishing(t *testing.T) {
+	bus := &recordingBus{}
+	app := newTestApp(t)
+	app.eventBus = bus
+
+	// Wire a real JWT issuer so handleIngestionAction can mint a
+	// usable token. The secret only needs to clear the 32-byte
+	// length check; the test does not verify the token, only that
+	// the CTA URLs end up populated.
+	iss, err := privacy.NewJWTIssuer(privacy.JWTConfig{
+		Secret: []byte("test-secret-test-secret-test-secret"),
+		Issuer: "sn360-es-test",
+		TTL:    time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("issuer: %v", err)
+	}
+	app.jwtIssuer = iss
+
+	cat, err := action.DefaultBannerCatalog()
+	if err != nil {
+		t.Fatalf("default catalog: %v", err)
+	}
+	br, err := action.NewBannerRenderer(cat)
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+	app.bannerRenderer = br
+
+	res := dto.EvaluateResult{
+		MessageID:     "msg-hr-1",
+		TenantID:      "t-1",
+		CorrelationID: "corr-1",
+		// HighRisk does NOT allow Mark Safe but MUST allow Report.
+		Tier:    constant.TierHighRisk,
+		Primary: constant.CategoryCredentialHarvesting,
+	}
+	body, _ := json.Marshal(res)
+	if err := app.handleIngestionAction(context.Background(), payloadMessage{data: body}); err != nil {
+		t.Fatalf("handleIngestionAction: %v", err)
+	}
+
+	payload := bus.firstPayload("es.action.banner")
+	if payload == nil {
+		t.Fatalf("expected banner published for HighRisk tier; got subjects: %v", bus.publishedSubjects())
+	}
+	var evt struct {
+		HTML string `json:"html"`
+	}
+	if err := json.Unmarshal(payload, &evt); err != nil {
+		t.Fatalf("unmarshal banner envelope: %v", err)
+	}
+	if !contains(evt.HTML, `data-sn360-tier="HighRisk"`) {
+		t.Errorf("rendered html should carry the HighRisk tier marker, got: %s", evt.HTML)
+	}
+	// Report Phishing MUST surface on HighRisk (BUG-0010 regression).
+	if !contains(evt.HTML, "report_phishing") {
+		t.Errorf("HighRisk banner missing Report Phishing CTA — BUG-0010 regressed:\n%s", evt.HTML)
+	}
+	// Mark Safe and Trust Sender must stay suppressed because
+	// HighRisk does not allow self-recovery.
+	for _, banned := range []string{"mark_safe", "trust_sender"} {
+		if contains(evt.HTML, banned) {
+			t.Errorf("HighRisk banner surfaced disallowed CTA %q\n%s", banned, evt.HTML)
 		}
 	}
 }
