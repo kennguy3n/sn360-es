@@ -149,7 +149,14 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 	if tier0.Bypass || tier0.SkipML || tier0.RspamdOnly {
 		reason := tier0.Reason
 		if reason == "" {
-			reason = "unknown_bypass"
+			switch {
+			case tier0.Bypass:
+				reason = "unknown_bypass"
+			case tier0.RspamdOnly:
+				reason = "rspamd_only"
+			case tier0.SkipML:
+				reason = "skip_ml"
+			}
 		}
 		e.cfg.Observer.ObserveTier0(reason)
 	} else {

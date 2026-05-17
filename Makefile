@@ -35,9 +35,27 @@ cover:
 	$(GO) tool cover -func=coverage.out
 
 .PHONY: lint
-lint:
+lint: openapi-check
 	$(GO) vet ./...
 	@out=$$(gofmt -l . 2>&1); if [ -n "$$out" ]; then echo "$$out"; exit 1; fi
+
+# --- OpenAPI spec sync ---------------------------------------------------
+#
+# The canonical OpenAPI document lives under api/openapi.yaml so it shows
+# up where API consumers expect it. internal/handler/openapi.yaml is an
+# exact mirror used by go:embed — go:embed does not follow symlinks, so
+# we keep a real file and enforce parity via `make openapi-check` (run
+# from `make lint`). `make openapi-sync` regenerates the embedded copy
+# whenever the canonical spec changes.
+
+.PHONY: openapi-sync
+openapi-sync:
+	cp api/openapi.yaml internal/handler/openapi.yaml
+
+.PHONY: openapi-check
+openapi-check:
+	@diff -q api/openapi.yaml internal/handler/openapi.yaml > /dev/null \
+		|| { echo "api/openapi.yaml and internal/handler/openapi.yaml are out of sync — run 'make openapi-sync'"; exit 1; }
 
 .PHONY: fmt
 fmt:
