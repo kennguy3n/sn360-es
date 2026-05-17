@@ -105,7 +105,7 @@ spec:
     helm:
       valueFiles:
         - values.yaml
-        - values.prod.yaml
+        - values.uat.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: sn360-uat

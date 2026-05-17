@@ -1,0 +1,44 @@
+# UAT overlay — staging tier sized between QA and prod. Two replicas
+# with autoscaling on, info logs, NATS JetStream cluster with a 25Gi
+# PVC, ServiceMonitor enabled for parity with prod observability but
+# `pgSSLMode=require` (not `verify-full`) so it can run against
+# managed-cert dev/staging Postgres without a custom CA chain.
+replicaCount: 2
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+resources:
+  requests:
+    cpu: 300m
+    memory: 384Mi
+  limits:
+    cpu: 1500m
+    memory: 1.5Gi
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+config:
+  logLevel: info
+  eventBusType: nats
+  pgSSLMode: require
+nats:
+  enabled: true
+  config:
+    cluster:
+      enabled: true
+      replicas: 3
+    jetstream:
+      enabled: true
+      fileStore:
+        pvc:
+          size: 25Gi
+serviceMonitor:
+  enabled: true
+ingress:
+  enabled: false

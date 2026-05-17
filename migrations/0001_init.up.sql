@@ -123,7 +123,7 @@ CREATE TABLE IF NOT EXISTS score_engine (
     threshold_caution   INT         NOT NULL DEFAULT 30,
     threshold_info      INT         NOT NULL DEFAULT 15,
     subject_tag_enabled BOOLEAN     NOT NULL DEFAULT FALSE,
-    subject_tag_prefix  TEXT        NOT NULL DEFAULT '[SN360: WARN]',
+    subject_tag_prefix  TEXT        NOT NULL DEFAULT 'SN360',
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CHECK (
         threshold_blocked > threshold_high
@@ -237,7 +237,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     template_id   TEXT        NOT NULL,
     difficulty    TEXT        NOT NULL CHECK (difficulty IN ('easy', 'medium', 'hard')),
     status        TEXT        NOT NULL DEFAULT 'draft'
-                  CHECK (status IN ('draft', 'scheduled', 'active', 'completed', 'cancelled')),
+                  CHECK (status IN ('draft', 'scheduled', 'sending', 'active', 'completed', 'cancelled')),
     target_group  UUID        REFERENCES groups(id) ON DELETE SET NULL,
     scheduled_at  TIMESTAMPTZ,
     started_at    TIMESTAMPTZ,
