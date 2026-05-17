@@ -1,0 +1,36 @@
+# Build artifacts
+bin/
+coverage.out
+*.test
+*.out
+
+# Go module cache (just in case)
+/vendor/
+
+# Editor / OS noise
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local env / secrets
+.env
+.env.local
+*.pem
+*.key
+credentials*.json
+
+# Tier 2 model weights — never commit GGUF blobs. Downloaded at
+# deploy time by deployments/llm/download-model.sh.
+*.gguf
+models/
+
+# Generated corpus output: ~7,500 emails (multi-MB) is built on
+# demand via `make generate-corpus`. The only checked-in slice is
+# scripts/corpus/evaluation/sample.json so CI has something to
+# validate against.
+scripts/corpus/evaluation/*.json
+!scripts/corpus/evaluation/sample.json
+scripts/corpus/loadtest/*.json
+!scripts/corpus/loadtest/README.md

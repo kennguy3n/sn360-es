@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sn360-es.dev/schemas/corpus_email.json",
+  "title": "SN360-ES Test Email",
+  "description": "Canonical schema for synthetic test emails consumed by the SN360-ES evaluation harness. The 16 categories and 6 tiers are the same vocabulary used at runtime by internal/constant/categories.go (Category.Valid / Category.IsBenign / Category.IsHighSeverity) and internal/constant/tiers.go (Tier.Valid). Score ranges match internal/config/config.go ScoreThresholds defaults. Tier 1 verdict expectations match internal/service/tier1/config.go DefaultThresholds (pass<20, escalate 20-60, flag>60).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "test_id",
+    "category",
+    "expected_tier",
+    "expected_score_range",
+    "is_threat",
+    "difficulty",
+    "locale",
+    "attack_type",
+    "description",
+    "expected_signals",
+    "tier0_bypass",
+    "expected_tier1_verdict",
+    "expected_tier2_needed",
+    "expected_tier2_categories",
+    "payload"
+  ],
+  "properties": {
+    "test_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+$",
+      "description": "Stable, unique, kebab/snake-case identifier. Convention: '{category_short}-{sequential}' (e.g. 'phish-000123')."
+    },
+    "category": {
+      "type": "string",
+      "description": "One of the 16 categories from internal/constant/categories.go AllCategories.",
+      "enum": [
+        "LIKELY_PHISHING",
+        "BEC_IMPERSONATION",
+        "LOOKALIKE_DOMAIN",
+        "SUSPICIOUS_URL",
+        "SUSPICIOUS_ATTACHMENT",
+        "FIRST_CONTACT_EXTERNAL",
+        "ACCOUNT_TAKEOVER_SUSPECTED",
+        "VENDOR_COMPROMISE",
+        "CREDENTIAL_HARVESTING",
+        "INVOICE_FRAUD",
+        "QR_PHISHING",
+        "SCAM_FRAUD",
+        "AUTH_FAILED",
+        "INTERNAL_TRUSTED",
+        "VENDOR_TRUSTED",
+        "NEWSLETTER"
+      ]
+    },
+    "expected_tier": {
+      "type": "string",
+      "description": "Final user-facing tier expected from the full pipeline. From internal/constant/tiers.go AllTiers.",
+      "enum": ["Blocked", "HighRisk", "Warning", "Caution", "Informational", "Trusted"]
+    },
+    "expected_score_range": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"type": "integer", "minimum": 0, "maximum": 100},
+      "description": "[low, high] inclusive bounds for the final risk score. Must align with tier thresholds: Blocked 85-100, HighRisk 70-84, Warning 50-69, Caution 30-49, Informational 15-29, Trusted 0-14."
+    },
+    "is_threat": {
+      "type": "boolean",
+      "description": "true for malicious emails, false for benign emails (regardless of category)."
+    },
+    "difficulty": {
+      "type": "string",
+      "description": "Signal density. 'easy' has overt cues; 'medium' has mixed signals; 'hard' is adversarial / subtle.",
+      "enum": ["easy", "medium", "hard"]
+    },
+    "locale": {
+      "type": "string",
+      "description": "Primary natural-language locale of subject/body. ISO 639-1 codes supported by the SN360-ES i18n catalogs.",
+      "enum": ["en", "th", "ja", "ko", "zh", "vi"]
+    },
+    "attack_type": {
+      "type": "string",
+      "description": "Short human-readable label for the attack technique (e.g. 'CEO wire-transfer impersonation', 'Punycode lookalike of microsoft.com')."
+    },
+    "description": {
+      "type": "string",
+      "description": "One-sentence summary of what this test validates."
+    },
+    "expected_signals": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Detection signal names the pipeline should surface (e.g. 'URGENT_TONE', 'REPLY_TO_MISMATCH', 'PUNYCODE_DOMAIN'). PII-free."
+    },
+    "tier0_bypass": {
+      "type": "boolean",
+      "description": "When true, Tier 0 (rule-based classification gate) should short-circuit and skip Tier 1/2 entirely (e.g. INTERNAL_TRUSTED, VENDOR_TRUSTED, benign NEWSLETTER)."
+    },
+    "expected_tier1_verdict": {
+      "type": "string",
+      "description": "Expected output of the Tier 1 (XLM-RoBERTa encoder) threshold logic. Thresholds: pass < 20, escalate 20-60, flag > 60 (DefaultThresholds in internal/service/tier1/config.go). 'skip' is used when tier0_bypass is true.",
+      "enum": ["pass", "escalate", "flag", "skip"]
+    },
+    "expected_tier2_needed": {
+      "type": "boolean",
+      "description": "Whether Tier 2 (Ternary-Bonsai-8B via kennguy3n/llama.cpp) should be invoked. Must be false whenever tier0_bypass is true OR expected_tier1_verdict == 'pass'."
+    },
+    "expected_tier2_categories": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "LIKELY_PHISHING",
+          "BEC_IMPERSONATION",
+          "LOOKALIKE_DOMAIN",
+          "SUSPICIOUS_URL",
+          "SUSPICIOUS_ATTACHMENT",
+          "FIRST_CONTACT_EXTERNAL",
+          "ACCOUNT_TAKEOVER_SUSPECTED",
+          "VENDOR_COMPROMISE",
+          "CREDENTIAL_HARVESTING",
+          "INVOICE_FRAUD",
+          "QR_PHISHING",
+          "SCAM_FRAUD",
+          "AUTH_FAILED",
+          "INTERNAL_TRUSTED",
+          "VENDOR_TRUSTED",
+          "NEWSLETTER"
+        ]
+      },
+      "description": "Categories the Tier 2 LLM (Ternary-Bonsai-8B) should output. Required to be non-empty when expected_tier2_needed is true."
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "subject", "body_text"],
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "RFC 5322 sender address (mailbox-only or angle-addr)."
+        },
+        "from_display": {
+          "type": "string",
+          "description": "Display name component of the From header (may be spoofed for lookalike tests)."
+        },
+        "to": {
+          "type": "string",
+          "description": "Primary recipient (tenant-side mailbox)."
+        },
+        "subject": {"type": "string"},
+        "body_text": {
+          "type": "string",
+          "description": "Plain-text body. Required even when body_html is also present."
+        },
+        "body_html": {
+          "type": "string",
+          "description": "Optional HTML body — used to test href/display mismatches, hidden text, etc."
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {"type": "string"},
+          "description": "Additional RFC 5322 headers (e.g. Reply-To, Return-Path, Authentication-Results, List-Unsubscribe)."
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["filename", "content_type"],
+            "properties": {
+              "filename": {"type": "string"},
+              "content_type": {"type": "string"},
+              "size_bytes": {"type": "integer", "minimum": 0},
+              "sha256": {"type": "string"},
+              "decoy_extension": {"type": "boolean"},
+              "macro_enabled": {"type": "boolean"},
+              "qr_target_url": {"type": "string"}
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,5791 @@
+[
+  {
+    "test_id": "phish-000000",
+    "category": "LIKELY_PHISHING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Credential phishing with urgency + suspicious link",
+    "description": "Phishing email impersonating a major brand and prompting credential entry on an off-brand login domain.",
+    "expected_signals": [
+      "CREDENTIAL_LINK",
+      "EXTERNAL_LOGIN_DOMAIN",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "LIKELY_PHISHING"
+    ],
+    "payload": {
+      "from": "support.9597@tutanota.com",
+      "from_display": "Apple Support",
+      "to": "alice@acme.example",
+      "subject": "Your account will be suspended in 24 hours",
+      "body_text": "Hi,\n\nYour account will be suspended in 24 hours\n\nPlease verify your credentials immediately to avoid service interruption.\n\nVerify: http://office365-renew.gq/signin\n\nBest regards,\nIT Helpdesk",
+      "body_html": "\u003cp\u003eYour account will be suspended in 24 hours\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://office365-renew.gq/signin\"\u003eClick here to verify\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none",
+        "Reply-To": "no-reply.3643@yandex.com"
+      }
+    }
+  },
+  {
+    "test_id": "phish-000001",
+    "category": "LIKELY_PHISHING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Credential phishing with urgency + suspicious link",
+    "description": "Phishing email impersonating a major brand and prompting credential entry on an off-brand login domain.",
+    "expected_signals": [
+      "CREDENTIAL_LINK",
+      "EXTERNAL_LOGIN_DOMAIN",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "LIKELY_PHISHING"
+    ],
+    "payload": {
+      "from": "support.2866@mail.ru",
+      "from_display": "DHL Express",
+      "to": "bob@acme.example",
+      "subject": "Your account will be suspended in 24 hours",
+      "body_text": "Hello,\n\nYour account will be suspended in 24 hours\n\nPlease verify your credentials immediately to avoid service interruption.\n\nVerify: http://verify-account-now.tk/login\n\nCheers,\nProcurement",
+      "body_html": "\u003cp\u003eYour account will be suspended in 24 hours\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://verify-account-now.tk/login\"\u003eClick here to verify\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none",
+        "Reply-To": "no-reply.4779@mail.ru"
+      }
+    }
+  },
+  {
+    "test_id": "phish-000002",
+    "category": "LIKELY_PHISHING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "th",
+    "attack_type": "Credential phishing with urgency + suspicious link",
+    "description": "Phishing email impersonating a major brand and prompting credential entry on an off-brand login domain.",
+    "expected_signals": [
+      "CREDENTIAL_LINK",
+      "EXTERNAL_LOGIN_DOMAIN",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "LIKELY_PHISHING"
+    ],
+    "payload": {
+      "from": "support.0054@gmail.com",
+      "from_display": "Microsoft Account Team",
+      "to": "carol@acme.example",
+      "subject": "การยืนยันด่วน: บัญชีจะถูกระงับใน 24 ชั่วโมง",
+      "body_text": "สวัสดีค่ะ,\n\nการยืนยันด่วน: บัญชีจะถูกระงับใน 24 ชั่วโมง\n\nกรุณายืนยันข้อมูลการเข้าสู่ระบบของคุณทันทีเพื่อหลีกเลี่ยงการระงับบริการ\n\nยืนยัน: http://microsoft-security-update.cf/auth\n\nขอบคุณครับ,\nฝ่ายจัดซื้อ",
+      "body_html": "\u003cp\u003eการยืนยันด่วน: บัญชีจะถูกระงับใน 24 ชั่วโมง\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://microsoft-security-update.cf/auth\"\u003eคลิกที่นี่เพื่อยืนยัน\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none",
+        "Reply-To": "no-reply.5876@yahoo.com"
+      }
+    }
+  },
+  {
+    "test_id": "phish-000003",
+    "category": "LIKELY_PHISHING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "th",
+    "attack_type": "Credential phishing with urgency + suspicious link",
+    "description": "Phishing email impersonating a major brand and prompting credential entry on an off-brand login domain.",
+    "expected_signals": [
+      "CREDENTIAL_LINK",
+      "EXTERNAL_LOGIN_DOMAIN",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "LIKELY_PHISHING"
+    ],
+    "payload": {
+      "from": "support.6804@yandex.com",
+      "from_display": "Apple Support",
+      "to": "david@acme.example",
+      "subject": "การยืนยันด่วน: บัญชีจะถูกระงับใน 24 ชั่วโมง",
+      "body_text": "สวัสดีค่ะ,\n\nการยืนยันด่วน: บัญชีจะถูกระงับใน 24 ชั่วโมง\n\nกรุณายืนยันข้อมูลการเข้าสู่ระบบของคุณทันทีเพื่อหลีกเลี่ยงการระงับบริการ\n\nยืนยัน: http://microsoft-security-update.cf/auth\n\nขอแสดงความนับถือ,\nฝ่ายจัดซื้อ",
+      "body_html": "\u003cp\u003eการยืนยันด่วน: บัญชีจะถูกระงับใน 24 ชั่วโมง\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://microsoft-security-update.cf/auth\"\u003eคลิกที่นี่เพื่อยืนยัน\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none",
+        "Reply-To": "no-reply.1372@gmx.com"
+      }
+    }
+  },
+  {
+    "test_id": "phish-000004",
+    "category": "LIKELY_PHISHING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Credential phishing with urgency + suspicious link",
+    "description": "Phishing email impersonating a major brand and prompting credential entry on an off-brand login domain.",
+    "expected_signals": [
+      "CREDENTIAL_LINK",
+      "EXTERNAL_LOGIN_DOMAIN",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "LIKELY_PHISHING"
+    ],
+    "payload": {
+      "from": "support.9368@gmail.com",
+      "from_display": "IT Helpdesk",
+      "to": "ellen@acme.example",
+      "subject": "Your account will be suspended in 24 hours",
+      "body_text": "Hi,\n\nYour account will be  suspended in 24 hours\n\nPlease verify your credentials immediately to avoid service interruption.\n\nVerify: https://o365-portal.app/login\n\nThanks,\nAccounts Payable",
+      "body_html": "\u003cp\u003eYour account will be suspended in 24 hours\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://o365-portal.app/login\"\u003eClick here to verify\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none",
+        "Reply-To": "no-reply.0328@yahoo.com"
+      }
+    }
+  },
+  {
+    "test_id": "phish-000005",
+    "category": "LIKELY_PHISHING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Credential phishing with urgency + suspicious link",
+    "description": "Phishing email impersonating a major brand and prompting credential entry on an off-brand login domain.",
+    "expected_signals": [
+      "CREDENTIAL_LINK",
+      "EXTERNAL_LOGIN_DOMAIN",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "LIKELY_PHISHING"
+    ],
+    "payload": {
+      "from": "support.5508@yahoo.com",
+      "from_display": "Office 365 Admin",
+      "to": "fionn@acme.example",
+      "subject": "Your account will be suspended in 24 hours",
+      "body_text": "Good morning,\n\nYour account will be suspended in 24 hours\n\nPlease verify your credentials immediately to avoid service interruption.\n\nVerify: https://o365-portal.app/login\n\nBest regards,\nAccounts Payable",
+      "body_html": "\u003cp\u003eYour account will be suspended in 24 hours\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://o365-portal.app/login\"\u003eClick here to verify\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none",
+        "Reply-To": "no-reply.6612@yahoo.com"
+      }
+    }
+  },
+  {
+    "test_id": "phish-000006",
+    "category": "LIKELY_PHISHING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Credential phishing with urgency + suspicious link",
+    "description": "Phishing email impersonating a major brand and prompting credential entry on an off-brand login domain.",
+    "expected_signals": [
+      "CREDENTIAL_LINK",
+      "EXTERNAL_LOGIN_DOMAIN",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "LIKELY_PHISHING"
+    ],
+    "payload": {
+      "from": "support.9086@gmail.com",
+      "from_display": "DHL Express",
+      "to": "grace@acme.example",
+      "subject": "Your account will be suspended in 24 hours",
+      "body_text": "Dear team,\n\nYour account will be suspended in 24 hours\n\nPlease verify your credentials immediately to avoid service interruption.\n\nVerify: https://accounts-google.support/secure\n\nCheers,\nAccounts Payable",
+      "body_html": "\u003cp\u003eYour account will be suspended in 24 hours\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://accounts-google.support/secure\"\u003eClick here to verify\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none",
+        "Reply-To": "no-reply.5950@tutanota.com"
+      }
+    }
+  },
+  {
+    "test_id": "phish-000007",
+    "category": "LIKELY_PHISHING",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "hard",
+    "locale": "th",
+    "attack_type": "Credential phishing with urgency + suspicious link",
+    "description": "Phishing email impersonating a major brand and prompting credential entry on an off-brand login domain.",
+    "expected_signals": [
+      "CREDENTIAL_LINK",
+      "EXTERNAL_LOGIN_DOMAIN",
+      "OBFUSCATED_URL",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "escalate",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "LIKELY_PHISHING"
+    ],
+    "payload": {
+      "from": "support.2936@tutanota.com",
+      "from_display": "FedEx Shipping",
+      "to": "hideo@acme.example",
+      "subject": "การยืนยันด่วน: บัญชีจะถูกระงับใน 24 ชั่วโมง",
+      "body_text": "สวัสดีค่ะ,\n\nการยืนยันด่วน: บัญชีจะถูกระงับใน 24  ชั่วโมง\n\nกรุณายืนยันข้อมูลการเข้าสู่ระบบของคุณทันทีเพื่อหลีกเลี่ยงการระงับบริการ\n\nยืนยัน: https://xn--logn-3oa.microsoft.com/auth\n\nขอคบุณครับ,\nทีมไอที",
+      "body_html": "\u003cp\u003eการยืนยันด่วน: บัญชีจะถูกระงับใน 24 ชั่วโมง\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://xn--logn-3oa.microsoft.com/auth\"\u003eคลิกที่นี่เพื่อยืนยัน\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none",
+        "Reply-To": "no-reply.1133@tutanota.com"
+      }
+    }
+  },
+  {
+    "test_id": "phish-000008",
+    "category": "LIKELY_PHISHING",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Benign internal IT reminder",
+    "description": "Internal helpdesk bulletin with no credential prompt — should score Trusted/Informational.",
+    "expected_signals": [
+      "INTERNAL_ORIGIN",
+      "NO_EXTERNAL_LINKS"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "itsupport@acme.example",
+      "from_display": "IT Helpdesk",
+      "to": "alice@acme.example",
+      "subject": "Reminder: Quarterly password reset",
+      "body_text": "Dear team,\n\nAs part of our scheduled IT hygiene,  please change your password from the company portal at your convenience.\n\nNo action is ReQuIred if you have already rotated credentials this quarter.\n\nNeed help? Reply to this threda and the helpdesk will reach out.\n\nRegards,\nProcuremnet",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "phish-000009",
+    "category": "LIKELY_PHISHING",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Benign internal IT reminder",
+    "description": "Internal helpdesk bulletin with no credential prompt — should score Trusted/Informational.",
+    "expected_signals": [
+      "INTERNAL_ORIGIN",
+      "NO_EXTERNAL_LINKS"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "itsupport@acme.example",
+      "from_display": "IT Helpdesk",
+      "to": "bob@acme.example",
+      "subject": "Reminder: Quarterly password reset",
+      "body_text": "Good morning,\n\nAs part of our scheduled IT hygiene, please change your password from the company portal at your convenience.\n\nNo action is required if you haev already rotated credentials this quarter.\n\nNeed hELp? Reply to this thread and the helpdesk will reach out.\n\nRegadrs,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "bec-000000",
+    "category": "BEC_IMPERSONATION",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "BEC wire-transfer impersonation",
+    "description": "Display-name spoof of a senior executive requesting a confidential wire transfer with a reply-to mismatch.",
+    "expected_signals": [
+      "DISPLAY_NAME_SPOOF",
+      "REPLY_TO_MISMATCH",
+      "URGENT_TONE",
+      "WIRE_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "BEC_IMPERSONATION"
+    ],
+    "payload": {
+      "from": "david.4657@yahoo.com",
+      "from_display": "David Chen, CEO",
+      "to": "alice@acme.example",
+      "subject": "URGENT — confidential wire request",
+      "body_text": "Good morning,\n\nHi, are you at your desk? I need you to handle a confidential wire transfer of USD 41994 today. The vendor is expecting payment before close of business.\n\nSend me the confirmation directly. Do not loop in finance.\n\nSent from my iPhone\n\nThanks,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=none dmarc=fail",
+        "Reply-To": "david.4657@yahoo.com"
+      }
+    }
+  },
+  {
+    "test_id": "bec-000001",
+    "category": "BEC_IMPERSONATION",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "th",
+    "attack_type": "BEC wire-transfer impersonation",
+    "description": "Display-name spoof of a senior executive requesting a confidential wire transfer with a reply-to mismatch.",
+    "expected_signals": [
+      "DISPLAY_NAME_SPOOF",
+      "REPLY_TO_MISMATCH",
+      "URGENT_TONE",
+      "WIRE_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "BEC_IMPERSONATION"
+    ],
+    "payload": {
+      "from": "akira.6304@yahoo.com",
+      "from_display": "Akira Tanaka, CEO",
+      "to": "bob@acme.example",
+      "subject": "ด่วน — คำขอโอนเงินลับ",
+      "body_text": "เรียนทีม,\n\nกรุณาดำเนินการโอนเงินจำนวน 34567 บาท ก่อนสิ้นวันทำการ เป็นความลับ ห้ามแจ้งใคร\n\nแจ้งยืนยันกับฉันโดยตรง อย่าส่งให้ทีมการเงิน\n\nส่งจากโทรศัพท์\n\nขอแสดงความนับถือ,\nฝ่ายจัดซื้อ",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=none dmarc=fail",
+        "Reply-To": "akira.6304@yahoo.com"
+      }
+    }
+  },
+  {
+    "test_id": "bec-000002",
+    "category": "BEC_IMPERSONATION",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "zh",
+    "attack_type": "BEC wire-transfer impersonation",
+    "description": "Display-name spoof of a senior executive requesting a confidential wire transfer with a reply-to mismatch.",
+    "expected_signals": [
+      "DISPLAY_NAME_SPOOF",
+      "REPLY_TO_MISMATCH",
+      "URGENT_TONE",
+      "WIRE_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "BEC_IMPERSONATION"
+    ],
+    "payload": {
+      "from": "maria.4351@gmail.com",
+      "from_display": "Maria Sousa, CFO",
+      "to": "carol@acme.example",
+      "subject": "紧急 — 机密汇款请求",
+      "body_text": "团队您好,\n\n请在今日下班前秘密办理 40008 元 的电汇，请勿告知他人\n\n请直接将确认发给我，不要抄送财务\n\n由iPhone发送\n\n此致敬礼,\n财务部",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=none dmarc=fail",
+        "Reply-To": "maria.4351@gmail.com"
+      }
+    }
+  },
+  {
+    "test_id": "bec-000003",
+    "category": "BEC_IMPERSONATION",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "zh",
+    "attack_type": "BEC wire-transfer impersonation",
+    "description": "Display-name spoof of a senior executive requesting a confidential wire transfer with a reply-to mismatch.",
+    "expected_signals": [
+      "DISPLAY_NAME_SPOOF",
+      "REPLY_TO_MISMATCH",
+      "URGENT_TONE",
+      "WIRE_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "BEC_IMPERSONATION"
+    ],
+    "payload": {
+      "from": "liam.9550@yandex.com",
+      "from_display": "Liam O'Connor, Managing Director",
+      "to": "david@acme.example",
+      "subject": "紧急 — 机密汇款请求",
+      "body_text": "团队您好,\n\n请在今日下班前秘密办理 82549 元 的电汇，请勿告知他人\n\n请直接将确认发给我，不要抄送财务\n\n由iPhone发送\n\n此致敬礼,\n采购部",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=none dmarc=fail",
+        "Reply-To": "liam.9550@yandex.com"
+      }
+    }
+  },
+  {
+    "test_id": "bec-000004",
+    "category": "BEC_IMPERSONATION",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "BEC wire-transfer impersonation",
+    "description": "Display-name spoof of a senior executive requesting a confidential wire transfer with a reply-to mismatch.",
+    "expected_signals": [
+      "DISPLAY_NAME_SPOOF",
+      "REPLY_TO_MISMATCH",
+      "URGENT_TONE",
+      "WIRE_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "BEC_IMPERSONATION"
+    ],
+    "payload": {
+      "from": "priya.6322@proton.me",
+      "from_display": "Priya Sharma, Finance Director",
+      "to": "ellen@acme.example",
+      "subject": "URGENT — confidential wire request",
+      "body_text": "Hi, are you at your desk? I need you to handle a confidential wire transfer of USD 83937 today. The vendor is expecting payment before close of business.\n\nSend me the confirmation directly. Do not loop in finance.\n\nSent from my iPhone\n\nBest regards,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=none dmarc=fail",
+        "Reply-To": "priya.6322@proton.me"
+      }
+    }
+  },
+  {
+    "test_id": "bec-000005",
+    "category": "BEC_IMPERSONATION",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "BEC wire-transfer impersonation",
+    "description": "Display-name spoof of a senior executive requesting a confidential wire transfer with a reply-to mismatch.",
+    "expected_signals": [
+      "DISPLAY_NAME_SPOOF",
+      "REPLY_TO_MISMATCH",
+      "URGENT_TONE",
+      "WIRE_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "BEC_IMPERSONATION"
+    ],
+    "payload": {
+      "from": "nguyen.1136@yahoo.com",
+      "from_display": "Nguyen Thi Lan, CEO",
+      "to": "fionn@acme.example",
+      "subject": "URGENT — confidential wire request",
+      "body_text": "Hi, are you at your desk? I need you to handle a confidential wire transfer of USD 56146 today. The vendor  is expecting payment before close of business.\n\nSend me the confirmation directly. Do not loop in finance.\n\nSent from my iPhone\n\nThanks,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=none dmarc=fail",
+        "Reply-To": "nguyen.1136@yahoo.com"
+      }
+    }
+  },
+  {
+    "test_id": "bec-000006",
+    "category": "BEC_IMPERSONATION",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "BEC wire-transfer impersonation",
+    "description": "Display-name spoof of a senior executive requesting a confidential wire transfer with a reply-to mismatch.",
+    "expected_signals": [
+      "DISPLAY_NAME_SPOOF",
+      "REPLY_TO_MISMATCH",
+      "URGENT_TONE",
+      "WIRE_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "BEC_IMPERSONATION"
+    ],
+    "payload": {
+      "from": "somchai.0193@mail.ru",
+      "from_display": "Somchai Suk, Operations Director",
+      "to": "grace@acme.example",
+      "subject": "URGENT — confidential wire request",
+      "body_text": "Hello,\n\nHi, are you at your desk? I need you to handle a confidential wire transfer of USD 83942 today. The vendor is expecting payment before close of business.\n\nSend me the confirmation directly. Do not loop in finance.\n\nSent from my iPhone\n\nCheers,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=none dmarc=fail",
+        "Reply-To": "somchai.0193@mail.ru"
+      }
+    }
+  },
+  {
+    "test_id": "bec-000007",
+    "category": "BEC_IMPERSONATION",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "BEC wire-transfer impersonation",
+    "description": "Display-name spoof of a senior executive requesting a confidential wire transfer with a reply-to mismatch.",
+    "expected_signals": [
+      "DISPLAY_NAME_SPOOF",
+      "LOOKALIKE_SENDER_DOMAIN",
+      "REPLY_TO_MISMATCH",
+      "URGENT_TONE",
+      "WIRE_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "escalate",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "BEC_IMPERSONATION"
+    ],
+    "payload": {
+      "from": "david@acme.examp1e.co",
+      "from_display": "David Chen, CEO",
+      "to": "hideo@acme.example",
+      "subject": "URGENT — confidential wire request",
+      "body_text": "Dear team,\n\nHi, are you at your desk? I need you to handle a confidential wire transfer of USD 31301 todya. The vendor is expecting payment beFORe lcose of business.\n\nSend me  the confirmation directly. Do not loop in finance.\n\nSent from my iPhone\n\nCheers,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=none dmarc=fail",
+        "Reply-To": "david.9830@yahoo.com"
+      }
+    }
+  },
+  {
+    "test_id": "bec-000008",
+    "category": "BEC_IMPERSONATION",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Benign executive OOO note",
+    "description": "Legitimate internal OOO note from a known executive — should NOT be flagged as BEC.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "INTERNAL_ORIGIN"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "akira@acme.example",
+      "from_display": "Akira Tanaka",
+      "to": "alice@acme.example",
+      "subject": "OOO next week",
+      "body_text": "Hello,\n\nHi, just a heads-up that I'll be travelling next week. Akira will be covering  apyment approvals.\n\nThanks,\nAkira TANaKa\n\nBest regards,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "bec-000009",
+    "category": "BEC_IMPERSONATION",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Benign executive OOO note",
+    "description": "Legitimate internal OOO note from a known executive — should NOT be flagged as BEC.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "INTERNAL_ORIGIN"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "maria@acme.example",
+      "from_display": "Maria Sousa",
+      "to": "bob@acme.example",
+      "subject": "OOO next week",
+      "body_text": "Hi, ujst a heads-up that I'll be travelling next WeEK. Maria will be covering payment  approvals.\n\nThanks,\nMaria Sousa\n\nCheers,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "lookalike-000000",
+    "category": "LOOKALIKE_DOMAIN",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "zh",
+    "attack_type": "Lookalike-domain brand impersonation",
+    "description": "Phishing sent from a homoglyph / character-swap of a well-known brand domain.",
+    "expected_signals": [
+      "BRAND_DISPLAY_NAME_SPOOF",
+      "LOOKALIKE_SENDER_DOMAIN"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "LOOKALIKE_DOMAIN"
+    ],
+    "payload": {
+      "from": "security@rnicrosoft.biz",
+      "from_display": "microsoft Security Team",
+      "to": "alice@acme.example",
+      "subject": "[microsoft] 重要安全通知",
+      "body_text": "您好,\n\n我们检测到您 microsoft 帐户的异常活动，请验证身份\n\nhttps://rnicrosoft.biz/secure-verify\n\n祝好,\n采购部",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "noreply@rnicrosoft.biz"
+      }
+    }
+  },
+  {
+    "test_id": "lookalike-000001",
+    "category": "LOOKALIKE_DOMAIN",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Lookalike-domain brand impersonation",
+    "description": "Phishing sent from a homoglyph / character-swap of a well-known brand domain.",
+    "expected_signals": [
+      "BRAND_DISPLAY_NAME_SPOOF",
+      "LOOKALIKE_SENDER_DOMAIN"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "LOOKALIKE_DOMAIN"
+    ],
+    "payload": {
+      "from": "security@goog1e.co",
+      "from_display": "google Security Team",
+      "to": "bob@acme.example",
+      "subject": "[google] Important security notice",
+      "body_text": "Good morning,\n\nWe've detected unusual activity on your google account. Verify your identity to keep your account secure.\n\nhttps://goog1e.co/secure-verify\n\nCheers,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "noreply@goog1e.co"
+      }
+    }
+  },
+  {
+    "test_id": "lookalike-000002",
+    "category": "LOOKALIKE_DOMAIN",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Lookalike-domain brand impersonation",
+    "description": "Phishing sent from a homoglyph / character-swap of a well-known brand domain.",
+    "expected_signals": [
+      "BRAND_DISPLAY_NAME_SPOOF",
+      "LOOKALIKE_SENDER_DOMAIN"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "LOOKALIKE_DOMAIN"
+    ],
+    "payload": {
+      "from": "security@app1e.net",
+      "from_display": "apple Security Team",
+      "to": "carol@acme.example",
+      "subject": "[apple] Important security notice",
+      "body_text": "Dear team,\n\nWe've detected unusual activity on your apple account. Verify your identity to keep your account secure.\n\nhttps://app1e.net/secure-verify\n\nCheers,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "noreply@app1e.net"
+      }
+    }
+  },
+  {
+    "test_id": "lookalike-000003",
+    "category": "LOOKALIKE_DOMAIN",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Lookalike-domain brand impersonation",
+    "description": "Phishing sent from a homoglyph / character-swap of a well-known brand domain.",
+    "expected_signals": [
+      "BRAND_DISPLAY_NAME_SPOOF",
+      "LOOKALIKE_SENDER_DOMAIN"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "LOOKALIKE_DOMAIN"
+    ],
+    "payload": {
+      "from": "security@paypa1.co",
+      "from_display": "paypal Security Team",
+      "to": "david@acme.example",
+      "subject": "[paypal] Important security notice",
+      "body_text": "Good morning,\n\nWe've detected unusual activity on your paypal account. Verify your identity to keep your account secure.\n\nhttps://paypa1.co/secure-verify\n\nBest regards,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "noreply@paypa1.co"
+      }
+    }
+  },
+  {
+    "test_id": "lookalike-000004",
+    "category": "LOOKALIKE_DOMAIN",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "vi",
+    "attack_type": "Lookalike-domain brand impersonation",
+    "description": "Phishing sent from a homoglyph / character-swap of a well-known brand domain.",
+    "expected_signals": [
+      "BRAND_DISPLAY_NAME_SPOOF",
+      "LOOKALIKE_SENDER_DOMAIN"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "LOOKALIKE_DOMAIN"
+    ],
+    "payload": {
+      "from": "security@dropbox-support.net",
+      "from_display": "dropbox Security Team",
+      "to": "ellen@acme.example",
+      "subject": "[dropbox] Thông báo bảo mật quan trọng",
+      "body_text": "Kính gửi anh/chị,\n\nChúng tôi phát hiện hoạt động bất thường trên tài khoản dropbox của bạn. Vui  lòng xác minh danh tính\n\nhttps://dropbox-support.net/secure-verify\n\nCảm ơn,\nPhòng Tài chính",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "noreply@dropbox-support.net"
+      }
+    }
+  },
+  {
+    "test_id": "lookalike-000005",
+    "category": "LOOKALIKE_DOMAIN",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Lookalike-domain brand impersonation",
+    "description": "Phishing sent from a homoglyph / character-swap of a well-known brand domain.",
+    "expected_signals": [
+      "BRAND_DISPLAY_NAME_SPOOF",
+      "LOOKALIKE_SENDER_DOMAIN"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "LOOKALIKE_DOMAIN"
+    ],
+    "payload": {
+      "from": "security@amaz0n.app",
+      "from_display": "amazon Security Team",
+      "to": "fionn@acme.example",
+      "subject": "[amazon] Important security notice",
+      "body_text": "Hello,\n\nWe've detected unusual activity on your  amazon account. Verify your identity to keep your account secure.\n\nhttps://amaz0n.app/secure-verify\n\nThanks,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "noreply@amaz0n.app"
+      }
+    }
+  },
+  {
+    "test_id": "lookalike-000006",
+    "category": "LOOKALIKE_DOMAIN",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Genuine brand notification",
+    "description": "Real-brand transactional notification — should not trip lookalike heuristics.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "BRAND_DOMAIN_LEGITIMATE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "no-reply@microsoft.com",
+      "from_display": "microsoft Account Team",
+      "to": "grace@acme.example",
+      "subject": "Account settings updated",
+      "body_text": "Hi,\n\nYour microsoft account preferences were updated.\n\nIf this wasn't you, sign in and review your activity.\n\nThanks,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "lookalike-000007",
+    "category": "LOOKALIKE_DOMAIN",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Genuine brand notification",
+    "description": "Real-brand transactional notification — should not trip lookalike heuristics.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "BRAND_DOMAIN_LEGITIMATE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "no-reply@google.com",
+      "from_display": "google Account Team",
+      "to": "hideo@acme.example",
+      "subject": "Account settings updated",
+      "body_text": "Good morning,\n\nYour google accuONT preferences  were updated.\n\nIf this wasn't you, sign in and review your actiivty.\n\nCheers,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "lookalike-000008",
+    "category": "LOOKALIKE_DOMAIN",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "zh",
+    "attack_type": "Genuine brand notification",
+    "description": "Real-brand transactional notification — should not trip lookalike heuristics.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "BRAND_DOMAIN_LEGITIMATE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "no-reply@apple.com",
+      "from_display": "apple Account Team",
+      "to": "alice@acme.example",
+      "subject": "帐户设置已更新",
+      "body_text": "团队您好,\n\n您的 apple  帐户偏好已更新\n\n如非本人操作，请登录查看活动记录\n\n顺颂商祺,\n财务部",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "lookalike-000009",
+    "category": "LOOKALIKE_DOMAIN",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Genuine brand notification",
+    "description": "Real-brand transactional notification — should not trip lookalike heuristics.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "BRAND_DOMAIN_LEGITIMATE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "no-reply@paypal.com",
+      "from_display": "paypal Account Team",
+      "to": "bob@acme.example",
+      "subject": "Account settings updated",
+      "body_text": "Good morning,\n\nYOuR  paypal cacount preferences were updated.\n\nIf this wasn't you, sign in and review your activity.\n\nCheers,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "url-000000",
+    "category": "SUSPICIOUS_URL",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Suspicious URL with display mismatch",
+    "description": "Email body links to a shortener / freshly-registered domain whose anchor text claims to be a brand portal.",
+    "expected_signals": [
+      "SHORTENED_OR_REDIRECTOR_URL",
+      "URL_DISPLAY_MISMATCH"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SUSPICIOUS_URL"
+    ],
+    "payload": {
+      "from": "billing.3344@mail.ru",
+      "from_display": "Accounts Payable",
+      "to": "alice@acme.example",
+      "subject": "Invoice #INV-9821 due",
+      "body_text": "Good morning,\n\nPlease review the attached invoice using the link below.\n\nView Invoice: http://bit.ly/332d9ef1\n\nRegards,\nIT Helpdesk",
+      "body_html": "\u003cp\u003ePlease review the attached invoice.\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://bit.ly/332d9ef1\"\u003eView Invoice\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "url-000001",
+    "category": "SUSPICIOUS_URL",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Suspicious URL with display mismatch",
+    "description": "Email body links to a shortener / freshly-registered domain whose anchor text claims to be a brand portal.",
+    "expected_signals": [
+      "SHORTENED_OR_REDIRECTOR_URL",
+      "URL_DISPLAY_MISMATCH"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SUSPICIOUS_URL"
+    ],
+    "payload": {
+      "from": "billing.1800@yandex.com",
+      "from_display": "Accounts Payable",
+      "to": "bob@acme.example",
+      "subject": "Invoice #INV-9821 due",
+      "body_text": "Dear team,\n\nPlease review the attached invoice using the link below.\n\nView Invoice: http://bit.ly/37cd6257\n\nRegards,\nIT Helpdesk",
+      "body_html": "\u003cp\u003ePlease review the attached invoice.\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://bit.ly/37cd6257\"\u003eView Invoice\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "url-000002",
+    "category": "SUSPICIOUS_URL",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Suspicious URL with display mismatch",
+    "description": "Email body links to a shortener / freshly-registered domain whose anchor text claims to be a brand portal.",
+    "expected_signals": [
+      "SHORTENED_OR_REDIRECTOR_URL",
+      "URL_DISPLAY_MISMATCH"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SUSPICIOUS_URL"
+    ],
+    "payload": {
+      "from": "billing.7017@yahoo.com",
+      "from_display": "Accounts Payable",
+      "to": "carol@acme.example",
+      "subject": "Invoice #INV-9821 due",
+      "body_text": "Hello,\n\nPlease review the attached invoice using the link below.\n\nView Invoice: http://bit.ly/3a554f22\n\nRegards,\nIT Helpdesk",
+      "body_html": "\u003cp\u003ePlease review the attached invoice.\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://bit.ly/3a554f22\"\u003eView Invoice\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "url-000003",
+    "category": "SUSPICIOUS_URL",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Suspicious URL with display mismatch",
+    "description": "Email body links to a shortener / freshly-registered domain whose anchor text claims to be a brand portal.",
+    "expected_signals": [
+      "SHORTENED_OR_REDIRECTOR_URL",
+      "URL_DISPLAY_MISMATCH"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SUSPICIOUS_URL"
+    ],
+    "payload": {
+      "from": "billing.6885@yahoo.com",
+      "from_display": "Accounts Payable",
+      "to": "david@acme.example",
+      "subject": "Invoice #INV-9821 due",
+      "body_text": "Hi,\n\nPlease review the attached invoice using the link below.\n\nView Invoice: http://bit.ly/369ce86f\n\nRegards,\nAccounts Payable",
+      "body_html": "\u003cp\u003ePlease review the attached invoice.\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://bit.ly/369ce86f\"\u003eView Invoice\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "url-000004",
+    "category": "SUSPICIOUS_URL",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Suspicious URL with display mismatch",
+    "description": "Email body links to a shortener / freshly-registered domain whose anchor text claims to be a brand portal.",
+    "expected_signals": [
+      "SHORTENED_OR_REDIRECTOR_URL",
+      "URL_DISPLAY_MISMATCH"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SUSPICIOUS_URL"
+    ],
+    "payload": {
+      "from": "billing.5857@mail.ru",
+      "from_display": "Accounts Payable",
+      "to": "ellen@acme.example",
+      "subject": "Invoice #INV-9821 due",
+      "body_text": "Dear team,\n\nPlease review the attached invoice using the link below.\n\nView Invoice: https://o365-portal.app/login\n\nBest regards,\nIT Helpdesk",
+      "body_html": "\u003cp\u003ePlease review the attached invoice.\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://o365-portal.app/login\"\u003eView Invoice\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "url-000005",
+    "category": "SUSPICIOUS_URL",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Suspicious URL with display mismatch",
+    "description": "Email body links to a shortener / freshly-registered domain whose anchor text claims to be a brand portal.",
+    "expected_signals": [
+      "SHORTENED_OR_REDIRECTOR_URL",
+      "URL_DISPLAY_MISMATCH"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SUSPICIOUS_URL"
+    ],
+    "payload": {
+      "from": "billing.5753@mail.ru",
+      "from_display": "Accounts Payable",
+      "to": "fionn@acme.example",
+      "subject": "Invoice #INV-9821 due",
+      "body_text": "Good morning,\n\nPlease review the attached invoice using the link below.\n\nView Invoice: https://o365-portal.app/login\n\nRegards,\nAccounts Payable",
+      "body_html": "\u003cp\u003ePlease review the attached invoice.\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://o365-portal.app/login\"\u003eView Invoice\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "url-000006",
+    "category": "SUSPICIOUS_URL",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Legitimate document share",
+    "description": "Vendor sending an internal documentation link — clean URL, no rewrite required.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "partner@trusted-vendor.com",
+      "from_display": "Trusted Vendor",
+      "to": "grace@acme.example",
+      "subject": "Q3 report",
+      "body_text": "Hello,\n\nHere's the quarterly report we discussed  earlier.\n\nhttps://docs.acme.example/reports/q3-2025.pdf\n\nRegards,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "url-000007",
+    "category": "SUSPICIOUS_URL",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Legitimate document share",
+    "description": "Vendor sending an internal documentation link — clean URL, no rewrite required.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "partner@trusted-vendor.com",
+      "from_display": "Trusted Vendor",
+      "to": "hideo@acme.example",
+      "subject": "Q3 report",
+      "body_text": "Hi,\n\nHere's the quArTrely report we discussed earlier.\n\nhttps://docs.acme.example/reports/q3-2025.pdf\n\nBest regards,\nAccoutns Payable",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "url-000008",
+    "category": "SUSPICIOUS_URL",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Legitimate document share",
+    "description": "Vendor sending an internal documentation link — clean URL, no rewrite required.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "partner@trusted-vendor.com",
+      "from_display": "Trusted Vendor",
+      "to": "alice@acme.example",
+      "subject": "Q3 report",
+      "body_text": "Dear team,\n\nHeRe'S the quatrerly report we discussed earlier.\n\nhttps://docs.acme.example/reports/q3-2025.pdf\n\nBest regards,\nProcuerment",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "url-000009",
+    "category": "SUSPICIOUS_URL",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Legitimate document share",
+    "description": "Vendor sending an internal documentation link — clean URL, no rewrite required.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "partner@trusted-vendor.com",
+      "from_display": "Trusted Vendor",
+      "to": "bob@acme.example",
+      "subject": "Q3 report",
+      "body_text": "Dear TeMa,\n\nHere's the quarterly report we discussed earlier.\n\nhttps://docs.acme.example/reports/q3-2025.pdf\n\nBest regards,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "attach-000000",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Weaponised attachment",
+    "description": "Email carrying an attachment that should fail attachment heuristics (executable, macro-enabled, or password-protected).",
+    "expected_signals": [
+      "DOUBLE_EXTENSION",
+      "EXECUTABLE_PAYLOAD",
+      "SUSPICIOUS_ATTACHMENT"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SUSPICIOUS_ATTACHMENT"
+    ],
+    "payload": {
+      "from": "ap.2021@outlook.com",
+      "from_display": "Accounts Payable",
+      "to": "alice@acme.example",
+      "subject": "Invoice 8000",
+      "body_text": "Good morning,\n\nPlease open the attached document at your earliest convenience.\n\nPassword: invoice2024\n\nCheers,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      },
+      "attachments": [
+        {
+          "filename": "Invoice_8821.pdf.exe",
+          "content_type": "application/x-msdownload",
+          "size_bytes": 2300000,
+          "decoy_extension": true
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "attach-000001",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Weaponised attachment",
+    "description": "Email carrying an attachment that should fail attachment heuristics (executable, macro-enabled, or password-protected).",
+    "expected_signals": [
+      "DOUBLE_EXTENSION",
+      "EXECUTABLE_PAYLOAD",
+      "SUSPICIOUS_ATTACHMENT"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SUSPICIOUS_ATTACHMENT"
+    ],
+    "payload": {
+      "from": "ap.2801@proton.me",
+      "from_display": "Accounts Payable",
+      "to": "bob@acme.example",
+      "subject": "Invoice 8001",
+      "body_text": "Hi,\n\nPlease open the attached document at your earliest convenience.\n\nPassword: invoice2024\n\nThanks,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      },
+      "attachments": [
+        {
+          "filename": "Invoice_8821.pdf.exe",
+          "content_type": "application/x-msdownload",
+          "size_bytes": 2300000,
+          "decoy_extension": true
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "attach-000002",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Weaponised attachment",
+    "description": "Email carrying an attachment that should fail attachment heuristics (executable, macro-enabled, or password-protected).",
+    "expected_signals": [
+      "DOUBLE_EXTENSION",
+      "EXECUTABLE_PAYLOAD",
+      "SUSPICIOUS_ATTACHMENT"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SUSPICIOUS_ATTACHMENT"
+    ],
+    "payload": {
+      "from": "ap.9476@yahoo.com",
+      "from_display": "Accounts Payable",
+      "to": "carol@acme.example",
+      "subject": "Invoice 8002",
+      "body_text": "Hello,\n\nPlease open the attached document at your earliest convenience.\n\nPassword: invoice2024\n\nCheers,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      },
+      "attachments": [
+        {
+          "filename": "Invoice_8821.pdf.exe",
+          "content_type": "application/x-msdownload",
+          "size_bytes": 2300000,
+          "decoy_extension": true
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "attach-000003",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "vi",
+    "attack_type": "Weaponised attachment",
+    "description": "Email carrying an attachment that should fail attachment heuristics (executable, macro-enabled, or password-protected).",
+    "expected_signals": [
+      "DOUBLE_EXTENSION",
+      "EXECUTABLE_PAYLOAD",
+      "SUSPICIOUS_ATTACHMENT"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SUSPICIOUS_ATTACHMENT"
+    ],
+    "payload": {
+      "from": "ap.1022@gmail.com",
+      "from_display": "Accounts Payable",
+      "to": "david@acme.example",
+      "subject": "Invoice 8003",
+      "body_text": "Kính gửi anh/chị,\n\nVui lòng mở tệp đính kèm sớm nhất có thể\n\nMật khẩu: invoice2024\n\nKính chúc,\nPhòng Tài chính",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      },
+      "attachments": [
+        {
+          "filename": "Invoice_8821.pdf.exe",
+          "content_type": "application/x-msdownload",
+          "size_bytes": 2300000,
+          "decoy_extension": true
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "attach-000004",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "ja",
+    "attack_type": "Weaponised attachment",
+    "description": "Email carrying an attachment that should fail attachment heuristics (executable, macro-enabled, or password-protected).",
+    "expected_signals": [
+      "MACRO_ENABLED_OFFICE",
+      "SUSPICIOUS_ATTACHMENT"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SUSPICIOUS_ATTACHMENT"
+    ],
+    "payload": {
+      "from": "ap.0422@tutanota.com",
+      "from_display": "Accounts Payable",
+      "to": "ellen@acme.example",
+      "subject": "Invoice 8004",
+      "body_text": "お世話になっております,\n\n添付ファイルをお早めにご確認ください\n\nパスワード:  invoice2024\n\nよろしくお願いいたします,\n経理部",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      },
+      "attachments": [
+        {
+          "filename": "PO-2024-Q4.docm",
+          "content_type": "application/vnd.ms-word.document.macroenabled.12",
+          "size_bytes": 187000,
+          "macro_enabled": true
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "attach-000005",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Weaponised attachment",
+    "description": "Email carrying an attachment that should fail attachment heuristics (executable, macro-enabled, or password-protected).",
+    "expected_signals": [
+      "MACRO_ENABLED_OFFICE",
+      "SUSPICIOUS_ATTACHMENT"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SUSPICIOUS_ATTACHMENT"
+    ],
+    "payload": {
+      "from": "ap.0845@yahoo.com",
+      "from_display": "Accounts Payable",
+      "to": "fionn@acme.example",
+      "subject": "Invoice 8005",
+      "body_text": "Dear team,\n\nPlease open the attached  document at your earliest convenience.\n\nPassword: invoice2024\n\nCheers,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      },
+      "attachments": [
+        {
+          "filename": "PO-2024-Q4.docm",
+          "content_type": "application/vnd.ms-word.document.macroenabled.12",
+          "size_bytes": 187000,
+          "macro_enabled": true
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "attach-000006",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Legitimate PDF handbook",
+    "description": "Clean PDF attachment from internal HR — should not trip attachment heuristics.",
+    "expected_signals": [
+      "ATTACHMENT_BENIGN",
+      "INTERNAL_ORIGIN"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "hr@acme.example",
+      "from_display": "Acme HR",
+      "to": "grace@acme.example",
+      "subject": "Updated employee handbook",
+      "body_text": "Hello,\n\nPlease find the latest handbook attached.\n\nBest regards,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      },
+      "attachments": [
+        {
+          "filename": "employee_handbook_v3.pdf",
+          "content_type": "application/pdf",
+          "size_bytes": 1245000
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "attach-000007",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Legitimate PDF handbook",
+    "description": "Clean PDF attachment from internal HR — should not trip attachment heuristics.",
+    "expected_signals": [
+      "ATTACHMENT_BENIGN",
+      "INTERNAL_ORIGIN"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "hr@acme.example",
+      "from_display": "Acme HR",
+      "to": "hideo@acme.example",
+      "subject": "Updated employee handbook",
+      "body_text": "Good MoRnING,\n\nPlease find the latest  handbook attached.\n\nBest regards,\nIT Heldpesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      },
+      "attachments": [
+        {
+          "filename": "employee_handbook_v3.pdf",
+          "content_type": "application/pdf",
+          "size_bytes": 1245000
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "attach-000008",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Legitimate PDF handbook",
+    "description": "Clean PDF attachment from internal HR — should not trip attachment heuristics.",
+    "expected_signals": [
+      "ATTACHMENT_BENIGN",
+      "INTERNAL_ORIGIN"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "hr@acme.example",
+      "from_display": "Acme HR",
+      "to": "alice@acme.example",
+      "subject": "Updated employee handbook",
+      "body_text": "Dear team,\n\nPlease FINd the latest handbook attached.\n\nBtes regards,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      },
+      "attachments": [
+        {
+          "filename": "employee_handbook_v3.pdf",
+          "content_type": "application/pdf",
+          "size_bytes": 1245000
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "attach-000009",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Legitimate PDF handbook",
+    "description": "Clean PDF attachment from internal HR — should not trip attachment heuristics.",
+    "expected_signals": [
+      "ATTACHMENT_BENIGN",
+      "INTERNAL_ORIGIN"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "hr@acme.example",
+      "from_display": "Acme HR",
+      "to": "bob@acme.example",
+      "subject": "Updated employee handbook",
+      "body_text": "Dear team,\n\nPlease find the latets handbook attached.\n\nrEGaRdS,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      },
+      "attachments": [
+        {
+          "filename": "employee_handbook_v3.pdf",
+          "content_type": "application/pdf",
+          "size_bytes": 1245000
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "first-000000",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "First-contact pretending to be prior thread",
+    "description": "Brand-new external sender claiming a previous conversation, asking to update banking details.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "BANK_DETAIL_CHANGE",
+      "FAKE_REPLY_PREFIX",
+      "FIRST_CONTACT_EXTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "FIRST_CONTACT_EXTERNAL"
+    ],
+    "payload": {
+      "from": "john.smith@cold-outreach-000.com",
+      "from_display": "John Smith",
+      "to": "alice@acme.example",
+      "subject": "Re: invoice follow-up",
+      "body_text": "Hi,\n\nFollowing up on our last conversation — please send the updated bank details to ar@cold-outreach-000.com.\n\nThanks,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "first-000001",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "First-contact pretending to be prior thread",
+    "description": "Brand-new external sender claiming a previous conversation, asking to update banking details.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "BANK_DETAIL_CHANGE",
+      "FAKE_REPLY_PREFIX",
+      "FIRST_CONTACT_EXTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "FIRST_CONTACT_EXTERNAL"
+    ],
+    "payload": {
+      "from": "john.smith@cold-outreach-001.com",
+      "from_display": "John Smith",
+      "to": "bob@acme.example",
+      "subject": "Re: invoice follow-up",
+      "body_text": "Hi,\n\nFollowing up on our last conversation — please send the updated bank details to ar@cold-outreach-001.com.\n\nCheers,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "first-000002",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "First-contact pretending to be prior thread",
+    "description": "Brand-new external sender claiming a previous conversation, asking to update banking details.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "BANK_DETAIL_CHANGE",
+      "FAKE_REPLY_PREFIX",
+      "FIRST_CONTACT_EXTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "FIRST_CONTACT_EXTERNAL"
+    ],
+    "payload": {
+      "from": "john.smith@cold-outreach-002.com",
+      "from_display": "John Smith",
+      "to": "carol@acme.example",
+      "subject": "Re: invoice follow-up",
+      "body_text": "Hi,\n\nFollowing up on our last conversation — please send the updated bank details to ar@cold-outreach-002.com.\n\nCheers,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "first-000003",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "First-contact pretending to be prior thread",
+    "description": "Brand-new external sender claiming a previous conversation, asking to update banking details.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "BANK_DETAIL_CHANGE",
+      "FAKE_REPLY_PREFIX",
+      "FIRST_CONTACT_EXTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "FIRST_CONTACT_EXTERNAL"
+    ],
+    "payload": {
+      "from": "john.smith@cold-outreach-003.com",
+      "from_display": "John Smith",
+      "to": "david@acme.example",
+      "subject": "Re: invoice follow-up",
+      "body_text": "Hello,\n\nFollowing up on our last conversation — please send the updated bank details to ar@cold-outreach-003.com.\n\nRegards,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "first-000004",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "vi",
+    "attack_type": "First-contact pretending to be prior thread",
+    "description": "Brand-new external sender claiming a previous conversation, asking to update banking details.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "BANK_DETAIL_CHANGE",
+      "FAKE_REPLY_PREFIX",
+      "FIRST_CONTACT_EXTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "FIRST_CONTACT_EXTERNAL"
+    ],
+    "payload": {
+      "from": "john.smith@cold-outreach-004.com",
+      "from_display": "John Smith",
+      "to": "ellen@acme.example",
+      "subject": "Re: theo dõi hóa đơn",
+      "body_text": "Kính gửi anh/chị,\n\nTiếp nối cuộc trò chuyện trước, vui lòng gửi thông tin ngân hàng mới đến ar@cold-outreach-004.com\n\nTrân trọng,\nPhòng IT",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "first-000005",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "First-contact pretending to be prior thread",
+    "description": "Brand-new external sender claiming a previous conversation, asking to update banking details.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "BANK_DETAIL_CHANGE",
+      "FAKE_REPLY_PREFIX",
+      "FIRST_CONTACT_EXTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "FIRST_CONTACT_EXTERNAL"
+    ],
+    "payload": {
+      "from": "john.smith@cold-outreach-005.com",
+      "from_display": "John Smith",
+      "to": "fionn@acme.example",
+      "subject": "Re: invoice follow-up",
+      "body_text": "Hi,\n\nFollowing up on our last conversation  — please send the updated bank details to ar@cold-outreach-005.com.\n\nThanks,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "first-000006",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Legitimate cold outreach",
+    "description": "First-contact-external sales email that authenticates and offers unsubscribe — should label Informational, not flag.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "FIRST_CONTACT_EXTERNAL",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "sales@cold-outreach-006.com",
+      "from_display": "Cold Outreach Sales",
+      "to": "grace@acme.example",
+      "subject": "Quick intro",
+      "body_text": "Good morning,\n\nHi, I'm reaching out from cold-outreach-006.com about our analytics platform.\n\nIf you'd prefer not to hear from us, please reply 'unsubscribe' and I'll remove you  from our list.\n\nCheers,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@cold-outreach-006.com\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "first-000007",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Legitimate cold outreach",
+    "description": "First-contact-external sales email that authenticates and offers unsubscribe — should label Informational, not flag.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "FIRST_CONTACT_EXTERNAL",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "sales@cold-outreach-007.com",
+      "from_display": "Cold Outreach Sales",
+      "to": "hideo@acme.example",
+      "subject": "Quick intro",
+      "body_text": "Hello,\n\nHi, I'm reaching out from cold-outreach-007.com about our analytics platform.\n\nIf you'd prefer not to hear FroM us, please reply 'unsubscribe' and I'll ermove you from our list.\n\nBest regards,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@cold-outreach-007.com\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "first-000008",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Legitimate cold outreach",
+    "description": "First-contact-external sales email that authenticates and offers unsubscribe — should label Informational, not flag.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "FIRST_CONTACT_EXTERNAL",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "sales@cold-outreach-008.com",
+      "from_display": "Cold Outreach Sales",
+      "to": "alice@acme.example",
+      "subject": "Quick intro",
+      "body_text": "Good monring,\n\nHi, I'm reaching  out from cold-outreach-008.com about our analytics platform.\n\nIf yo'ud prefer not to hear from us, please REplY 'unsubscribe' and I'll remove you from our list.\n\nCheers,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@cold-outreach-008.com\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "first-000009",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Legitimate cold outreach",
+    "description": "First-contact-external sales email that authenticates and offers unsubscribe — should label Informational, not flag.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "FIRST_CONTACT_EXTERNAL",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "sales@cold-outreach-009.com",
+      "from_display": "Cold Outreach Sales",
+      "to": "bob@acme.example",
+      "subject": "Quick intro",
+      "body_text": "Hi, I'm ReAchiNg out from  cold-outreach-009.com abuot our analytics platform.\n\nIf you'd prefer not to hear from us, please reply 'unsubscribe' and I'll remove you from our list.\n\nRegards,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@cold-outreach-009.com\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "ato-000000",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "zh",
+    "attack_type": "Compromised internal mailbox exfil request",
+    "description": "Email sent from an authenticated internal mailbox requesting payroll exfiltration to a personal address — classic ATO signal.",
+    "expected_signals": [
+      "FOREIGN_IP_ORIGIN",
+      "OUT_OF_BAND_URGENCY",
+      "REPLY_TO_EXTERNAL_FREEMAIL",
+      "SENSITIVE_DATA_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "ACCOUNT_TAKEOVER_SUSPECTED"
+    ],
+    "payload": {
+      "from": "alice@acme.example",
+      "from_display": "alice",
+      "to": "payroll@acme.example",
+      "subject": "紧急 — 请发送工资数据",
+      "body_text": "团队您好,\n\n我在开会，请把最新工资数据和 W-2 表格转发到我的私人邮箱\n\nSend to: alice.4042@mail.ru\n\n祝好,\n财务部",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "alice.3766@yandex.com",
+        "X-Mailer": "OWA/16.0",
+        "X-Originating-IP": "[81.45.162.122]"
+      }
+    }
+  },
+  {
+    "test_id": "ato-000001",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Compromised internal mailbox exfil request",
+    "description": "Email sent from an authenticated internal mailbox requesting payroll exfiltration to a personal address — classic ATO signal.",
+    "expected_signals": [
+      "FOREIGN_IP_ORIGIN",
+      "OUT_OF_BAND_URGENCY",
+      "REPLY_TO_EXTERNAL_FREEMAIL",
+      "SENSITIVE_DATA_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "ACCOUNT_TAKEOVER_SUSPECTED"
+    ],
+    "payload": {
+      "from": "bob@acme.example",
+      "from_display": "bob",
+      "to": "payroll@acme.example",
+      "subject": "URGENT — need payroll export now",
+      "body_text": "Hello,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet to my personal address.\n\nSend to: bob.7297@gmail.com\n\nCheers,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "bob.5499@yahoo.com",
+        "X-Mailer": "OWA/16.0",
+        "X-Originating-IP": "[107.61.9.202]"
+      }
+    }
+  },
+  {
+    "test_id": "ato-000002",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Compromised internal mailbox exfil request",
+    "description": "Email sent from an authenticated internal mailbox requesting payroll exfiltration to a personal address — classic ATO signal.",
+    "expected_signals": [
+      "FOREIGN_IP_ORIGIN",
+      "OUT_OF_BAND_URGENCY",
+      "REPLY_TO_EXTERNAL_FREEMAIL",
+      "SENSITIVE_DATA_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "ACCOUNT_TAKEOVER_SUSPECTED"
+    ],
+    "payload": {
+      "from": "carol@acme.example",
+      "from_display": "carol",
+      "to": "payroll@acme.example",
+      "subject": "URGENT — need payroll export now",
+      "body_text": "Good morning,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet to my personal address.\n\nSend to: carol.8464@yandex.com\n\nCheers,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "carol.2448@outlook.com",
+        "X-Mailer": "OWA/16.0",
+        "X-Originating-IP": "[143.113.176.118]"
+      }
+    }
+  },
+  {
+    "test_id": "ato-000003",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Compromised internal mailbox exfil request",
+    "description": "Email sent from an authenticated internal mailbox requesting payroll exfiltration to a personal address — classic ATO signal.",
+    "expected_signals": [
+      "FOREIGN_IP_ORIGIN",
+      "OUT_OF_BAND_URGENCY",
+      "REPLY_TO_EXTERNAL_FREEMAIL",
+      "SENSITIVE_DATA_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "ACCOUNT_TAKEOVER_SUSPECTED"
+    ],
+    "payload": {
+      "from": "david@acme.example",
+      "from_display": "david",
+      "to": "payroll@acme.example",
+      "subject": "URGENT — need payroll export now",
+      "body_text": "Hi,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet to my personal address.\n\nSend to: david.8606@gmail.com\n\nThanks,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "david.3879@yandex.com",
+        "X-Mailer": "OWA/16.0",
+        "X-Originating-IP": "[152.224.31.192]"
+      }
+    }
+  },
+  {
+    "test_id": "ato-000004",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "ko",
+    "attack_type": "Compromised internal mailbox exfil request",
+    "description": "Email sent from an authenticated internal mailbox requesting payroll exfiltration to a personal address — classic ATO signal.",
+    "expected_signals": [
+      "FOREIGN_IP_ORIGIN",
+      "OUT_OF_BAND_URGENCY",
+      "REPLY_TO_EXTERNAL_FREEMAIL",
+      "SENSITIVE_DATA_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "ACCOUNT_TAKEOVER_SUSPECTED"
+    ],
+    "payload": {
+      "from": "alice@acme.example",
+      "from_display": "alice",
+      "to": "payroll@acme.example",
+      "subject": "긴급 — 급여 데이터 보내주세요",
+      "body_text": "안녕하세요,\n\n회의 중이어서요, 최신 급여 자료와 W-2 시트를 제 개인  이메일로 전달해 주세요\n\nSend to: alice.1786@proton.me\n\n안부 전합니다,\n구매팀",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "alice.8864@gmx.com",
+        "X-Mailer": "OWA/16.0",
+        "X-Originating-IP": "[147.199.79.253]"
+      }
+    }
+  },
+  {
+    "test_id": "ato-000005",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Compromised internal mailbox exfil request",
+    "description": "Email sent from an authenticated internal mailbox requesting payroll exfiltration to a personal address — classic ATO signal.",
+    "expected_signals": [
+      "FOREIGN_IP_ORIGIN",
+      "OUT_OF_BAND_URGENCY",
+      "REPLY_TO_EXTERNAL_FREEMAIL",
+      "SENSITIVE_DATA_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "ACCOUNT_TAKEOVER_SUSPECTED"
+    ],
+    "payload": {
+      "from": "bob@acme.example",
+      "from_display": "bob",
+      "to": "payroll@acme.example",
+      "subject": "URGENT — need payroll export now",
+      "body_text": "Dear team,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll  export and the W-2 spreadsheet to my personal address.\n\nSend to: bob.6740@yandex.com\n\nRegards,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "bob.4465@gmx.com",
+        "X-Mailer": "OWA/16.0",
+        "X-Originating-IP": "[140.82.27.158]"
+      }
+    }
+  },
+  {
+    "test_id": "ato-000006",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Compromised internal mailbox exfil request",
+    "description": "Email sent from an authenticated internal mailbox requesting payroll exfiltration to a personal address — classic ATO signal.",
+    "expected_signals": [
+      "FOREIGN_IP_ORIGIN",
+      "OUT_OF_BAND_URGENCY",
+      "REPLY_TO_EXTERNAL_FREEMAIL",
+      "SENSITIVE_DATA_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "ACCOUNT_TAKEOVER_SUSPECTED"
+    ],
+    "payload": {
+      "from": "carol@acme.example",
+      "from_display": "carol",
+      "to": "payroll@acme.example",
+      "subject": "URGENT — need payroll export now",
+      "body_text": "Good morning,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet to my personal address.\n\nSend to: carol.4777@mail.ru\n\nThanks,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "carol.8790@proton.me",
+        "X-Mailer": "OWA/16.0",
+        "X-Originating-IP": "[106.62.194.187]"
+      }
+    }
+  },
+  {
+    "test_id": "ato-000007",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Compromised internal mailbox exfil request",
+    "description": "Email sent from an authenticated internal mailbox requesting payroll exfiltration to a personal address — classic ATO signal.",
+    "expected_signals": [
+      "FOREIGN_IP_ORIGIN",
+      "OUT_OF_BAND_URGENCY",
+      "REPLY_TO_EXTERNAL_FREEMAIL",
+      "SENSITIVE_DATA_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "escalate",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "ACCOUNT_TAKEOVER_SUSPECTED"
+    ],
+    "payload": {
+      "from": "david@acme.example",
+      "from_display": "david",
+      "to": "payroll@acme.example",
+      "subject": "URGENT — need payroll export now",
+      "body_text": "Good morning,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll  exoprt and the W-2 spreadsheet to my personal addres.s\n\nSend to: david.6996@yandex.com\n\nCheers,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "david.6678@proton.me",
+        "X-Mailer": "OWA/16.0",
+        "X-Originating-IP": "[125.233.176.201]"
+      }
+    }
+  },
+  {
+    "test_id": "ato-000008",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "User self-report",
+    "description": "Internal user proactively reporting a suspicious click — must not be flagged as ATO.",
+    "expected_signals": [
+      "INTERNAL_ORIGIN",
+      "USER_INITIATED_REPORT"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "alice@acme.example",
+      "from_display": "alice (User)",
+      "to": "itsupport@acme.example",
+      "subject": "Possible phishing click",
+      "body_text": "Godo morning,\n\nI think I clicekd on a suspicious link earlier today. Can you check my acCoUNT for anything unusual?\n\nThanks,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "ato-000009",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "zh",
+    "attack_type": "User self-report",
+    "description": "Internal user proactively reporting a suspicious click — must not be flagged as ATO.",
+    "expected_signals": [
+      "INTERNAL_ORIGIN",
+      "USER_INITIATED_REPORT"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "bob@acme.example",
+      "from_display": "bob (User)",
+      "to": "itsupport@acme.example",
+      "subject": "可能误点钓鱼链接",
+      "body_text": "好您,，\n\n我今早可能点击了一个可疑链接，能否帮我检查一下账户\n\n祝好,\n财务部",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_c-000000",
+    "category": "VENDOR_COMPROMISE",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "ko",
+    "attack_type": "Vendor mid-thread bank-detail change",
+    "description": "Previously-known vendor address pushing a banking change with reply-to redirected to a lookalike domain.",
+    "expected_signals": [
+      "BANK_DETAIL_CHANGE",
+      "KNOWN_VENDOR",
+      "MID_THREAD_DEVIATION",
+      "REPLY_TO_LOOKALIKE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "VENDOR_COMPROMISE"
+    ],
+    "payload": {
+      "from": "ar@alpha-supply.com",
+      "from_display": "Alpha Supply A/R",
+      "to": "alice@acme.example",
+      "subject": "은행 정보 변경 안내 — 9821",
+      "body_text": "팀 여러분께,\n\n송장 9821 관련, 은행 정보가 변경되었습니다. 즉시 아래로 송금해 주세요\n\nBank: HSBC\nAccount: 2472697119\nSWIFT: WFBIUS6S\n\n급한 안내 드려 죄송합니다\n\n잘 부탁드립니다,\nIT팀",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "ar@a1pha-supply.net"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_c-000001",
+    "category": "VENDOR_COMPROMISE",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Vendor mid-thread bank-detail change",
+    "description": "Previously-known vendor address pushing a banking change with reply-to redirected to a lookalike domain.",
+    "expected_signals": [
+      "BANK_DETAIL_CHANGE",
+      "KNOWN_VENDOR",
+      "MID_THREAD_DEVIATION",
+      "REPLY_TO_LOOKALIKE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "VENDOR_COMPROMISE"
+    ],
+    "payload": {
+      "from": "ar@beta-logistics.com",
+      "from_display": "Alpha Supply A/R",
+      "to": "bob@acme.example",
+      "subject": "Banking details update — invoice 9821",
+      "body_text": "Hello,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: HSBC\nAccount: 3635305732\nSWIFT: SCBLSG22\n\nApologies for the short notice.\n\nThanks,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "ar@beta-1ogistics.co"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_c-000002",
+    "category": "VENDOR_COMPROMISE",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Vendor mid-thread bank-detail change",
+    "description": "Previously-known vendor address pushing a banking change with reply-to redirected to a lookalike domain.",
+    "expected_signals": [
+      "BANK_DETAIL_CHANGE",
+      "KNOWN_VENDOR",
+      "MID_THREAD_DEVIATION",
+      "REPLY_TO_LOOKALIKE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "VENDOR_COMPROMISE"
+    ],
+    "payload": {
+      "from": "ar@gamma-print.com",
+      "from_display": "Alpha Supply A/R",
+      "to": "carol@acme.example",
+      "subject": "Banking details update — invoice 9821",
+      "body_text": "Hi,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: HSBC\nAccount: 0669871302\nSWIFT: SCBLSG22\n\nApologies for the short notice.\n\nThanks,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "ar@garnma-print.net"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_c-000003",
+    "category": "VENDOR_COMPROMISE",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "ko",
+    "attack_type": "Vendor mid-thread bank-detail change",
+    "description": "Previously-known vendor address pushing a banking change with reply-to redirected to a lookalike domain.",
+    "expected_signals": [
+      "BANK_DETAIL_CHANGE",
+      "KNOWN_VENDOR",
+      "MID_THREAD_DEVIATION",
+      "REPLY_TO_LOOKALIKE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "VENDOR_COMPROMISE"
+    ],
+    "payload": {
+      "from": "ar@alpha-supply.com",
+      "from_display": "Alpha Supply A/R",
+      "to": "david@acme.example",
+      "subject": "은행 정보 변경 안내 — 9821",
+      "body_text": "팀 여러분께,\n\n송장 9821 관련, 은행 정보가 변경되었습니다. 즉시 아래로 송금해 주세요\n\nBank: Standard Chartered\nAccount: 9111331902\nSWIFT: WFBIUS6S\n\n급한 안내 드려 죄송합니다\n\n안부 전합니다,\n구매팀",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "ar@alpha-supply-support.co"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_c-000004",
+    "category": "VENDOR_COMPROMISE",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Vendor mid-thread bank-detail change",
+    "description": "Previously-known vendor address pushing a banking change with reply-to redirected to a lookalike domain.",
+    "expected_signals": [
+      "BANK_DETAIL_CHANGE",
+      "KNOWN_VENDOR",
+      "MID_THREAD_DEVIATION",
+      "REPLY_TO_LOOKALIKE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "VENDOR_COMPROMISE"
+    ],
+    "payload": {
+      "from": "ar@beta-logistics.com",
+      "from_display": "Alpha Supply A/R",
+      "to": "ellen@acme.example",
+      "subject": "Banking details update — invoice 9821",
+      "body_text": "Good morning,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: HSBC\nAccount: 8067081853\nSWIFT: HSBCHKHH\n\nApologies for the short notice.\n\nThanks,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "ar@beta-l0gistics.app"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_c-000005",
+    "category": "VENDOR_COMPROMISE",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Vendor mid-thread bank-detail change",
+    "description": "Previously-known vendor address pushing a banking change with reply-to redirected to a lookalike domain.",
+    "expected_signals": [
+      "BANK_DETAIL_CHANGE",
+      "KNOWN_VENDOR",
+      "MID_THREAD_DEVIATION",
+      "REPLY_TO_LOOKALIKE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "VENDOR_COMPROMISE"
+    ],
+    "payload": {
+      "from": "ar@gamma-print.com",
+      "from_display": "Alpha Supply A/R",
+      "to": "fionn@acme.example",
+      "subject": "Banking details update — invoice 9821",
+      "body_text": "Good morning,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: Wells Fargo\nAccount: 0004841618\nSWIFT: SCBLSG22\n\nApologies for the short notice.\n\nBest regards,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "ar@garnma-print.net"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_c-000006",
+    "category": "VENDOR_COMPROMISE",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Vendor mid-thread bank-detail change",
+    "description": "Previously-known vendor address pushing a banking change with reply-to redirected to a lookalike domain.",
+    "expected_signals": [
+      "BANK_DETAIL_CHANGE",
+      "KNOWN_VENDOR",
+      "MID_THREAD_DEVIATION",
+      "REPLY_TO_LOOKALIKE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "VENDOR_COMPROMISE"
+    ],
+    "payload": {
+      "from": "ar@alpha-supply.com",
+      "from_display": "Alpha Supply A/R",
+      "to": "grace@acme.example",
+      "subject": "Banking details update — invoice 9821",
+      "body_text": "Dear team,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: HSBC\nAccount: 2497901781\nSWIFT: SCBLSG22\n\nApologies for the short notice.\n\nThanks,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "ar@a1pha-supply.co"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_c-000007",
+    "category": "VENDOR_COMPROMISE",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Vendor mid-thread bank-detail change",
+    "description": "Previously-known vendor address pushing a banking change with reply-to redirected to a lookalike domain.",
+    "expected_signals": [
+      "BANK_DETAIL_CHANGE",
+      "KNOWN_VENDOR",
+      "MID_THREAD_DEVIATION",
+      "REPLY_TO_LOOKALIKE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "escalate",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "VENDOR_COMPROMISE"
+    ],
+    "payload": {
+      "from": "ar@beta-logistics.com",
+      "from_display": "Alpha Supply A/R",
+      "to": "hideo@acme.example",
+      "subject": "Banking details update — invoice 9821",
+      "body_text": "Hello,\n\nFurther to invoice 9821, please note our bankign has changed. Effective immediately, ruote payments to:\n\nBank: Wells Fargo\nAccount: 4546205880\nSWIFT: HSBCHKHH\n\nApologies for the short notice.\n\nThanks,\nIT  Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "ar@beta-l0gistics.com"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_c-000008",
+    "category": "VENDOR_COMPROMISE",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "vi",
+    "attack_type": "Routine vendor statement",
+    "description": "Established vendor sending routine statement — should classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "ar@gamma-print.com",
+      "from_display": "Alpha Supply A/R",
+      "to": "alice@acme.example",
+      "subject": "Bảng kê tháng 9",
+      "body_text": "Kính gửi anh/chị,\n\níĐnh kèm bảng kê, hkông cần xử lý nếu không có sai sót\n\nKÍnH chúc,\nPhòng IT",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_c-000009",
+    "category": "VENDOR_COMPROMISE",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Routine vendor statement",
+    "description": "Established vendor sending routine statement — should classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "ar@alpha-supply.com",
+      "from_display": "Alpha Supply A/R",
+      "to": "bob@acme.example",
+      "subject": "Statement for September",
+      "body_text": "Godo morning,\n\nStatement attached. No action requIrED if all entries look correct.\n\nThanks,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "cred-000000",
+    "category": "CREDENTIAL_HARVESTING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Password-expiry credential harvest",
+    "description": "Fake password-expiry warning directing the recipient to an off-brand login page that captures credentials.",
+    "expected_signals": [
+      "CREDENTIAL_PROMPT",
+      "EXTERNAL_LOGIN_DOMAIN",
+      "PASSWORD_EXPIRY_PRETEXT",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "CREDENTIAL_HARVESTING"
+    ],
+    "payload": {
+      "from": "passwordreset.1064@yandex.com",
+      "from_display": "IT Support",
+      "to": "alice@acme.example",
+      "subject": "Action required: password expiry",
+      "body_text": "Dear team,\n\nYour mailbox password will expire in 24 hours. Re-confirm your password to keep service active.\n\nRe-confirm: http://verify-account-now.tk/login\n\nRegards,\nProcurement",
+      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://verify-account-now.tk/login\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "cred-000001",
+    "category": "CREDENTIAL_HARVESTING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Password-expiry credential harvest",
+    "description": "Fake password-expiry warning directing the recipient to an off-brand login page that captures credentials.",
+    "expected_signals": [
+      "CREDENTIAL_PROMPT",
+      "EXTERNAL_LOGIN_DOMAIN",
+      "PASSWORD_EXPIRY_PRETEXT",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "CREDENTIAL_HARVESTING"
+    ],
+    "payload": {
+      "from": "passwordreset.3768@outlook.com",
+      "from_display": "IT Support",
+      "to": "bob@acme.example",
+      "subject": "Action required: password expiry",
+      "body_text": "Good morning,\n\nYour mailbox password will expire in 24 hours. Re-confirm your password to keep service active.\n\nRe-confirm: http://office365-renew.gq/signin\n\nRegards,\nAccounts Payable",
+      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://office365-renew.gq/signin\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "cred-000002",
+    "category": "CREDENTIAL_HARVESTING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Password-expiry credential harvest",
+    "description": "Fake password-expiry warning directing the recipient to an off-brand login page that captures credentials.",
+    "expected_signals": [
+      "CREDENTIAL_PROMPT",
+      "EXTERNAL_LOGIN_DOMAIN",
+      "PASSWORD_EXPIRY_PRETEXT",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "CREDENTIAL_HARVESTING"
+    ],
+    "payload": {
+      "from": "passwordreset.9513@gmx.com",
+      "from_display": "IT Support",
+      "to": "carol@acme.example",
+      "subject": "Action required: password expiry",
+      "body_text": "Dear team,\n\nYour mailbox password will expire in 24 hours. Re-confirm your password to keep service active.\n\nRe-confirm: http://microsoft-security-update.cf/auth\n\nBest regards,\nAccounts Payable",
+      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://microsoft-security-update.cf/auth\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "cred-000003",
+    "category": "CREDENTIAL_HARVESTING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Password-expiry credential harvest",
+    "description": "Fake password-expiry warning directing the recipient to an off-brand login page that captures credentials.",
+    "expected_signals": [
+      "CREDENTIAL_PROMPT",
+      "EXTERNAL_LOGIN_DOMAIN",
+      "PASSWORD_EXPIRY_PRETEXT",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "CREDENTIAL_HARVESTING"
+    ],
+    "payload": {
+      "from": "passwordreset.6808@outlook.com",
+      "from_display": "IT Support",
+      "to": "david@acme.example",
+      "subject": "Action required: password expiry",
+      "body_text": "Hi,\n\nYour mailbox password will expire in 24 hours. Re-confirm your password to keep service active.\n\nRe-confirm: http://office365-renew.gq/signin\n\nCheers,\nIT Helpdesk",
+      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://office365-renew.gq/signin\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "cred-000004",
+    "category": "CREDENTIAL_HARVESTING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Password-expiry credential harvest",
+    "description": "Fake password-expiry warning directing the recipient to an off-brand login page that captures credentials.",
+    "expected_signals": [
+      "CREDENTIAL_PROMPT",
+      "EXTERNAL_LOGIN_DOMAIN",
+      "PASSWORD_EXPIRY_PRETEXT",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "CREDENTIAL_HARVESTING"
+    ],
+    "payload": {
+      "from": "passwordreset.5183@mail.ru",
+      "from_display": "IT Support",
+      "to": "ellen@acme.example",
+      "subject": "Action required: password expiry",
+      "body_text": "Dear team,\n\nYour mailbox password will expire in 24  hours. Re-confirm your password to keep service active.\n\nRe-confirm: https://login-microsoftonline.co/verify\n\nRegards,\nProcurement",
+      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://login-microsoftonline.co/verify\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "cred-000005",
+    "category": "CREDENTIAL_HARVESTING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Password-expiry credential harvest",
+    "description": "Fake password-expiry warning directing the recipient to an off-brand login page that captures credentials.",
+    "expected_signals": [
+      "CREDENTIAL_PROMPT",
+      "EXTERNAL_LOGIN_DOMAIN",
+      "PASSWORD_EXPIRY_PRETEXT",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "CREDENTIAL_HARVESTING"
+    ],
+    "payload": {
+      "from": "passwordreset.0903@tutanota.com",
+      "from_display": "IT Support",
+      "to": "fionn@acme.example",
+      "subject": "Action required: password expiry",
+      "body_text": "Hello,\n\nYour mailbox password will expire  in 24 hours. Re-confirm your password to keep service active.\n\nRe-confirm: https://login-microsoftonline.co/verify\n\nCheers,\nIT Helpdesk",
+      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://login-microsoftonline.co/verify\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "cred-000006",
+    "category": "CREDENTIAL_HARVESTING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Password-expiry credential harvest",
+    "description": "Fake password-expiry warning directing the recipient to an off-brand login page that captures credentials.",
+    "expected_signals": [
+      "CREDENTIAL_PROMPT",
+      "EXTERNAL_LOGIN_DOMAIN",
+      "PASSWORD_EXPIRY_PRETEXT",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "CREDENTIAL_HARVESTING"
+    ],
+    "payload": {
+      "from": "passwordreset.2553@tutanota.com",
+      "from_display": "IT Support",
+      "to": "grace@acme.example",
+      "subject": "Action required: password expiry",
+      "body_text": "Hi,\n\nYour mailbox password will expire in 24 hours. Re-confirm your password to keep service active.\n\nRe-confirm: https://o365-portal.app/login\n\nRegards,\nProcurement",
+      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://o365-portal.app/login\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "cred-000007",
+    "category": "CREDENTIAL_HARVESTING",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Password-expiry credential harvest",
+    "description": "Fake password-expiry warning directing the recipient to an off-brand login page that captures credentials.",
+    "expected_signals": [
+      "CREDENTIAL_PROMPT",
+      "EXTERNAL_LOGIN_DOMAIN",
+      "PASSWORD_EXPIRY_PRETEXT",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "escalate",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "CREDENTIAL_HARVESTING"
+    ],
+    "payload": {
+      "from": "passwordreset.3016@yandex.com",
+      "from_display": "IT Support",
+      "to": "hideo@acme.example",
+      "subject": "Action required: password expiry",
+      "body_text": "eDar team,\n\nYour mailbox password WiLl expire in 24 hours. Re-confirm your password to keep service active.\n\nRe-confirm: https://xn--logn-3oa.microsoft.com/auth\n\nThanks,\nIT Helpdesk",
+      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://xn--logn-3oa.microsoft.com/auth\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "cred-000008",
+    "category": "CREDENTIAL_HARVESTING",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "ja",
+    "attack_type": "Legitimate MFA enrolment reminder",
+    "description": "Genuine internal security bulletin requesting users self-enrol via the SSO portal — no credential prompt.",
+    "expected_signals": [
+      "INTERNAL_ORIGIN",
+      "POINTS_TO_SSO_PORTAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "security@acme.example",
+      "from_display": "Acme Security",
+      "to": "alice@acme.example",
+      "subject": "金曜までに MFA 登録を完了してください",
+      "body_text": "お世話になっております,\n\n会社の SSO ーポタルから  MFA を登録てしください。本メールでは認証情報を求めません\n\nご確認のほどお願いいたします,\n購買部",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "cred-000009",
+    "category": "CREDENTIAL_HARVESTING",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Legitimate MFA enrolment reminder",
+    "description": "Genuine internal security bulletin requesting users self-enrol via the SSO portal — no credential prompt.",
+    "expected_signals": [
+      "INTERNAL_ORIGIN",
+      "POINTS_TO_SSO_PORTAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "security@acme.example",
+      "from_display": "Acme Security",
+      "to": "bob@acme.example",
+      "subject": "MFA enrolment is mandatory by Friday",
+      "body_text": "Hello,\n\nVisit the company SSO  portal to enrol your MFA device. No cRedENtialS are required from this email.\n\nCehers,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "invoice-000000",
+    "category": "INVOICE_FRAUD",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Fake invoice with lookalike vendor",
+    "description": "Invoice fraud sent from a lookalike of a known vendor, with payment redirected via a fresh-domain link.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "INVOICE_PRETEXT",
+      "LOOKALIKE_SENDER_DOMAIN",
+      "PAYMENT_REDIRECT_URL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "INVOICE_FRAUD"
+    ],
+    "payload": {
+      "from": "billing@a1pha-supply.app",
+      "from_display": "Alpha Supply Billing",
+      "to": "alice@acme.example",
+      "subject": "URGENT: Past-due invoice INV-90000",
+      "body_text": "Dear team,\n\nPlease find invoice INV-90000 for $13016 due immediately. Pay via the secure link below.\n\nPay Now: http://microsoft-security-update.cf/auth\n\nThanks,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=none dmarc=fail",
+        "Reply-To": "ar@a1pha-supply.app"
+      }
+    }
+  },
+  {
+    "test_id": "invoice-000001",
+    "category": "INVOICE_FRAUD",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Fake invoice with lookalike vendor",
+    "description": "Invoice fraud sent from a lookalike of a known vendor, with payment redirected via a fresh-domain link.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "INVOICE_PRETEXT",
+      "LOOKALIKE_SENDER_DOMAIN",
+      "PAYMENT_REDIRECT_URL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "INVOICE_FRAUD"
+    ],
+    "payload": {
+      "from": "billing@beta-1ogistics.biz",
+      "from_display": "Alpha Supply Billing",
+      "to": "bob@acme.example",
+      "subject": "URGENT: Past-due invoice INV-90001",
+      "body_text": "Hi,\n\nPlease find invoice INV-90001 for $25474 due immediately. Pay via the secure link below.\n\nPay Now: http://office365-renew.gq/signin\n\nBest regards,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=none dmarc=fail",
+        "Reply-To": "ar@beta-1ogistics.biz"
+      }
+    }
+  },
+  {
+    "test_id": "invoice-000002",
+    "category": "INVOICE_FRAUD",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Fake invoice with lookalike vendor",
+    "description": "Invoice fraud sent from a lookalike of a known vendor, with payment redirected via a fresh-domain link.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "INVOICE_PRETEXT",
+      "LOOKALIKE_SENDER_DOMAIN",
+      "PAYMENT_REDIRECT_URL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "INVOICE_FRAUD"
+    ],
+    "payload": {
+      "from": "billing@garnma-print.biz",
+      "from_display": "Alpha Supply Billing",
+      "to": "carol@acme.example",
+      "subject": "URGENT: Past-due invoice INV-90002",
+      "body_text": "Hi,\n\nPlease find invoice INV-90002 for $3607 due immediately. Pay via the secure link below.\n\nPay Now: http://verify-account-now.tk/login\n\nThanks,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=none dmarc=fail",
+        "Reply-To": "ar@garnma-print.biz"
+      }
+    }
+  },
+  {
+    "test_id": "invoice-000003",
+    "category": "INVOICE_FRAUD",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "ja",
+    "attack_type": "Fake invoice with lookalike vendor",
+    "description": "Invoice fraud sent from a lookalike of a known vendor, with payment redirected via a fresh-domain link.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "INVOICE_PRETEXT",
+      "LOOKALIKE_SENDER_DOMAIN",
+      "PAYMENT_REDIRECT_URL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "INVOICE_FRAUD"
+    ],
+    "payload": {
+      "from": "billing@a1pha-supply.biz",
+      "from_display": "Alpha Supply Billing",
+      "to": "david@acme.example",
+      "subject": "URGENT: Past-due invoice INV-90003",
+      "body_text": "いつもお世話になっております,\n\n31766 円の請求書、本日中にお支払いください\n\n今すぐ支払う: http://microsoft-security-update.cf/auth\n\nご確認のほどお願いいたします,\n購買部",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=none dmarc=fail",
+        "Reply-To": "ar@a1pha-supply.biz"
+      }
+    }
+  },
+  {
+    "test_id": "invoice-000004",
+    "category": "INVOICE_FRAUD",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Fake invoice with lookalike vendor",
+    "description": "Invoice fraud sent from a lookalike of a known vendor, with payment redirected via a fresh-domain link.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "INVOICE_PRETEXT",
+      "LOOKALIKE_SENDER_DOMAIN",
+      "PAYMENT_REDIRECT_URL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "INVOICE_FRAUD"
+    ],
+    "payload": {
+      "from": "billing@beta-1ogistics.com",
+      "from_display": "Alpha Supply Billing",
+      "to": "ellen@acme.example",
+      "subject": "URGENT: Past-due invoice INV-90004",
+      "body_text": "Good morning,\n\nPlease find  invoice INV-90004 for $21206 due immediately. Pay via the secure link below.\n\nPay Now: https://accounts-google.support/secure\n\nThanks,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=none dmarc=fail",
+        "Reply-To": "ar@beta-1ogistics.com"
+      }
+    }
+  },
+  {
+    "test_id": "invoice-000005",
+    "category": "INVOICE_FRAUD",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "zh",
+    "attack_type": "Fake invoice with lookalike vendor",
+    "description": "Invoice fraud sent from a lookalike of a known vendor, with payment redirected via a fresh-domain link.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "INVOICE_PRETEXT",
+      "LOOKALIKE_SENDER_DOMAIN",
+      "PAYMENT_REDIRECT_URL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "INVOICE_FRAUD"
+    ],
+    "payload": {
+      "from": "billing@garnma-print.biz",
+      "from_display": "Alpha Supply Billing",
+      "to": "fionn@acme.example",
+      "subject": "URGENT: Past-due invoice INV-90005",
+      "body_text": "团队您好,\n\n发票金额  38982 元请立即支付\n\n立即付款: https://o365-portal.app/login\n\n此致敬礼,\n信息技术部",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=none dmarc=fail",
+        "Reply-To": "ar@garnma-print.biz"
+      }
+    }
+  },
+  {
+    "test_id": "invoice-000006",
+    "category": "INVOICE_FRAUD",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Fake invoice with lookalike vendor",
+    "description": "Invoice fraud sent from a lookalike of a known vendor, with payment redirected via a fresh-domain link.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "INVOICE_PRETEXT",
+      "LOOKALIKE_SENDER_DOMAIN",
+      "PAYMENT_REDIRECT_URL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "INVOICE_FRAUD"
+    ],
+    "payload": {
+      "from": "billing@a1pha-supply.app",
+      "from_display": "Alpha Supply Billing",
+      "to": "grace@acme.example",
+      "subject": "URGENT: Past-due invoice INV-90006",
+      "body_text": "Dear team,\n\nPlease find invoice INV-90006 for $49731 due immediately. Pay via the secure link below.\n\nPay Now: https://login-microsoftonline.co/verify\n\nRegards,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=none dmarc=fail",
+        "Reply-To": "ar@a1pha-supply.app"
+      }
+    }
+  },
+  {
+    "test_id": "invoice-000007",
+    "category": "INVOICE_FRAUD",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "hard",
+    "locale": "zh",
+    "attack_type": "Fake invoice with lookalike vendor",
+    "description": "Invoice fraud sent from a lookalike of a known vendor, with payment redirected via a fresh-domain link.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "INVOICE_PRETEXT",
+      "LOOKALIKE_SENDER_DOMAIN",
+      "PAYMENT_REDIRECT_URL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "escalate",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "INVOICE_FRAUD"
+    ],
+    "payload": {
+      "from": "billing@beta-1ogistics.co",
+      "from_display": "Alpha Supply Billing",
+      "to": "hideo@acme.example",
+      "subject": "URGENT: Past-due invoice INV-90007",
+      "body_text": "您好,\n\n发票额金  37638 元请立即支付\n\n立即付款: https://login.microsoftonline.com.security-verify.app/auth?id=62c6f51b\n\n顺颂商祺,\n财务部",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=none dmarc=fail",
+        "Reply-To": "ar@beta-1ogistics.co"
+      }
+    }
+  },
+  {
+    "test_id": "invoice-000008",
+    "category": "INVOICE_FRAUD",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Legitimate vendor invoice",
+    "description": "Genuine vendor invoice with consistent banking and authenticated sender — should classify Trusted/Informational.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "billing@gamma-print.com",
+      "from_display": "Alpha Supply Billing",
+      "to": "alice@acme.example",
+      "subject": "Invoice INV-10008",
+      "body_text": "Dear team,\n\nInvoice for $5850 attached. Net 30 terms apply. Pay via the same ACH detAils on file.\n\nBest regards,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      },
+      "attachments": [
+        {
+          "filename": "INV-10008.pdf",
+          "content_type": "application/pdf",
+          "size_bytes": 85000
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "invoice-000009",
+    "category": "INVOICE_FRAUD",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Legitimate vendor invoice",
+    "description": "Genuine vendor invoice with consistent banking and authenticated sender — should classify Trusted/Informational.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "billing@alpha-supply.com",
+      "from_display": "Alpha Supply Billing",
+      "to": "bob@acme.example",
+      "subject": "Invoice INV-10009",
+      "body_text": "Hi,\n\nInvoice for $36921 attached. Net 30 terms ApPly. Pay via the same ACH details on file.\n\nRegadrs,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      },
+      "attachments": [
+        {
+          "filename": "INV-10009.pdf",
+          "content_type": "application/pdf",
+          "size_bytes": 85000
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "qr-000000",
+    "category": "QR_PHISHING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "QR-coded credential harvest",
+    "description": "QR attachment whose decoded URL points to an off-brand login page — quishing.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "CREDENTIAL_LINK",
+      "QR_PRESENT",
+      "QR_RESOLVES_EXTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "QR_PHISHING"
+    ],
+    "payload": {
+      "from": "delivery.2931@yahoo.com",
+      "from_display": "Package Delivery",
+      "to": "alice@acme.example",
+      "subject": "Action required: re-deliver package",
+      "body_text": "Good morning,\n\nScan the QR below to confirm your delivery address.\n\nCheers,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      },
+      "attachments": [
+        {
+          "filename": "redelivery.png",
+          "content_type": "image/png",
+          "size_bytes": 18000,
+          "qr_target_url": "http://verify-account-now.tk/login"
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "qr-000001",
+    "category": "QR_PHISHING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "QR-coded credential harvest",
+    "description": "QR attachment whose decoded URL points to an off-brand login page — quishing.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "CREDENTIAL_LINK",
+      "QR_PRESENT",
+      "QR_RESOLVES_EXTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "QR_PHISHING"
+    ],
+    "payload": {
+      "from": "delivery.1738@gmx.com",
+      "from_display": "Package Delivery",
+      "to": "bob@acme.example",
+      "subject": "Action required: re-deliver package",
+      "body_text": "Hello,\n\nScan the QR below to confirm your delivery address.\n\nCheers,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      },
+      "attachments": [
+        {
+          "filename": "redelivery.png",
+          "content_type": "image/png",
+          "size_bytes": 18000,
+          "qr_target_url": "http://microsoft-security-update.cf/auth"
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "qr-000002",
+    "category": "QR_PHISHING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "ko",
+    "attack_type": "QR-coded credential harvest",
+    "description": "QR attachment whose decoded URL points to an off-brand login page — quishing.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "CREDENTIAL_LINK",
+      "QR_PRESENT",
+      "QR_RESOLVES_EXTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "QR_PHISHING"
+    ],
+    "payload": {
+      "from": "delivery.1853@mail.ru",
+      "from_display": "Package Delivery",
+      "to": "carol@acme.example",
+      "subject": "필수 조치: 재배송 요청",
+      "body_text": "팀 여러분께,\n\n아래 QR을 스캔해 배송 주소를 확인하세요\n\n감사합니다,\n재무팀",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      },
+      "attachments": [
+        {
+          "filename": "redelivery.png",
+          "content_type": "image/png",
+          "size_bytes": 18000,
+          "qr_target_url": "http://microsoft-security-update.cf/auth"
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "qr-000003",
+    "category": "QR_PHISHING",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "QR-coded credential harvest",
+    "description": "QR attachment whose decoded URL points to an off-brand login page — quishing.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "CREDENTIAL_LINK",
+      "QR_PRESENT",
+      "QR_RESOLVES_EXTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "QR_PHISHING"
+    ],
+    "payload": {
+      "from": "delivery.8629@outlook.com",
+      "from_display": "Package Delivery",
+      "to": "david@acme.example",
+      "subject": "Action required: re-deliver package",
+      "body_text": "Dear team,\n\nScan the QR below to confirm your delivery address.\n\nBest regards,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      },
+      "attachments": [
+        {
+          "filename": "redelivery.png",
+          "content_type": "image/png",
+          "size_bytes": 18000,
+          "qr_target_url": "http://office365-renew.gq/signin"
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "qr-000004",
+    "category": "QR_PHISHING",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "QR-coded credential harvest",
+    "description": "QR attachment whose decoded URL points to an off-brand login page — quishing.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "CREDENTIAL_LINK",
+      "QR_PRESENT",
+      "QR_RESOLVES_EXTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "QR_PHISHING"
+    ],
+    "payload": {
+      "from": "delivery.4657@mail.ru",
+      "from_display": "Package Delivery",
+      "to": "ellen@acme.example",
+      "subject": "Action required: re-deliver package",
+      "body_text": "Hi,\n\nScan the QR below to confirm your delivery address.\n\nThanks,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      },
+      "attachments": [
+        {
+          "filename": "redelivery.png",
+          "content_type": "image/png",
+          "size_bytes": 18000,
+          "qr_target_url": "https://accounts-google.support/secure"
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "qr-000005",
+    "category": "QR_PHISHING",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "QR-coded credential harvest",
+    "description": "QR attachment whose decoded URL points to an off-brand login page — quishing.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "CREDENTIAL_LINK",
+      "QR_PRESENT",
+      "QR_RESOLVES_EXTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "QR_PHISHING"
+    ],
+    "payload": {
+      "from": "delivery.6545@yandex.com",
+      "from_display": "Package Delivery",
+      "to": "fionn@acme.example",
+      "subject": "Action required: re-deliver package",
+      "body_text": "Hi,\n\nScan the  QR below to confirm your delivery address.\n\nThanks,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      },
+      "attachments": [
+        {
+          "filename": "redelivery.png",
+          "content_type": "image/png",
+          "size_bytes": 18000,
+          "qr_target_url": "https://o365-portal.app/login"
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "qr-000006",
+    "category": "QR_PHISHING",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Legitimate event QR badge",
+    "description": "QR attachment resolving to a tenant-owned event URL — should classify Trusted.",
+    "expected_signals": [
+      "QR_PRESENT",
+      "QR_RESOLVES_INTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "events@acme.example",
+      "from_display": "Acme Events",
+      "to": "grace@acme.example",
+      "subject": "Your conference badge",
+      "body_text": "Hi,\n\nScan the attached QR  to check in.\n\nRegards,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      },
+      "attachments": [
+        {
+          "filename": "badge_qr.png",
+          "content_type": "image/png",
+          "size_bytes": 12000,
+          "qr_target_url": "https://events.acme.example/checkin/1006"
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "qr-000007",
+    "category": "QR_PHISHING",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Legitimate event QR badge",
+    "description": "QR attachment resolving to a tenant-owned event URL — should classify Trusted.",
+    "expected_signals": [
+      "QR_PRESENT",
+      "QR_RESOLVES_INTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "events@acme.example",
+      "from_display": "Acme Events",
+      "to": "hideo@acme.example",
+      "subject": "Your conference badge",
+      "body_text": "Good morning,\n\nScna the attached QR  to check in.\n\nreGarDS,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      },
+      "attachments": [
+        {
+          "filename": "badge_qr.png",
+          "content_type": "image/png",
+          "size_bytes": 12000,
+          "qr_target_url": "https://events.acme.example/checkin/1007"
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "qr-000008",
+    "category": "QR_PHISHING",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Legitimate event QR badge",
+    "description": "QR attachment resolving to a tenant-owned event URL — should classify Trusted.",
+    "expected_signals": [
+      "QR_PRESENT",
+      "QR_RESOLVES_INTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "events@acme.example",
+      "from_display": "Acme Events",
+      "to": "alice@acme.example",
+      "subject": "Your conference badge",
+      "body_text": "Hello,\n\nSaCn the  attached QR to check in.\n\nRegards,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      },
+      "attachments": [
+        {
+          "filename": "badge_qr.png",
+          "content_type": "image/png",
+          "size_bytes": 12000,
+          "qr_target_url": "https://events.acme.example/checkin/1008"
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "qr-000009",
+    "category": "QR_PHISHING",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "th",
+    "attack_type": "Legitimate event QR badge",
+    "description": "QR attachment resolving to a tenant-owned event URL — should classify Trusted.",
+    "expected_signals": [
+      "QR_PRESENT",
+      "QR_RESOLVES_INTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "events@acme.example",
+      "from_display": "Acme Events",
+      "to": "bob@acme.example",
+      "subject": "บัตรเข้างานของคุณ",
+      "body_text": "รเียนทีม,\n\nสแกน QR ที่นแบเพื่อเช็คอิน\n\nด้วยความเคารพ,\nทีมไอที",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
+      },
+      "attachments": [
+        {
+          "filename": "badge_qr.png",
+          "content_type": "image/png",
+          "size_bytes": 12000,
+          "qr_target_url": "https://events.acme.example/checkin/1009"
+        }
+      ]
+    }
+  },
+  {
+    "test_id": "scam-000000",
+    "category": "SCAM_FRAUD",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Advance-fee lottery scam",
+    "description": "Classic lottery / advance-fee scam asking for a processing fee to release fictitious winnings.",
+    "expected_signals": [
+      "ADVANCE_FEE_REQUEST",
+      "AUTH_FAIL",
+      "EXTREME_REWARD",
+      "FREEMAIL_SENDER"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SCAM_FRAUD"
+    ],
+    "payload": {
+      "from": "agent.8170@yahoo.com",
+      "from_display": "International Lottery Commission",
+      "to": "alice@acme.example",
+      "subject": "YOU HAVE WON!",
+      "body_text": "Hi,\n\nCongratulations! You have been selected to receive $1188866 USD as part of an international lottery promotion.\n\nTo claim, send your full name, address, and a $500 processing fee to our agent.\n\nRegards,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "scam-000001",
+    "category": "SCAM_FRAUD",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "vi",
+    "attack_type": "Advance-fee lottery scam",
+    "description": "Classic lottery / advance-fee scam asking for a processing fee to release fictitious winnings.",
+    "expected_signals": [
+      "ADVANCE_FEE_REQUEST",
+      "AUTH_FAIL",
+      "EXTREME_REWARD",
+      "FREEMAIL_SENDER"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SCAM_FRAUD"
+    ],
+    "payload": {
+      "from": "agent.7905@yandex.com",
+      "from_display": "International Lottery Commission",
+      "to": "bob@acme.example",
+      "subject": "Bạn đã trúng thưởng!",
+      "body_text": "Kính gửi anh/chị,\n\nXin chúc mừng! Bạn đã trúng 3093697 trong xổ số quốc tế\n\nĐể nhận thưởng vui lòng gửi họ tên, địa chỉ và phí 500 USD\n\nKính chúc,\nPhòng Mua hàng",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "scam-000002",
+    "category": "SCAM_FRAUD",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "ja",
+    "attack_type": "Advance-fee lottery scam",
+    "description": "Classic lottery / advance-fee scam asking for a processing fee to release fictitious winnings.",
+    "expected_signals": [
+      "ADVANCE_FEE_REQUEST",
+      "AUTH_FAIL",
+      "EXTREME_REWARD",
+      "FREEMAIL_SENDER"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SCAM_FRAUD"
+    ],
+    "payload": {
+      "from": "agent.8935@gmail.com",
+      "from_display": "International Lottery Commission",
+      "to": "carol@acme.example",
+      "subject": "ご当選おめでとうございます!",
+      "body_text": "いつもお世話になっております,\n\nおめでとうございます！国際抽選で 2533785 円が当選しました\n\n請求するには氏名、住所、500ドルの手数料を送ってください\n\nご確認のほどお願いいたします,\n経理部",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "scam-000003",
+    "category": "SCAM_FRAUD",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Advance-fee lottery scam",
+    "description": "Classic lottery / advance-fee scam asking for a processing fee to release fictitious winnings.",
+    "expected_signals": [
+      "ADVANCE_FEE_REQUEST",
+      "AUTH_FAIL",
+      "EXTREME_REWARD",
+      "FREEMAIL_SENDER"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SCAM_FRAUD"
+    ],
+    "payload": {
+      "from": "agent.2655@yahoo.com",
+      "from_display": "International Lottery Commission",
+      "to": "david@acme.example",
+      "subject": "YOU HAVE WON!",
+      "body_text": "Dear team,\n\nCongratulations! You have been selected to receive $8052467 USD as part of an international lottery promotion.\n\nTo claim, send your full name, address, and a $500 processing fee to our agent.\n\nRegards,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "scam-000004",
+    "category": "SCAM_FRAUD",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Advance-fee lottery scam",
+    "description": "Classic lottery / advance-fee scam asking for a processing fee to release fictitious winnings.",
+    "expected_signals": [
+      "ADVANCE_FEE_REQUEST",
+      "AUTH_FAIL",
+      "EXTREME_REWARD",
+      "FREEMAIL_SENDER"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SCAM_FRAUD"
+    ],
+    "payload": {
+      "from": "agent.3717@gmx.com",
+      "from_display": "International Lottery Commission",
+      "to": "ellen@acme.example",
+      "subject": "YOU HAVE WON!",
+      "body_text": "Hi,\n\nCongratulations! You have been selected to receive $5989231 USD as part of an international lottery promotion.\n\nTo claim, send your full name, address, and a $500 processing fee to our agent.\n\nCheers,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "scam-000005",
+    "category": "SCAM_FRAUD",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Advance-fee lottery scam",
+    "description": "Classic lottery / advance-fee scam asking for a processing fee to release fictitious winnings.",
+    "expected_signals": [
+      "ADVANCE_FEE_REQUEST",
+      "AUTH_FAIL",
+      "EXTREME_REWARD",
+      "FREEMAIL_SENDER"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "SCAM_FRAUD"
+    ],
+    "payload": {
+      "from": "agent.4122@outlook.com",
+      "from_display": "International Lottery Commission",
+      "to": "fionn@acme.example",
+      "subject": "YOU HAVE WON!",
+      "body_text": "Hi,\n\nCongratulations! You have been selected to receive $3952770 USD as part of an international lottery promotion.\n\nTo claim, send your full name, address, and a $500 processing fee to our agent.\n\nCheers,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "scam-000006",
+    "category": "SCAM_FRAUD",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Legitimate fundraising newsletter",
+    "description": "Real alumni newsletter offering optional donations — should classify Informational.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "alumni@university.example",
+      "from_display": "University Alumni Office",
+      "to": "grace@acme.example",
+      "subject": "Alumni newsletter",
+      "body_text": "Good morning,\n\nAnnual fundraising update — no purchase necessary, donations are optional.\n\nThanks,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@university.example\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "scam-000007",
+    "category": "SCAM_FRAUD",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Legitimate fundraising newsletter",
+    "description": "Real alumni newsletter offering optional donations — should classify Informational.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "alumni@university.example",
+      "from_display": "University Alumni Office",
+      "to": "hideo@acme.example",
+      "subject": "Alumni newsletter",
+      "body_text": "Hello,\n\nAnnual fuNdRaisinG update — no purchase necessary, donatoins are optional.\n\nBest regards,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@university.example\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "scam-000008",
+    "category": "SCAM_FRAUD",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "ja",
+    "attack_type": "Legitimate fundraising newsletter",
+    "description": "Real alumni newsletter offering optional donations — should classify Informational.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "alumni@university.example",
+      "from_display": "University Alumni Office",
+      "to": "alice@acme.example",
+      "subject": "卒業生ニュースレター",
+      "body_text": "お世話になっおりてます,\n\n年次募金の最新情報、寄付は任意です\n\nご確認のほどお願いいたします,\n購買部",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@university.example\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "scam-000009",
+    "category": "SCAM_FRAUD",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Legitimate fundraising newsletter",
+    "description": "Real alumni newsletter offering optional donations — should classify Informational.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "alumni@university.example",
+      "from_display": "University Alumni Office",
+      "to": "bob@acme.example",
+      "subject": "Alumni newsletter",
+      "body_text": "Hello,\n\nAnnual fundriasing update — no purchase necessary,  donations are optional.\n\nCheers,\nIT HeLpDeSk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@university.example\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "auth-000000",
+    "category": "AUTH_FAILED",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "SPF/DKIM/DMARC failed spoof",
+    "description": "Header from-address spoofs an internal user, but SPF/DKIM/DMARC all fail — classic direct spoof.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "DKIM_FAIL",
+      "DMARC_FAIL",
+      "EXTERNAL_RELAY",
+      "SPF_FAIL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "AUTH_FAILED"
+    ],
+    "payload": {
+      "from": "ceo@acme.example",
+      "from_display": "Acme CEO",
+      "to": "alice@acme.example",
+      "subject": "Quick favor",
+      "body_text": "Good morning,\n\nAre you available? I need a quick favour while I'm in a meeting.\n\nBest regards,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=fail dmarc=fail",
+        "Received": "from relay-0.suspicious-host.example ([203.0.113.75])"
+      }
+    }
+  },
+  {
+    "test_id": "auth-000001",
+    "category": "AUTH_FAILED",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "SPF/DKIM/DMARC failed spoof",
+    "description": "Header from-address spoofs an internal user, but SPF/DKIM/DMARC all fail — classic direct spoof.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "DKIM_FAIL",
+      "DMARC_FAIL",
+      "EXTERNAL_RELAY",
+      "SPF_FAIL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "AUTH_FAILED"
+    ],
+    "payload": {
+      "from": "ceo@acme.example",
+      "from_display": "Acme CEO",
+      "to": "bob@acme.example",
+      "subject": "Quick favor",
+      "body_text": "Good morning,\n\nAre you available? I need a quick favour while I'm in a meeting.\n\nRegards,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=fail dmarc=fail",
+        "Received": "from relay-1.suspicious-host.example ([203.0.113.80])"
+      }
+    }
+  },
+  {
+    "test_id": "auth-000002",
+    "category": "AUTH_FAILED",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "SPF/DKIM/DMARC failed spoof",
+    "description": "Header from-address spoofs an internal user, but SPF/DKIM/DMARC all fail — classic direct spoof.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "DKIM_FAIL",
+      "DMARC_FAIL",
+      "EXTERNAL_RELAY",
+      "SPF_FAIL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "AUTH_FAILED"
+    ],
+    "payload": {
+      "from": "ceo@acme.example",
+      "from_display": "Acme CEO",
+      "to": "carol@acme.example",
+      "subject": "Quick favor",
+      "body_text": "Dear team,\n\nAre you available? I need a quick favour while I'm in a meeting.\n\nThanks,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=fail dmarc=fail",
+        "Received": "from relay-2.suspicious-host.example ([203.0.113.47])"
+      }
+    }
+  },
+  {
+    "test_id": "auth-000003",
+    "category": "AUTH_FAILED",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "SPF/DKIM/DMARC failed spoof",
+    "description": "Header from-address spoofs an internal user, but SPF/DKIM/DMARC all fail — classic direct spoof.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "DKIM_FAIL",
+      "DMARC_FAIL",
+      "EXTERNAL_RELAY",
+      "SPF_FAIL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "AUTH_FAILED"
+    ],
+    "payload": {
+      "from": "ceo@acme.example",
+      "from_display": "Acme CEO",
+      "to": "david@acme.example",
+      "subject": "Quick favor",
+      "body_text": "Hi,\n\nAre you available? I need a quick favour while I'm in a meeting.\n\nThanks,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=fail dmarc=fail",
+        "Received": "from relay-3.suspicious-host.example ([203.0.113.171])"
+      }
+    }
+  },
+  {
+    "test_id": "auth-000004",
+    "category": "AUTH_FAILED",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "vi",
+    "attack_type": "SPF/DKIM/DMARC failed spoof",
+    "description": "Header from-address spoofs an internal user, but SPF/DKIM/DMARC all fail — classic direct spoof.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "DKIM_FAIL",
+      "DMARC_FAIL",
+      "EXTERNAL_RELAY",
+      "SPF_FAIL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "AUTH_FAILED"
+    ],
+    "payload": {
+      "from": "ceo@acme.example",
+      "from_display": "Acme CEO",
+      "to": "ellen@acme.example",
+      "subject": "Cần nhờ một việc",
+      "body_text": "Xin chào,\n\nBạn rảnh không? Tôi  đang họp và cần giúp một việc\n\nTrân trọng,\nPhòng IT",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=fail dmarc=fail",
+        "Received": "from relay-4.suspicious-host.example ([203.0.113.52])"
+      }
+    }
+  },
+  {
+    "test_id": "auth-000005",
+    "category": "AUTH_FAILED",
+    "expected_tier": "HighRisk",
+    "expected_score_range": [
+      70,
+      84
+    ],
+    "is_threat": true,
+    "difficulty": "medium",
+    "locale": "ja",
+    "attack_type": "SPF/DKIM/DMARC failed spoof",
+    "description": "Header from-address spoofs an internal user, but SPF/DKIM/DMARC all fail — classic direct spoof.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "DKIM_FAIL",
+      "DMARC_FAIL",
+      "EXTERNAL_RELAY",
+      "SPF_FAIL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "AUTH_FAILED"
+    ],
+    "payload": {
+      "from": "ceo@acme.example",
+      "from_display": "Acme CEO",
+      "to": "fionn@acme.example",
+      "subject": "お願いがあります",
+      "body_text": "お世話になっております,\n\n少し手伝ってもらえますか？会議中です\n\n敬具,\n購買部",
+      "headers": {
+        "Authentication-Results": "spf=fail dkim=fail dmarc=fail",
+        "Received": "from relay-5.suspicious-host.example ([203.0.113.243])"
+      }
+    }
+  },
+  {
+    "test_id": "auth-000006",
+    "category": "AUTH_FAILED",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "ESP transient DKIM tempfail",
+    "description": "Authenticated partner sender with a transient DKIM tempfail — should not be flagged as a spoof.",
+    "expected_signals": [
+      "AUTH_TEMPFAIL",
+      "KNOWN_PARTNER"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "notifications@partner.example",
+      "from_display": "Partner Notifications",
+      "to": "grace@acme.example",
+      "subject": "Weekly status digest",
+      "body_text": "Good morning,\n\nThis is a routine  status email. No action required.\n\nThanks,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=temperror dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "auth-000007",
+    "category": "AUTH_FAILED",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "ESP transient DKIM tempfail",
+    "description": "Authenticated partner sender with a transient DKIM tempfail — should not be flagged as a spoof.",
+    "expected_signals": [
+      "AUTH_TEMPFAIL",
+      "KNOWN_PARTNER"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "notifications@partner.example",
+      "from_display": "Partner Notifications",
+      "to": "hideo@acme.example",
+      "subject": "Weekly status digest",
+      "body_text": "Hello,\n\nThis is a routine sattus email. No action requIrEd.\n\nRegards,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=temperror dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "auth-000008",
+    "category": "AUTH_FAILED",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "ESP transient DKIM tempfail",
+    "description": "Authenticated partner sender with a transient DKIM tempfail — should not be flagged as a spoof.",
+    "expected_signals": [
+      "AUTH_TEMPFAIL",
+      "KNOWN_PARTNER"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "notifications@partner.example",
+      "from_display": "Partner Notifications",
+      "to": "alice@acme.example",
+      "subject": "Weekly status digest",
+      "body_text": "Hi,\n\nThis  is a Routine status email. No action required.\n\nhTank,s\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=temperror dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "auth-000009",
+    "category": "AUTH_FAILED",
+    "expected_tier": "Informational",
+    "expected_score_range": [
+      15,
+      29
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "th",
+    "attack_type": "ESP transient DKIM tempfail",
+    "description": "Authenticated partner sender with a transient DKIM tempfail — should not be flagged as a spoof.",
+    "expected_signals": [
+      "AUTH_TEMPFAIL",
+      "KNOWN_PARTNER"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "pass",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "notifications@partner.example",
+      "from_display": "Partner Notifications",
+      "to": "bob@acme.example",
+      "subject": "สรุปสถานะรายสัปดาห์",
+      "body_text": "เรียนคุณ,\n\nอีมเลสรุปสถานะปกติ  ไม่ต้องดำเนินการ\n\nขอบคุณครั,บ\nฝ่ายจัดซื้อ",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=temperror dmarc=pass"
+      }
+    }
+  },
+  {
+    "test_id": "internal-000000",
+    "category": "INTERNAL_TRUSTED",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "ko",
+    "attack_type": "Compromised internal mailbox wire request",
+    "description": "Internal-looking mailbox sending an out-of-band wire request with a personal-email reply-to.",
+    "expected_signals": [
+      "INTERNAL_ORIGIN",
+      "OUT_OF_BAND_URGENCY",
+      "REPLY_TO_EXTERNAL_FREEMAIL",
+      "WIRE_REQUEST"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "INTERNAL_TRUSTED"
+    ],
+    "payload": {
+      "from": "alice@acme.example",
+      "from_display": "alice",
+      "to": "finance@acme.example",
+      "subject": "긴급 송금 요청",
+      "body_text": "안녕하세요,\n\n오늘 신규 거래처로 즉시 송금이 필요해요\n\n확인은 개인 메일로 보내주세요. 회사 계정이 잠겨 있어요\n\n잘 부탁드립니다,\nIT팀",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "alice.9350@yahoo.com"
+      }
+    }
+  },
+  {
+    "test_id": "internal-000001",
+    "category": "INTERNAL_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Routine internal collaboration",
+    "description": "Intra-tenant message between known internal users — must bypass Tier 0 and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "INTERNAL_ORIGIN"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "bob@acme.example",
+      "from_display": "bob@acme",
+      "to": "bob@acme.example",
+      "subject": "Project plan",
+      "body_text": "Good morning,\n\nSharing notes from today's sync. Let me know if anything is missing.\n\nCheers,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "X-Tenant-Origin": "acme.example"
+      }
+    }
+  },
+  {
+    "test_id": "internal-000002",
+    "category": "INTERNAL_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Routine internal collaboration",
+    "description": "Intra-tenant message between known internal users — must bypass Tier 0 and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "INTERNAL_ORIGIN"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "carol@acme.example",
+      "from_display": "carol@acme",
+      "to": "carol@acme.example",
+      "subject": "Quarterly OKRs",
+      "body_text": "Dear team,\n\nSharing notes from today's sync. Let me know if anything is missing.\n\nRegards,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "X-Tenant-Origin": "acme.example"
+      }
+    }
+  },
+  {
+    "test_id": "internal-000003",
+    "category": "INTERNAL_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Routine internal collaboration",
+    "description": "Intra-tenant message between known internal users — must bypass Tier 0 and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "INTERNAL_ORIGIN"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "david@acme.example",
+      "from_display": "david@acme",
+      "to": "david@acme.example",
+      "subject": "Engineering update",
+      "body_text": "Hello,\n\nSharing notes from today's sync. Let me know if anything is missing.\n\nThanks,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "X-Tenant-Origin": "acme.example"
+      }
+    }
+  },
+  {
+    "test_id": "internal-000004",
+    "category": "INTERNAL_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "medium",
+    "locale": "vi",
+    "attack_type": "Routine internal collaboration",
+    "description": "Intra-tenant message between known internal users — must bypass Tier 0 and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "INTERNAL_ORIGIN"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "emma@acme.example",
+      "from_display": "emma@acme",
+      "to": "ellen@acme.example",
+      "subject": "Hiring loop",
+      "body_text": "Xin chào,\n\nChia sẻ ghi chú họp hôm  nay, có gì thiếu hãy báo lại\n\nTrân trọng,\nPhòng Mua hàng",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "X-Tenant-Origin": "acme.example"
+      }
+    }
+  },
+  {
+    "test_id": "internal-000005",
+    "category": "INTERNAL_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "medium",
+    "locale": "vi",
+    "attack_type": "Routine internal collaboration",
+    "description": "Intra-tenant message between known internal users — must bypass Tier 0 and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "INTERNAL_ORIGIN"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "frank@acme.example",
+      "from_display": "frank@acme",
+      "to": "fionn@acme.example",
+      "subject": "Meeting recap",
+      "body_text": "Xin chào,\n\nChia sẻ ghi chú họp hôm nay, có gì thiếu hãy báo lại\n\nKính chúc,\nPhòng Tài chính",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "X-Tenant-Origin": "acme.example"
+      }
+    }
+  },
+  {
+    "test_id": "internal-000006",
+    "category": "INTERNAL_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Routine internal collaboration",
+    "description": "Intra-tenant message between known internal users — must bypass Tier 0 and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "INTERNAL_ORIGIN"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "alice@acme.example",
+      "from_display": "alice@acme",
+      "to": "grace@acme.example",
+      "subject": "Project plan",
+      "body_text": "Dear team,\n\nSharing notes from today's sync. Let me know if anything is missing.\n\nCheers,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "X-Tenant-Origin": "acme.example"
+      }
+    }
+  },
+  {
+    "test_id": "internal-000007",
+    "category": "INTERNAL_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Routine internal collaboration",
+    "description": "Intra-tenant message between known internal users — must bypass Tier 0 and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "INTERNAL_ORIGIN"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "bob@acme.example",
+      "from_display": "bob@acme",
+      "to": "hideo@acme.example",
+      "subject": "Quarterly OKRs",
+      "body_text": "Dear team,\n\nShraing ntoes from today's sync.  Let me know if anything is MiSsInG.\n\nBest regards,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "X-Tenant-Origin": "acme.example"
+      }
+    }
+  },
+  {
+    "test_id": "internal-000008",
+    "category": "INTERNAL_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Routine internal collaboration",
+    "description": "Intra-tenant message between known internal users — must bypass Tier 0 and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "INTERNAL_ORIGIN"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "carol@acme.example",
+      "from_display": "carol@acme",
+      "to": "alice@acme.example",
+      "subject": "Engineering update",
+      "body_text": "Dear team,\n\nSharing notes FROm today's sync. Let me know if antyhing is missing.\n\nThanks,\nIT  Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "X-Tenant-Origin": "acme.example"
+      }
+    }
+  },
+  {
+    "test_id": "internal-000009",
+    "category": "INTERNAL_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "th",
+    "attack_type": "Routine internal collaboration",
+    "description": "Intra-tenant message between known internal users — must bypass Tier 0 and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "INTERNAL_ORIGIN"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "david@acme.example",
+      "from_display": "david@acme",
+      "to": "bob@acme.example",
+      "subject": "Hiring loop",
+      "body_text": "สวัสดีครับ,\n\nแนบบันทึกการประชุม  หากต้องเพิ่มเติมแจ้งได้\n\nด้วยวคามเคารพ,\nฝ่ายบัญชี",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "X-Tenant-Origin": "acme.example"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_t-000000",
+    "category": "VENDOR_TRUSTED",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Vendor account abused for predatory billing",
+    "description": "Otherwise-trusted vendor sending an abusive auto-renewal demand with payment redirected to a lookalike domain.",
+    "expected_signals": [
+      "KNOWN_VENDOR",
+      "PAYMENT_REDIRECT_URL",
+      "REPLY_TO_LOOKALIKE",
+      "URGENT_TONE"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "VENDOR_TRUSTED"
+    ],
+    "payload": {
+      "from": "billing@alpha-supply.com",
+      "from_display": "alpha-supply.com Billing",
+      "to": "alice@acme.example",
+      "subject": "Urgent: contract auto-renewal at 5x rate",
+      "body_text": "Dear team,\n\nPer the auto-renewal clause, your contract renews tomorrow at a 5x rate. Pay now to avoid the price change.\n\nPay: http://verify-account-now.tk/login\n\nThanks,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "Reply-To": "billing@a1pha-supply.com"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_t-000001",
+    "category": "VENDOR_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "easy",
+    "locale": "vi",
+    "attack_type": "Routine vendor billing receipt",
+    "description": "Allow-listed vendor's automated billing notification — must Tier 0 bypass and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "billing@beta-logistics.com",
+      "from_display": "beta-logistics.com Billing",
+      "to": "bob@acme.example",
+      "subject": "Biên lai đăng ký hàng tháng",
+      "body_text": "Kính gửi anh/chị,\n\nĐăng ký đã được gia hạn, không cần xử lý\n\nCảm ơn,\nPhòng Mua hàng",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@beta-logistics.com\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_t-000002",
+    "category": "VENDOR_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "easy",
+    "locale": "ja",
+    "attack_type": "Routine vendor billing receipt",
+    "description": "Allow-listed vendor's automated billing notification — must Tier 0 bypass and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "billing@gamma-print.com",
+      "from_display": "gamma-print.com Billing",
+      "to": "carol@acme.example",
+      "subject": "月次サブスク領収書",
+      "body_text": "お世話になっております,\n\nサブスクリプションが更新されました、対応不要です\n\n敬具,\n情報システム部",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@gamma-print.com\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_t-000003",
+    "category": "VENDOR_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Routine vendor billing receipt",
+    "description": "Allow-listed vendor's automated billing notification — must Tier 0 bypass and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "billing@delta-software.com",
+      "from_display": "delta-software.com Billing",
+      "to": "david@acme.example",
+      "subject": "Monthly subscription receipt",
+      "body_text": "Dear team,\n\nYour subscription has renewed. No action required.\n\nCheers,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@delta-software.com\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_t-000004",
+    "category": "VENDOR_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Routine vendor billing receipt",
+    "description": "Allow-listed vendor's automated billing notification — must Tier 0 bypass and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "billing@alpha-supply.com",
+      "from_display": "alpha-supply.com Billing",
+      "to": "ellen@acme.example",
+      "subject": "Monthly subscription receipt",
+      "body_text": "Hello,\n\nYour subscription has renewed. No action required.\n\nThanks,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@alpha-supply.com\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_t-000005",
+    "category": "VENDOR_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Routine vendor billing receipt",
+    "description": "Allow-listed vendor's automated billing notification — must Tier 0 bypass and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "billing@beta-logistics.com",
+      "from_display": "beta-logistics.com Billing",
+      "to": "fionn@acme.example",
+      "subject": "Monthly subscription receipt",
+      "body_text": "Hello,\n\nYour subscription has renewed. No action required.\n\nBest regards,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@beta-logistics.com\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_t-000006",
+    "category": "VENDOR_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Routine vendor billing receipt",
+    "description": "Allow-listed vendor's automated billing notification — must Tier 0 bypass and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "billing@gamma-print.com",
+      "from_display": "gamma-print.com Billing",
+      "to": "grace@acme.example",
+      "subject": "Monthly subscription receipt",
+      "body_text": "Dear team,\n\nYour subscription has  renewed. No action required.\n\nCheers,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@gamma-print.com\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_t-000007",
+    "category": "VENDOR_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Routine vendor billing receipt",
+    "description": "Allow-listed vendor's automated billing notification — must Tier 0 bypass and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "billing@delta-software.com",
+      "from_display": "delta-software.com Billing",
+      "to": "hideo@acme.example",
+      "subject": "Monthly subscription receipt",
+      "body_text": "Good morning,\n\nYour  subscription has renewed. No action rqeuired.\n\nCHEreS,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@delta-software.com\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_t-000008",
+    "category": "VENDOR_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Routine vendor billing receipt",
+    "description": "Allow-listed vendor's automated billing notification — must Tier 0 bypass and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "billing@alpha-supply.com",
+      "from_display": "alpha-supply.com Billing",
+      "to": "alice@acme.example",
+      "subject": "Monthly subscription receipt",
+      "body_text": "Dear team,\n\nYour subscription has renewed. No actoin required.\n\nREGArdS,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@alpha-supply.com\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "vendor_t-000009",
+    "category": "VENDOR_TRUSTED",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Routine vendor billing receipt",
+    "description": "Allow-listed vendor's automated billing notification — must Tier 0 bypass and classify Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "KNOWN_VENDOR",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "billing@beta-logistics.com",
+      "from_display": "beta-logistics.com Billing",
+      "to": "bob@acme.example",
+      "subject": "Monthly subscription receipt",
+      "body_text": "Hello,\n\nYuor subscription has renewed. No ACTion requierd.\n\nBest  regards,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@beta-logistics.com\u003e"
+      }
+    }
+  },
+  {
+    "test_id": "news-000000",
+    "category": "NEWSLETTER",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "zh",
+    "attack_type": "Hijacked newsletter platform credential harvest",
+    "description": "Newsletter platform pushing a credential-verification link to a lookalike domain — bulk-tier phish.",
+    "expected_signals": [
+      "BULK_PRECEDENCE",
+      "CREDENTIAL_LINK",
+      "EXTERNAL_LOGIN_DOMAIN"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "NEWSLETTER"
+    ],
+    "payload": {
+      "from": "offers@mailchimp.example",
+      "from_display": "Exclusive Member Offer",
+      "to": "alice@acme.example",
+      "subject": "领取会员福利需验证账户",
+      "body_text": "您好,\n\n作为订阅用户，请重新验证您的工作邮箱以解锁本月内容\n\nVerify: http://verify-account-now.tk/login\n\n祝好,\n财务部",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@mailchimp.example\u003e",
+        "Precedence": "bulk"
+      }
+    }
+  },
+  {
+    "test_id": "news-000001",
+    "category": "NEWSLETTER",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Routine bulk newsletter",
+    "description": "Authenticated, unsubscribable bulk mailer — must Tier 0 bypass and classify Informational/Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "BULK_PRECEDENCE",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "newsletter@sendgrid.example",
+      "from_display": "Industry Weekly",
+      "to": "bob@acme.example",
+      "subject": "Industry Weekly — top 5 stories",
+      "body_text": "Good morning,\n\nTop stories this week, curated for you.\n\nThanks,\nAccounts Payable",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@sendgrid.example\u003e",
+        "Precedence": "bulk"
+      }
+    }
+  },
+  {
+    "test_id": "news-000002",
+    "category": "NEWSLETTER",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Routine bulk newsletter",
+    "description": "Authenticated, unsubscribable bulk mailer — must Tier 0 bypass and classify Informational/Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "BULK_PRECEDENCE",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "newsletter@marketo.example",
+      "from_display": "Industry Weekly",
+      "to": "carol@acme.example",
+      "subject": "Industry Weekly — top 5 stories",
+      "body_text": "Dear team,\n\nTop stories this week, curated for you.\n\nThanks,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@marketo.example\u003e",
+        "Precedence": "bulk"
+      }
+    }
+  },
+  {
+    "test_id": "news-000003",
+    "category": "NEWSLETTER",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "Routine bulk newsletter",
+    "description": "Authenticated, unsubscribable bulk mailer — must Tier 0 bypass and classify Informational/Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "BULK_PRECEDENCE",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "newsletter@hubspot.example",
+      "from_display": "Industry Weekly",
+      "to": "david@acme.example",
+      "subject": "Industry Weekly — top 5 stories",
+      "body_text": "Hello,\n\nTop stories this week, curated for you.\n\nBest regards,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@hubspot.example\u003e",
+        "Precedence": "bulk"
+      }
+    }
+  },
+  {
+    "test_id": "news-000004",
+    "category": "NEWSLETTER",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Routine bulk newsletter",
+    "description": "Authenticated, unsubscribable bulk mailer — must Tier 0 bypass and classify Informational/Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "BULK_PRECEDENCE",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "newsletter@mailchimp.example",
+      "from_display": "Industry Weekly",
+      "to": "ellen@acme.example",
+      "subject": "Industry Weekly — top 5 stories",
+      "body_text": "Dear team,\n\nTop stories this week,  curated for you.\n\nCheers,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@mailchimp.example\u003e",
+        "Precedence": "bulk"
+      }
+    }
+  },
+  {
+    "test_id": "news-000005",
+    "category": "NEWSLETTER",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "medium",
+    "locale": "en",
+    "attack_type": "Routine bulk newsletter",
+    "description": "Authenticated, unsubscribable bulk mailer — must Tier 0 bypass and classify Informational/Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "BULK_PRECEDENCE",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "newsletter@sendgrid.example",
+      "from_display": "Industry Weekly",
+      "to": "fionn@acme.example",
+      "subject": "Industry Weekly — top 5 stories",
+      "body_text": "Hi,\n\nTop stories this week, curated for you.\n\nThanks,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@sendgrid.example\u003e",
+        "Precedence": "bulk"
+      }
+    }
+  },
+  {
+    "test_id": "news-000006",
+    "category": "NEWSLETTER",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "medium",
+    "locale": "ko",
+    "attack_type": "Routine bulk newsletter",
+    "description": "Authenticated, unsubscribable bulk mailer — must Tier 0 bypass and classify Informational/Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "BULK_PRECEDENCE",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "newsletter@marketo.example",
+      "from_display": "Industry Weekly",
+      "to": "grace@acme.example",
+      "subject": "주간 산업 소식",
+      "body_text": "팀 여러분께,\n\n이번 주 주요 기사 모음\n\n잘 부탁드립니다,\n구매팀",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@marketo.example\u003e",
+        "Precedence": "bulk"
+      }
+    }
+  },
+  {
+    "test_id": "news-000007",
+    "category": "NEWSLETTER",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Routine bulk newsletter",
+    "description": "Authenticated, unsubscribable bulk mailer — must Tier 0 bypass and classify Informational/Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "BULK_PRECEDENCE",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "newsletter@hubspot.example",
+      "from_display": "Industry Weekly",
+      "to": "hideo@acme.example",
+      "subject": "Industry Weekly — top 5 stories",
+      "body_text": "Hello,\n\nTop stories this week, curated for yo.u\n\nBest regards,\nprOcUREmEnT",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@hubspot.example\u003e",
+        "Precedence": "bulk"
+      }
+    }
+  },
+  {
+    "test_id": "news-000008",
+    "category": "NEWSLETTER",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Routine bulk newsletter",
+    "description": "Authenticated, unsubscribable bulk mailer — must Tier 0 bypass and classify Informational/Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "BULK_PRECEDENCE",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "newsletter@mailchimp.example",
+      "from_display": "Industry Weekly",
+      "to": "alice@acme.example",
+      "subject": "Industry Weekly — top 5 stories",
+      "body_text": "Good mroning,\n\nTop stories  this week, CUrATED for you.\n\nCheers,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@mailchimp.example\u003e",
+        "Precedence": "bulk"
+      }
+    }
+  },
+  {
+    "test_id": "news-000009",
+    "category": "NEWSLETTER",
+    "expected_tier": "Trusted",
+    "expected_score_range": [
+      0,
+      14
+    ],
+    "is_threat": false,
+    "difficulty": "hard",
+    "locale": "en",
+    "attack_type": "Routine bulk newsletter",
+    "description": "Authenticated, unsubscribable bulk mailer — must Tier 0 bypass and classify Informational/Trusted.",
+    "expected_signals": [
+      "AUTH_PASS",
+      "BULK_PRECEDENCE",
+      "LIST_UNSUBSCRIBE_PRESENT"
+    ],
+    "tier0_bypass": true,
+    "expected_tier1_verdict": "skip",
+    "expected_tier2_needed": false,
+    "expected_tier2_categories": [],
+    "payload": {
+      "from": "newsletter@sendgrid.example",
+      "from_display": "Industry Weekly",
+      "to": "bob@acme.example",
+      "subject": "Industry Weekly — top 5 stories",
+      "body_text": "Hello,\n\nTop stories htis week, curated for you.\n\nBset regards,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+        "List-Unsubscribe": "\u003cmailto:unsub@sendgrid.example\u003e",
+        "Precedence": "bulk"
+      }
+    }
+  }
+]
