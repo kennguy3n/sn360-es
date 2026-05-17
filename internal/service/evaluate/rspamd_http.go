@@ -180,11 +180,14 @@ func buildRawEmail(req dto.EvaluateRequest) []byte {
 	if req.Recipient != "" {
 		fmt.Fprintf(&b, "To: %s\r\n", sanitiseHeaderValue(req.Recipient))
 	}
-	for _, cc := range req.CC {
-		if cc == "" {
-			continue
-		}
-		fmt.Fprintf(&b, "Cc: %s\r\n", sanitiseHeaderValue(cc))
+	// RFC 5322 §3.6.3: the Cc field is a single header whose value
+	// is a comma-separated address-list. Emitting one Cc line per
+	// address (as we did initially) is technically a multi-field
+	// header and confuses some MTAs and Rspamd plugins that index
+	// the first Cc only. Sanitise each address, drop empties, and
+	// fold into one header line.
+	if cc := joinCCAddresses(req.CC); cc != "" {
+		fmt.Fprintf(&b, "Cc: %s\r\n", cc)
 	}
 	if req.Subject != "" {
 		fmt.Fprintf(&b, "Subject: %s\r\n", sanitiseHeaderValue(req.Subject))
@@ -203,6 +206,21 @@ func buildRawEmail(req dto.EvaluateRequest) []byte {
 // joining tokens an attacker tried to split.
 func sanitiseHeaderValue(s string) string {
 	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
+}
+
+// joinCCAddresses sanitises every entry in addrs and joins the
+// non-empty results with ", " so the caller can emit a single
+// RFC-5322 Cc header. Returns "" when every entry is blank.
+func joinCCAddresses(addrs []string) string {
+	out := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		s := sanitiseHeaderValue(a)
+		if s == "" {
+			continue
+		}
+		out = append(out, s)
+	}
+	return strings.Join(out, ", ")
 }
 
 // clampRspamdScore caps the score into a reasonable range. Rspamd's

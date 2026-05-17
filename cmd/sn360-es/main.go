@@ -907,10 +907,10 @@ func (a *application) StopConsumers(logger *slog.Logger) {
 	}
 	if a.batchOrch != nil {
 		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		if err := a.batchOrch.Stop(stopCtx); err != nil {
 			logger.Warn("sn360-es: tier1 batch orchestrator stop error", slog.Any("error", err))
 		}
-		cancel()
 		a.batchOrch = nil
 	}
 	a.subsMu.Lock()
@@ -1306,6 +1306,17 @@ func (a *application) handleSimulationSend(ctx context.Context, msg events.Messa
 			MailboxAlias: t.MailboxAlias,
 			DisplayName:  t.DisplayName,
 		})
+	}
+	// Warn when the envelope carried targets but the per-target
+	// filter dropped every one of them. Without this signal a
+	// misconfigured management-service publisher (e.g. omitting
+	// user_hash or mailbox_alias) shows up as silent no-ops with no
+	// hint that simulations were enqueued at all.
+	if len(env.Targets) > 0 && len(targets) == 0 {
+		a.logger.WarnContext(ctx, "sn360-es: education.simulation.send filter dropped all targets",
+			slog.String("campaign_id", env.CampaignID),
+			slog.Int("raw_targets", len(env.Targets)))
+		return nil
 	}
 	if _, err := a.simulationEng.SendSimulation(ctx, env.CampaignID, targets, env.Params); err != nil {
 		return fmt.Errorf("simulation.send: %w", err)
@@ -2009,26 +2020,13 @@ func (a tier0BatchAdapter) Apply(req dto.EvaluateRequest, signals dto.RiskSignal
 		CorrelationID: req.CorrelationID,
 		EvaluatedAt:   time.Now().UTC(),
 		Primary:       out.ForcedCategory,
-		Tier:          forcedBatchTierFor(out.ForcedCategory),
+		Tier:          evaluate.ForcedTierFor(out.ForcedCategory),
 		Tier0:         &out,
 	}
 	if out.Reason != "" {
 		res.ReasonCodes = append(res.ReasonCodes, out.Reason)
 	}
 	return res, true
-}
-
-// forcedBatchTierFor mirrors evaluate.forcedTierFor (unexported there).
-// Kept in sync with internal/service/evaluate/evaluator.go.
-func forcedBatchTierFor(c constant.Category) constant.Tier {
-	switch c {
-	case constant.CategoryInternalTrusted, constant.CategoryVendorTrusted:
-		return constant.TierTrusted
-	case constant.CategoryNewsletter:
-		return constant.TierInformational
-	default:
-		return constant.TierTrusted
-	}
 }
 
 // fallbackEvaluatorAdapter adapts *evaluate.Evaluator (which exposes

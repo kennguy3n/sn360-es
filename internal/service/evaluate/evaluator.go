@@ -166,7 +166,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 	if tier0.Bypass {
 		// Short-circuit straight to verdict.
 		res.Primary = tier0.ForcedCategory
-		res.Tier = forcedTierFor(tier0.ForcedCategory)
+		res.Tier = ForcedTierFor(tier0.ForcedCategory)
 		res.Score = 0
 		if tier0.Reason != "" {
 			res.ReasonCodes = append(res.ReasonCodes, tier0.Reason)
@@ -366,9 +366,11 @@ func tier2OutcomeLabel(out dto.Tier2Outcome) string {
 	return "flagged"
 }
 
-// forcedTierFor maps the categories the Tier 0 gate may force into the
-// matching tier label.
-func forcedTierFor(c constant.Category) constant.Tier {
+// ForcedTierFor maps the categories the Tier 0 gate may force into
+// the matching tier label. Exported so the batch-orchestrator wiring
+// in cmd/sn360-es/main.go can reuse the same mapping without
+// maintaining a hand-synced duplicate.
+func ForcedTierFor(c constant.Category) constant.Tier {
 	switch c {
 	case constant.CategoryInternalTrusted, constant.CategoryVendorTrusted:
 		return constant.TierTrusted

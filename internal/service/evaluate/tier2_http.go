@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -163,7 +164,17 @@ func (c *Tier2HTTPClient) Evaluate(ctx context.Context, req dto.EvaluateRequest,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return dto.Tier2Outcome{}, fmt.Errorf("tier2: HTTP %d", resp.StatusCode)
+		// Drain a bounded prefix of the body so operators see
+		// llama.cpp's error envelope (e.g. {"error":{"message":
+		// "..."}}) instead of a bare status code. We cap the
+		// read so a misbehaving server cannot bloat error
+		// messages with a multi-MB payload.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		snippet := strings.TrimSpace(string(body))
+		if snippet == "" {
+			return dto.Tier2Outcome{}, fmt.Errorf("tier2: HTTP %d", resp.StatusCode)
+		}
+		return dto.Tier2Outcome{}, fmt.Errorf("tier2: HTTP %d: %s", resp.StatusCode, snippet)
 	}
 
 	var parsed tier2ChatResponse

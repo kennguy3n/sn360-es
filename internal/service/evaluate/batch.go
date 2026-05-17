@@ -129,7 +129,11 @@ func NewBatchOrchestrator(cfg BatchOrchestratorConfig) (*BatchOrchestrator, erro
 		cfg.MaxWait = 500 * time.Millisecond
 	}
 	if cfg.ResultSubject == "" {
-		cfg.ResultSubject = "es.action.banner"
+		// Match the single-message handleEvaluateRequest publish
+		// target so the downstream consumer fan-out (management-
+		// persist, education-trigger, ingestion-action) sees batch
+		// verdicts on the same subject as per-message verdicts.
+		cfg.ResultSubject = "es.evaluate.result"
 	}
 	if (cfg.Thresholds == tier1.Thresholds{}) {
 		cfg.Thresholds = tier1.DefaultThresholds()
