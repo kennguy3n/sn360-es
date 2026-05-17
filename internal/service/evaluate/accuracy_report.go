@@ -171,9 +171,11 @@ func (r *AccuracyReport) AddObservation(predictedCat, expectedCat constant.Categ
 
 	// Track FP / FN rates against benign / threat ground truth. We
 	// classify a verdict as "raised" when the predicted tier is
-	// Warning or higher; a verdict as "trusted" when it lands at
-	// Trusted.
-	predRaised := predictedTier.Severity() >= constant.TierWarning.Severity()
+	// Caution or higher (i.e. anything above the Trusted /
+	// Informational floor surfaces a visible banner / label to the
+	// user, per ARCHITECTURE.md §8.2); a verdict as "trusted" when
+	// it lands at Trusted.
+	predRaised := predictedTier.Severity() >= constant.TierCaution.Severity()
 	predTrusted := predictedTier == constant.TierTrusted
 	overall := r.Overall
 	if threat {
