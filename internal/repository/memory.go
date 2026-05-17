@@ -24,6 +24,7 @@ func NewInMemoryRegistry() *Registry {
 		Vendors:                newMemoryVendors(),
 		EvaluationResults:      newMemoryEvalResults(),
 		CommunicationHistories: newMemoryCommHistory(),
+		FeedbackEvents:         newMemoryFeedbackEvents(),
 	}
 }
 
@@ -470,4 +471,61 @@ func (m *memoryCommHistory) Get(_ context.Context, tenantID string, senderHash, 
 		return nil, ErrNotFound
 	}
 	return &h, nil
+}
+
+// --- feedback events ----------------------------------------------------
+
+type memoryFeedbackEvents struct {
+	mu   sync.RWMutex
+	rows []FeedbackEvent
+}
+
+func newMemoryFeedbackEvents() *memoryFeedbackEvents {
+	return &memoryFeedbackEvents{}
+}
+
+func (m *memoryFeedbackEvents) Create(_ context.Context, e *FeedbackEvent) error {
+	if e == nil {
+		return ErrNotFound
+	}
+	if e.ID == "" {
+		e.ID = uuid.NewString()
+	}
+	now := time.Now().UTC()
+	if e.CreatedAt.IsZero() {
+		e.CreatedAt = now
+	}
+	if e.OccurredAt.IsZero() {
+		e.OccurredAt = now
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rows = append(m.rows, *e)
+	return nil
+}
+
+func (m *memoryFeedbackEvents) Counts(_ context.Context, tenantID string, start, end time.Time) (FeedbackCounts, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var c FeedbackCounts
+	for _, r := range m.rows {
+		if r.TenantID != tenantID {
+			continue
+		}
+		if !start.IsZero() && r.OccurredAt.Before(start) {
+			continue
+		}
+		if !end.IsZero() && !r.OccurredAt.Before(end) {
+			continue
+		}
+		switch r.Action {
+		case "report_phishing":
+			c.ReportedPhishing++
+		case "mark_safe":
+			c.MarkedSafe++
+		case "trust_sender":
+			c.TrustedSender++
+		}
+	}
+	return c, nil
 }

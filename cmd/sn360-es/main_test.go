@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,8 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/config"
 	"github.com/kennguy3n/sn360-es/internal/constant"
 	"github.com/kennguy3n/sn360-es/internal/dto"
+	"github.com/kennguy3n/sn360-es/internal/repository"
+	"github.com/kennguy3n/sn360-es/internal/service/action"
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
 	"github.com/kennguy3n/sn360-es/internal/service/education"
 	"github.com/kennguy3n/sn360-es/internal/service/predict"
@@ -384,4 +387,240 @@ func containsStatus(set []int, got int) bool {
 		}
 	}
 	return false
+}
+
+// TestMemoryQuarantineStore exercises the in-memory fallback for
+// action.QuarantineStore: round-trip, TTL expiry, Del, and the
+// "missing key returns ok=false without error" contract.
+func TestMemoryQuarantineStore(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryQuarantineStore()
+	if err := store.Set(ctx, "k1", "v1", time.Minute); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if v, ok, err := store.Get(ctx, "k1"); err != nil || !ok || v != "v1" {
+		t.Fatalf("Get k1: v=%q ok=%v err=%v", v, ok, err)
+	}
+	if _, ok, err := store.Get(ctx, "missing"); err != nil || ok {
+		t.Fatalf("Get missing: ok=%v err=%v", ok, err)
+	}
+	// TTL expiry path: 1ns is in the past on any real clock by the
+	// time Get runs, so the store must report ok=false and evict.
+	if err := store.Set(ctx, "k2", "v2", time.Nanosecond); err != nil {
+		t.Fatalf("Set k2: %v", err)
+	}
+	time.Sleep(time.Millisecond)
+	if _, ok, _ := store.Get(ctx, "k2"); ok {
+		t.Fatal("Get k2: expected expiry to evict")
+	}
+	if err := store.Set(ctx, "k3", "v3", 0); err != nil {
+		t.Fatalf("Set k3: %v", err)
+	}
+	if err := store.Del(ctx, "k3", "missing"); err != nil {
+		t.Fatalf("Del: %v", err)
+	}
+	if _, ok, _ := store.Get(ctx, "k3"); ok {
+		t.Fatal("Get k3: expected deleted")
+	}
+}
+
+// TestLatestVerdictReevaluator_NoRepo asserts the conservative
+// fallback when no EvaluationResults repository is wired: every
+// reevaluate request returns a Blocked tier so the release flow
+// refuses to restore messages we cannot re-verify.
+func TestLatestVerdictReevaluator_NoRepo(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	r := newLatestVerdictReevaluator(nil, logger)
+	got, err := r.Reevaluate(context.Background(), "t-1", "msg-1")
+	if err != nil {
+		t.Fatalf("Reevaluate: %v", err)
+	}
+	if got.Tier != constant.TierBlocked {
+		t.Errorf("tier: got %q, want %q (still-blocked fallback)", got.Tier, constant.TierBlocked)
+	}
+	if got.TenantID != "t-1" || got.MessageID != "msg-1" {
+		t.Errorf("identifiers passed through: %+v", got)
+	}
+}
+
+// TestLatestVerdictReevaluator_HappyPath round-trips a stored
+// EvaluationResult through the adapter and verifies the projection
+// onto dto.EvaluateResult preserves tier, score, primary, secondary,
+// reason codes, and the evaluated_at timestamp.
+func TestLatestVerdictReevaluator_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	repos := repository.NewInMemoryRegistry()
+	evaluatedAt := time.Date(2026, 5, 17, 0, 0, 0, 0, time.UTC)
+	row := &repository.EvaluationResult{
+		TenantID:      "t-1",
+		MessageIDHash: []byte("msg-1"),
+		CorrelationID: "corr-1",
+		Score:         62,
+		Tier:          string(constant.TierWarning),
+		Primary:       string(constant.CategoryCredentialHarvesting),
+		Secondary:     []string{string(constant.CategorySuspiciousURL)},
+		ReasonCodes:   []string{"lookalike_domain"},
+		Degraded:      true,
+		EvaluatedAt:   evaluatedAt,
+	}
+	if err := repos.EvaluationResults.Create(ctx, row); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	r := newLatestVerdictReevaluator(repos, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	got, err := r.Reevaluate(ctx, "t-1", "msg-1")
+	if err != nil {
+		t.Fatalf("Reevaluate: %v", err)
+	}
+	if got.Tier != constant.TierWarning {
+		t.Errorf("tier: got %q, want %q", got.Tier, constant.TierWarning)
+	}
+	if got.Score != 62 {
+		t.Errorf("score: got %d, want 62", got.Score)
+	}
+	if got.Primary != constant.CategoryCredentialHarvesting {
+		t.Errorf("primary: got %q", got.Primary)
+	}
+	if len(got.Secondary) != 1 || got.Secondary[0] != constant.CategorySuspiciousURL {
+		t.Errorf("secondary: %v", got.Secondary)
+	}
+	if len(got.ReasonCodes) != 1 || got.ReasonCodes[0] != "lookalike_domain" {
+		t.Errorf("reason_codes: %v", got.ReasonCodes)
+	}
+	if !got.Degraded {
+		t.Error("degraded: expected true")
+	}
+	if !got.EvaluatedAt.Equal(evaluatedAt) {
+		t.Errorf("evaluated_at: got %v, want %v", got.EvaluatedAt, evaluatedAt)
+	}
+}
+
+// TestLatestVerdictReevaluator_NotFound asserts that a missing row
+// also falls back to the conservative Blocked tier — refusing the
+// release is safer than guessing when we have no verdict on file.
+func TestLatestVerdictReevaluator_NotFound(t *testing.T) {
+	repos := repository.NewInMemoryRegistry()
+	r := newLatestVerdictReevaluator(repos, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	got, err := r.Reevaluate(context.Background(), "t-1", "msg-missing")
+	if err != nil {
+		t.Fatalf("Reevaluate: %v", err)
+	}
+	if got.Tier != constant.TierBlocked {
+		t.Errorf("tier: got %q, want %q (no-row fallback)", got.Tier, constant.TierBlocked)
+	}
+}
+
+// stubMessageWith is a stubMessage with a settable payload, used to
+// drive the feedback-persist handler directly.
+type stubMessageWith struct {
+	payload []byte
+}
+
+func (m stubMessageWith) Data() []byte               { return m.payload }
+func (m stubMessageWith) Subject() string            { return "es.action.feedback.report_phishing" }
+func (m stubMessageWith) Headers() map[string]string { return nil }
+func (m stubMessageWith) Ack() error                 { return nil }
+func (m stubMessageWith) Nak(time.Duration) error    { return nil }
+func (m stubMessageWith) Metadata() (events.MessageMetadata, error) {
+	return events.MessageMetadata{}, nil
+}
+
+// TestHandleFeedbackPersist_HappyPath verifies that a valid
+// FeedbackEvent payload is decoded, projected onto a
+// repository.FeedbackEvent row, and persisted via the wired
+// FeedbackEventRepository.
+func TestHandleFeedbackPersist_HappyPath(t *testing.T) {
+	ctx := context.Background()
+	repos := repository.NewInMemoryRegistry()
+	app := newTestApp(t)
+	app.repos = repos
+
+	occurred := time.Date(2026, 5, 17, 12, 0, 0, 0, time.UTC)
+	payload, err := json.Marshal(action.FeedbackEvent{
+		TenantID:             "t-1",
+		PseudonymizedMessage: "msg-1",
+		Action:               action.FeedbackReportPhishing,
+		Tier:                 string(constant.TierWarning),
+		OccurredAt:           occurred,
+		CorrelationID:        "corr-1",
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := app.handleFeedbackPersist(ctx, stubMessageWith{payload: payload}); err != nil {
+		t.Fatalf("handleFeedbackPersist: %v", err)
+	}
+	counts, err := repos.FeedbackEvents.Counts(ctx, "t-1",
+		occurred.Add(-time.Hour), occurred.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Counts: %v", err)
+	}
+	if counts.ReportedPhishing != 1 || counts.MarkedSafe != 0 || counts.TrustedSender != 0 {
+		t.Errorf("counts: %+v", counts)
+	}
+}
+
+// TestHandleFeedbackPersist_DropsMalformed pins the poison-message
+// contract: a malformed payload or one missing required fields must
+// log + return nil so the bus does not redeliver forever.
+func TestHandleFeedbackPersist_DropsMalformed(t *testing.T) {
+	ctx := context.Background()
+	repos := repository.NewInMemoryRegistry()
+	app := newTestApp(t)
+	app.repos = repos
+
+	cases := []struct {
+		name    string
+		payload []byte
+	}{
+		{name: "invalid json", payload: []byte("not json")},
+		{name: "missing tenant", payload: mustJSON(t, action.FeedbackEvent{
+			PseudonymizedMessage: "m", Action: action.FeedbackMarkSafe,
+		})},
+		{name: "missing message id", payload: mustJSON(t, action.FeedbackEvent{
+			TenantID: "t", Action: action.FeedbackMarkSafe,
+		})},
+		{name: "unknown action", payload: mustJSON(t, action.FeedbackEvent{
+			TenantID: "t", PseudonymizedMessage: "m", Action: action.FeedbackAction("bogus"),
+		})},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := app.handleFeedbackPersist(ctx, stubMessageWith{payload: tc.payload}); err != nil {
+				t.Fatalf("handleFeedbackPersist: %v (expected nil)", err)
+			}
+		})
+	}
+	now := time.Now().UTC()
+	counts, err := repos.FeedbackEvents.Counts(ctx, "t",
+		now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Counts: %v", err)
+	}
+	if counts.ReportedPhishing+counts.MarkedSafe+counts.TrustedSender != 0 {
+		t.Errorf("expected no rows persisted, got %+v", counts)
+	}
+}
+
+// TestHandleFeedbackPersist_NoRepo verifies the handler short-circuits
+// to nil when the application has no FeedbackEvents repository wired.
+// This is the dev / no-Postgres path and must never error.
+func TestHandleFeedbackPersist_NoRepo(t *testing.T) {
+	app := newTestApp(t)
+	if err := app.handleFeedbackPersist(context.Background(), stubMessageWith{
+		payload: mustJSON(t, action.FeedbackEvent{
+			TenantID: "t", PseudonymizedMessage: "m",
+			Action: action.FeedbackReportPhishing,
+		}),
+	}); err != nil {
+		t.Fatalf("handleFeedbackPersist: %v (expected nil)", err)
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return b
 }

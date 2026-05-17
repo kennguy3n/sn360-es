@@ -279,16 +279,49 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		app.feedbackSvc = action.NewFeedbackService(logger, app.jwtIssuer, eventBus, nil)
 	}
 
-	// Release service for /v1/quarantine/release. The synchronous
-	// quarantine + re-evaluator are not wired in this binary yet; the
-	// release service still publishes audit events through the bus.
-	if rsvc, rerr := action.NewReleaseService(action.ReleaseConfig{
-		Logger:    logger,
-		Publisher: eventBus,
-	}); rerr == nil {
-		app.releaseSvc = rsvc
+	// Quarantine service + release service for /v1/quarantine/release.
+	//
+	// The quarantine service needs a store (redis if available, in-memory
+	// fallback so tests + dev still work) and an encryptor (the same
+	// envelope-encryption ladder we use for the URL pre-image store).
+	// Provider implementations (Gmail, O365) live elsewhere and are
+	// wired in by deployment-specific binaries; when no providers are
+	// registered, the service still serves LookupReference / persist
+	// paths but Release() rejects with "no provider registered".
+	if qencryptor, eerr := buildURLEncryptor(cfg, logger); eerr != nil {
+		logger.Warn("sn360-es: quarantine encryptor init failed", slog.Any("error", eerr))
 	} else {
-		logger.Warn("sn360-es: release service init failed", slog.Any("error", rerr))
+		qstore := newQuarantineStore(app.redis)
+		qsvc, qerr := action.NewQuarantineService(action.QuarantineConfig{
+			Logger:    logger,
+			Store:     qstore,
+			Encryptor: qencryptor,
+			Publisher: eventBus,
+		})
+		if qerr != nil {
+			logger.Warn("sn360-es: quarantine service init failed", slog.Any("error", qerr))
+		} else {
+			// Reevaluator looks up the most recent evaluation_result
+			// for (tenant, pseudo_message_id). The repository layer is
+			// the source of truth for the latest verdict; the
+			// asynchronous evaluator updates it whenever a fresh
+			// scoring pass completes. When no repos are wired we fall
+			// back to a conservative "still blocked" verdict so the
+			// release flow does not accidentally restore messages
+			// without re-checking them.
+			reevaluator := newLatestVerdictReevaluator(app.repos, logger)
+			rsvc, rerr := action.NewReleaseService(action.ReleaseConfig{
+				Logger:      logger,
+				Quarantine:  qsvc,
+				Reevaluator: reevaluator,
+				Publisher:   eventBus,
+			})
+			if rerr == nil {
+				app.releaseSvc = rsvc
+			} else {
+				logger.Warn("sn360-es: release service init failed", slog.Any("error", rerr))
+			}
+		}
 	}
 
 	// URL rewriter for outbound mail. Skipped when Redis is missing
@@ -349,12 +382,19 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	app.recipientSvc = predict.NewRecipientService(predict.RecipientServiceConfig{})
 	app.openSvc = predict.NewOpenService(predict.OpenServiceConfig{})
 
-	// Escalation service uses the in-memory ticket store by default;
-	// production wires a Postgres-backed implementation through the
-	// repository registry once the management API merges.
+	// Escalation service. Tickets land in escalation_tickets when a
+	// Postgres connection is available so the dashboard FalseRates
+	// aggregate has rows to count; otherwise the in-memory store keeps
+	// the HTTP path working in dev / test.
+	var ticketStore agent.TicketStore
+	if app.pgDB != nil {
+		ticketStore = agent.NewPostgresTicketStore(app.pgDB)
+	} else {
+		ticketStore = agent.NewMemoryTicketStore()
+	}
 	if esc, eerr := agent.NewEscalationService(agent.EscalationServiceConfig{
 		Publisher: escalationPublisherAdapter{bus: eventBus},
-		Store:     agent.NewMemoryTicketStore(),
+		Store:     ticketStore,
 		Logger:    logger,
 	}); eerr == nil {
 		app.escalationSvc = esc
@@ -370,7 +410,11 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	// back to the deterministic narrative — wiring the support agent
 	// here would couple it to the LLM tier, which is optional.
 	if app.pgDB != nil {
-		src, serr := dashboard.NewPostgresSource(app.pgDB)
+		cfg := dashboard.PostgresSourceConfig{}
+		if app.repos != nil && app.repos.FeedbackEvents != nil {
+			cfg.Feedback = feedbackCountsAdapter{repo: app.repos.FeedbackEvents}
+		}
+		src, serr := dashboard.NewPostgresSourceWithConfig(app.pgDB, cfg)
 		if serr != nil {
 			logger.Warn("sn360-es: dashboard metrics source init failed",
 				slog.Any("error", serr))
@@ -453,6 +497,25 @@ func (a *application) StartConsumers(ctx context.Context) error {
 		}
 	}
 
+	// es.action.feedback.> → persist each verified banner click into
+	// feedback_events (migration 0002) so the dashboard FeedbackStats
+	// aggregate has rows to count. Critical only when both the
+	// repository layer and the feedback service are wired; in dev or
+	// when Postgres is missing the dashboard surfaces zero counts and
+	// the bus messages flow through unblocked.
+	if a.repos != nil && a.repos.FeedbackEvents != nil {
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.feedback.>", a.handleFeedbackPersist,
+			events.WithDurable("feedback-persist"),
+			events.WithMaxDeliver(3))
+		if err != nil {
+			a.logger.Error("sn360-es: subscribe action.feedback (feedback-persist) failed",
+				slog.Any("error", err))
+			critErrs = append(critErrs, fmt.Errorf("feedback-persist: %w", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
 	// DLQ processor — best-effort. It watches the canonical DLQ
 	// subjects and logs each failed message; without it the system
 	// still functions, the operator just loses the structured failed-
@@ -520,6 +583,46 @@ func (a *application) handleEvaluateResult(ctx context.Context, msg events.Messa
 	row := evaluateResultRow(res, msg)
 	if err := a.repos.EvaluationResults.Create(ctx, row); err != nil {
 		return fmt.Errorf("persist evaluate.result: %w", err)
+	}
+	return nil
+}
+
+// handleFeedbackPersist writes each verified banner click into the
+// feedback_events table so the dashboard FeedbackStats aggregate has
+// rows to count. The handler is keyed by subject suffix (the action)
+// so a single subscription on `es.action.feedback.>` covers all three
+// action types. We deliberately drop malformed payloads (poison
+// messages) so the bus does not redeliver them forever.
+func (a *application) handleFeedbackPersist(ctx context.Context, msg events.Message) error {
+	if a.repos == nil || a.repos.FeedbackEvents == nil {
+		return nil
+	}
+	var evt action.FeedbackEvent
+	if err := json.Unmarshal(msg.Data(), &evt); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: action.feedback unmarshal failed",
+			slog.Any("error", err))
+		return nil
+	}
+	if evt.TenantID == "" || evt.PseudonymizedMessage == "" || !evt.Action.Valid() {
+		a.logger.WarnContext(ctx, "sn360-es: action.feedback missing required fields",
+			slog.String("tenant_id", evt.TenantID),
+			slog.String("action", string(evt.Action)))
+		return nil
+	}
+	occurred := evt.OccurredAt
+	if occurred.IsZero() {
+		occurred = time.Now().UTC()
+	}
+	row := &repository.FeedbackEvent{
+		TenantID:        evt.TenantID,
+		PseudoMessageID: evt.PseudonymizedMessage,
+		Action:          string(evt.Action),
+		Tier:            evt.Tier,
+		CorrelationID:   evt.CorrelationID,
+		OccurredAt:      occurred,
+	}
+	if err := a.repos.FeedbackEvents.Create(ctx, row); err != nil {
+		return fmt.Errorf("persist action.feedback: %w", err)
 	}
 	return nil
 }
@@ -795,6 +898,177 @@ func (s redisURLStore) Set(ctx context.Context, key, value string, ttl time.Dura
 
 func (s redisURLStore) Get(ctx context.Context, key string) (string, bool, error) {
 	return s.client.Get(ctx, key)
+}
+
+// redisQuarantineStore adapts redis.Client to action.QuarantineStore.
+// The quarantine service writes hex-encoded encrypted records keyed by
+// QuarantineKey(tenant, pseudo_message_id).
+type redisQuarantineStore struct{ client *redis.Client }
+
+func (s redisQuarantineStore) Set(ctx context.Context, key, value string, ttl time.Duration) error {
+	return s.client.Set(ctx, key, value, ttl)
+}
+
+func (s redisQuarantineStore) Get(ctx context.Context, key string) (string, bool, error) {
+	return s.client.Get(ctx, key)
+}
+
+func (s redisQuarantineStore) Del(ctx context.Context, keys ...string) error {
+	return s.client.Del(ctx, keys...)
+}
+
+// memoryQuarantineStore is the in-memory fallback used when Redis is
+// not configured. It is goroutine-safe and respects the TTL parameter
+// so dev / unit-test behaviour matches the redis path.
+type memoryQuarantineStore struct {
+	mu   sync.Mutex
+	rows map[string]memoryQuarantineEntry
+}
+
+type memoryQuarantineEntry struct {
+	value   string
+	expires time.Time
+}
+
+func newMemoryQuarantineStore() *memoryQuarantineStore {
+	return &memoryQuarantineStore{rows: map[string]memoryQuarantineEntry{}}
+}
+
+func (m *memoryQuarantineStore) Set(_ context.Context, key, value string, ttl time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var expires time.Time
+	if ttl > 0 {
+		expires = time.Now().Add(ttl)
+	}
+	m.rows[key] = memoryQuarantineEntry{value: value, expires: expires}
+	return nil
+}
+
+func (m *memoryQuarantineStore) Get(_ context.Context, key string) (string, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.rows[key]
+	if !ok {
+		return "", false, nil
+	}
+	if !entry.expires.IsZero() && time.Now().After(entry.expires) {
+		delete(m.rows, key)
+		return "", false, nil
+	}
+	return entry.value, true, nil
+}
+
+func (m *memoryQuarantineStore) Del(_ context.Context, keys ...string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, k := range keys {
+		delete(m.rows, k)
+	}
+	return nil
+}
+
+// newQuarantineStore returns redisQuarantineStore when a Redis client
+// is available; otherwise the in-memory fallback so QuarantineService
+// still satisfies its non-nil-store invariant.
+func newQuarantineStore(client *redis.Client) action.QuarantineStore {
+	if client != nil {
+		return redisQuarantineStore{client: client}
+	}
+	return newMemoryQuarantineStore()
+}
+
+// latestVerdictReevaluator implements action.QuarantineReevaluator by
+// reading the most recent evaluation_result for the (tenant,
+// pseudo_message_id) tuple from the repository. The asynchronous
+// evaluator updates the row every time it scores a message, so this
+// adapter always returns the freshest verdict the management plane
+// has produced. When no repository or no row is available we return
+// a conservative "still blocked" verdict so the release flow does
+// not accidentally restore a message we no longer know anything
+// about.
+type latestVerdictReevaluator struct {
+	repo   repository.EvaluationResultRepository
+	logger *slog.Logger
+}
+
+func newLatestVerdictReevaluator(repos *repository.Registry, logger *slog.Logger) *latestVerdictReevaluator {
+	var r repository.EvaluationResultRepository
+	if repos != nil {
+		r = repos.EvaluationResults
+	}
+	return &latestVerdictReevaluator{repo: r, logger: logger}
+}
+
+// Reevaluate satisfies action.QuarantineReevaluator. It looks the
+// pseudonymised message up by hash; the management evaluator hashes
+// raw message-ids the same way (the privacy-safe hash IS the
+// pseudonymised id), so a single byte cast bridges them. We do not
+// re-run the tier 0/1/2 pipeline here — doing so would couple the
+// release endpoint to the evaluator's import graph for no benefit;
+// the latest verdict on file is the authoritative source.
+func (r *latestVerdictReevaluator) Reevaluate(ctx context.Context, tenantID, pseudoMessageID string) (dto.EvaluateResult, error) {
+	if r.repo == nil {
+		if r.logger != nil {
+			r.logger.WarnContext(ctx,
+				"release: no evaluation_results repo; returning conservative still-blocked verdict",
+				slog.String("tenant_id", tenantID),
+			)
+		}
+		return dto.EvaluateResult{
+			TenantID:  tenantID,
+			MessageID: pseudoMessageID,
+			Tier:      constant.TierBlocked,
+		}, nil
+	}
+	row, err := r.repo.GetByMessageHash(ctx, tenantID, []byte(pseudoMessageID))
+	if errors.Is(err, repository.ErrNotFound) {
+		// No row means we have not re-scored the message since it
+		// was quarantined. Refuse the release to be safe.
+		return dto.EvaluateResult{
+			TenantID:  tenantID,
+			MessageID: pseudoMessageID,
+			Tier:      constant.TierBlocked,
+		}, nil
+	}
+	if err != nil {
+		return dto.EvaluateResult{}, fmt.Errorf("reevaluator: lookup verdict: %w", err)
+	}
+	secondary := make([]constant.Category, 0, len(row.Secondary))
+	for _, c := range row.Secondary {
+		secondary = append(secondary, constant.Category(c))
+	}
+	return dto.EvaluateResult{
+		TenantID:      row.TenantID,
+		MessageID:     pseudoMessageID,
+		CorrelationID: row.CorrelationID,
+		Score:         row.Score,
+		Tier:          constant.Tier(row.Tier),
+		Primary:       constant.Category(row.Primary),
+		Secondary:     secondary,
+		ReasonCodes:   append([]string(nil), row.ReasonCodes...),
+		Degraded:      row.Degraded,
+		EvaluatedAt:   row.EvaluatedAt,
+	}, nil
+}
+
+// feedbackCountsAdapter bridges repository.FeedbackEventRepository to
+// the dashboard.FeedbackCountsReader contract so the dashboard package
+// does not need to import the repository package directly.
+type feedbackCountsAdapter struct {
+	repo repository.FeedbackEventRepository
+}
+
+func (a feedbackCountsAdapter) Counts(ctx context.Context, tenantID string, start, end time.Time) (dashboard.FeedbackCounts, error) {
+	counts, err := a.repo.Counts(ctx, tenantID, start, end)
+	if err != nil {
+		return dashboard.FeedbackCounts{}, err
+	}
+	return dashboard.FeedbackCounts{
+		ReportedPhishing: counts.ReportedPhishing,
+		MarkedSafe:       counts.MarkedSafe,
+		TrustedSender:    counts.TrustedSender,
+	}, nil
 }
 
 // passthroughEncryptor is a last-resort URLEncryptor that returns the

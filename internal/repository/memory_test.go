@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestMemoryTenants(t *testing.T) {
@@ -178,5 +179,75 @@ func TestMemoryGroups(t *testing.T) {
 	gs, _ := r.Groups.List(ctx, "tx")
 	if len(gs) != 1 {
 		t.Fatalf("groups: %d", len(gs))
+	}
+}
+
+func TestMemoryFeedbackEvents(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+	now := time.Now().UTC()
+	rows := []*FeedbackEvent{
+		{TenantID: "tx", PseudoMessageID: "m1", Action: "report_phishing", Tier: "HighRisk", OccurredAt: now.Add(-30 * time.Minute)},
+		{TenantID: "tx", PseudoMessageID: "m2", Action: "report_phishing", Tier: "Warning", OccurredAt: now.Add(-15 * time.Minute)},
+		{TenantID: "tx", PseudoMessageID: "m3", Action: "mark_safe", Tier: "Warning", OccurredAt: now.Add(-10 * time.Minute)},
+		{TenantID: "tx", PseudoMessageID: "m4", Action: "trust_sender", Tier: "Caution", OccurredAt: now.Add(-5 * time.Minute)},
+		// Outside the window — must be excluded.
+		{TenantID: "tx", PseudoMessageID: "m5", Action: "report_phishing", Tier: "HighRisk", OccurredAt: now.Add(-90 * time.Minute)},
+		// Different tenant — must be excluded.
+		{TenantID: "ty", PseudoMessageID: "m6", Action: "report_phishing", OccurredAt: now.Add(-2 * time.Minute)},
+	}
+	for _, row := range rows {
+		if err := r.FeedbackEvents.Create(ctx, row); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if row.ID == "" {
+			t.Fatal("expected ID populated on Create")
+		}
+		if row.CreatedAt.IsZero() {
+			t.Fatal("expected CreatedAt populated on Create")
+		}
+	}
+	counts, err := r.FeedbackEvents.Counts(ctx, "tx", now.Add(-60*time.Minute), now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Counts: %v", err)
+	}
+	if counts.ReportedPhishing != 2 {
+		t.Fatalf("reported_phishing: got=%d want=2", counts.ReportedPhishing)
+	}
+	if counts.MarkedSafe != 1 {
+		t.Fatalf("marked_safe: got=%d want=1", counts.MarkedSafe)
+	}
+	if counts.TrustedSender != 1 {
+		t.Fatalf("trusted_sender: got=%d want=1", counts.TrustedSender)
+	}
+}
+
+func TestMemoryFeedbackEvents_TenantIsolation(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+	now := time.Now().UTC()
+	if err := r.FeedbackEvents.Create(ctx, &FeedbackEvent{
+		TenantID: "tenant-a", PseudoMessageID: "m", Action: "mark_safe", OccurredAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.FeedbackEvents.Create(ctx, &FeedbackEvent{
+		TenantID: "tenant-b", PseudoMessageID: "m", Action: "report_phishing", OccurredAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.FeedbackEvents.Counts(ctx, "tenant-a", now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MarkedSafe != 1 || got.ReportedPhishing != 0 {
+		t.Fatalf("tenant-a counts: %+v", got)
+	}
+	got, err = r.FeedbackEvents.Counts(ctx, "tenant-b", now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReportedPhishing != 1 || got.MarkedSafe != 0 {
+		t.Fatalf("tenant-b counts: %+v", got)
 	}
 }
