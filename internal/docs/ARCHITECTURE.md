@@ -176,14 +176,18 @@ sequenceDiagram
 Although the consumers live in the same binary, JetStream still groups
 them by name so multiple replicas of `sn360-es` can share work.
 
-| Consumer Group | Stream | Filter | Max Deliver | Ack Wait | Purpose |
-|---|---|---|---|---|---|
-| `evaluate-svc` | ES_EVALUATE | `es.evaluate.request` | 5 | 60s | Evaluation processing |
-| `ingestion-action` | ES_EVALUATE | `es.evaluate.result` | 3 | 30s | Banner/label actions |
-| `management-persist` | ES_EVALUATE | `es.evaluate.result` | 3 | 30s | Result persistence |
-| `education-trigger` | ES_EVALUATE | `es.evaluate.result` | 3 | 10s | Education micro-lesson triggers |
-| `ingestion-onboard` | ES_ONBOARDING | `es.onboarding.>` | 3 | 30s | Onboarding handlers |
-| `education-sim` | ES_EDUCATION | `es.education.simulation.>` | 3 | 30s | Simulation execution |
+| Consumer Group | Stream | Filter | Max Deliver | Ack Wait | Wired in binary | Purpose |
+|---|---|---|---|---|---|---|
+| `evaluate-svc` | ES_EVALUATE | `es.evaluate.request` | 5 | 60s | Yes (critical when `evaluator` is constructed) | Multi-tier evaluation processing |
+| `ingestion-action` | ES_EVALUATE | `es.evaluate.result` | 3 | 30s | Yes (critical when banner/URL/release wired) | Banner + label + URL-rewrite + quarantine fan-out |
+| `management-persist` | ES_EVALUATE | `es.evaluate.result` | 3 | 30s | Yes (critical when Postgres repos wired) | Result persistence |
+| `education-trigger` | ES_EVALUATE | `es.evaluate.result` | 3 | 10s | Yes (critical when micro-lesson service wired) | Education micro-lesson triggers |
+| `feedback-persist` | ES_EVALUATE | `es.action.feedback.>` | 3 | 30s | Yes (critical when feedback repo wired) | Persist banner click feedback for dashboard counts |
+| `ingestion-onboard` | ES_ONBOARDING | `es.onboarding.>` | 3 | 30s | Yes (best-effort; observe-only until directory client wired) | Onboarding handlers |
+| `education-sim` | ES_EDUCATION | `es.education.simulation.send` | 3 | 30s | Yes (critical when simulation engine wired) | Simulation campaign execution |
+| `education-sim-track` | ES_EDUCATION | `es.education.simulation.result` | 3 | 30s | Yes (best-effort when tracker wired) | Record per-user interaction outcomes |
+| `quarantine-release` | ES_ACTION | `es.action.quarantine.release` | 3 | 30s | Yes (critical when release service wired) | Quarantine release flow |
+| `escalation` | ES_ACTION | `es.action.escalation.>` | 3 | 30s | Yes (critical when escalation service wired) | SecOps escalation ticket fan-out |
 
 ## 3. Detection Pipeline
 
