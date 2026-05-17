@@ -124,42 +124,4 @@ func TestRecipient_RejectsInvalid(t *testing.T) {
 	}
 }
 
-func TestOpen_TierGated(t *testing.T) {
-	svc := NewOpenService()
-	cases := []struct {
-		tier string
-		want WarningLevel
-		show bool
-	}{
-		{"trusted", WarnNone, false},
-		{"informational", WarnNone, false},
-		{"caution", WarnCaution, true},
-		{"warning", WarnWarning, true},
-		{"high_risk", WarnHigh, true},
-		{"blocked", WarnHigh, true},
-	}
-	for _, c := range cases {
-		res, err := svc.Predict(context.Background(), OpenRequest{
-			TenantID: "acme", PseudoMessageID: "m1", Tier: c.tier,
-		})
-		if err != nil {
-			t.Fatalf("Predict(%q): %v", c.tier, err)
-		}
-		if res.ShowWarning != c.show {
-			t.Fatalf("tier=%q show=%v want=%v", c.tier, res.ShowWarning, c.show)
-		}
-		if res.Level != c.want {
-			t.Fatalf("tier=%q level=%d want=%d", c.tier, res.Level, c.want)
-		}
-	}
-}
-
-func TestOpen_RejectsInvalid(t *testing.T) {
-	svc := NewOpenService()
-	if _, err := svc.Predict(context.Background(), OpenRequest{}); err == nil {
-		t.Fatal("expected error for empty tenant")
-	}
-	if _, err := svc.Predict(context.Background(), OpenRequest{TenantID: "acme"}); err == nil {
-		t.Fatal("expected error for empty pseudo_message_id")
-	}
-}
+// Open* tests live in open_test.go.

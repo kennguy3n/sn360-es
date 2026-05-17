@@ -53,6 +53,10 @@ type Metrics struct {
 	EventConsumed   *prometheus.CounterVec
 	EventErrors     *prometheus.CounterVec
 	EventLagSeconds *prometheus.GaugeVec
+
+	// --- HTTP server ----------------------------------------------
+	HTTPRequests       *prometheus.CounterVec
+	HTTPRequestLatency *prometheus.HistogramVec
 }
 
 // MetricsConfig configures the metric set. Subsystem maps to Prometheus
@@ -169,8 +173,28 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		EventLagSeconds: b.gaugeVec("event_lag_seconds",
 			"Estimated consumer lag in seconds.",
 			[]string{"bus", "stream"}),
+
+		HTTPRequests: b.counterVec("http_requests_total",
+			"HTTP requests served, partitioned by method/route/status.",
+			[]string{"method", "route", "status"}),
+		HTTPRequestLatency: b.histogramVec("http_request_latency_seconds",
+			"HTTP request latency in seconds, partitioned by method/route.",
+			latencyBuckets(),
+			[]string{"method", "route"}),
 	}
 	return m
+}
+
+// ObserveHTTPRequest records a single completed HTTP request against
+// the request counter + latency histogram. The route argument should
+// be a low-cardinality template (e.g. "/v1/predict/open"), not the raw
+// path with query string or interpolated IDs.
+func (m *Metrics) ObserveHTTPRequest(method, route, status string, latencySeconds float64) {
+	if m == nil {
+		return
+	}
+	m.HTTPRequests.WithLabelValues(method, route, status).Inc()
+	m.HTTPRequestLatency.WithLabelValues(method, route).Observe(latencySeconds)
 }
 
 // Registerer returns the underlying registerer (useful for sub-component
