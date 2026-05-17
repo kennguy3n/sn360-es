@@ -20,10 +20,10 @@ import (
 // and difficulty so list operations are O(1) lookup + O(n_filtered)
 // iteration.
 type TemplateLibrary struct {
-	mu         sync.RWMutex
-	byID       map[string]dto.SimulationTemplate
-	byAttack   map[dto.AttackType]map[dto.DifficultyLevel][]string
-	templates  map[string]*template.Template // subject+body parsed
+	mu        sync.RWMutex
+	byID      map[string]dto.SimulationTemplate
+	byAttack  map[dto.AttackType]map[dto.DifficultyLevel][]string
+	templates map[string]*template.Template // subject+body parsed
 }
 
 // NewTemplateLibrary constructs an empty library. Use Register to

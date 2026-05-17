@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sn360-es.fullname" . }}
+  labels:
+    {{- include "sn360-es.labels" . | nindent 4 }}
+data:
+  LOG_LEVEL: {{ tpl (.Values.config.logLevel | toString) . | quote }}
+  EVENT_BUS_TYPE: {{ tpl (.Values.config.eventBusType | toString) . | quote }}
+  NATS_URL: {{ tpl (.Values.config.natsURL | toString) . | quote }}
+  REDIS_ADDR: {{ tpl (.Values.config.redisAddr | toString) . | quote }}
+  PG_HOST: {{ tpl (.Values.config.pgHost | toString) . | quote }}
+  PG_PORT: {{ tpl (.Values.config.pgPort | toString) . | quote }}
+  PG_USER: {{ tpl (.Values.config.pgUser | toString) . | quote }}
+  PG_DB:   {{ tpl (.Values.config.pgDB | toString) . | quote }}
+  PG_SSLMODE: {{ tpl (.Values.config.pgSSLMode | toString) . | quote }}

@@ -1,0 +1,23 @@
+SN360-ES has been deployed.
+
+Release: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+
+Useful commands:
+
+  # tail the listener logs
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} -f
+
+  # hit the system endpoints
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "sn360-es.fullname" . }} 8080:{{ .Values.service.port }}
+  curl http://localhost:8080/healthz
+  curl http://localhost:8080/readyz
+  curl http://localhost:8080/metrics
+  open http://localhost:8080/docs   # Swagger UI
+
+{{- if .Values.nats.enabled }}
+
+NATS JetStream is bundled. Connect with:
+
+  nats://{{ .Release.Name }}-nats.{{ .Release.Namespace }}.svc:4222
+{{- end }}

@@ -12,45 +12,45 @@ import (
 // SenderObservation summarises one external sender within the
 // trailing-30-days window. It feeds the auto-discovery heuristic.
 type SenderObservation struct {
-	Domain           string
-	InboundCount     int
-	OutboundCount    int
+	Domain             string
+	InboundCount       int
+	OutboundCount      int
 	DistinctRecipients int
-	FirstSeen        time.Time
-	LastSeen         time.Time
+	FirstSeen          time.Time
+	LastSeen           time.Time
 }
 
 // VendorProposal is the output of the discovery job: one row per
 // candidate vendor with a confidence score.
 type VendorProposal struct {
-	Domain      string  `json:"domain"`
-	Confidence  float64 `json:"confidence"`   // 0..1
-	AutoApprove bool    `json:"auto_approve"` // confidence >= cfg.AutoApproveThreshold
-	Bidirectional      bool `json:"bidirectional"`
-	InboundCount       int  `json:"inbound_count"`
-	OutboundCount      int  `json:"outbound_count"`
-	DistinctRecipients int  `json:"distinct_recipients"`
-	Reason             string `json:"reason"`
+	Domain             string  `json:"domain"`
+	Confidence         float64 `json:"confidence"`   // 0..1
+	AutoApprove        bool    `json:"auto_approve"` // confidence >= cfg.AutoApproveThreshold
+	Bidirectional      bool    `json:"bidirectional"`
+	InboundCount       int     `json:"inbound_count"`
+	OutboundCount      int     `json:"outbound_count"`
+	DistinctRecipients int     `json:"distinct_recipients"`
+	Reason             string  `json:"reason"`
 }
 
 // VendorDiscoveryConfig wires the discovery heuristic.
 type VendorDiscoveryConfig struct {
-	MinInbound           int
+	MinInbound            int
 	MinDistinctRecipients int
-	MinWindowDays        int
-	AutoApproveThreshold float64
-	ExcludeFreeDomains   bool
-	FreeDomains          map[string]struct{}
+	MinWindowDays         int
+	AutoApproveThreshold  float64
+	ExcludeFreeDomains    bool
+	FreeDomains           map[string]struct{}
 }
 
 // DefaultVendorDiscoveryConfig returns the production defaults.
 func DefaultVendorDiscoveryConfig() VendorDiscoveryConfig {
 	return VendorDiscoveryConfig{
-		MinInbound:           5,
+		MinInbound:            5,
 		MinDistinctRecipients: 2,
-		MinWindowDays:        14,
-		AutoApproveThreshold: 0.80,
-		ExcludeFreeDomains:   true,
+		MinWindowDays:         14,
+		AutoApproveThreshold:  0.80,
+		ExcludeFreeDomains:    true,
 		FreeDomains: map[string]struct{}{
 			"gmail.com": {}, "outlook.com": {}, "yahoo.com": {},
 			"hotmail.com": {}, "icloud.com": {}, "proton.me": {}, "protonmail.com": {},
@@ -133,7 +133,7 @@ func (v *VendorDiscovery) score(obs SenderObservation) (VendorProposal, bool) {
 	// and bidirectional behaviour. Capped at 1.0.
 	conf := 0.0
 	conf += min01(float64(obs.InboundCount) / 30.0 * 0.5)        // ≤ 0.5
-	conf += min01(float64(obs.DistinctRecipients) / 10.0 * 0.25)  // ≤ 0.25
+	conf += min01(float64(obs.DistinctRecipients) / 10.0 * 0.25) // ≤ 0.25
 	bidirectional := obs.OutboundCount > 0
 	if bidirectional {
 		conf += 0.20

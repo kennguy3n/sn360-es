@@ -1,0 +1,28 @@
+apiVersion: v2
+name: sn360-es
+description: |
+  SN360-ES (Email Security) — multi-tenant, AI-driven post-delivery email
+  threat remediation for Google Workspace and Microsoft 365. This chart
+  packages the sn360-es API + listener, its migration job, and an
+  optional bundled NATS JetStream cluster.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - email
+  - security
+  - phishing
+  - nats
+  - jetstream
+home: https://github.com/kennguy3n/sn360-es
+sources:
+  - https://github.com/kennguy3n/sn360-es
+maintainers:
+  - name: SN360 Engineering
+    email: eng@sn360.local
+dependencies:
+  - name: nats
+    version: "1.2.2"
+    repository: "https://nats-io.github.io/k8s/helm/charts/"
+    condition: nats.enabled
+    alias: nats

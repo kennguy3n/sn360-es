@@ -32,7 +32,10 @@ func (f *fakeForcedEval) ReEvaluateForced(_ context.Context, _, _ string) (Repor
 	return f.verdict, f.err
 }
 
-type fakeRecipients struct{ list []string; err error }
+type fakeRecipients struct {
+	list []string
+	err  error
+}
 
 func (f *fakeRecipients) Recipients(_ context.Context, _, _ string) ([]string, error) {
 	return f.list, f.err
@@ -141,7 +144,7 @@ func TestReportWorkflow_RejectsInvalid(t *testing.T) {
 func TestReportWorkflow_PublishesEvenWhenReevalFails(t *testing.T) {
 	pub := &fakeReportPub{}
 	wf, _ := NewReportWorkflow(ReportWorkflowConfig{
-		Publisher: pub,
+		Publisher:   pub,
 		ReEvaluator: &fakeForcedEval{err: errors.New("model down")},
 	})
 	evt, err := wf.HandleReport(context.Background(), "acme", "msg-1", "rep-1", "")

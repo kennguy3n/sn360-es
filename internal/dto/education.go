@@ -103,18 +103,18 @@ const (
 
 // Campaign is a single tenant-scoped phishing simulation.
 type Campaign struct {
-	CampaignID  string         `json:"campaign_id"`
-	TenantID    string         `json:"tenant_id"`
-	Name        string         `json:"name"`
-	TemplateID  string         `json:"template_id"`
+	CampaignID  string          `json:"campaign_id"`
+	TenantID    string          `json:"tenant_id"`
+	Name        string          `json:"name"`
+	TemplateID  string          `json:"template_id"`
 	Difficulty  DifficultyLevel `json:"difficulty"`
-	Status      CampaignStatus `json:"status"`
-	CreatedAt   time.Time      `json:"created_at"`
-	ScheduledAt time.Time      `json:"scheduled_at"`
-	StartedAt   *time.Time     `json:"started_at,omitempty"`
-	CompletedAt *time.Time     `json:"completed_at,omitempty"`
-	TargetCount int            `json:"target_count"`
-	SentCount   int            `json:"sent_count"`
+	Status      CampaignStatus  `json:"status"`
+	CreatedAt   time.Time       `json:"created_at"`
+	ScheduledAt time.Time       `json:"scheduled_at"`
+	StartedAt   *time.Time      `json:"started_at,omitempty"`
+	CompletedAt *time.Time      `json:"completed_at,omitempty"`
+	TargetCount int             `json:"target_count"`
+	SentCount   int             `json:"sent_count"`
 }
 
 // UserInteractionType is the action a simulation target took.
@@ -173,13 +173,13 @@ type UserInteraction struct {
 
 // SimulationResult aggregates the outcome counts for a campaign.
 type SimulationResult struct {
-	CampaignID            string `json:"campaign_id"`
-	Delivered             int    `json:"delivered"`
-	Opened                int    `json:"opened"`
-	Clicked               int    `json:"clicked"`
-	SubmittedCredentials  int    `json:"submitted_credentials"`
-	Reported              int    `json:"reported"`
-	Ignored               int    `json:"ignored"`
+	CampaignID           string `json:"campaign_id"`
+	Delivered            int    `json:"delivered"`
+	Opened               int    `json:"opened"`
+	Clicked              int    `json:"clicked"`
+	SubmittedCredentials int    `json:"submitted_credentials"`
+	Reported             int    `json:"reported"`
+	Ignored              int    `json:"ignored"`
 }
 
 // ResilienceTier is the human-readable bucket for a resilience score.

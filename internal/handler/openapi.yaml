@@ -1,0 +1,447 @@
+openapi: 3.1.0
+info:
+  title: SN360-ES Service API
+  version: "v2.0"
+  description: |
+    REST surface for the SN360-ES (Email Security) control plane.
+
+    The API is divided into:
+      * `/v1/banner/*` — one-click user feedback from rendered banners
+      * `/v1/quarantine/*` — quarantine release approval workflow
+      * `/v1/education/*` — micro-lesson and simulation tracking
+      * `/v1/escalation/*` — SOC escalation ticket handling
+      * `/v1/dashboard/*` — aggregated tenant dashboards
+      * `/v1/predict/*` — pre-send and pre-open add-in scoring
+
+    All request and response bodies are JSON. Authentication is via
+    short-lived signed action tokens or tenant API keys depending on the
+    endpoint.
+  contact:
+    name: SN360-ES Maintainers
+    url: https://github.com/kennguy3n/sn360-es
+  license:
+    name: Proprietary
+servers:
+  - url: http://localhost:8080
+    description: Local development
+  - url: https://sn360-es.dev.uney.com
+    description: Dev cluster
+tags:
+  - name: banner
+  - name: quarantine
+  - name: education
+  - name: escalation
+  - name: dashboard
+  - name: predict
+  - name: system
+
+paths:
+  /healthz:
+    get:
+      tags: [system]
+      summary: Liveness probe
+      description: Always returns 200 OK while the process is running.
+      responses:
+        "200":
+          description: OK
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+
+  /readyz:
+    get:
+      tags: [system]
+      summary: Readiness probe
+      description: |
+        Reports readiness as a JSON document with one entry per
+        dependency (`nats`, `redis`, `postgres`). Returns 503 when any
+        required dependency is unavailable.
+      responses:
+        "200":
+          description: All checks healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+        "503":
+          description: One or more checks failing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+
+  /metrics:
+    get:
+      tags: [system]
+      summary: Prometheus metrics
+      description: |
+        Exposes counters / histograms in Prometheus exposition format.
+        See `pkg/telemetry/metrics.go` for the canonical instrument
+        names.
+      responses:
+        "200":
+          description: Prometheus exposition payload
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /docs:
+    get:
+      tags: [system]
+      summary: Swagger UI
+      description: Interactive API explorer served from the embedded OpenAPI document.
+      responses:
+        "200":
+          description: HTML page
+          content:
+            text/html: {}
+
+  /openapi.yaml:
+    get:
+      tags: [system]
+      summary: OpenAPI document
+      description: Raw OpenAPI 3.1 spec used by `/docs`.
+      responses:
+        "200":
+          description: YAML body
+          content:
+            application/yaml: {}
+
+  /v1/banner/action:
+    post:
+      tags: [banner]
+      summary: Submit one-click banner feedback
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BannerActionRequest"
+      responses:
+        "200":
+          description: Feedback recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BannerActionResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+
+  /v1/quarantine/release:
+    post:
+      tags: [quarantine]
+      summary: Release a quarantined message
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuarantineReleaseRequest"
+      responses:
+        "200":
+          description: Release outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuarantineReleaseResponse"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /v1/education/lesson/{category}:
+    get:
+      tags: [education]
+      summary: Fetch a micro-lesson
+      parameters:
+        - in: path
+          name: category
+          required: true
+          schema:
+            type: string
+            description: One of the SN360-ES categories (e.g. "Phishing", "BEC").
+        - in: query
+          name: locale
+          schema:
+            type: string
+            default: en
+      responses:
+        "200":
+          description: Lesson body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MicroLesson"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /v1/escalation/resolve:
+    post:
+      tags: [escalation]
+      summary: Resolve a SOC escalation ticket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EscalationResolveRequest"
+      responses:
+        "200":
+          description: Resolved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EscalationResolveResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+
+  /v1/dashboard/summary:
+    get:
+      tags: [dashboard]
+      summary: Aggregate dashboard for a tenant
+      parameters:
+        - in: query
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: range
+          schema:
+            type: string
+            description: "Time range (`7d`, `24h`, etc.)"
+            default: "7d"
+      responses:
+        "200":
+          description: Aggregated stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+        "400":
+          $ref: "#/components/responses/Error"
+
+  /v1/predict/recipient:
+    post:
+      tags: [predict]
+      summary: Pre-send recipient risk score
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PredictRecipientRequest"
+      responses:
+        "200":
+          description: Prediction
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PredictRecipientResponse"
+
+  /v1/predict/open:
+    post:
+      tags: [predict]
+      summary: Pre-open URL risk score
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PredictOpenRequest"
+      responses:
+        "200":
+          description: Prediction
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PredictOpenResponse"
+
+components:
+  responses:
+    Error:
+      description: Error envelope
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    ReadinessResponse:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, unavailable]
+        checks:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              status:
+                type: string
+                enum: [ok, error, skipped]
+              error:
+                type: string
+              latency_ms:
+                type: integer
+
+    BannerActionRequest:
+      type: object
+      required: [token, action]
+      properties:
+        token:
+          type: string
+          description: Signed JWT minted when the banner was rendered.
+        action:
+          type: string
+          enum: [report_phishing, mark_safe, trust_sender, ignore]
+
+    BannerActionResponse:
+      type: object
+      required: [status, action, pseudonymized_message_id]
+      properties:
+        status:
+          type: string
+          example: ok
+        action:
+          type: string
+        pseudonymized_message_id:
+          type: string
+
+    QuarantineReleaseRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+        approver_role:
+          type: string
+          enum: [admin, security_lead, end_user]
+        justification:
+          type: string
+
+    QuarantineReleaseResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+        released_at:
+          type: string
+          format: date-time
+
+    MicroLesson:
+      type: object
+      required: [category, locale, title, body]
+      properties:
+        category:
+          type: string
+        locale:
+          type: string
+        title:
+          type: string
+        body:
+          type: string
+        cta_url:
+          type: string
+
+    EscalationResolveRequest:
+      type: object
+      required: [ticket_id, resolution]
+      properties:
+        ticket_id:
+          type: string
+        resolution:
+          type: string
+          enum: [confirmed_threat, false_positive, ignored]
+        notes:
+          type: string
+
+    EscalationResolveResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        ticket_id:
+          type: string
+
+    DashboardSummary:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+        range:
+          type: string
+        evaluated:
+          type: integer
+        banner_distribution:
+          type: object
+          additionalProperties:
+            type: integer
+        top_categories:
+          type: array
+          items:
+            type: object
+            properties:
+              category:
+                type: string
+              count:
+                type: integer
+        resilience_score:
+          type: number
+
+    PredictRecipientRequest:
+      type: object
+      required: [tenant_id, sender, recipients]
+      properties:
+        tenant_id:
+          type: string
+        sender:
+          type: string
+        recipients:
+          type: array
+          items:
+            type: string
+
+    PredictRecipientResponse:
+      type: object
+      properties:
+        risk:
+          type: string
+          enum: [low, medium, high]
+        reason:
+          type: string
+
+    PredictOpenRequest:
+      type: object
+      required: [tenant_id, url]
+      properties:
+        tenant_id:
+          type: string
+        url:
+          type: string
+
+    PredictOpenResponse:
+      type: object
+      properties:
+        risk:
+          type: string
+          enum: [low, medium, high]
+        verdict:
+          type: string

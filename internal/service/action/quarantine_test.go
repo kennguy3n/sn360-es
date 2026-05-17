@@ -72,15 +72,15 @@ func (e fakeQEncryptor) Decrypt(ctx context.Context, tenant string, ciphertext [
 
 // fakeQProvider records every call so tests can assert the protocol.
 type fakeQProvider struct {
-	mu              sync.Mutex
-	kind            LabelProviderKind
-	labelID         string
-	ensureCalls     []string
-	moveCalls       []moveCall
-	restoreCalls    []restoreCall
-	ensureErr       error
-	moveErr         error
-	restoreErr      error
+	mu           sync.Mutex
+	kind         LabelProviderKind
+	labelID      string
+	ensureCalls  []string
+	moveCalls    []moveCall
+	restoreCalls []restoreCall
+	ensureErr    error
+	moveErr      error
+	restoreErr   error
 }
 
 type moveCall struct {

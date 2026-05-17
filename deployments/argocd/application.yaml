@@ -1,0 +1,143 @@
+# GitOps source-of-truth for SN360-ES across the four standard tiers
+# (dev, qa, uat, prod). Each Application points at the same chart but
+# bind a different overlay values file, mirroring the convention used
+# in nges-k8s-assets.
+#
+# Apply with `kubectl apply -f deployments/argocd/application.yaml`
+# from a cluster that already has ArgoCD installed in `argocd`.
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: sn360-es
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: SN360 Email Security control-plane services.
+  sourceRepos:
+    - https://github.com/kennguy3n/sn360-es.git
+  destinations:
+    - namespace: sn360-*
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sn360-es-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: sn360-es
+  source:
+    repoURL: https://github.com/kennguy3n/sn360-es.git
+    targetRevision: main
+    path: deployments/helm/sn360-es
+    helm:
+      valueFiles:
+        - values.yaml
+        - values.dev.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sn360-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sn360-es-qa
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: sn360-es
+  source:
+    repoURL: https://github.com/kennguy3n/sn360-es.git
+    targetRevision: main
+    path: deployments/helm/sn360-es
+    helm:
+      valueFiles:
+        - values.yaml
+        - values.qa.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sn360-qa
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sn360-es-uat
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: sn360-es
+  source:
+    repoURL: https://github.com/kennguy3n/sn360-es.git
+    targetRevision: main
+    path: deployments/helm/sn360-es
+    helm:
+      valueFiles:
+        - values.yaml
+        - values.uat.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sn360-uat
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sn360-es-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: sn360-es
+  source:
+    repoURL: https://github.com/kennguy3n/sn360-es.git
+    targetRevision: main
+    path: deployments/helm/sn360-es
+    helm:
+      valueFiles:
+        - values.yaml
+        - values.prod.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sn360-prod
+  # Production rolls forward manually after a green dev/qa/uat sync.
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true

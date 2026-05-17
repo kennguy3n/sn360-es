@@ -39,18 +39,18 @@ type AttachmentMeta struct {
 
 // AttachmentScanResult is the per-attachment finding.
 type AttachmentScanResult struct {
-	Filename    string            `json:"filename"`
-	SHA256      string            `json:"sha256"`
-	Size        int64             `json:"size"`
-	MIME        string            `json:"mime"`
-	Verdict     AttachmentVerdict `json:"verdict"`
-	Score       int               `json:"score"`
-	Engine      string            `json:"engine"`
-	Matches     []string          `json:"matches,omitempty"`
-	ShouldSbx   bool              `json:"escalate_to_sandbox"`
-	ScannedAt   time.Time         `json:"scanned_at"`
-	DurationMs  int64             `json:"duration_ms"`
-	Err         string            `json:"error,omitempty"`
+	Filename   string            `json:"filename"`
+	SHA256     string            `json:"sha256"`
+	Size       int64             `json:"size"`
+	MIME       string            `json:"mime"`
+	Verdict    AttachmentVerdict `json:"verdict"`
+	Score      int               `json:"score"`
+	Engine     string            `json:"engine"`
+	Matches    []string          `json:"matches,omitempty"`
+	ShouldSbx  bool              `json:"escalate_to_sandbox"`
+	ScannedAt  time.Time         `json:"scanned_at"`
+	DurationMs int64             `json:"duration_ms"`
+	Err        string            `json:"error,omitempty"`
 }
 
 // YARAEngine is the abstraction over a YARA matcher.
@@ -66,13 +66,13 @@ type ClamAVClient interface {
 
 // AttachmentScannerConfig wires the scanner.
 type AttachmentScannerConfig struct {
-	YARA            YARAEngine
-	ClamAV          ClamAVClient
-	Logger          *slog.Logger
-	PerScanTimeout  time.Duration // 0 -> 5s
-	MaxBytes        int64         // 0 -> 25 MB
-	SuspiciousExts  []string
-	Now             func() time.Time
+	YARA           YARAEngine
+	ClamAV         ClamAVClient
+	Logger         *slog.Logger
+	PerScanTimeout time.Duration // 0 -> 5s
+	MaxBytes       int64         // 0 -> 25 MB
+	SuspiciousExts []string
+	Now            func() time.Time
 }
 
 // AttachmentScanner runs lightweight pre-screens (YARA + ClamAV + ext
@@ -313,9 +313,9 @@ func DefaultYARARules() map[string][]byte {
 		// OLE Compound Document magic (legacy MS Office macros).
 		"ole_compound_doc_magic": {0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1},
 		// VBA module verbs commonly seen in macro malware.
-		"vba_shell_invoke":     []byte("Shell("),
-		"vba_createobject":     []byte("CreateObject(\"WScript.Shell\""),
-		"vba_powershell_call":  []byte("powershell -EncodedCommand"),
+		"vba_shell_invoke":    []byte("Shell("),
+		"vba_createobject":    []byte("CreateObject(\"WScript.Shell\""),
+		"vba_powershell_call": []byte("powershell -EncodedCommand"),
 		// PE magic — useful for archive payload pre-screen.
 		"pe_executable_header": []byte("MZ\x90\x00\x03\x00"),
 		// Common phishing landing-page artefact.

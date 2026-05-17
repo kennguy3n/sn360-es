@@ -1,0 +1,46 @@
+{{- if .Values.migrations.enabled -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "sn360-es.fullname" . }}-migrate
+  labels:
+    {{- include "sn360-es.labels" . | nindent 4 }}
+  annotations:
+    # Run before the Deployment so the schema is in place before pods
+    # accept readiness probes; delete previous successful jobs so Helm
+    # can re-run the migration on every upgrade.
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "sn360-es.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ include "sn360-es.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: "{{ include "sn360-es.migrateImage" . }}"
+          imagePullPolicy: {{ .Values.migrations.image.pullPolicy }}
+          args: ["up"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "sn360-es.fullname" . }}
+            {{- if .Values.secret.create }}
+            - secretRef:
+                name: {{ include "sn360-es.fullname" . }}
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+{{- end }}

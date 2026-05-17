@@ -31,7 +31,7 @@ func TestRecipient_ExternalOnInternalThread(t *testing.T) {
 	known := true
 	svc := NewRecipientService(RecipientServiceConfig{})
 	res, _ := svc.Predict(context.Background(), RecipientRequest{
-		TenantID: "acme",
+		TenantID:         "acme",
 		ThreadIsInternal: true,
 		Recipients: []RecipientCandidate{
 			{UserHash: "u1", Domain: "outside.com", IsExternal: true, IsKnownContact: &known},
@@ -106,7 +106,7 @@ func TestRecipient_LatencyBudget(t *testing.T) {
 		},
 	})
 	res, _ := svc.Predict(context.Background(), RecipientRequest{
-		TenantID: "acme",
+		TenantID:   "acme",
 		Recipients: []RecipientCandidate{{UserHash: "u1", Domain: "x.com", IsExternal: true}},
 	})
 	if res.LatencyMs <= 0 {

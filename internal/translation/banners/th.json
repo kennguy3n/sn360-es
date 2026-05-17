@@ -1,0 +1,43 @@
+{
+  "tier.Blocked.title": "ถูกบล็อก: อีเมลนี้เป็นอันตราย",
+  "tier.Blocked.body": "เราบล็อกอีเมลนี้เพราะมีแนวโน้มสูงว่าเป็นความพยายามฟิชชิงหรือภัยคุกคามอื่น อย่าเปิดไฟล์แนบหรือคลิกลิงก์",
+  "tier.HighRisk.title": "ความเสี่ยงสูง: อย่าตอบสนองอีเมลนี้",
+  "tier.HighRisk.body": "อีเมลนี้แสดงสัญญาณที่ชัดเจนของการแอบอ้าง การฉ้อโกง หรือการยึดบัญชี ยืนยันตัวตนผู้ส่งผ่านช่องทางอื่นก่อนดำเนินการใดๆ",
+  "tier.Warning.title": "คำเตือน: อีเมลนี้น่าสงสัย",
+  "tier.Warning.body": "อีเมลนี้มีสัญญาณว่าอาจมีผู้พยายามหลอกลวงคุณ ตรวจสอบผู้ส่งอย่างละเอียดก่อนคลิกลิงก์หรือตอบกลับ",
+  "tier.Caution.title": "ระวัง: ผู้ส่งหรือเนื้อหาผิดปกติ",
+  "tier.Caution.body": "มีบางอย่างเกี่ยวกับอีเมลนี้ที่ผิดปกติ จัดการลิงก์ ไฟล์แนบ หรือคำร้องขออย่างระมัดระวัง",
+  "tier.Informational.title": "ผู้ส่งภายนอกครั้งแรก",
+  "tier.Informational.body": "นี่เป็นอีเมลแรกที่เราพบจากผู้ส่งนี้ ยืนยันตัวตนของพวกเขาก่อนดำเนินการตามคำขอใดๆ",
+  "tier.Trusted.title": "ผู้ส่งที่เชื่อถือได้",
+  "tier.Trusted.body": "อีเมลนี้มาจากผู้ส่งที่องค์กรของคุณเชื่อถืออยู่แล้ว ไม่จำเป็นต้องดำเนินการใดๆ",
+
+  "category.LIKELY_PHISHING": "อาจเป็นฟิชชิง",
+  "category.BEC_IMPERSONATION": "อาจมีการแอบอ้าง (BEC)",
+  "category.LOOKALIKE_DOMAIN": "โดเมนคล้ายของจริง",
+  "category.SUSPICIOUS_URL": "ลิงก์น่าสงสัย",
+  "category.SUSPICIOUS_ATTACHMENT": "ไฟล์แนบน่าสงสัย",
+  "category.FIRST_CONTACT_EXTERNAL": "ติดต่อครั้งแรกจากภายนอกองค์กร",
+  "category.ACCOUNT_TAKEOVER_SUSPECTED": "สงสัยว่าบัญชีถูกยึด",
+  "category.VENDOR_COMPROMISE": "สงสัยว่าผู้ขายถูกแฮก",
+  "category.CREDENTIAL_HARVESTING": "การเก็บข้อมูลรับรอง",
+  "category.INVOICE_FRAUD": "การฉ้อโกงใบแจ้งหนี้",
+  "category.QR_PHISHING": "ฟิชชิงผ่าน QR Code",
+  "category.SCAM_FRAUD": "การหลอกลวง / ฉ้อโกง",
+  "category.AUTH_FAILED": "การยืนยันผู้ส่งล้มเหลว",
+  "category.INTERNAL_TRUSTED": "ผู้ส่งภายใน",
+  "category.VENDOR_TRUSTED": "ผู้ขายที่เชื่อถือได้",
+  "category.NEWSLETTER": "จดหมายข่าว",
+
+  "auth.verified": "ผู้ส่งได้รับการยืนยัน",
+  "auth.unverified": "ผู้ส่งไม่ได้รับการยืนยัน",
+  "auth.failed": "การยืนยันผู้ส่งล้มเหลว",
+  "auth.unknown": "ไม่ทราบสถานะการยืนยันผู้ส่ง",
+
+  "action.report": "รายงานฟิชชิง",
+  "action.mark_safe": "ทำเครื่องหมายว่าปลอดภัย",
+  "action.trust_sender": "เชื่อถือผู้ส่งนี้",
+  "action.learn_more": "เรียนรู้เพิ่มเติม",
+
+  "banner.degraded": "บริการตรวจจับบางอย่างไม่พร้อมใช้งานระหว่างการประเมิน"
+}

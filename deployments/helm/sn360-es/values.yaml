@@ -1,0 +1,156 @@
+# Default values for sn360-es.
+#
+# Each top-level block maps 1:1 to a template under templates/. Override
+# any field on the command line with --set or in a values file passed to
+# `helm install -f`.
+
+# nameOverride / fullnameOverride trim or replace the auto-generated
+# resource names. Leave empty to use the chart name.
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/kennguy3n/sn360-es
+  tag: ""            # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+  pullSecrets: []    # [{name: regcred}]
+
+# replicaCount only applies when autoscaling.enabled is false.
+replicaCount: 2
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations:
+  # Force a rolling restart when the rendered ConfigMap changes.
+  checksum/config: "{{ include \"sn360-es.configChecksum\" . }}"
+  # Scrape /metrics by default; Prometheus operator users can rely on
+  # ServiceMonitor instead.
+  prometheus.io/scrape: "true"
+  prometheus.io/path: "/metrics"
+  prometheus.io/port: "8080"
+podLabels: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# Container port served by sn360-es's HTTP listener (system + REST
+# endpoints, /metrics, /docs, /healthz, /readyz).
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts: []
+  tls: []
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Pod scheduling.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+# probes — see internal/handler/health.go for endpoint semantics.
+probes:
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:
+    path: /readyz
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 6
+
+# Application configuration projected into a ConfigMap and consumed via
+# env vars. Anything sensitive (DB/Redis passwords, JWT signing keys,
+# KMS aliases) belongs in the secret block below.
+config:
+  logLevel: info
+  eventBusType: nats         # nats | redis
+  natsURL: "nats://{{ .Release.Name }}-nats:4222"
+  redisAddr: "{{ .Release.Name }}-redis-master:6379"
+  pgHost: "{{ .Release.Name }}-postgresql"
+  pgPort: "5432"
+  pgUser: sn360es
+  pgDB: sn360es
+  pgSSLMode: require
+
+secret:
+  # Render a Kubernetes Secret with these keys. Leave a value empty to
+  # bind via externalSecrets / sealed-secrets instead.
+  create: true
+  annotations: {}
+  data:
+    pgPassword: ""           # POSTGRES_PASSWORD
+    redisPassword: ""        # REDIS_PASSWORD
+    jwtSigningKey: ""        # ACTION_TOKEN_HMAC_KEY
+    kmsKeyArn: ""            # AES-256-GCM tenant-key KMS alias
+
+# Migration Job: run cmd/sn360-es-migrate up before the Deployment.
+# Helm hook-weight ordering ensures migrations finish before pods roll.
+migrations:
+  enabled: true
+  image:
+    repository: ghcr.io/kennguy3n/sn360-es-migrate
+    tag: ""
+    pullPolicy: IfNotPresent
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+
+# Bundled NATS JetStream dependency. Disable when an external NATS
+# cluster is already deployed in the namespace.
+nats:
+  enabled: true
+  config:
+    cluster:
+      enabled: true
+      replicas: 3
+    jetstream:
+      enabled: true
+      fileStore:
+        pvc:
+          size: 10Gi
+  natsBox:
+    enabled: false
+
+# ServiceMonitor for Prometheus Operator. Disable when scraping is done
+# via classic annotation-driven discovery.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
