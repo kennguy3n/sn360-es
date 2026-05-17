@@ -71,18 +71,62 @@ func suspiciousLoginURL(r *rand.Rand, level Level) string {
 // lookalikeDomain returns a string that visually resembles target but
 // is registrable on a public TLD. Used by lookalike_domain.go and
 // invoice_fraud.go.
+//
+// The function guarantees `out != lower(target)`. Three of the five
+// swaps (the character substitutions o→0, l→1, m→rn) are no-ops when
+// the target lacks the source character, and the TLD pool happens to
+// include `.com`, so the naive "pick a random swap, append a random
+// TLD" approach silently returns the original domain for ~8-12% of
+// inputs (e.g. `apple.com`, `paypal.com`, `acme.example`). That makes
+// the impostor address identical to the legitimate vendor and quietly
+// invalidates every test case that depends on a lookalike signal
+// firing. Loop the random swap until it actually mutates the base; if
+// no character swap can mutate it (rare — only when none of `o`/`l`/
+// `m` appear), fall through to the unconditional `-support`/`-secure`
+// suffix path. Finally, force a different TLD if the candidate ended
+// up matching the original input.
 func lookalikeDomain(r *rand.Rand, target string) string {
-	swaps := []func(string) string{
+	target = strings.ToLower(target)
+	base := strings.TrimSuffix(target, ".com")
+
+	charSwaps := []func(string) string{
 		func(s string) string { return strings.Replace(s, "o", "0", 1) },
 		func(s string) string { return strings.Replace(s, "l", "1", 1) },
 		func(s string) string { return strings.Replace(s, "m", "rn", 1) },
+	}
+	suffixSwaps := []func(string) string{
 		func(s string) string { return s + "-support" },
 		func(s string) string { return s + "-secure" },
 	}
-	swap := swaps[r.Intn(len(swaps))]
+
+	// First, try a random character swap up to a small budget; bail
+	// out on the first one that actually mutates `base`.
+	mutated := base
+	for i := 0; i < 4 && mutated == base; i++ {
+		mutated = charSwaps[r.Intn(len(charSwaps))](base)
+	}
+	// If no character swap mutated, fall through to a suffix swap.
+	// These are always mutating because they append.
+	if mutated == base {
+		mutated = suffixSwaps[r.Intn(len(suffixSwaps))](base)
+	}
+
 	tlds := []string{".com", ".co", ".net", ".biz", ".app"}
-	base := swap(strings.ToLower(strings.TrimSuffix(target, ".com")))
-	return base + pick(r, tlds)
+	candidate := mutated + pick(r, tlds)
+	// Defensive: if we somehow regenerated the original (only
+	// possible for target=="foo" with no `.com` and an unlucky swap
+	// chain), force a different TLD.
+	if candidate == target {
+		for _, tld := range tlds {
+			if mutated+tld != target {
+				return mutated + tld
+			}
+		}
+		// Genuinely unreachable, but keep a deterministic fallback
+		// so the function never returns the original verbatim.
+		return mutated + "-impostor.app"
+	}
+	return candidate
 }
 
 // localePool returns a small phrase pool keyed by locale. Each helper

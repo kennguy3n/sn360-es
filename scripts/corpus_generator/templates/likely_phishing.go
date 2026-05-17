@@ -39,9 +39,24 @@ func (g *LikelyPhishing) Generate(opts Options) Result {
 			"Nhắc nhở đổi mật khẩu định kỳ")
 		_ = display
 		body := pool.body([]string{
-			"As part of our scheduled IT hygiene, please change your password from the company portal at your convenience.",
-			"No action is required if you have already rotated credentials this quarter.",
-			"Need help? Reply to this thread and the helpdesk will reach out.",
+			pool.t("As part of our scheduled IT hygiene, please change your password from the company portal at your convenience.",
+				"ในการดูแลระบบ IT ตามกำหนด กรุณาเปลี่ยนรหัสผ่านผ่านพอร์ทัลของบริษัทเมื่อสะดวก",
+				"定期的なITメンテナンスの一環として、ご都合のよいタイミングで社内ポータルからパスワードを変更してください。",
+				"정기 IT 점검의 일환으로, 편하실 때 사내 포털에서 비밀번호를 변경해 주세요.",
+				"作为定期 IT 维护的一部分，请在方便时通过公司门户更改您的密码。",
+				"Trong khuôn khổ bảo trì IT định kỳ, vui lòng đổi mật khẩu qua cổng nội bộ khi thuận tiện."),
+			pool.t("No action is required if you have already rotated credentials this quarter.",
+				"หากคุณเปลี่ยนรหัสผ่านในไตรมาสนี้แล้ว ไม่ต้องดำเนินการใด ๆ",
+				"今四半期にすでにパスワードを更新されている場合は、対応は不要です。",
+				"이번 분기에 이미 비밀번호를 변경하셨다면 별도 조치가 필요하지 않습니다.",
+				"如果您本季度已更新过密码，则无需任何操作。",
+				"Nếu bạn đã đổi mật khẩu trong quý này thì không cần thực hiện thêm thao tác nào."),
+			pool.t("Need help? Reply to this thread and the helpdesk will reach out.",
+				"ต้องการความช่วยเหลือ? ตอบกลับอีเมลนี้แล้วทีมเฮลป์เดสก์จะติดต่อกลับ",
+				"サポートが必要ですか?このメールに返信いただければヘルプデスクからご連絡します。",
+				"도움이 필요하신가요? 본 메일에 답장하시면 헬프데스크에서 연락드리겠습니다.",
+				"需要帮助？请回复此邮件，IT 服务台会与您联系。",
+				"Cần hỗ trợ? Trả lời email này và bộ phận hỗ trợ sẽ liên hệ với bạn."),
 		})
 		return Result{
 			Payload: Payload{
@@ -50,6 +65,13 @@ func (g *LikelyPhishing) Generate(opts Options) Result {
 				To:          recipient(opts),
 				Subject:     subj,
 				BodyText:    body,
+				// All other templates' benign variants set this so the
+				// validator's model-validation path sees a realistic
+				// internal-bulletin auth posture rather than an empty
+				// header map.
+				Headers: map[string]string{
+					"Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+				},
 			},
 			AttackType:      "Benign internal IT reminder",
 			Description:     "Internal helpdesk bulletin with no credential prompt — should score Trusted/Informational.",

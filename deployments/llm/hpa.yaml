@@ -12,9 +12,24 @@ spec:
     kind: Deployment
     name: sn360-es-llm
   # Ternary-Bonsai-8B Q2_0 on CPU is ~2-5s per request; aggressive
-  # scale-up keeps the Tier 2 queue from blocking the evaluate pipeline.
+  # scale-up would normally keep the Tier 2 queue from blocking the
+  # evaluate pipeline.
+  #
+  # However: the deployment's PVC is currently ReadWriteOnce (see
+  # deployments/llm/deployment.yaml:230 and the comment block above
+  # it). RWO can only be attached by pods on a single node at a
+  # time, so any HPA scale-up that lands a replica on a second node
+  # would crash-loop with `Multi-Attach error` and turn a load spike
+  # into an outage rather than a scale-up.
+  #
+  # We therefore pin replicas to 1 here. The CPU / memory / queue
+  # metrics below stay declared so the eventual scaling intent is
+  # documented at the manifest level — once the StatefulSet-with-
+  # per-pod-PVC follow-up lands (or we move to an RWX storage class
+  # like EFS / CephFS / Filestore) we just lift these caps and the
+  # behaviour block underneath already does the right thing.
   minReplicas: 1
-  maxReplicas: 4
+  maxReplicas: 1
   behavior:
     scaleDown:
       # llama-server takes 30-60s to warm up on a cold node, so be slow
