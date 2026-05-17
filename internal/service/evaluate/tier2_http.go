@@ -65,8 +65,11 @@ func NewTier2HTTPClient(cfg Tier2HTTPConfig) (*Tier2HTTPClient, error) {
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = 512
 	}
-	if cfg.Temperature < 0 {
-		cfg.Temperature = 0
+	// Treat the zero value as "unset" and fall back to the documented
+	// 0.1 default. Callers who genuinely want greedy decoding can pass
+	// a tiny positive number (e.g. 1e-9); anything <0 is clamped to 0.1.
+	if cfg.Temperature <= 0 {
+		cfg.Temperature = 0.1
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: cfg.Timeout}
