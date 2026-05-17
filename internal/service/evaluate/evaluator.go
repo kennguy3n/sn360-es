@@ -270,11 +270,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 				slog.String("message_id", req.MessageID),
 				slog.Any("error", err))
 		} else {
-			outcomeLabel := "ok"
-			if len(outcome.Categories) > 0 {
-				outcomeLabel = string(outcome.Categories[0])
-			}
-			e.cfg.Observer.ObserveTier2(outcomeLabel, time.Since(start))
+			e.cfg.Observer.ObserveTier2(tier2OutcomeLabel(outcome), time.Since(start))
 			res.Tier2 = &outcome
 		}
 	}
@@ -354,6 +350,20 @@ func (e *Evaluator) shouldRunTier2(tier0 dto.Tier0Outcome, t1 *dto.Tier1Outcome)
 		return true
 	}
 	return t1.Escalate || t1.Flag
+}
+
+// tier2OutcomeLabel maps a Tier 2 result to a fixed, low-cardinality
+// label suitable for Prometheus. There are 16+ distinct category
+// constants and Tier 2 returns them by name, so using the raw category
+// string as a metric label would balloon the time-series cardinality
+// on sn360_es_tier2_escalations_total. Bucket into ok / flagged so the
+// label set stays bounded; if dashboards need per-category breakdowns
+// the categorizer's own counters provide that detail.
+func tier2OutcomeLabel(out dto.Tier2Outcome) string {
+	if len(out.Categories) == 0 {
+		return "ok"
+	}
+	return "flagged"
 }
 
 // forcedTierFor maps the categories the Tier 0 gate may force into the

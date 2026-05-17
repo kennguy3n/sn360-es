@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -104,6 +105,166 @@ func TestClient_DoesNotRetryNonIdempotent(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("expected exactly 1 call, got %d", calls.Load())
+	}
+}
+
+// TestClient_PostJSONWithBodyDoesNotRetry verifies the fix for the
+// double-submission bug: PostJSON now treats POST as non-idempotent
+// even when a body is present, so 5xx responses are NOT retried and
+// the caller cannot accidentally create duplicate side effects (e.g.
+// duplicate escalation tickets).
+func TestClient_PostJSONWithBodyDoesNotRetry(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv, WithMaxRetries(3))
+	if err := c.PostJSON(context.Background(), "/", map[string]string{"k": "v"}, nil); err == nil {
+		t.Fatal("expected error")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("PostJSON must not retry on 5xx; got %d calls (expected 1)", got)
+	}
+}
+
+// TestClient_PostJSONIdempotentRetriesOn500 verifies the opt-in path:
+// callers whose endpoints are genuinely idempotent can use
+// PostJSONIdempotent and still get retry behavior.
+func TestClient_PostJSONIdempotentRetriesOn500(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Each attempt must carry the full body — the retry path
+		// must rewind via req.GetBody.
+		buf := make([]byte, 32)
+		n, _ := r.Body.Read(buf)
+		if n == 0 {
+			t.Errorf("retry %d sent empty body", calls.Load())
+		}
+		if calls.Add(1) < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv, WithMaxRetries(3))
+	if err := c.PostJSONIdempotent(context.Background(), "/", map[string]string{"k": "v"}, &struct{}{}); err != nil {
+		t.Fatalf("PostJSONIdempotent: %v", err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("expected 3 attempts on PostJSONIdempotent, got %d", got)
+	}
+}
+
+// TestClient_PutJSONRetriesAndRewindsBody verifies that the helper path
+// for PUT consents to retries (PUT is semantically idempotent) and that
+// the retry attempts receive the full body payload, not an empty body.
+func TestClient_PutJSONRetriesAndRewindsBody(t *testing.T) {
+	var calls atomic.Int32
+	var emptyBodies atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, 32)
+		n, _ := r.Body.Read(buf)
+		if n == 0 {
+			emptyBodies.Add(1)
+		}
+		if calls.Add(1) < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv, WithMaxRetries(3))
+	if err := c.PutJSON(context.Background(), "/", map[string]string{"k": "v"}, &struct{}{}); err != nil {
+		t.Fatalf("PutJSON: %v", err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("expected 3 attempts on PutJSON, got %d", got)
+	}
+	if got := emptyBodies.Load(); got != 0 {
+		t.Fatalf("PutJSON retry sent empty body %d time(s); expected 0", got)
+	}
+}
+
+// TestClient_DoPutWithBodyButNoGetBodyIsNotRetried covers the safety
+// invariant added to isIdempotent: PUT/DELETE with a body but no
+// rewinder are treated as non-idempotent so we never silently retry
+// with an empty body and corrupt server state.
+func TestClient_DoPutWithBodyButNoGetBodyIsNotRetried(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv, WithMaxRetries(3))
+
+	// nopReader is intentionally not one of the body types that
+	// http.NewRequestWithContext auto-populates GetBody for (which
+	// are *bytes.Buffer, *bytes.Reader, *strings.Reader). With this
+	// reader GetBody stays nil so we exercise the actual code path:
+	// PUT with non-rewindable body must NOT be retried.
+	req, err := http.NewRequestWithContext(context.Background(),
+		http.MethodPut, srv.URL+"/", &nopReader{r: strings.NewReader(`{"k":"v"}`)})
+	if err != nil {
+		t.Fatalf("new req: %v", err)
+	}
+	if req.GetBody != nil {
+		t.Fatalf("test precondition violated: GetBody auto-set despite opaque body type")
+	}
+	resp, err := c.Do(context.Background(), req)
+	if err == nil && resp != nil {
+		_ = resp.Body.Close()
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("PUT without GetBody must not retry; got %d calls (expected 1)", got)
+	}
+}
+
+// nopReader wraps a *strings.Reader but hides the underlying type, so
+// http.NewRequestWithContext cannot recognize it and skips GetBody
+// auto-population. Used by TestClient_DoPutWithBodyButNoGetBodyIsNotRetried
+// to model the real-world case of an opaque streaming body (e.g. a
+// network or fs reader).
+type nopReader struct{ r *strings.Reader }
+
+func (n *nopReader) Read(p []byte) (int, error) { return n.r.Read(p) }
+
+// TestClient_DoBodylessIdempotentRetries guards against a regression in
+// the isIdempotent rewrite: GET / HEAD / OPTIONS without a body must
+// continue to retry on 5xx since they were always retryable.
+func TestClient_DoBodylessIdempotentRetries(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
+		method := method
+		t.Run(method, func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if calls.Add(1) < 3 {
+					w.WriteHeader(http.StatusBadGateway)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+			c := newTestClient(t, srv, WithMaxRetries(3))
+			req, err := http.NewRequestWithContext(context.Background(), method, srv.URL+"/", nil)
+			if err != nil {
+				t.Fatalf("new req: %v", err)
+			}
+			resp, err := c.Do(context.Background(), req)
+			if err != nil {
+				t.Fatalf("%s: %v", method, err)
+			}
+			_ = resp.Body.Close()
+			if got := calls.Load(); got != 3 {
+				t.Fatalf("%s expected 3 attempts, got %d", method, got)
+			}
+		})
 	}
 }
 
