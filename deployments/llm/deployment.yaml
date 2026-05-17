@@ -76,7 +76,13 @@ spec:
         - name: download-script
           configMap:
             name: sn360-es-llm-download-script
-            defaultMode: 0o755
+            # 0755 is YAML 1.1 octal. `0o755` (YAML 1.2 / Go-style) only
+            # parses on kubectl ≥ 1.29 / sigs.k8s.io/yaml ≥ v1.4.0;
+            # older kubectl / helm / argocd built on yaml.v2 treat
+            # `0o755` as the string "0o755" and the API server rejects
+            # the manifest with `cannot convert string to int32`. Stick
+            # with the universally-supported form.
+            defaultMode: 0755
       initContainers:
         # Fetches Ternary-Bonsai-8B-Q2_0.gguf from HuggingFace on first
         # boot. Idempotent: skips the download when a non-zero file is
@@ -202,10 +208,26 @@ metadata:
   name: sn360-es-llm-models
   namespace: sn360-es
 spec:
-  # Multiple replicas mount the same GGUF read-only; if the storage
-  # class doesn't support ReadOnlyMany, switch to ReadWriteOnce and
-  # accept that scale-up replicas re-download once per node.
-  accessModes: ["ReadOnlyMany"]
+  # The download-model init container WRITES the ~3GB GGUF into this
+  # PVC; the main llama-server container then mounts it `readOnly:
+  # true`. The PVC itself must therefore be a writable mode at the
+  # storage class level. ReadOnlyMany is rejected at admission by
+  # most CSI drivers (or silently coerced to a read-only mount, in
+  # which case `curl -o` exits with EROFS and the pod never starts).
+  #
+  # ReadWriteOnce is the highest-portability choice and works on
+  # every CSI provisioner. Caveat: HPA scale-up replicas that land on
+  # a different node will fail to attach this PVC; the deliberate
+  # follow-up for multi-node scale-up is either:
+  #   (a) RWX storage class (EFS / CephFS / Filestore) — swap the
+  #       accessMode below to ReadWriteMany; the download happens
+  #       once cluster-wide and all pods share the same PVC, or
+  #   (b) StatefulSet with a per-pod PVC template — each pod gets its
+  #       own PVC and downloads the GGUF once per pod ever (cheap on
+  #       restart, expensive on first scale-up).
+  # For now we lock to RWO + replicas=1 with HPA tuned to keep us
+  # there until the StatefulSet/RWX follow-up lands.
+  accessModes: ["ReadWriteOnce"]
   resources:
     requests:
       storage: 8Gi
