@@ -261,12 +261,12 @@ func TestSupportAgent_Answer_DefaultsActionToExplain(t *testing.T) {
 
 func TestExplainVerdict_AllTiers(t *testing.T) {
 	cases := map[constant.Tier]string{
-		constant.TierBlocked:        "blocked",
-		constant.TierHighRisk:       "high-risk",
-		constant.TierWarning:        "suspicious",
-		constant.TierCaution:        "unusual",
-		constant.TierInformational:  "informational",
-		constant.TierTrusted:        "trusted",
+		constant.TierBlocked:       "blocked",
+		constant.TierHighRisk:      "high-risk",
+		constant.TierWarning:       "suspicious",
+		constant.TierCaution:       "unusual",
+		constant.TierInformational: "informational",
+		constant.TierTrusted:       "trusted",
 	}
 	for tier, fragment := range cases {
 		t.Run(string(tier), func(t *testing.T) {

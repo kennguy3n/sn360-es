@@ -28,9 +28,9 @@ func (s stubDirectory) ListGroups(_ context.Context, _ string) ([]DiscoveredGrou
 
 // recordingLabels records EnsureTierLabels calls.
 type recordingLabels struct {
-	mu       sync.Mutex
-	calls    []string
-	fail     map[string]error
+	mu    sync.Mutex
+	calls []string
+	fail  map[string]error
 }
 
 func newRecordingLabels() *recordingLabels {

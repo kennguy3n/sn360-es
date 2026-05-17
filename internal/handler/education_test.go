@@ -16,7 +16,7 @@ import (
 // doesn't fail when serving with a tenant_id.
 type noOpPublisher struct{}
 
-func (noOpPublisher) Publish(string, []byte) error            { return nil }
+func (noOpPublisher) Publish(string, []byte) error                        { return nil }
 func (noOpPublisher) PublishWithCorrelation(string, []byte, string) error { return nil }
 
 func newTestEducationService(t *testing.T) *education.MicroLessonService {

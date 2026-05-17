@@ -89,9 +89,9 @@ func TestNewSimulationTracker_AppliesClockDefault(t *testing.T) {
 func TestRecordInteraction_RejectsInvalidInputs(t *testing.T) {
 	tr, _ := NewSimulationTracker(TrackerConfig{Store: &stubInteractionStore{}})
 	cases := []struct {
-		name             string
-		campaign, user   string
-		action           dto.UserInteractionType
+		name           string
+		campaign, user string
+		action         dto.UserInteractionType
 	}{
 		{"empty campaign", "", "u", dto.InteractionOpened},
 		{"empty user", "c", "", dto.InteractionOpened},

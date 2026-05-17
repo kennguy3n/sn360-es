@@ -321,9 +321,9 @@ func TestClient_Health_FailingStatus(t *testing.T) {
 
 func TestClient_Score_ClampsAndDecides(t *testing.T) {
 	cases := []struct {
-		raw       int
-		clamped   int
-		want      Verdict
+		raw     int
+		clamped int
+		want    Verdict
 	}{
 		{-10, 0, VerdictPass},
 		{50, 50, VerdictEscalate},
