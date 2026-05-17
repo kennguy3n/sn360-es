@@ -65,7 +65,13 @@ func NewSubjectTagger(cfg SubjectTagConfig) (*SubjectTagger, error) {
 		cfg.Prefix = "SN360"
 	}
 	if len(cfg.Labels) == 0 {
-		cfg.Labels = DefaultSubjectTagLabels
+		// Copy DefaultSubjectTagLabels so the tagger owns its map; the
+		// package-level default must not be aliased into every instance
+		// (later mutations would race with Tag/Untag readers).
+		cfg.Labels = make(map[constant.Tier]string, len(DefaultSubjectTagLabels))
+		for k, v := range DefaultSubjectTagLabels {
+			cfg.Labels[k] = v
+		}
 	}
 	if cfg.Enabled {
 		// At least one tier at or above MinTier must have a label.

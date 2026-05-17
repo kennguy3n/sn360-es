@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,9 +35,15 @@ type fakeTier1 struct {
 	score      int
 	confidence float64
 	err        error
+	// called is incremented every time Evaluate runs. Tests that need
+	// to verify Tier 1 was (not) invoked should pass a pointer in.
+	called *atomic.Int32
 }
 
 func (f fakeTier1) Evaluate(_ context.Context, _ dto.EvaluateRequest) (dto.Tier1Outcome, error) {
+	if f.called != nil {
+		f.called.Add(1)
+	}
 	if f.err != nil {
 		return dto.Tier1Outcome{}, f.err
 	}
@@ -223,7 +230,7 @@ func TestPipelineIntegration_EvaluateRequestProducesBannerAction(t *testing.T) {
 func TestPipelineIntegration_Tier0BypassShortCircuits(t *testing.T) {
 	svc := startNATSService(t)
 
-	var tier1Called bool
+	var tier1Called atomic.Int32
 	evaluator := evaluate.NewEvaluator(evaluate.Config{
 		Tier0: fakeTier0{apply: func(_ dto.EvaluateRequest) dto.Tier0Outcome {
 			return dto.Tier0Outcome{
@@ -233,10 +240,11 @@ func TestPipelineIntegration_Tier0BypassShortCircuits(t *testing.T) {
 				SkipML:         true,
 			}
 		}},
-		Tier1: fakeTier1{score: 90, err: func() error {
-			tier1Called = true
-			return errors.New("tier1 should not have been called")
-		}()},
+		Tier1: fakeTier1{
+			score:  90,
+			err:    errors.New("tier1 should not have been called"),
+			called: &tier1Called,
+		},
 		Tier2:       fakeTier2{score: 90},
 		Rspamd:      fakeRspamd{score: 6.0},
 		Categorizer: fakeCategorizer{},
@@ -276,9 +284,9 @@ func TestPipelineIntegration_Tier0BypassShortCircuits(t *testing.T) {
 			t.Fatalf("expected no downstream stages for bypass; tier1=%v tier2=%v rspamd=%v",
 				res.Tier1, res.Tier2, res.Rspamd)
 		}
-		// The tier1Called flag is captured at construction time so it's
-		// always false; what matters is res.Tier1 is nil.
-		_ = tier1Called
+		if n := tier1Called.Load(); n != 0 {
+			t.Fatalf("tier1 was invoked %d time(s) on a Tier-0 bypass", n)
+		}
 	case <-ctx.Done():
 		t.Fatal("timeout waiting for bypass result")
 	}
