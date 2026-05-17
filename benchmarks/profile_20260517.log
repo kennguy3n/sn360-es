@@ -1,0 +1,47 @@
+=== RUN   TestLatencyDistribution
+    latency_distribution_test.go:70: 
+        Latency Distribution (5000 samples)
+          Avg:  14.261µs
+          Max:  789.809µs
+        
+          le        count         pct         histogram
+          ------------------------------------------------------------
+          1ms       5000          100.00   %  ###################################################
+          5ms       0             0.00     %  
+          10ms      0             0.00     %  
+          25ms      0             0.00     %  
+          50ms      0             0.00     %  
+          100ms     0             0.00     %  
+          250ms     0             0.00     %  
+          500ms     0             0.00     %  
+          1s        0             0.00     %  
+          2.5s      0             0.00     %  
+          5s        0             0.00     %  
+          10s       0             0.00     %  
+          30s       0             0.00     %  
+          +Inf      0             0.00     %  
+        
+    latency_distribution_test.go:79: wrote latency distribution to /home/ubuntu/repos/sn360-es/benchmarks/latency_distribution_20260517.txt
+--- PASS: TestLatencyDistribution (0.08s)
+=== RUN   TestResourceProfile
+    profile_test.go:129: 
+        Resource Profile
+        ================
+        Timestamp:        2026-05-17T03:43:14Z
+        Corpus size:      10000
+        Total duration:   96.879081ms
+        Avg latency:      9.479µs
+        p50 latency:      7.043µs
+        p95 latency:      25.173µs
+        p99 latency:      40.084µs
+        max latency:      312.304µs
+        Throughput:       103221.46 emails/sec
+        Peak memory:      14.08 MB
+        Total alloc:      30.30 MB
+        GC pauses:        4 (max 0.238 ms)
+        Peak goroutines:  2
+        
+    profile_test.go:143: wrote profile to /home/ubuntu/repos/sn360-es/benchmarks/profile_20260517.txt and /home/ubuntu/repos/sn360-es/benchmarks/profile_20260517.json
+--- PASS: TestResourceProfile (0.12s)
+PASS
+ok  	github.com/kennguy3n/sn360-es/internal/service/evaluate	0.208s

@@ -1,0 +1,87 @@
+goos: linux
+goarch: amd64
+pkg: github.com/kennguy3n/sn360-es/internal/service/evaluate
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkRuleCategorizer_HighSignal-8   	  224371	      5286 ns/op	    2392 B/op	      15 allocs/op
+BenchmarkRuleCategorizer_HighSignal-8   	  229495	      5244 ns/op	    2392 B/op	      15 allocs/op
+BenchmarkRuleCategorizer_HighSignal-8   	  228295	      5373 ns/op	    2392 B/op	      15 allocs/op
+BenchmarkRuleCategorizer_LowSignal-8    	20457552	        56.25 ns/op	      48 B/op	       1 allocs/op
+BenchmarkRuleCategorizer_LowSignal-8    	20316495	        55.48 ns/op	      48 B/op	       1 allocs/op
+BenchmarkRuleCategorizer_LowSignal-8    	20226313	        55.84 ns/op	      48 B/op	       1 allocs/op
+BenchmarkRuleCategorizer_AllSignals-8   	  800083	      1276 ns/op	    1118 B/op	       7 allocs/op
+BenchmarkRuleCategorizer_AllSignals-8   	  880033	      1253 ns/op	    1118 B/op	       7 allocs/op
+BenchmarkRuleCategorizer_AllSignals-8   	  934908	      1254 ns/op	    1118 B/op	       7 allocs/op
+BenchmarkRuleCategorizer_Categorise-8   	  421676	      2515 ns/op	    1904 B/op	      13 allocs/op
+BenchmarkRuleCategorizer_Categorise-8   	  478072	      2473 ns/op	    1904 B/op	      13 allocs/op
+BenchmarkRuleCategorizer_Categorise-8   	  472819	      2538 ns/op	    1904 B/op	      13 allocs/op
+BenchmarkEvaluator_SingleMessage-8      	   79394	     14396 ns/op	    4072 B/op	      44 allocs/op
+BenchmarkEvaluator_SingleMessage-8      	   79605	     14213 ns/op	    4078 B/op	      44 allocs/op
+BenchmarkEvaluator_SingleMessage-8      	   78680	     14149 ns/op	    4088 B/op	      44 allocs/op
+BenchmarkEvaluator_BatchOf64-8          	  107282	     11685 ns/op	    3161 B/op	      34 allocs/op
+BenchmarkEvaluator_BatchOf64-8          	  103755	     12173 ns/op	    3166 B/op	      34 allocs/op
+BenchmarkEvaluator_BatchOf64-8          	  106304	     11866 ns/op	    3170 B/op	      34 allocs/op
+BenchmarkEvaluator_Tier0Bypass-8        	 2541830	       481.2 ns/op	     656 B/op	       4 allocs/op
+BenchmarkEvaluator_Tier0Bypass-8        	 2437975	       476.0 ns/op	     656 B/op	       4 allocs/op
+BenchmarkEvaluator_Tier0Bypass-8        	 2498025	       480.9 ns/op	     656 B/op	       4 allocs/op
+BenchmarkEvaluator_FullEscalation-8     	   70478	     17351 ns/op	    4663 B/op	      47 allocs/op
+BenchmarkEvaluator_FullEscalation-8     	   65046	     17666 ns/op	    4665 B/op	      47 allocs/op
+BenchmarkEvaluator_FullEscalation-8     	   72496	     17162 ns/op	    4666 B/op	      47 allocs/op
+BenchmarkScore_AllWeights-8             	227034374	         5.246 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScore_AllWeights-8             	225775845	         5.296 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScore_AllWeights-8             	229112875	         5.204 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScore_ZeroWeights-8            	494923525	         2.356 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScore_ZeroWeights-8            	495648128	         2.380 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScore_ZeroWeights-8            	511069276	         2.356 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScore_FromResult-8             	90740059	        13.08 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScore_FromResult-8             	91146838	        13.26 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScore_FromResult-8             	87834259	        13.30 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/kennguy3n/sn360-es/internal/service/evaluate	44.588s
+goos: linux
+goarch: amd64
+pkg: github.com/kennguy3n/sn360-es/internal/service/tier0
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkGate_InternalBypass-8         	59438354	        19.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGate_InternalBypass-8         	60750631	        19.61 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGate_InternalBypass-8         	61428601	        19.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGate_VendorBypass-8           	61371031	        20.03 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGate_VendorBypass-8           	56624170	        20.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGate_VendorBypass-8           	56808528	        19.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGate_ExternalFullPath-8       	 1472834	       838.2 ns/op	      96 B/op	       5 allocs/op
+BenchmarkGate_ExternalFullPath-8       	 1419393	       822.3 ns/op	      96 B/op	       5 allocs/op
+BenchmarkGate_ExternalFullPath-8       	 1480210	       823.9 ns/op	      96 B/op	       5 allocs/op
+BenchmarkGate_HighVolumeRspamdOnly-8   	 1565296	       792.1 ns/op	      96 B/op	       5 allocs/op
+BenchmarkGate_HighVolumeRspamdOnly-8   	 1578549	       761.0 ns/op	      96 B/op	       5 allocs/op
+BenchmarkGate_HighVolumeRspamdOnly-8   	 1544314	       770.8 ns/op	      96 B/op	       5 allocs/op
+PASS
+ok  	github.com/kennguy3n/sn360-es/internal/service/tier0	19.305s
+goos: linux
+goarch: amd64
+pkg: github.com/kennguy3n/sn360-es/internal/service/action
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkBannerRenderer_HighRisk-8   	   41658	     29965 ns/op	   11725 B/op	     133 allocs/op
+BenchmarkBannerRenderer_HighRisk-8   	   39739	     29080 ns/op	   11725 B/op	     133 allocs/op
+BenchmarkBannerRenderer_HighRisk-8   	   41842	     29242 ns/op	   11725 B/op	     133 allocs/op
+BenchmarkBannerRenderer_AllTiers-8   	   41628	     28259 ns/op	   11413 B/op	     126 allocs/op
+BenchmarkBannerRenderer_AllTiers-8   	   40910	     28252 ns/op	   11413 B/op	     126 allocs/op
+BenchmarkBannerRenderer_AllTiers-8   	   42663	     28237 ns/op	   11413 B/op	     126 allocs/op
+BenchmarkBannerRenderer_RTL-8        	   45883	     25340 ns/op	   10997 B/op	     109 allocs/op
+BenchmarkBannerRenderer_RTL-8        	   45358	     25642 ns/op	   10997 B/op	     109 allocs/op
+BenchmarkBannerRenderer_RTL-8        	   46144	     25633 ns/op	   10997 B/op	     109 allocs/op
+PASS
+ok  	github.com/kennguy3n/sn360-es/internal/service/action	13.271s
+goos: linux
+goarch: amd64
+pkg: github.com/kennguy3n/sn360-es/internal/service/education
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkTemplateLibrary_Render-8      	  584432	      1782 ns/op	    1424 B/op	      26 allocs/op
+BenchmarkTemplateLibrary_Render-8      	  644956	      1794 ns/op	    1424 B/op	      26 allocs/op
+BenchmarkTemplateLibrary_Render-8      	  615751	      1819 ns/op	    1424 B/op	      26 allocs/op
+BenchmarkTemplateLibrary_Get-8         	31096216	        37.97 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTemplateLibrary_Get-8         	32518974	        37.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTemplateLibrary_Get-8         	31827579	        37.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSimulationEngine_Dispatch-8   	   75271	     15283 ns/op	   11420 B/op	     209 allocs/op
+BenchmarkSimulationEngine_Dispatch-8   	   77671	     15372 ns/op	   11420 B/op	     209 allocs/op
+BenchmarkSimulationEngine_Dispatch-8   	   76500	     15336 ns/op	   11420 B/op	     209 allocs/op
+PASS
+ok  	github.com/kennguy3n/sn360-es/internal/service/education	11.142s

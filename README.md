@@ -185,6 +185,25 @@ make test-integration   # Integration tests (NATS / Redis / PG via testcontainer
 make lint               # gofmt + go vet
 ```
 
+## Benchmarks
+
+```bash
+make bench-all          # Run the full suite (corpus + micro + accuracy + profile)
+
+make bench              # Go microbenchmarks (ns/op, B/op, allocs/op)
+make bench-accuracy     # Classification accuracy / precision / recall / F1 / confusion matrix
+make bench-profile      # Resource utilisation (p50/p95/p99 latency, GC, peak memory, throughput)
+make gen-corpus         # Regenerate the labelled 1 000-email corpus (seed 42)
+```
+
+All artefacts land under [`benchmarks/`](./benchmarks/) with a UTC
+datestamp; the most recent baseline is summarised in
+[`benchmarks/BASELINE.md`](./benchmarks/BASELINE.md). Accuracy and
+profile tests are gated by `//go:build benchmark` so they stay out of
+`make test` — see [`benchmarks/README.md`](./benchmarks/README.md) for
+details on what each artefact contains and how to compare runs with
+`benchstat`.
+
 ## Documentation
 
 | Doc | Purpose |
