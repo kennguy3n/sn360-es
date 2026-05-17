@@ -140,16 +140,17 @@ type application struct {
 	rspamdCache *cache.RspamdCache
 
 	// HTTP-facing services.
-	bannerRenderer *action.BannerRenderer
-	feedbackSvc    *action.FeedbackService
-	releaseSvc     *action.ReleaseService
-	urlRewriter    *action.URLRewriter
-	microLessonSvc *education.MicroLessonService
-	simulationEng  *education.SimulationEngine
-	dashboardGen   *dashboard.DashboardGenerator
-	recipientSvc   *predict.RecipientService
-	openSvc        *predict.OpenService
-	escalationSvc  *agent.EscalationService
+	bannerRenderer    *action.BannerRenderer
+	feedbackSvc       *action.FeedbackService
+	releaseSvc        *action.ReleaseService
+	urlRewriter       *action.URLRewriter
+	microLessonSvc    *education.MicroLessonService
+	simulationEng     *education.SimulationEngine
+	simulationTracker *education.SimulationTracker
+	dashboardGen      *dashboard.DashboardGenerator
+	recipientSvc      *predict.RecipientService
+	openSvc           *predict.OpenService
+	escalationSvc     *agent.EscalationService
 
 	// Evaluation pipeline. Tier 0 is always wireable (pure CPU); the
 	// other clients are optional and stay nil when their endpoints are
@@ -394,6 +395,21 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		logger.Warn("sn360-es: simulation engine init failed", slog.Any("error", eerr))
 	}
 
+	// Simulation tracker — memory-backed InteractionStore so the
+	// es.education.simulation.result consumer has somewhere to land
+	// interactions until a Postgres-backed store is wired. Publisher
+	// is intentionally nil here because the tracker writes the same
+	// `es.education.simulation.result` subject the consumer is reading
+	// from; re-publishing would cause an infinite loop.
+	if tracker, terr := education.NewSimulationTracker(education.TrackerConfig{
+		Store:  education.NewMemoryInteractionStore(),
+		Logger: logger,
+	}); terr == nil {
+		app.simulationTracker = tracker
+	} else {
+		logger.Warn("sn360-es: simulation tracker init failed", slog.Any("error", terr))
+	}
+
 	// Recipient + Open predict services. Both depend only on optional
 	// look-ups so they are always wireable.
 	app.recipientSvc = predict.NewRecipientService(predict.RecipientServiceConfig{})
@@ -633,6 +649,147 @@ func (a *application) StartConsumers(ctx context.Context) error {
 		}
 	}
 
+	// es.evaluate.request → the multi-tier detection pipeline.
+	// This is the documented entry point for the evaluation flow
+	// (ARCHITECTURE.md §2): ingestion-svc publishes one
+	// EvaluateRequest per discovered message, this consumer fans it
+	// through Tier 0 → Tier 1 → Tier 2 → Rspamd via the evaluator,
+	// and publishes the resulting EvaluateResult on
+	// `es.evaluate.result` for the persist + action consumers to
+	// pick up. The evaluator is constructed unconditionally so this
+	// subscription is always critical when wired.
+	if a.evaluator != nil {
+		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.request", a.handleEvaluateRequest,
+			events.WithDurable("evaluate-svc"),
+			events.WithMaxDeliver(5))
+		if err != nil {
+			a.logger.Error("sn360-es: subscribe evaluate.request (evaluate-svc) failed",
+				slog.Any("error", err))
+			critErrs = append(critErrs, fmt.Errorf("evaluate-svc: %w", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
+	// es.evaluate.result → ingestion-action chain: render the banner,
+	// apply the native tier label, rewrite URLs for risky tiers, and
+	// quarantine on Blocked. Each step is best-effort; their failures
+	// must not block the others or block re-delivery, so we always
+	// return nil from the handler. Critical when at least one of the
+	// downstream services is wired.
+	if a.bannerRenderer != nil || a.urlRewriter != nil || a.releaseSvc != nil {
+		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.result", a.handleIngestionAction,
+			events.WithDurable("ingestion-action"),
+			events.WithMaxDeliver(3))
+		if err != nil {
+			a.logger.Error("sn360-es: subscribe evaluate.result (ingestion-action) failed",
+				slog.Any("error", err))
+			critErrs = append(critErrs, fmt.Errorf("ingestion-action: %w", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
+	// es.education.simulation.send → dispatch a campaign through the
+	// SimulationEngine. The engine itself is always wired (memory
+	// store + embedded templates), so subscription failure is
+	// critical: a silent skip would let send requests pile up in the
+	// stream.
+	if a.simulationEng != nil {
+		sub, err := a.eventBus.Subscribe(ctx, "es.education.simulation.send", a.handleSimulationSend,
+			events.WithDurable("education-sim"),
+			events.WithMaxDeliver(3))
+		if err != nil {
+			a.logger.Error("sn360-es: subscribe education.simulation.send (education-sim) failed",
+				slog.Any("error", err))
+			critErrs = append(critErrs, fmt.Errorf("education-sim: %w", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
+	// es.education.simulation.result → record per-user interaction
+	// outcomes (delivered / opened / clicked / submitted / reported /
+	// ignored) into the SimulationTracker so Aggregate() returns
+	// up-to-date counts for the dashboard. Best-effort: a missing
+	// tracker means we just skip persistence; the stream is
+	// independent of the engine path that originally published the
+	// interaction.
+	if a.simulationTracker != nil {
+		sub, err := a.eventBus.Subscribe(ctx, "es.education.simulation.result", a.handleSimulationResult,
+			events.WithDurable("education-sim-track"),
+			events.WithMaxDeliver(3))
+		if err != nil {
+			a.logger.Warn("sn360-es: subscribe education.simulation.result (education-sim-track) failed",
+				slog.Any("error", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
+	// es.onboarding.> → onboarding-side effects (label-applier seed,
+	// vendor allowlist warm-up, audit). Until a DirectoryClient is
+	// wired the agent itself is not constructed, so this consumer
+	// runs in observe-only mode: it logs the event and continues so
+	// downstream services that depend on the onboarding stream (e.g.
+	// the future user-store hydrator) can still consume the same
+	// subject without a separate subscription.
+	sub, err := a.eventBus.Subscribe(ctx, "es.onboarding.>", a.handleOnboarding,
+		events.WithDurable("ingestion-onboard"),
+		events.WithMaxDeliver(3))
+	if err != nil {
+		a.logger.Warn("sn360-es: subscribe onboarding (ingestion-onboard) failed",
+			slog.Any("error", err))
+	} else {
+		a.trackSub(sub)
+	}
+
+	// es.action.quarantine.release → user (or AI agent) released a
+	// quarantined message. Calls the ReleaseService which re-attaches
+	// the original body in the provider mailbox and publishes the
+	// outcome on `es.action.quarantine.release.result`. Critical when
+	// the release service is wired.
+	if a.releaseSvc != nil {
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.quarantine.release", a.handleQuarantineRelease,
+			events.WithDurable("quarantine-release"),
+			events.WithMaxDeliver(3))
+		if err != nil {
+			a.logger.Error("sn360-es: subscribe quarantine.release (quarantine-release) failed",
+				slog.Any("error", err))
+			critErrs = append(critErrs, fmt.Errorf("quarantine-release: %w", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
+	// es.action.escalation.> → fan escalation events (created /
+	// resolved) into the EscalationService. Critical when the
+	// service is wired.
+	if a.escalationSvc != nil {
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.escalation.>", a.handleEscalation,
+			events.WithDurable("escalation"),
+			events.WithMaxDeliver(3))
+		if err != nil {
+			a.logger.Error("sn360-es: subscribe escalation (escalation) failed",
+				slog.Any("error", err))
+			critErrs = append(critErrs, fmt.Errorf("escalation: %w", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
+	// Optional Tier 1 batch orchestrator. Pulls EvaluateRequest
+	// messages in batches of up to BatchSize from `es.evaluate.request`,
+	// runs Tier 0 in-process, packs the survivors into a single batched
+	// Tier 1 HTTP call, escalates ambiguous verdicts through the full
+	// evaluator, and publishes verdicts on the action subject. Only
+	// runs when explicitly opted-in via TIER1_BATCH_ENABLED — the
+	// per-message consumer above remains the default path.
+	if a.batchOrch != nil {
+		a.batchOrch.Start(ctx)
+		a.logger.Info("sn360-es: tier1 batch orchestrator started")
+	}
+
 	// DLQ processor — best-effort. It watches the canonical DLQ
 	// subjects and logs each failed message; without it the system
 	// still functions, the operator just loses the structured failed-
@@ -787,6 +944,403 @@ func (a *application) handleEducationTrigger(ctx context.Context, msg events.Mes
 			slog.String("category", string(res.Primary)),
 			slog.Any("error", err),
 		)
+	}
+	return nil
+}
+
+// handleEvaluateRequest fans an es.evaluate.request payload through
+// the multi-tier evaluator and publishes the verdict on
+// `es.evaluate.result`. Malformed payloads (poison messages) are
+// dropped — returning nil tells the bus not to redeliver them. Real
+// evaluator errors propagate so the bus can retry up to MaxDeliver,
+// then DLQ.
+func (a *application) handleEvaluateRequest(ctx context.Context, msg events.Message) error {
+	if a.evaluator == nil || a.eventBus == nil {
+		return nil
+	}
+	var req dto.EvaluateRequest
+	if err := json.Unmarshal(msg.Data(), &req); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: evaluate.request unmarshal failed",
+			slog.Any("error", err))
+		return nil
+	}
+	if req.MessageID == "" || req.TenantID == "" {
+		a.logger.WarnContext(ctx, "sn360-es: evaluate.request missing identifiers",
+			slog.String("tenant_id", req.TenantID),
+			slog.String("message_id", req.MessageID))
+		return nil
+	}
+	result, err := a.evaluator.Evaluate(ctx, req)
+	if err != nil {
+		return fmt.Errorf("evaluate: %w", err)
+	}
+	if result.MessageID == "" {
+		result.MessageID = req.MessageID
+	}
+	if result.TenantID == "" {
+		result.TenantID = req.TenantID
+	}
+	if result.CorrelationID == "" {
+		result.CorrelationID = req.CorrelationID
+	}
+	if result.EvaluatedAt.IsZero() {
+		result.EvaluatedAt = time.Now().UTC()
+	}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: evaluate.result marshal failed",
+			slog.Any("error", err))
+		return nil
+	}
+	if err := a.eventBus.Publish(ctx, "es.evaluate.result", payload,
+		events.WithCorrelationID(req.CorrelationID),
+		events.WithTenantID(req.TenantID),
+		events.WithEventType("evaluate.result"),
+	); err != nil {
+		return fmt.Errorf("publish evaluate.result: %w", err)
+	}
+	return nil
+}
+
+// handleIngestionAction renders the banner, rewrites risky URLs, and
+// triggers a quarantine reference for Blocked verdicts. Each step is
+// best-effort: a per-step failure is logged but does not abort the
+// chain and does not return an error (so the message is not
+// redelivered just because one provider call timed out). Native label
+// application is wired separately once a LabelProvider is registered
+// (Group D); until then the chain operates without the label step.
+func (a *application) handleIngestionAction(ctx context.Context, msg events.Message) error {
+	var res dto.EvaluateResult
+	if err := json.Unmarshal(msg.Data(), &res); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: evaluate.result unmarshal failed in ingestion-action",
+			slog.Any("error", err))
+		return nil
+	}
+	if res.MessageID == "" || res.TenantID == "" {
+		return nil
+	}
+
+	// 1. Banner — only renders into bytes; the actual provider-side
+	// injection happens in ingestion-svc, which subscribes to the
+	// `es.action.banner` subject. We publish the rendered HTML so the
+	// downstream injector does not have to know about templates.
+	if a.bannerRenderer != nil && res.Tier.Valid() && res.Tier != constant.TierTrusted {
+		input := action.BannerInput{
+			Tier:        res.Tier,
+			Primary:     res.Primary,
+			Secondary:   res.Secondary,
+			ReasonCodes: res.ReasonCodes,
+			Locale:      "en",
+		}
+		// ActionToken is required for tiers that allow Mark Safe; we
+		// only synthesise one when the JWT issuer is wired. The
+		// action is left as "mark_safe" so the banner CTA matches
+		// the canonical FeedbackAction value enforced by the banner
+		// handler.
+		if input.Tier.AllowsMarkSafe() && a.jwtIssuer != nil {
+			if tok, terr := a.jwtIssuer.Issue(res.TenantID, res.MessageID, privacy.IssueOptions{
+				Tier:   string(res.Tier),
+				Action: string(action.FeedbackMarkSafe),
+			}); terr == nil {
+				input.ActionToken = tok
+			} else {
+				a.logger.WarnContext(ctx, "sn360-es: ingestion-action: issue banner token failed",
+					slog.String("tenant_id", res.TenantID),
+					slog.Any("error", terr))
+			}
+		}
+		if html, rerr := a.bannerRenderer.Render(input); rerr != nil {
+			a.logger.WarnContext(ctx, "sn360-es: ingestion-action: banner render failed",
+				slog.String("tenant_id", res.TenantID),
+				slog.String("message_id", res.MessageID),
+				slog.Any("error", rerr))
+		} else {
+			bannerEvt := map[string]any{
+				"tenant_id":      res.TenantID,
+				"message_id":     res.MessageID,
+				"correlation_id": res.CorrelationID,
+				"tier":           res.Tier,
+				"html":           string(html),
+			}
+			if blob, merr := json.Marshal(bannerEvt); merr == nil {
+				if perr := a.eventBus.Publish(ctx, "es.action.banner", blob,
+					events.WithTenantID(res.TenantID),
+					events.WithCorrelationID(res.CorrelationID),
+					events.WithEventType("action.banner"),
+				); perr != nil {
+					a.logger.WarnContext(ctx, "sn360-es: ingestion-action: publish banner failed",
+						slog.Any("error", perr))
+				}
+			}
+		}
+	}
+
+	// 2. URL rewriting — rewriter takes the result's reason codes and
+	// extracts the URLs from the body in the live ingestion path. The
+	// rewriter exposes a per-URL Rewrite() call rather than a result-
+	// level helper, so the ingestion-svc itself owns the per-URL fan-
+	// out. We publish a signal here so the downstream service knows it
+	// should rewrite the message body for this tier.
+	if a.urlRewriter != nil && (res.Tier == constant.TierBlocked || res.Tier == constant.TierHighRisk) {
+		signal := map[string]any{
+			"tenant_id":      res.TenantID,
+			"message_id":     res.MessageID,
+			"correlation_id": res.CorrelationID,
+			"tier":           res.Tier,
+		}
+		if blob, merr := json.Marshal(signal); merr == nil {
+			if perr := a.eventBus.Publish(ctx, "es.action.url_rewrite", blob,
+				events.WithTenantID(res.TenantID),
+				events.WithCorrelationID(res.CorrelationID),
+				events.WithEventType("action.url_rewrite"),
+			); perr != nil {
+				a.logger.WarnContext(ctx, "sn360-es: ingestion-action: publish url_rewrite signal failed",
+					slog.Any("error", perr))
+			}
+		}
+	}
+
+	// 3. Quarantine — only when the verdict is Blocked. The actual
+	// provider-side replacement happens in ingestion-svc; here we
+	// publish a signal carrying the verdict so the downstream
+	// quarantine consumer can pull the provider client off the
+	// tenant context and act.
+	if res.Tier == constant.TierBlocked {
+		signal := map[string]any{
+			"tenant_id":      res.TenantID,
+			"message_id":     res.MessageID,
+			"correlation_id": res.CorrelationID,
+			"tier":           res.Tier,
+			"primary":        res.Primary,
+			"score":          res.Score,
+		}
+		if blob, merr := json.Marshal(signal); merr == nil {
+			if perr := a.eventBus.Publish(ctx, "es.action.quarantine", blob,
+				events.WithTenantID(res.TenantID),
+				events.WithCorrelationID(res.CorrelationID),
+				events.WithEventType("action.quarantine"),
+			); perr != nil {
+				a.logger.WarnContext(ctx, "sn360-es: ingestion-action: publish quarantine signal failed",
+					slog.Any("error", perr))
+			}
+		}
+	}
+
+	// 4. Native label — publish a typed signal so the provider-aware
+	// label applier (wired in Group D) can pick it up. We use the
+	// canonical `es.action.label` subject documented in
+	// ARCHITECTURE.md §8.4.
+	if res.Tier.Valid() && res.Tier != constant.TierTrusted {
+		signal := map[string]any{
+			"tenant_id":      res.TenantID,
+			"message_id":     res.MessageID,
+			"correlation_id": res.CorrelationID,
+			"tier":           res.Tier,
+			"primary":        res.Primary,
+		}
+		if blob, merr := json.Marshal(signal); merr == nil {
+			if perr := a.eventBus.Publish(ctx, "es.action.label", blob,
+				events.WithTenantID(res.TenantID),
+				events.WithCorrelationID(res.CorrelationID),
+				events.WithEventType("action.label"),
+			); perr != nil {
+				a.logger.WarnContext(ctx, "sn360-es: ingestion-action: publish label signal failed",
+					slog.Any("error", perr))
+			}
+		}
+	}
+
+	return nil
+}
+
+// simulationSendEnvelope is the wire format expected on
+// `es.education.simulation.send`. It carries the campaign ID and the
+// target list assembled by the management service.
+type simulationSendEnvelope struct {
+	CampaignID string                          `json:"campaign_id"`
+	Targets    []simulationSendTargetEnvelope  `json:"targets"`
+	Params     map[string]string               `json:"params,omitempty"`
+}
+
+type simulationSendTargetEnvelope struct {
+	UserHash     string `json:"user_hash"`
+	MailboxAlias string `json:"mailbox_alias"`
+	DisplayName  string `json:"display_name,omitempty"`
+}
+
+// handleSimulationSend dispatches a campaign through SimulationEngine.
+// Malformed payloads are dropped; downstream errors propagate so the
+// bus can retry.
+func (a *application) handleSimulationSend(ctx context.Context, msg events.Message) error {
+	if a.simulationEng == nil {
+		return nil
+	}
+	var env simulationSendEnvelope
+	if err := json.Unmarshal(msg.Data(), &env); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: education.simulation.send unmarshal failed",
+			slog.Any("error", err))
+		return nil
+	}
+	if env.CampaignID == "" {
+		a.logger.WarnContext(ctx, "sn360-es: education.simulation.send missing campaign_id")
+		return nil
+	}
+	targets := make([]education.SimulationTarget, 0, len(env.Targets))
+	for _, t := range env.Targets {
+		if t.UserHash == "" || t.MailboxAlias == "" {
+			continue
+		}
+		targets = append(targets, education.SimulationTarget{
+			UserHash:     t.UserHash,
+			MailboxAlias: t.MailboxAlias,
+			DisplayName:  t.DisplayName,
+		})
+	}
+	if _, err := a.simulationEng.SendSimulation(ctx, env.CampaignID, targets, env.Params); err != nil {
+		return fmt.Errorf("simulation.send: %w", err)
+	}
+	return nil
+}
+
+// handleSimulationResult records an interaction event published by
+// the engine (or by the click-tracking endpoint) into the tracker so
+// Aggregate() returns up-to-date counts. We deliberately do not
+// re-publish from inside the handler — that would loop on the same
+// subject we are reading from.
+func (a *application) handleSimulationResult(ctx context.Context, msg events.Message) error {
+	if a.simulationTracker == nil {
+		return nil
+	}
+	var interaction dto.UserInteraction
+	if err := json.Unmarshal(msg.Data(), &interaction); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: education.simulation.result unmarshal failed",
+			slog.Any("error", err))
+		return nil
+	}
+	if interaction.CampaignID == "" || interaction.UserHash == "" || !interaction.Action.Valid() {
+		return nil
+	}
+	if _, err := a.simulationTracker.RecordInteraction(ctx,
+		interaction.CampaignID, interaction.UserHash, interaction.Action); err != nil {
+		return fmt.Errorf("simulation.result: %w", err)
+	}
+	return nil
+}
+
+// handleOnboarding dispatches by subject suffix. Until an
+// OnboardingAgent (which needs a DirectoryClient) is wired the handler
+// runs in observe-only mode: it logs the event so operators can
+// confirm the stream is live, and returns nil so the bus does not
+// redeliver. The conditional inside is intentionally permissive — new
+// suffixes can be added without touching the subscription.
+func (a *application) handleOnboarding(ctx context.Context, msg events.Message) error {
+	subject := msg.Subject()
+	switch {
+	case strings.HasSuffix(subject, ".user.created"),
+		strings.HasSuffix(subject, ".user.deleted"),
+		strings.HasSuffix(subject, ".tenant.created"),
+		strings.HasSuffix(subject, ".vendor.seeded"):
+		a.logger.InfoContext(ctx, "sn360-es: onboarding event received",
+			slog.String("subject", subject),
+			slog.Int("bytes", len(msg.Data())))
+	default:
+		a.logger.DebugContext(ctx, "sn360-es: onboarding event ignored (unknown suffix)",
+			slog.String("subject", subject))
+	}
+	return nil
+}
+
+// quarantineReleaseEnvelope is the wire format for the user- or
+// agent-driven release flow. The fields mirror the HTTP handler's
+// request body so the same struct can travel over either transport.
+type quarantineReleaseEnvelope struct {
+	TenantID             string `json:"tenant_id"`
+	PseudonymizedMessage string `json:"pseudonymized_message_id"`
+	RequestedBy          string `json:"requested_by,omitempty"`
+	RestoredBody         string `json:"restored_body,omitempty"`
+}
+
+// handleQuarantineRelease calls ReleaseService.Release; the service
+// itself publishes the outcome on
+// `es.action.quarantine.release.result`, so we only need to surface
+// real errors here.
+func (a *application) handleQuarantineRelease(ctx context.Context, msg events.Message) error {
+	if a.releaseSvc == nil {
+		return nil
+	}
+	var env quarantineReleaseEnvelope
+	if err := json.Unmarshal(msg.Data(), &env); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: quarantine.release unmarshal failed",
+			slog.Any("error", err))
+		return nil
+	}
+	if env.TenantID == "" || env.PseudonymizedMessage == "" {
+		return nil
+	}
+	if _, err := a.releaseSvc.Release(ctx, action.ReleaseRequest{
+		TenantID:             env.TenantID,
+		PseudonymizedMessage: env.PseudonymizedMessage,
+		RequestedBy:          env.RequestedBy,
+		RestoredBody:         env.RestoredBody,
+	}); err != nil {
+		return fmt.Errorf("quarantine.release: %w", err)
+	}
+	return nil
+}
+
+// escalationCreateEnvelope and escalationResolveEnvelope are the wire
+// formats for the two escalation subjects. They keep the JSON
+// independent of the internal DTO so future schema changes don't
+// require coordinated bus migrations.
+type escalationCreateEnvelope struct {
+	TenantID string                 `json:"tenant_id"`
+	Incident dto.EscalationIncident `json:"incident"`
+}
+
+type escalationResolveEnvelope struct {
+	TicketID     string                 `json:"ticket_id"`
+	ResolverHash string                 `json:"resolver_hash"`
+	Outcome      dto.EscalationOutcome  `json:"outcome"`
+	Notes        string                 `json:"notes,omitempty"`
+}
+
+// handleEscalation dispatches by subject suffix between Escalate (for
+// `*.created`) and ResolveEscalation (for `*.resolved`).
+func (a *application) handleEscalation(ctx context.Context, msg events.Message) error {
+	if a.escalationSvc == nil {
+		return nil
+	}
+	subject := msg.Subject()
+	switch {
+	case strings.HasSuffix(subject, ".created"):
+		var env escalationCreateEnvelope
+		if err := json.Unmarshal(msg.Data(), &env); err != nil {
+			a.logger.WarnContext(ctx, "sn360-es: escalation.created unmarshal failed",
+				slog.Any("error", err))
+			return nil
+		}
+		if env.TenantID == "" {
+			return nil
+		}
+		if _, err := a.escalationSvc.Escalate(ctx, env.TenantID, env.Incident); err != nil {
+			return fmt.Errorf("escalation.created: %w", err)
+		}
+	case strings.HasSuffix(subject, ".resolved"):
+		var env escalationResolveEnvelope
+		if err := json.Unmarshal(msg.Data(), &env); err != nil {
+			a.logger.WarnContext(ctx, "sn360-es: escalation.resolved unmarshal failed",
+				slog.Any("error", err))
+			return nil
+		}
+		if env.TicketID == "" {
+			return nil
+		}
+		if _, err := a.escalationSvc.ResolveEscalation(ctx, env.TicketID, env.ResolverHash, env.Outcome, env.Notes); err != nil {
+			return fmt.Errorf("escalation.resolved: %w", err)
+		}
+	default:
+		a.logger.DebugContext(ctx, "sn360-es: escalation event ignored (unknown suffix)",
+			slog.String("subject", subject))
 	}
 	return nil
 }
