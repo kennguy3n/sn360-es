@@ -726,6 +726,12 @@ func defaultAuthSkipPaths() []string {
 		// authenticate through their own signed tokens.
 		"/v1/banner/action",
 		"/v1/quarantine/release",
+		// Education lessons are linked from the email banner's
+		// "Learn more" affordance; the click reaches an end user
+		// who does not carry a Bearer JWT. The lesson handler
+		// only returns static localised copy, so skipping auth
+		// here is safe — no tenant scoping is needed.
+		"/v1/education/lesson/",
 	}
 }
 

@@ -99,6 +99,13 @@ func NewCORSFromConfig(next http.Handler, cfg config.Config, override []string) 
 }
 
 // ServeHTTP implements http.Handler.
+//
+// Allow-Origin (and the paired Vary: Origin) is set on every
+// cross-origin response so the browser can decide whether to expose
+// the body to the page. Allow-Methods, Allow-Headers and Max-Age are
+// only meaningful on preflight (OPTIONS) responses per the CORS spec
+// (Fetch §3.2.5), so we gate them on r.Method == OPTIONS to avoid
+// shipping bytes the browser will discard on every API call.
 func (c *CORS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	origin := r.Header.Get("Origin")
 	if origin != "" && c.allow(origin) {
@@ -107,12 +114,12 @@ func (c *CORS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else if c.wildcard {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 	}
-	w.Header().Set("Access-Control-Allow-Methods", c.methods)
-	w.Header().Set("Access-Control-Allow-Headers", c.headers)
-	if c.maxAge != "" {
-		w.Header().Set("Access-Control-Max-Age", c.maxAge)
-	}
 	if r.Method == http.MethodOptions {
+		w.Header().Set("Access-Control-Allow-Methods", c.methods)
+		w.Header().Set("Access-Control-Allow-Headers", c.headers)
+		if c.maxAge != "" {
+			w.Header().Set("Access-Control-Max-Age", c.maxAge)
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

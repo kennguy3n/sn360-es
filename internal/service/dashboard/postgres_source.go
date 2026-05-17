@@ -136,17 +136,19 @@ func (s *PostgresSource) Feedback(ctx context.Context, tenantID string, r dto.Ti
 	return dto.FeedbackStats{}, nil
 }
 
-// Quarantine counts evaluation_results rows in the Quarantine tier
-// (canonical constant.TierBlocked equivalent at the storage layer
-// uses the raw string written by evaluateResultRow). Released /
-// false-quarantine counts are zero — they require a dedicated
-// quarantine_actions table the schema does not yet have.
+// Quarantine counts evaluation_results rows that match the canonical
+// quarantine tier. The architecture (PROPOSAL.md §3) only
+// auto-quarantines at Blocked — HighRisk surfaces a warning banner
+// but does NOT pull the message — so this filter is intentionally
+// "Blocked" only. Released / false-quarantine counts are zero;
+// they require a dedicated quarantine_actions table the v1 schema
+// does not yet have.
 func (s *PostgresSource) Quarantine(ctx context.Context, tenantID string, r dto.TimeRange) (dto.QuarantineStats, error) {
 	const q = `
         SELECT COUNT(*)
         FROM evaluation_results
         WHERE tenant_id = $1 AND evaluated_at >= $2 AND evaluated_at < $3
-              AND tier IN ('Blocked', 'Quarantine', 'HighRisk')
+              AND tier = 'Blocked'
     `
 	var n int
 	if err := s.db.QueryRowContext(ctx, q, tenantID, r.Start.UTC(), r.End.UTC()).Scan(&n); err != nil {
