@@ -68,7 +68,17 @@ type Config struct {
 
 	// MaxRetries is the number of retry attempts for idempotent
 	// failures. Default: 2 (so each call makes at most 3 attempts).
+	//
+	// The zero value triggers the default. To explicitly disable
+	// retries pass 0 via WithMaxRetries / WithNoRetries — the option
+	// pattern flips an internal flag so the defaulting logic can
+	// distinguish "unset" from "explicitly zero".
 	MaxRetries int
+	// maxRetriesExplicit is set by WithMaxRetries / WithNoRetries so
+	// defaulted() can leave MaxRetries==0 alone when it was passed
+	// deliberately. The field is unexported so struct-literal
+	// callers cannot accidentally toggle it.
+	maxRetriesExplicit bool
 
 	// RetryBaseDelay is the first retry backoff. Each subsequent retry
 	// doubles. Default: 100ms.
@@ -116,7 +126,7 @@ func (c Config) defaulted() Config {
 	}
 	if c.MaxRetries < 0 {
 		c.MaxRetries = 0
-	} else if c.MaxRetries == 0 {
+	} else if c.MaxRetries == 0 && !c.maxRetriesExplicit {
 		c.MaxRetries = 2
 	}
 	if c.RetryBaseDelay == 0 {
@@ -211,8 +221,26 @@ func FromHTTPClient(name string, hc *http.Client, opts ...Option) *Client {
 // Option mutates a Config (used by FromHTTPClient).
 type Option func(*Config)
 
-// WithMaxRetries overrides the retry budget.
-func WithMaxRetries(n int) Option { return func(c *Config) { c.MaxRetries = n } }
+// WithMaxRetries overrides the retry budget. n=0 explicitly disables
+// retries (each call makes exactly one attempt); the option pattern
+// records the override so defaulted() will not overwrite it with the
+// package default of 2.
+func WithMaxRetries(n int) Option {
+	return func(c *Config) {
+		c.MaxRetries = n
+		c.maxRetriesExplicit = true
+	}
+}
+
+// WithNoRetries is a readability shortcut for WithMaxRetries(0).
+// Useful for callers whose endpoints are not idempotent and who
+// prefer the intent to be obvious at the call site.
+func WithNoRetries() Option {
+	return func(c *Config) {
+		c.MaxRetries = 0
+		c.maxRetriesExplicit = true
+	}
+}
 
 // WithRetryBaseDelay overrides the base retry delay.
 func WithRetryBaseDelay(d time.Duration) Option { return func(c *Config) { c.RetryBaseDelay = d } }

@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
 
 	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
@@ -585,18 +585,28 @@ SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, count_7d,
 
 // --- helpers ------------------------------------------------------------
 
+// pgUniqueViolationCode is the SQLSTATE for unique_violation.
+// https://www.postgresql.org/docs/current/errcodes-appendix.html
+const pgUniqueViolationCode = "23505"
+
+// isUniqueViolation reports whether err is a Postgres unique-constraint
+// violation. It supports both pgx/v5 (the default driver in this repo —
+// `*pgconn.PgError`) and lib/pq (legacy callers — `*pq.Error`) by
+// inspecting the typed SQLSTATE rather than message text, which is
+// locale-dependent and brittle across driver upgrades.
 func isUniqueViolation(err error) bool {
 	if err == nil {
 		return false
 	}
-	// pq error code for unique_violation is 23505.
+	var pgxErr *pgconn.PgError
+	if errors.As(err, &pgxErr) {
+		return pgxErr.Code == pgUniqueViolationCode
+	}
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) {
-		return pqErr.Code == "23505"
+		return string(pqErr.Code) == pgUniqueViolationCode
 	}
-	// pgx stdlib surface — sniff by message text as a last resort.
-	return strings.Contains(err.Error(), "23505") ||
-		strings.Contains(err.Error(), "duplicate key value")
+	return false
 }
 
 func nullableTime(t interface{}) interface{} {

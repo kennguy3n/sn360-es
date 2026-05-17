@@ -192,6 +192,60 @@ func TestClient_CircuitBreaker_HalfOpenAdmitsSingleTrial(t *testing.T) {
 	}
 }
 
+// TestClient_WithMaxRetriesZeroDisablesRetries pins the new
+// MaxRetries=0 semantics: passing WithMaxRetries(0) (or
+// WithNoRetries()) means the caller wants exactly one attempt and
+// defaulted() must no longer silently rewrite that to the package
+// default of 2.
+func TestClient_WithMaxRetriesZeroDisablesRetries(t *testing.T) {
+	cases := []struct {
+		name string
+		opt  Option
+	}{
+		{name: "WithMaxRetries(0)", opt: WithMaxRetries(0)},
+		{name: "WithNoRetries()", opt: WithNoRetries()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(http.StatusBadGateway)
+			}))
+			defer srv.Close()
+			c := newTestClient(t, srv, tc.opt)
+			if c.cfg.MaxRetries != 0 {
+				t.Fatalf("%s: cfg.MaxRetries = %d, want 0",
+					tc.name, c.cfg.MaxRetries)
+			}
+			// GET is idempotent — with the default of 2 retries it
+			// would attempt 3 times. With our explicit 0 it must
+			// attempt exactly once.
+			_ = c.GetJSON(context.Background(), "/", nil)
+			if got := calls.Load(); got != 1 {
+				t.Fatalf("%s: server got %d requests, want 1 (no retries)",
+					tc.name, got)
+			}
+		})
+	}
+}
+
+// TestClient_BareConfigStillDefaultsToTwoRetries pins the
+// backward-compat invariant: callers who leave MaxRetries unset must
+// continue to get the documented default of 2 even though 0 is now a
+// valid explicit value. defaulted() distinguishes the two via the
+// internal maxRetriesExplicit flag.
+func TestClient_BareConfigStillDefaultsToTwoRetries(t *testing.T) {
+	c, err := New(Config{Name: "bare"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer c.Close()
+	if c.cfg.MaxRetries != 2 {
+		t.Fatalf("bare Config MaxRetries = %d, want 2 (default)", c.cfg.MaxRetries)
+	}
+}
+
 func TestClient_NoBaseURL_RelativePath(t *testing.T) {
 	c, err := New(Config{Name: "noop"})
 	if err != nil {
