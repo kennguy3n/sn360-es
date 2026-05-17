@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"log/slog"
 	"net/smtp"
 	"strings"
 	"sync"
@@ -358,6 +359,40 @@ func TestSend_Uses8bitWhen8BITMIMEAdvertised(t *testing.T) {
 	body := fake.body.String()
 	if !strings.Contains(body, "Content-Transfer-Encoding: 8bit") {
 		t.Errorf("expected 8bit CTE when 8BITMIME advertised, got body:\n%s", body)
+	}
+}
+
+// TestSend_Port465SkipsSTARTTLSAndDowngradeWarning pins the
+// implicit-TLS (RFC 8314 submission port) contract: when the operator
+// configures port 465 the dialer already wraps the connection in TLS,
+// so the Send path must NOT attempt a STARTTLS upgrade and must NOT
+// log the "continuing in plaintext" downgrade warning — that warning
+// would be factually wrong because the connection is already
+// encrypted. The fake server reports hasStartTLS=false (which is what
+// a real implicit-TLS server would do) so any STARTTLS attempt would
+// produce the misleading warning if the guard regressed.
+func TestSend_Port465SkipsSTARTTLSAndDowngradeWarning(t *testing.T) {
+	var logBuf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	fake := &fakeSMTPClient{hasStartTLS: false, has8BITMIME: true}
+	s := senderWithFake(t, SMTPConfig{
+		Port:     465,
+		StartTLS: true,
+		Logger:   logger,
+	}, fake)
+
+	if err := s.Send(context.Background(), newTarget(), newRendered()); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	if fake.extension {
+		t.Errorf("Extension(\"STARTTLS\") must not be queried on implicit-TLS port 465")
+	}
+	if fake.starttls {
+		t.Errorf("StartTLS must not be attempted on implicit-TLS port 465")
+	}
+	if strings.Contains(logBuf.String(), "continuing in plaintext") {
+		t.Errorf("must not emit the misleading plaintext-downgrade warning on port 465; log was:\n%s", logBuf.String())
 	}
 }
 

@@ -127,7 +127,15 @@ func (s *SMTPSender) Send(ctx context.Context, target SimulationTarget, rendered
 	// downgrading to plaintext: a security-product simulation relay
 	// quietly losing TLS would expose realistic phishing templates
 	// to any network observer between us and the relay.
-	if s.cfg.StartTLS {
+	//
+	// Port 465 is the canonical implicit-TLS submission port
+	// (RFC 8314): defaultDial already wrapped the connection in TLS
+	// before handing the client over, so a STARTTLS upgrade is
+	// neither possible (servers do not advertise STARTTLS on an
+	// already-encrypted session) nor meaningful. Skip the entire
+	// block so we do not emit the misleading "continuing in
+	// plaintext" warning on a connection that is already encrypted.
+	if s.cfg.StartTLS && s.cfg.Port != 465 {
 		if ok, _ := client.Extension("STARTTLS"); ok {
 			tlsCfg := &tls.Config{
 				ServerName:         s.cfg.Host,
