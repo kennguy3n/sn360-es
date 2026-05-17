@@ -196,6 +196,11 @@ type Tier1 struct {
 	BatchSize     int
 	PassThreshold int
 	FlagThreshold int
+	// BatchEnabled selects the batched-orchestrator path on
+	// es.evaluate.request (pulls in batches of up to BatchSize and
+	// calls the encoder's /predict/batch endpoint). When false the
+	// per-message handler is used instead.
+	BatchEnabled bool
 }
 
 // Tier0 controls the Tier 0 classification gates.
@@ -351,6 +356,7 @@ func Load() (Config, error) {
 			BatchSize:     getInt("TIER1_BATCH_SIZE", 64),
 			PassThreshold: getInt("TIER1_PASS_THRESHOLD", 20),
 			FlagThreshold: getInt("TIER1_FLAG_THRESHOLD", 60),
+			BatchEnabled:  getBool("TIER1_BATCH_ENABLED", false),
 		},
 		Tier0: Tier0{
 			SkipInternal:         getBool("TIER0_SKIP_INTERNAL", true),

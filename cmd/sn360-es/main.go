@@ -31,7 +31,10 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/cache"
 	"github.com/kennguy3n/sn360-es/internal/service/dashboard"
 	"github.com/kennguy3n/sn360-es/internal/service/education"
+	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
 	"github.com/kennguy3n/sn360-es/internal/service/predict"
+	"github.com/kennguy3n/sn360-es/internal/service/tier0"
+	"github.com/kennguy3n/sn360-es/internal/service/tier1"
 	"github.com/kennguy3n/sn360-es/pkg/events"
 	"github.com/kennguy3n/sn360-es/pkg/events/bus"
 	natsbus "github.com/kennguy3n/sn360-es/pkg/events/nats"
@@ -147,6 +150,20 @@ type application struct {
 	recipientSvc   *predict.RecipientService
 	openSvc        *predict.OpenService
 	escalationSvc  *agent.EscalationService
+
+	// Evaluation pipeline. Tier 0 is always wireable (pure CPU); the
+	// other clients are optional and stay nil when their endpoints are
+	// unconfigured or unreachable. The evaluator itself is constructed
+	// even in fully-degraded mode so the consumer wiring stays uniform
+	// — its markDegraded path handles a nil Tier 1 / Tier 2 / Rspamd
+	// at runtime.
+	tier0Gate    *tier0.Gate
+	tier1Raw     *tier1.Client
+	tier1Client  evaluate.Tier1Client
+	tier2Client  evaluate.Tier2Client
+	rspamdClient evaluate.RspamdClient
+	evaluator    *evaluate.Evaluator
+	batchOrch    *evaluate.BatchOrchestrator
 
 	// Lifecycle.
 	subs    []events.Subscription
@@ -431,6 +448,106 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		logger.Info("sn360-es: dashboard generator disabled (postgres not configured)")
 	}
 
+	// Evaluation pipeline.
+	//
+	// Tier 0 is pure-CPU and has no external dependencies, so we always
+	// wire it. Tier 1, Tier 2, and Rspamd each require an external
+	// service; failure to reach any of them is non-fatal — the
+	// evaluator's markDegraded path keeps verdicts flowing with
+	// reduced signal. We still construct the evaluator unconditionally
+	// so the consumer wiring in StartConsumers can treat it as the
+	// single entry point.
+	app.tier0Gate = tier0.NewGate(tier0.GateConfig{
+		SkipInternal:         cfg.Tier0.SkipInternal,
+		SkipVendor:           cfg.Tier0.SkipVendor,
+		SkipRecurring:        cfg.Tier0.SkipRecurring,
+		HighVolumeRspamdOnly: cfg.Tier0.HighVolumeRspamdOnly,
+	}, nil)
+
+	if cfg.Tier1.URL != "" {
+		t1, err := tier1.New(tier1.Config{
+			URL:          cfg.Tier1.URL,
+			Timeout:      cfg.Tier1.Timeout,
+			MaxBatchSize: cfg.Tier1.BatchSize,
+		})
+		if err != nil {
+			logger.Warn("sn360-es: tier1 client init failed; evaluator will run in degraded mode",
+				slog.String("url", cfg.Tier1.URL),
+				slog.Any("error", err))
+		} else {
+			app.tier1Raw = t1
+			app.tier1Client = evaluate.NewTier1Adapter(t1, tier1.Thresholds{
+				PassBelow: cfg.Tier1.PassThreshold,
+				FlagAbove: cfg.Tier1.FlagThreshold,
+			})
+		}
+	} else {
+		logger.Info("sn360-es: TIER1_URL not configured; tier1 encoder client disabled")
+	}
+
+	if cfg.AI.URL != "" {
+		t2, err := evaluate.NewTier2HTTPClient(evaluate.Tier2HTTPConfig{
+			URL:     cfg.AI.URL,
+			APIKey:  cfg.AI.APIKey,
+			Timeout: cfg.AI.Timeout,
+		})
+		if err != nil {
+			logger.Warn("sn360-es: tier2 client init failed; evaluator will skip LLM escalation",
+				slog.String("url", cfg.AI.URL),
+				slog.Any("error", err))
+		} else {
+			app.tier2Client = t2
+		}
+	} else {
+		logger.Info("sn360-es: AI_URL not configured; tier2 LLM client disabled")
+	}
+
+	if cfg.Rspamd.URL != "" {
+		rs, err := evaluate.NewRspamdHTTPClient(evaluate.RspamdHTTPConfig{
+			URL:      cfg.Rspamd.URL,
+			Password: cfg.Rspamd.Password,
+			Timeout:  cfg.Rspamd.Timeout,
+		})
+		if err != nil {
+			logger.Warn("sn360-es: rspamd client init failed; evaluator will skip heuristic scoring",
+				slog.String("url", cfg.Rspamd.URL),
+				slog.Any("error", err))
+		} else {
+			app.rspamdClient = rs
+		}
+	} else {
+		logger.Info("sn360-es: RSPAMD_URL not configured; rspamd client disabled")
+	}
+
+	tierDecider, derr := action.NewTierDecider(action.TierThresholds{
+		Blocked:           cfg.Score.Blocked,
+		HighRisk:          cfg.Score.HighRisk,
+		Warning:           cfg.Score.Warning,
+		Caution:           cfg.Score.Caution,
+		Informational:     cfg.Score.Info,
+		FirstContactFloor: constant.TierInformational,
+	})
+	if derr != nil {
+		return nil, fmt.Errorf("tier decider: %w", derr)
+	}
+
+	app.evaluator = evaluate.NewEvaluator(evaluate.Config{
+		Tier0:              app.tier0Gate,
+		Tier1:              app.tier1Client,
+		Tier2:              app.tier2Client,
+		Rspamd:             app.rspamdClient,
+		Categorizer:        evaluate.NewRuleCategorizer(),
+		TierDecider:        tierDeciderAdapter{decider: tierDecider},
+		Weights:            evaluate.DefaultWeights(),
+		Tier1PassThreshold: cfg.Tier1.PassThreshold,
+		Tier1FlagThreshold: cfg.Tier1.FlagThreshold,
+		Tier1Timeout:       cfg.Tier1.Timeout,
+		Tier2Timeout:       cfg.AI.Timeout,
+		RspamdTimeout:      cfg.Rspamd.Timeout,
+		Logger:             logger,
+		Observer:           app.metrics.PipelineObserver(),
+	})
+
 	return app, nil
 }
 
@@ -707,6 +824,12 @@ func buildMux(app *application) (http.Handler, error) {
 		raw := app.redis.Raw()
 		checkers = append(checkers, handler.HealthCheckerFunc{N: "redis", F: func(ctx context.Context) error {
 			return raw.Ping(ctx).Err()
+		}})
+	}
+	if app.tier1Raw != nil {
+		t1 := app.tier1Raw
+		checkers = append(checkers, handler.HealthCheckerFunc{N: "tier1_encoder", F: func(ctx context.Context) error {
+			return t1.Health(ctx)
 		}})
 	}
 	health := handler.NewHealthHandler(handler.HealthConfig{Logger: logger, Checkers: checkers})
@@ -1161,6 +1284,23 @@ func buildURLEncryptor(cfg *config.Config, logger *slog.Logger) (action.URLEncry
 func derivedRootKey(id string) []byte {
 	sum := sha256.Sum256([]byte("sn360-es:mock-kms:" + id))
 	return sum[:]
+}
+
+// tierDeciderAdapter bridges the production *action.TierDecider — whose
+// Decide method consumes a full dto.EvaluateResult — to the evaluate
+// package's TierDecider interface, which takes (score, primary,
+// signals). The decider only reads Score and Primary from the
+// EvaluateResult; the signals argument is passed through unchanged for
+// future tenant-specific overrides. This mirrors the deciderAdapter
+// used in the accuracy / bench harness so production and harness wire
+// to the same threshold logic.
+type tierDeciderAdapter struct{ decider *action.TierDecider }
+
+func (a tierDeciderAdapter) Decide(score int, primary constant.Category, _ dto.RiskSignals) constant.Tier {
+	if a.decider == nil {
+		return constant.TierInformational
+	}
+	return a.decider.Decide(dto.EvaluateResult{Score: score, Primary: primary})
 }
 
 // escalationPublisherAdapter narrows events.EventService down to the
