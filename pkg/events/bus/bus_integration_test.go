@@ -128,3 +128,55 @@ func TestBus_UnknownTypeIsRejected(t *testing.T) {
 		t.Fatal("expected error for unknown type")
 	}
 }
+
+// TestBus_HealthRoutesToProvider exercises the readiness probe path end-to-end:
+// the bus factory must surface a provider-specific Health that succeeds against
+// a live broker, regardless of which backend the feature flag selects.
+func TestBus_HealthRoutesToProvider(t *testing.T) {
+	t.Run("nats", func(t *testing.T) {
+		url := startNATSURL(t)
+		cfg := bus.Config{
+			Type:   bus.TypeNATS,
+			Source: "bus-it",
+			NATS: func() natsbus.Config {
+				c := natsbus.DefaultConfig()
+				c.URL = url
+				c.Storage = "memory"
+				return c
+			}(),
+		}
+		svc, err := bus.New(context.Background(), cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+		if err != nil {
+			t.Fatalf("new nats: %v", err)
+		}
+		defer bus.CloseWithTimeout(svc, 5*time.Second)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := svc.Health(ctx); err != nil {
+			t.Fatalf("nats Health: %v", err)
+		}
+	})
+
+	t.Run("redis", func(t *testing.T) {
+		addr := startRedisAddr(t)
+		cfg := bus.Config{
+			Type:   bus.TypeRedis,
+			Source: "bus-it",
+			Redis: redisbus.Config{
+				Addr: addr,
+			},
+		}
+		svc, err := bus.New(context.Background(), cfg, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+		if err != nil {
+			t.Fatalf("new redis: %v", err)
+		}
+		defer bus.CloseWithTimeout(svc, 5*time.Second)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := svc.Health(ctx); err != nil {
+			t.Fatalf("redis Health: %v", err)
+		}
+	})
+}

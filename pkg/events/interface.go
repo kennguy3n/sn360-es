@@ -54,6 +54,14 @@ type EventService interface {
 	// call [Message.Nak] / [Message.Ack] directly and then return nil.
 	Subscribe(ctx context.Context, subject string, handler MessageHandler, opts ...SubscribeOption) (Subscription, error)
 
+	// Health performs a cheap, side-effect-free liveness probe against the
+	// underlying broker (e.g. NATS AccountInfo, Redis PING). Implementations
+	// must NOT publish messages, create durable state, or otherwise mutate
+	// the broker — readiness probes call Health on every Kubernetes probe
+	// interval. A nil return means the broker is reachable and healthy; a
+	// non-nil error means it is not.
+	Health(ctx context.Context) error
+
 	// Close releases all underlying resources (connections, consumers). The
 	// service must not be used after Close returns.
 	Close() error

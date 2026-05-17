@@ -37,6 +37,8 @@ func (p *recordingPublisher) Subscribe(context.Context, string, events.MessageHa
 	return nil, errors.New("not implemented")
 }
 
+func (p *recordingPublisher) Health(context.Context) error { return nil }
+
 func (p *recordingPublisher) Close() error { return nil }
 
 func newTestService(t *testing.T, pub events.EventService) *MicroLessonService {
