@@ -32,6 +32,10 @@ type fakeSMTPClient struct {
 	failHello, failStartTLS, failAuth                 error
 	failMail, failRcpt, failData, failWrite, failQuit error
 	hasStartTLS                                       bool
+	// has8BITMIME defaults to true so existing tests preserve the
+	// 8bit Content-Transfer-Encoding behaviour. Tests that exercise
+	// the quoted-printable fallback can flip this to false.
+	has8BITMIME bool
 }
 
 func (f *fakeSMTPClient) Hello(localName string) error {
@@ -41,9 +45,12 @@ func (f *fakeSMTPClient) Hello(localName string) error {
 	return f.failHello
 }
 func (f *fakeSMTPClient) Extension(ext string) (bool, string) {
-	if ext == "STARTTLS" {
+	switch ext {
+	case "STARTTLS":
 		f.extension = true
 		return f.hasStartTLS, ""
+	case "8BITMIME":
+		return f.has8BITMIME, ""
 	}
 	return false, ""
 }
@@ -165,7 +172,7 @@ func TestNewSMTPSender_RequiresHostAndFrom(t *testing.T) {
 }
 
 func TestSend_HappyPath_RFC822EnvelopeAndCommands(t *testing.T) {
-	fake := &fakeSMTPClient{hasStartTLS: true}
+	fake := &fakeSMTPClient{hasStartTLS: true, has8BITMIME: true}
 	s := senderWithFake(t, SMTPConfig{
 		StartTLS: true,
 		User:     "alice",
@@ -294,13 +301,63 @@ func TestBuildMessage_NonASCIISubjectIsBase64Encoded(t *testing.T) {
 	rendered := newRendered()
 	rendered.Subject = "Atención: verifica tu cuenta"
 	rendered.SenderDisplay = "Seguridad técnica"
-	msg := buildMessage("security@tenant.example.com", newTarget(), rendered)
+	msg := buildMessage("security@tenant.example.com", newTarget(), rendered, "8bit")
 	body := string(msg)
 	if !strings.Contains(body, "Subject: =?UTF-8?B?") {
 		t.Errorf("expected MIME-encoded subject, got body:\n%s", body)
 	}
 	if !strings.Contains(body, "From: =?UTF-8?B?") {
 		t.Errorf("expected MIME-encoded display, got body:\n%s", body)
+	}
+}
+
+func TestBuildMessage_QuotedPrintableFallback(t *testing.T) {
+	rendered := newRendered()
+	// Non-ASCII body bytes that quoted-printable must escape:
+	// 'é' is 0xC3 0xA9, which encodes to =C3=A9.
+	rendered.Body = "<p>Café acción</p>"
+	msg := buildMessage("security@tenant.example.com", newTarget(), rendered, "quoted-printable")
+	body := string(msg)
+	if !strings.Contains(body, "Content-Transfer-Encoding: quoted-printable") {
+		t.Errorf("expected CTE header to be quoted-printable, got body:\n%s", body)
+	}
+	if !strings.Contains(body, "=C3=A9") {
+		t.Errorf("expected quoted-printable-escaped UTF-8 body, got body:\n%s", body)
+	}
+	// And the original raw UTF-8 byte must NOT appear, since it
+	// would have to come through as 0xC3 0xA9 — confirm the
+	// printable escape replaced it.
+	if strings.Contains(body, "Café") {
+		t.Errorf("body still contains raw UTF-8 instead of QP escape:\n%s", body)
+	}
+}
+
+func TestSend_FallsBackToQuotedPrintableWhenNo8BITMIME(t *testing.T) {
+	fake := &fakeSMTPClient{hasStartTLS: false, has8BITMIME: false}
+	s := senderWithFake(t, SMTPConfig{}, fake)
+	rendered := newRendered()
+	rendered.Body = "<p>Café</p>"
+	if err := s.Send(context.Background(), newTarget(), rendered); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	body := fake.body.String()
+	if !strings.Contains(body, "Content-Transfer-Encoding: quoted-printable") {
+		t.Errorf("expected quoted-printable CTE when 8BITMIME is absent, got body:\n%s", body)
+	}
+	if !strings.Contains(body, "=C3=A9") {
+		t.Errorf("expected QP-escaped body bytes, got body:\n%s", body)
+	}
+}
+
+func TestSend_Uses8bitWhen8BITMIMEAdvertised(t *testing.T) {
+	fake := &fakeSMTPClient{hasStartTLS: false, has8BITMIME: true}
+	s := senderWithFake(t, SMTPConfig{}, fake)
+	if err := s.Send(context.Background(), newTarget(), newRendered()); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	body := fake.body.String()
+	if !strings.Contains(body, "Content-Transfer-Encoding: 8bit") {
+		t.Errorf("expected 8bit CTE when 8BITMIME advertised, got body:\n%s", body)
 	}
 }
 

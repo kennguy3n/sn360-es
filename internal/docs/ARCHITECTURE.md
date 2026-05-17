@@ -189,6 +189,33 @@ them by name so multiple replicas of `sn360-es` can share work.
 | `quarantine-release` | ES_ACTION | `es.action.quarantine.release` | 3 | 30s | Yes (critical when release service wired) | Quarantine release flow |
 | `escalation` | ES_ACTION | `es.action.escalation.>` | 3 | 30s | Yes (critical when escalation service wired) | SecOps escalation ticket fan-out |
 
+#### `TIER1_BATCH_ENABLED` wire-format dependency
+
+The optional Tier 1 `BatchOrchestrator` (`internal/service/evaluate/batch.go`)
+shares the `es.evaluate.request` subject with the per-message
+`evaluate-svc` consumer, but the two consumers expect **different
+payloads on the wire**:
+
+| `TIER1_BATCH_ENABLED` | Active consumer | Expected payload on `es.evaluate.request` |
+|---|---|---|
+| `false` (default) | per-message `evaluate-svc` (`handleEvaluateRequest`) | `dto.EvaluateRequest` JSON |
+| `true` | `BatchOrchestrator` only (per-message consumer is suppressed) | `evaluate.BatchMessage` JSON: `{ "request": dto.EvaluateRequest, "signals": dto.RiskSignals }` |
+
+`sn360-es` enforces mutual exclusion via the `a.evaluator != nil &&
+a.batchOrch == nil` guard in `StartConsumers`, so both consumers will
+never be active at once in the same process. However, **upstream
+publishers (ingestion-svc, replay tooling, anything that calls
+`bus.Publish("es.evaluate.request", ...)`) must agree on which payload
+shape to emit for the configured mode**. A misconfigured deployment
+(batch enabled in `sn360-es` but ingestion still publishing flat
+`dto.EvaluateRequest` payloads, or vice versa) results in every message
+failing to unmarshal and being NAK'd up to `MaxDeliver=5` before
+landing in the DLQ.
+
+When flipping `TIER1_BATCH_ENABLED`, roll the publisher and the
+consumer together: both must speak the same wire format in the same
+release.
+
 ## 3. Detection Pipeline
 
 ### 3-Tier Architecture

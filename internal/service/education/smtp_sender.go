@@ -1,11 +1,14 @@
 package education
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
+	"mime/quotedprintable"
 	"net"
 	"net/smtp"
 	"strings"
@@ -18,14 +21,24 @@ import (
 // User/Password may be empty for relay servers that accept
 // unauthenticated submissions (e.g. an internal MTA).
 type SMTPConfig struct {
-	Host       string
-	Port       int
-	User       string
-	Password   string
-	From       string
-	StartTLS   bool
-	Timeout    time.Duration
+	Host     string
+	Port     int
+	User     string
+	Password string
+	From     string
+	StartTLS bool
+	Timeout  time.Duration
+	// SkipVerify is an opt-in escape hatch for STARTTLS / implicit-TLS
+	// connections against a self-signed test relay (mailpit /
+	// mailhog). It is wired to crypto/tls.Config.InsecureSkipVerify
+	// and therefore disables certificate validation when true.
+	// Operators must NOT enable this in production — leaving the
+	// default (false) preserves full chain verification.
 	SkipVerify bool
+	// Logger is used for non-fatal diagnostics (STARTTLS downgrade,
+	// 8BITMIME fallback). Defaults to slog.Default() when nil so the
+	// sender works without a wired logger.
+	Logger *slog.Logger
 }
 
 // SMTPSender is the production implementation of SimulationSender. It
@@ -75,6 +88,9 @@ func NewSMTPSender(cfg SMTPConfig) (*SMTPSender, error) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 10 * time.Second
 	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
 	return &SMTPSender{cfg: cfg, dialer: defaultDial}, nil
 }
 
@@ -93,8 +109,6 @@ func (s *SMTPSender) Send(ctx context.Context, target SimulationTarget, rendered
 		return errors.New("education: simulation requires body")
 	}
 
-	msg := buildMessage(s.cfg.From, target, rendered)
-
 	client, err := s.dialer(ctx, s.cfg)
 	if err != nil {
 		return fmt.Errorf("education: smtp dial: %w", err)
@@ -106,17 +120,27 @@ func (s *SMTPSender) Send(ctx context.Context, target SimulationTarget, rendered
 	}
 
 	// STARTTLS if the server advertises it and the caller asked for
-	// it. We always pass through with InsecureSkipVerify so callers
-	// in dev can point at a self-signed test relay.
+	// it. InsecureSkipVerify is wired from SMTPConfig.SkipVerify —
+	// see the comment on that field for the safety contract. When
+	// the operator requested STARTTLS but the server does not
+	// advertise the extension we warn rather than silently
+	// downgrading to plaintext: a security-product simulation relay
+	// quietly losing TLS would expose realistic phishing templates
+	// to any network observer between us and the relay.
 	if s.cfg.StartTLS {
 		if ok, _ := client.Extension("STARTTLS"); ok {
 			tlsCfg := &tls.Config{
 				ServerName:         s.cfg.Host,
-				InsecureSkipVerify: s.cfg.SkipVerify, //nolint:gosec // dev only
+				InsecureSkipVerify: s.cfg.SkipVerify, //nolint:gosec // gated on opt-in SkipVerify config; see SMTPConfig.SkipVerify comment.
 			}
 			if err := client.StartTLS(tlsCfg); err != nil {
 				return fmt.Errorf("education: smtp STARTTLS: %w", err)
 			}
+		} else {
+			s.cfg.Logger.WarnContext(ctx,
+				"education: SMTP STARTTLS requested but server did not advertise the extension; continuing in plaintext",
+				slog.String("host", s.cfg.Host),
+				slog.Int("port", s.cfg.Port))
 		}
 	}
 
@@ -126,6 +150,23 @@ func (s *SMTPSender) Send(ctx context.Context, target SimulationTarget, rendered
 			return fmt.Errorf("education: smtp AUTH: %w", err)
 		}
 	}
+
+	// Pick the Content-Transfer-Encoding for the body based on
+	// whether the server advertises 8BITMIME (RFC 6152). Without
+	// that extension, non-ASCII octets in the body can be silently
+	// mangled by the MTA — fall back to quoted-printable so all
+	// templates survive intact on legacy relays. We log a warning
+	// because losing 8BITMIME in production usually indicates a
+	// misconfigured relay rather than an intentional choice.
+	bodyEncoding := "8bit"
+	if ok, _ := client.Extension("8BITMIME"); !ok {
+		bodyEncoding = "quoted-printable"
+		s.cfg.Logger.WarnContext(ctx,
+			"education: SMTP relay does not advertise 8BITMIME; falling back to quoted-printable",
+			slog.String("host", s.cfg.Host),
+			slog.Int("port", s.cfg.Port))
+	}
+	msg := buildMessage(s.cfg.From, target, rendered, bodyEncoding)
 
 	if err := client.Mail(s.cfg.From); err != nil {
 		return fmt.Errorf("education: smtp MAIL FROM: %w", err)
@@ -171,7 +212,7 @@ func defaultDial(ctx context.Context, cfg SMTPConfig) (smtpClient, error) {
 	if cfg.Port == 465 {
 		tlsCfg := &tls.Config{
 			ServerName:         cfg.Host,
-			InsecureSkipVerify: cfg.SkipVerify, //nolint:gosec // dev only
+			InsecureSkipVerify: cfg.SkipVerify, //nolint:gosec // gated on opt-in SkipVerify config; see SMTPConfig.SkipVerify comment.
 		}
 		conn, err = tls.DialWithDialer(d, "tcp", addr, tlsCfg)
 	} else {
@@ -219,8 +260,16 @@ func (a *smtpClientAdapter) Data() (writeCloser, error) {
 // order so the resulting bytes are deterministic across runs (helpful
 // for tests and for downstream MTAs that rely on a stable Received
 // chain).
-func buildMessage(from string, target SimulationTarget, rendered dto.RenderedSimulation) []byte {
-	var b strings.Builder
+//
+// bodyEncoding selects the Content-Transfer-Encoding emitted with the
+// body. Pass "8bit" when the receiving relay advertises 8BITMIME, or
+// "quoted-printable" otherwise. Any other value is treated as 8bit
+// (the relay-advertised default).
+func buildMessage(from string, target SimulationTarget, rendered dto.RenderedSimulation, bodyEncoding string) []byte {
+	if bodyEncoding == "" {
+		bodyEncoding = "8bit"
+	}
+	var b bytes.Buffer
 	type kv struct{ k, v string }
 	headers := []kv{
 		{"From", formatFromHeader(from, rendered.SenderDisplay)},
@@ -229,7 +278,7 @@ func buildMessage(from string, target SimulationTarget, rendered dto.RenderedSim
 		{"Date", time.Now().UTC().Format(time.RFC1123Z)},
 		{"MIME-Version", "1.0"},
 		{"Content-Type", "text/html; charset=UTF-8"},
-		{"Content-Transfer-Encoding", "8bit"},
+		{"Content-Transfer-Encoding", bodyEncoding},
 		{"X-SN360-Simulation", "true"},
 		{"X-SN360-Template", rendered.TemplateID},
 	}
@@ -240,8 +289,16 @@ func buildMessage(from string, target SimulationTarget, rendered dto.RenderedSim
 		b.WriteString("\r\n")
 	}
 	b.WriteString("\r\n")
-	b.WriteString(rendered.Body)
-	return []byte(b.String())
+	if bodyEncoding == "quoted-printable" {
+		qp := quotedprintable.NewWriter(&b)
+		// quotedprintable.Writer never returns errors for an
+		// in-memory buffer; ignore them explicitly.
+		_, _ = qp.Write([]byte(rendered.Body))
+		_ = qp.Close()
+	} else {
+		b.WriteString(rendered.Body)
+	}
+	return b.Bytes()
 }
 
 // formatFromHeader prefers a display name when the rendered template
