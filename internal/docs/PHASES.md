@@ -228,12 +228,27 @@ a runnable binary:
   from `internal/middleware/` wraps the mux, with the JWT middleware
   skipping `/healthz`, `/readyz`, `/metrics`, `/docs`, and
   `/openapi.yaml`.
-- NATS consumers for `es.evaluate.request`, `es.evaluate.result`
-  (persistence + education trigger), `es.education.simulation.send`
-  / `.result`, `es.action.banner` / `.label` / `.quarantine`,
-  `es.onboarding.>`, and `es.action.feedback.>` are registered
-  before HTTP `ListenAndServe`. A `service.DLQProcessor` starts
-  alongside them.
+- NATS consumers registered before HTTP `ListenAndServe`:
+  - `es.evaluate.result` × 2 (durables `management-persist` and
+    `education-trigger`) wired in `StartConsumers`. The persist
+    consumer is critical when the repository layer is wired and
+    the education-trigger consumer is critical when the
+    micro-lesson service is wired — `StartConsumers` returns an
+    error and the binary fails fast if either subscription fails.
+  - `service.DLQProcessor` watches the canonical DLQ subjects
+    (`es.evaluate.dlq`, `es.action.dlq`, `es.onboarding.dlq`) and
+    logs each failed message. It is best-effort: a failure to
+    init or start the processor is logged and the binary keeps
+    running without it.
+  - The other subjects called out in earlier drafts of this
+    document (`es.evaluate.request`, `es.education.simulation.*`,
+    `es.action.banner` / `.label` / `.quarantine`,
+    `es.onboarding.>`, `es.action.feedback.>`) are NOT yet wired
+    in `StartConsumers`. Their handlers are implemented in the
+    relevant service packages and can be plugged in via
+    `eventBus.Subscribe`, but the management binary does not do
+    that today — see the [`README.md`](../../README.md#project-status)
+    project-status matrix.
 - Graceful shutdown closes all subscriptions and the DLQ processor
   before HTTP `Shutdown`, then the event bus / Redis / PG `defer`s
   close out.

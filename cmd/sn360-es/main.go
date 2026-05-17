@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +25,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/handler"
 	"github.com/kennguy3n/sn360-es/internal/middleware"
 	"github.com/kennguy3n/sn360-es/internal/repository"
+	"github.com/kennguy3n/sn360-es/internal/service"
 	"github.com/kennguy3n/sn360-es/internal/service/action"
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
 	"github.com/kennguy3n/sn360-es/internal/service/cache"
@@ -79,7 +82,11 @@ func run() error {
 	}
 
 	if cerr := app.StartConsumers(ctx); cerr != nil {
-		logger.Warn("sn360-es: consumer startup error", slog.Any("error", cerr))
+		// Critical subscription failures bubble up here. Tear down
+		// any partially-wired subscriptions before returning so the
+		// bus close (via app.Close) does not race in-flight handlers.
+		app.StopConsumers(logger)
+		return fmt.Errorf("start consumers: %w", cerr)
 	}
 
 	serveErr := make(chan error, 1)
@@ -145,6 +152,7 @@ type application struct {
 	subs    []events.Subscription
 	subsMu  sync.Mutex
 	closers []func() error
+	dlqProc *service.DLQProcessor
 }
 
 // newApplication wires every component the binary needs. Required
@@ -286,16 +294,22 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	// URL rewriter for outbound mail. Skipped when Redis is missing
 	// (pre-image store) or when the JWT issuer is absent (no token).
 	if app.jwtIssuer != nil && app.redis != nil {
-		rewriter, rerr := action.NewURLRewriter(
-			logger, app.jwtIssuer,
-			redisURLStore{client: app.redis},
-			passthroughEncryptor{},
-			action.URLRewriterConfig{BaseURL: cfg.URLRewrite.Base},
-		)
-		if rerr == nil {
-			app.urlRewriter = rewriter
+		urlEncryptor, eerr := buildURLEncryptor(cfg, logger)
+		if eerr != nil {
+			logger.Warn("sn360-es: url rewriter disabled — encryptor init failed",
+				slog.Any("error", eerr))
 		} else {
-			logger.Warn("sn360-es: url rewriter init failed", slog.Any("error", rerr))
+			rewriter, rerr := action.NewURLRewriter(
+				logger, app.jwtIssuer,
+				redisURLStore{client: app.redis},
+				urlEncryptor,
+				action.URLRewriterConfig{BaseURL: cfg.URLRewrite.Base},
+			)
+			if rerr == nil {
+				app.urlRewriter = rewriter
+			} else {
+				logger.Warn("sn360-es: url rewriter init failed", slog.Any("error", rerr))
+			}
 		}
 	}
 
@@ -364,10 +378,27 @@ func (a *application) Close(logger *slog.Logger) {
 // StartConsumers subscribes to the event subjects this binary handles.
 // All subscriptions are tracked so StopConsumers can drain them in
 // reverse order before the bus closes.
+//
+// Subscriptions are classified as critical or best-effort:
+//
+//   - critical: their dependent service is fully wired and we cannot
+//     deliver the documented behaviour without them. A critical
+//     subscription failure is returned as an error so the binary
+//     fails fast instead of pretending to be healthy.
+//   - best-effort: their dependent service is missing or the
+//     subscription is purely opportunistic (e.g. DLQ log-only). We
+//     log a warning and continue.
+//
+// In practice the management-persist consumer is critical when the
+// repository layer is wired, and the education-trigger consumer is
+// critical when the micro-lesson service is wired. The DLQ processor
+// is always best-effort.
 func (a *application) StartConsumers(ctx context.Context) error {
 	if a.eventBus == nil {
 		return nil
 	}
+
+	var critErrs []error
 
 	// es.evaluate.result → persist to the management Postgres layer.
 	if a.repos != nil {
@@ -375,7 +406,9 @@ func (a *application) StartConsumers(ctx context.Context) error {
 			events.WithDurable("management-persist"),
 			events.WithMaxDeliver(3))
 		if err != nil {
-			a.logger.Warn("sn360-es: subscribe evaluate.result failed", slog.Any("error", err))
+			a.logger.Error("sn360-es: subscribe evaluate.result (management-persist) failed",
+				slog.Any("error", err))
+			critErrs = append(critErrs, fmt.Errorf("management-persist: %w", err))
 		} else {
 			a.trackSub(sub)
 		}
@@ -387,18 +420,52 @@ func (a *application) StartConsumers(ctx context.Context) error {
 			events.WithDurable("education-trigger"),
 			events.WithMaxDeliver(3))
 		if err != nil {
-			a.logger.Warn("sn360-es: subscribe education-trigger failed", slog.Any("error", err))
+			a.logger.Error("sn360-es: subscribe evaluate.result (education-trigger) failed",
+				slog.Any("error", err))
+			critErrs = append(critErrs, fmt.Errorf("education-trigger: %w", err))
 		} else {
 			a.trackSub(sub)
 		}
 	}
 
+	// DLQ processor — best-effort. It watches the canonical DLQ
+	// subjects and logs each failed message; without it the system
+	// still functions, the operator just loses the structured failed-
+	// message signal.
+	dlq, derr := service.NewDLQProcessor(service.DLQProcessorConfig{
+		Bus: a.eventBus,
+		// Default to log-only so the processor never silently
+		// retries messages that the operator has not opted into.
+		Decider: service.DeciderFunc(func(_ context.Context, _ events.Message) service.Decision {
+			return service.Decision{Action: service.ActionLogOnly, Reason: "default"}
+		}),
+		Republisher: a.eventBus,
+		Logger:      a.logger,
+	})
+	if derr != nil {
+		a.logger.Warn("sn360-es: dlq processor init failed", slog.Any("error", derr))
+	} else if serr := dlq.Start(ctx); serr != nil {
+		a.logger.Warn("sn360-es: dlq processor start failed", slog.Any("error", serr))
+	} else {
+		a.dlqProc = dlq
+	}
+
+	if len(critErrs) > 0 {
+		return fmt.Errorf("sn360-es: critical consumer subscriptions failed: %w",
+			errors.Join(critErrs...))
+	}
 	return nil
 }
 
-// StopConsumers closes every subscription previously registered.
-// Errors are logged but never returned.
+// StopConsumers closes every subscription previously registered and
+// stops the DLQ processor. Errors are logged but never returned.
 func (a *application) StopConsumers(logger *slog.Logger) {
+	if a.dlqProc != nil {
+		if err := a.dlqProc.Stop(); err != nil {
+			logger.Warn("sn360-es: dlq processor stop error", slog.Any("error", err))
+		}
+		a.dlqProc = nil
+	}
 	a.subsMu.Lock()
 	subs := a.subs
 	a.subs = nil
@@ -583,7 +650,9 @@ func wrapMiddleware(mux http.Handler, app *application) http.Handler {
 		})
 	}
 
-	// CORS.
+	// CORS. The override argument is left nil so NewCORSFromConfig
+	// reads from app.cfg.CORS.AllowedOrigins (CORS_ALLOWED_ORIGINS
+	// env var) and falls back to wildcard in dev / empty in prod.
 	h = middleware.NewCORSFromConfig(h, *app.cfg, nil)
 
 	// Request logging — the logger is already wrapped with the log
@@ -676,10 +745,11 @@ func (s redisURLStore) Get(ctx context.Context, key string) (string, bool, error
 	return s.client.Get(ctx, key)
 }
 
-// passthroughEncryptor is a development-mode URLEncryptor that returns
-// the input unchanged. Production must replace this with a KMS-backed
-// privacy.Encryptor; we keep it here so the rewriter is testable end
-// to end without provisioning KMS keys.
+// passthroughEncryptor is a last-resort URLEncryptor that returns the
+// input unchanged. It is used only when the operator has explicitly
+// disabled KMS (AWS_KMS_USE_MOCK=false + empty AWS_KMS_MASTER_KEY_ID)
+// — buildURLEncryptor logs a loud warning in that case so the
+// pre-image store going plaintext in Redis is never silent.
 type passthroughEncryptor struct{}
 
 func (passthroughEncryptor) Encrypt(_ context.Context, _ string, plaintext []byte) ([]byte, error) {
@@ -688,6 +758,83 @@ func (passthroughEncryptor) Encrypt(_ context.Context, _ string, plaintext []byt
 
 func (passthroughEncryptor) Decrypt(_ context.Context, _ string, ciphertext []byte) ([]byte, error) {
 	return append([]byte(nil), ciphertext...), nil
+}
+
+// buildURLEncryptor returns the action.URLEncryptor the URL rewriter
+// should use to wrap pre-images before writing them to Redis. The
+// selection ladder is:
+//
+//  1. cfg.AWS.KMSUseMock=true (the default for non-prod) — build a
+//     privacy.MockKMS and wrap it in privacy.NewEncryptor. The mock
+//     KMS is AES-256-GCM in-process and produces real ciphertext, so
+//     Redis values are encrypted at rest even in dev.
+//  2. cfg.AWS.KMSUseMock=false and cfg.AWS.KMSMasterKeyID set — in
+//     production this branch should be wired to a real AWS KMS
+//     client. We do not have one in-repo today, so we fall back to a
+//     deterministic MockKMS seeded with the master-key-id and log a
+//     warning so the gap is visible.
+//  3. cfg.AWS.KMSUseMock=false and KMSMasterKeyID empty — operator
+//     has explicitly opted out of envelope encryption. We log a loud
+//     warning and return passthroughEncryptor so the rewriter still
+//     functions in tightly controlled environments (e.g. internal
+//     test rigs where the pre-image store is not sensitive).
+func buildURLEncryptor(cfg *config.Config, logger *slog.Logger) (action.URLEncryptor, error) {
+	if cfg == nil {
+		return nil, errors.New("buildURLEncryptor: nil config")
+	}
+	if cfg.AWS.KMSUseMock {
+		var rootKey []byte
+		if seed := strings.TrimSpace(cfg.AWS.KMSMockKeyHex); seed != "" {
+			decoded, derr := hex.DecodeString(seed)
+			if derr == nil && len(decoded) == 32 {
+				rootKey = decoded
+			} else {
+				logger.Warn("sn360-es: AWS_KMS_MOCK_KEY_HEX is not 32 hex bytes; using random root key",
+					slog.Int("seed_len", len(decoded)),
+					slog.Any("error", derr),
+				)
+			}
+		}
+		kms, err := privacy.NewMockKMS(rootKey)
+		if err != nil {
+			return nil, fmt.Errorf("buildURLEncryptor: mock KMS: %w", err)
+		}
+		enc, err := privacy.NewEncryptor(privacy.EncryptorConfig{KMS: kms})
+		if err != nil {
+			return nil, fmt.Errorf("buildURLEncryptor: encryptor: %w", err)
+		}
+		logger.Info("sn360-es: url rewriter using mock KMS encryptor (envelope encryption in-process)")
+		return enc, nil
+	}
+	if strings.TrimSpace(cfg.AWS.KMSMasterKeyID) != "" {
+		// Real AWS KMS client wiring belongs here. Until that is
+		// added, fall back to a MockKMS seeded so the key-id is
+		// stable across restarts in the same deployment.
+		rootKey := derivedRootKey(cfg.AWS.KMSMasterKeyID)
+		kms, err := privacy.NewMockKMS(rootKey)
+		if err != nil {
+			return nil, fmt.Errorf("buildURLEncryptor: derived KMS: %w", err)
+		}
+		enc, err := privacy.NewEncryptor(privacy.EncryptorConfig{KMS: kms})
+		if err != nil {
+			return nil, fmt.Errorf("buildURLEncryptor: encryptor: %w", err)
+		}
+		logger.Warn("sn360-es: url rewriter using derived-from-key-id mock KMS — wire a real AWS KMS client for production",
+			slog.String("master_key_id", cfg.AWS.KMSMasterKeyID),
+		)
+		return enc, nil
+	}
+	logger.Warn("sn360-es: url rewriter falling back to passthrough encryptor — URL pre-images will be stored UNENCRYPTED in Redis. Set AWS_KMS_USE_MOCK=true or AWS_KMS_MASTER_KEY_ID to fix.")
+	return passthroughEncryptor{}, nil
+}
+
+// derivedRootKey expands an arbitrary key-id string into a 32-byte
+// AES-256 root key for the mock KMS. SHA-256 keeps the mapping
+// deterministic so two processes started with the same master key id
+// share the same MockKMS root key (within a single deployment).
+func derivedRootKey(id string) []byte {
+	sum := sha256.Sum256([]byte("sn360-es:mock-kms:" + id))
+	return sum[:]
 }
 
 // escalationPublisherAdapter narrows events.EventService down to the

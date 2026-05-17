@@ -10,6 +10,31 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/constant"
 )
 
+// canonicaliseTier normalises a tier string supplied by the caller (or
+// fetched from a repository lookup) to a constant.Tier. It accepts the
+// canonical capitalised form ("Warning"), the lowercase form
+// ("warning"), and the legacy "high_risk" spelling so add-in clients
+// from before the constant.Tier rename keep working. Unknown values
+// produce an empty Tier — the Predict switch treats those as
+// "no warning".
+func canonicaliseTier(in string) constant.Tier {
+	switch strings.ToLower(strings.TrimSpace(in)) {
+	case "blocked":
+		return constant.TierBlocked
+	case "highrisk", "high_risk":
+		return constant.TierHighRisk
+	case "warning":
+		return constant.TierWarning
+	case "caution":
+		return constant.TierCaution
+	case "informational", "info":
+		return constant.TierInformational
+	case "trusted":
+		return constant.TierTrusted
+	}
+	return constant.Tier("")
+}
+
 // OpenRequest is the request body for POST /v1/predict/open. It carries
 // a pseudonymised message ID and (optionally) the tier/category the
 // message already received from the evaluation pipeline. When Tier is
@@ -82,7 +107,7 @@ func (s *OpenService) Predict(ctx context.Context, req OpenRequest) (OpenRespons
 	if utf8.RuneCountInString(req.PseudoMessageID) == 0 {
 		return OpenResponse{}, errors.New("predict: pseudo_message_id is required")
 	}
-	tier := strings.ToLower(strings.TrimSpace(req.Tier))
+	tier := canonicaliseTier(req.Tier)
 	primary := strings.TrimSpace(req.Category)
 	if tier == "" && s.lookup != nil {
 		t, p, ok, err := s.lookup.Lookup(ctx, req.TenantID, req.PseudoMessageID)
@@ -90,30 +115,33 @@ func (s *OpenService) Predict(ctx context.Context, req OpenRequest) (OpenRespons
 			return OpenResponse{}, err
 		}
 		if ok {
-			tier = strings.ToLower(strings.TrimSpace(t))
+			tier = canonicaliseTier(t)
 			if primary == "" {
 				primary = p
 			}
 		}
 	}
-	out := OpenResponse{Tier: tier, Reason: sanitisePrimary(primary)}
+	// The response carries the canonical capitalised tier string
+	// (e.g. "Warning") so add-in callers can compare against the
+	// same constants the rest of the system uses.
+	out := OpenResponse{Tier: string(tier), Reason: sanitisePrimary(primary)}
 	switch tier {
-	case "blocked":
+	case constant.TierBlocked:
 		out.ShowWarning = true
 		out.Level = WarnHigh
 		out.Code = "tier_blocked"
 		out.Message = "This message was blocked by SN360. Open the quarantine to review."
-	case "high_risk", "highrisk":
+	case constant.TierHighRisk:
 		out.ShowWarning = true
 		out.Level = WarnHigh
 		out.Code = "tier_high_risk"
 		out.Message = "High risk: this message looks like a phishing attempt."
-	case "warning":
+	case constant.TierWarning:
 		out.ShowWarning = true
 		out.Level = WarnWarning
 		out.Code = "tier_warning"
 		out.Message = "Be careful — this message has suspicious indicators."
-	case "caution":
+	case constant.TierCaution:
 		out.ShowWarning = true
 		out.Level = WarnCaution
 		out.Code = "tier_caution"

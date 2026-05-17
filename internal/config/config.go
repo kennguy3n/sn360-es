@@ -78,6 +78,7 @@ type Config struct {
 	Banner     Banner
 	Score      ScoreThresholds
 	URLRewrite URLRewrite
+	CORS       CORS
 }
 
 // Log carries structured-logging configuration.
@@ -238,6 +239,20 @@ type URLRewrite struct {
 	Base string
 }
 
+// CORS configures the cross-origin policy applied to every HTTP route.
+//
+// AllowedOrigins is read from the CORS_ALLOWED_ORIGINS environment
+// variable as a comma-separated list. A single "*" entry means
+// "echo any origin"; other entries must match the request's Origin
+// header exactly (case-insensitive). In development/local builds the
+// list defaults to "*" so the dev server stays usable without any
+// extra wiring; in non-development environments the list defaults to
+// empty so a production deployment that forgets to set the variable
+// fails closed instead of silently letting any origin in.
+type CORS struct {
+	AllowedOrigins []string
+}
+
 // Load reads configuration from the environment.
 //
 // It loads ".env" if present in the working directory (best-effort) and
@@ -366,6 +381,9 @@ func Load() (Config, error) {
 		URLRewrite: URLRewrite{
 			Base: getStr("URL_REWRITER_BASE", "https://l.sn360.io"),
 		},
+		CORS: CORS{
+			AllowedOrigins: parseCSV(getStr("CORS_ALLOWED_ORIGINS", "")),
+		},
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -443,6 +461,26 @@ func getDuration(key string, def time.Duration) time.Duration {
 		}
 	}
 	return def
+}
+
+// parseCSV splits a comma-separated list into a trimmed slice. Empty
+// fields are dropped so trailing or duplicate commas do not produce
+// empty allow-list entries.
+func parseCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := parts[:0]
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // loadDotEnv parses a minimal .env file and assigns variables that aren't

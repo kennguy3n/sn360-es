@@ -70,15 +70,30 @@ func NewCORS(next http.Handler, cfg CORSConfig) *CORS {
 	return c
 }
 
-// NewCORSFromConfig is a convenience constructor that picks safe
-// defaults based on the deployment environment: wildcard origins in
-// dev/local, otherwise empty (caller must configure explicitly).
+// NewCORSFromConfig is a convenience constructor that resolves the
+// allowed-origin allow-list in this priority order:
+//
+//  1. an explicit override slice (highest priority — used in tests
+//     and by callers that build the slice from sources outside the
+//     Config struct);
+//  2. cfg.CORS.AllowedOrigins, populated from the
+//     CORS_ALLOWED_ORIGINS environment variable;
+//  3. wildcard ("*") when the deployment Environment is
+//     development/local — the dev convenience default;
+//  4. empty (no Access-Control-Allow-Origin header emitted) when
+//     none of the above match.
+//
+// In production this means a forgotten CORS_ALLOWED_ORIGINS variable
+// fails closed: the add-in / dashboard surfaces will not get the
+// CORS header, which is loud and obvious rather than silently
+// permissive.
 func NewCORSFromConfig(next http.Handler, cfg config.Config, override []string) *CORS {
 	origins := override
 	if origins == nil {
-		if cfg.Environment.IsDevelopment() {
-			origins = []string{"*"}
-		}
+		origins = cfg.CORS.AllowedOrigins
+	}
+	if origins == nil && cfg.Environment.IsDevelopment() {
+		origins = []string{"*"}
 	}
 	return NewCORS(next, CORSConfig{AllowedOrigins: origins})
 }

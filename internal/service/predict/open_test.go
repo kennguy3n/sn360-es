@@ -85,8 +85,8 @@ func TestOpen_LookupFillsTier(t *testing.T) {
 	if !res.ShowWarning || res.Level != WarnWarning {
 		t.Fatalf("expected warning level, got %+v", res)
 	}
-	if res.Tier != "warning" {
-		t.Fatalf("tier=%q", res.Tier)
+	if res.Tier != "Warning" {
+		t.Fatalf("tier=%q, want canonical %q", res.Tier, "Warning")
 	}
 	if res.Reason != "LIKELY_PHISHING" {
 		t.Fatalf("reason=%q", res.Reason)

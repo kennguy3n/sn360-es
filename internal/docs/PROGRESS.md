@@ -35,8 +35,9 @@ evaluator degrades gracefully and surfaces those tiers as "pending".
 | Middleware chain (telemetry → JWT auth → CORS → request logger) | Wired |
 | Banner action, dashboard, education, predict, quarantine, escalation, interstitial handlers | Wired |
 | NATS / Redis Streams event bus selectable via `EVENT_BUS` | Wired |
-| Evaluation consumers (`es.evaluate.request` / `.result`) and DLQ processor | Wired |
-| Education, action, onboarding, feedback consumers | Wired |
+| `es.evaluate.result` consumers (`management-persist`, `education-trigger`) | Wired (critical when their service deps are present) |
+| DLQ processor (`service.DLQProcessor`) on the canonical DLQ subjects | Wired (best-effort, log-only by default) |
+| Other event consumers (`es.evaluate.request`, `es.education.simulation.*`, `es.action.banner` / `.label` / `.quarantine`, `es.onboarding.>`, `es.action.feedback.>`) | Implemented per-package, NOT yet wired in `StartConsumers` |
 | Tier 0 classification gate | Wired (pure CPU) |
 | Tier 1 encoder client + Tier 2 SLM client | Wired in process; remote services optional |
 | Rspamd client + AI / Rspamd Redis caches | Wired (Rspamd optional via docker-compose) |
@@ -73,10 +74,16 @@ The dates below are commit dates on the `main` branch.
   (recipient + open) services, escalation service, AI onboarding /
   tuning / support agents, every HTTP handler with a 503 guard when
   dependencies are nil, the middleware chain
-  (telemetry → JWT auth → CORS → request logger), NATS consumers for
-  evaluate request / result / education / action / onboarding /
-  feedback, a `service.DLQProcessor`, and a graceful shutdown that
-  closes subscriptions before the HTTP server and event bus.
+  (telemetry → JWT auth → CORS → request logger), two
+  `es.evaluate.result` consumers (`management-persist` for the
+  Postgres repository and `education-trigger` for the micro-lesson
+  service) treated as critical when their dependencies are wired,
+  a best-effort `service.DLQProcessor` on the canonical DLQ
+  subjects, and a graceful shutdown that closes subscriptions
+  before the HTTP server and event bus. The remaining event
+  subjects (`es.evaluate.request`, `es.education.simulation.*`,
+  `es.action.*`, `es.onboarding.>`, `es.action.feedback.>`) have
+  per-package handlers but are NOT yet subscribed in the binary.
 - `internal/middleware/` adds the four middleware components
   referenced by `main.go`: `auth.go` (JWT auth with skip-list),
   `cors.go` (configurable origins / methods / headers + preflight),
