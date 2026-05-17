@@ -446,6 +446,72 @@ func TestHandleIngestionAction_TrustedTierSkipsBanner(t *testing.T) {
 	}
 }
 
+// TestHandleIngestionAction_PublishesBannerWithoutJWTIssuer is the
+// regression test for the silent-drop bug where, on tiers that
+// AllowsMarkSafe (Warning / Caution / Informational), the
+// ingestion-action consumer used to render nothing because
+// BannerInput.Validate required a non-empty ActionToken. The contract
+// now relaxes that requirement: deployments without a configured JWT
+// feedback issuer must still see banner HTML on the bus (with the
+// interactive Mark Safe / Report / Trust Sender CTAs suppressed); only
+// the click-to-act buttons need a token, the informational portion
+// does not.
+func TestHandleIngestionAction_PublishesBannerWithoutJWTIssuer(t *testing.T) {
+	bus := &recordingBus{}
+	app := newTestApp(t)
+	app.eventBus = bus
+	// No jwtIssuer wired — this is the bug fixture: prior behaviour
+	// silently logged a render error and dropped the banner publish.
+	app.jwtIssuer = nil
+	cat, err := action.DefaultBannerCatalog()
+	if err != nil {
+		t.Fatalf("default catalog: %v", err)
+	}
+	br, err := action.NewBannerRenderer(cat)
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+	app.bannerRenderer = br
+
+	res := dto.EvaluateResult{
+		MessageID:     "msg-warn-1",
+		TenantID:      "t-1",
+		CorrelationID: "corr-1",
+		Tier:          constant.TierWarning, // AllowsMarkSafe() == true
+		Primary:       constant.CategoryLookalikeDomain,
+	}
+	body, _ := json.Marshal(res)
+	if err := app.handleIngestionAction(context.Background(), payloadMessage{data: body}); err != nil {
+		t.Fatalf("handleIngestionAction: %v", err)
+	}
+
+	payload := bus.firstPayload("es.action.banner")
+	if payload == nil {
+		t.Fatalf("expected banner published for Warning tier without jwtIssuer; got subjects: %v", bus.publishedSubjects())
+	}
+	// The published payload wraps the HTML in a small JSON envelope;
+	// confirm the rendered HTML actually carries the Warning marker so
+	// we know we published a real banner and not a placeholder.
+	var evt struct {
+		HTML string `json:"html"`
+	}
+	if err := json.Unmarshal(payload, &evt); err != nil {
+		t.Fatalf("unmarshal banner envelope: %v", err)
+	}
+	if evt.HTML == "" {
+		t.Fatalf("banner envelope has empty html field: %s", string(payload))
+	}
+	if !contains(evt.HTML, `data-sn360-tier="Warning"`) {
+		t.Errorf("rendered html should carry the Warning tier marker, got: %s", evt.HTML)
+	}
+	// Interactive CTAs must not appear (they would carry a broken empty token).
+	for _, banned := range []string{"report_phishing", "mark_safe", "trust_sender"} {
+		if contains(evt.HTML, banned) {
+			t.Errorf("banner without ActionToken still surfaced CTA %q\n%s", banned, evt.HTML)
+		}
+	}
+}
+
 // TestHandleIngestionAction_DropsMalformed asserts the poison-message
 // behaviour: invalid JSON or a payload missing identifiers must
 // short-circuit to nil without publishing anything.

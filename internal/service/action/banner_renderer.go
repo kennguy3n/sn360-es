@@ -28,7 +28,12 @@ type BannerInput struct {
 	// Locale is BCP-47; rendered banners fall back to "en" if missing.
 	Locale string
 	// ActionToken is the short-lived signed JWT used to post feedback.
-	// Required for any tier that exposes user actions.
+	// Optional: when empty, the renderer suppresses the interactive
+	// CTAs (Report / Mark Safe / Trust Sender) and produces an
+	// informational-only banner. Callers that want the user to be able
+	// to act on the verdict from the banner must mint a token and pass
+	// it here; deployments without a feedback token issuer still get a
+	// readable banner.
 	ActionToken string
 	// MicroLessonURL is an optional anchor to an in-product micro-lesson.
 	MicroLessonURL string
@@ -93,13 +98,14 @@ func ariaRoleFor(t constant.Tier) string {
 	}
 }
 
-// Validate sanity-checks the input.
+// Validate sanity-checks the structural invariants on the input. A
+// missing ActionToken is no longer fatal: Render() simply suppresses
+// the interactive CTAs in that case so the informational portion of
+// the banner still surfaces. This avoids silent banner loss in
+// deployments that haven't wired a JWT feedback issuer.
 func (b BannerInput) Validate() error {
 	if !b.Tier.Valid() {
 		return errors.New("banner: invalid tier")
-	}
-	if b.Tier.AllowsMarkSafe() && b.ActionToken == "" {
-		return errors.New("banner: action token required for interactive tier")
 	}
 	return nil
 }
@@ -143,6 +149,12 @@ func (r *BannerRenderer) Render(in BannerInput) ([]byte, error) {
 		locale = "en"
 	}
 	title := r.tr.Translate(locale, "tier."+string(in.Tier)+".title")
+	// Interactive CTAs (Report / Mark Safe / Trust Sender) all post to
+	// l.sn360.io with `?token={ActionToken}`. Without a token the
+	// resulting URL is broken and the click would surface as a feedback
+	// 401 on the server, so suppress them when no token is supplied.
+	// The micro-lesson link is unrelated to feedback and stays visible.
+	hasToken := in.ActionToken != ""
 	view := bannerView{
 		Tier:          in.Tier,
 		TierClass:     tierClassFor(in.Tier),
@@ -162,9 +174,9 @@ func (r *BannerRenderer) Render(in BannerInput) ([]byte, error) {
 		AriaLabel:     title,
 		IconGlyph:     tierIcon(in.Tier),
 		ActionToken:   in.ActionToken,
-		ShowReport:    in.Tier.Severity() >= constant.TierInformational.Severity(),
-		ShowMarkSafe:  in.Tier.AllowsMarkSafe(),
-		ShowTrust:     in.Tier.AllowsMarkSafe(),
+		ShowReport:    hasToken && in.Tier.Severity() >= constant.TierInformational.Severity(),
+		ShowMarkSafe:  hasToken && in.Tier.AllowsMarkSafe(),
+		ShowTrust:     hasToken && in.Tier.AllowsMarkSafe(),
 		MicroLesson:   in.MicroLessonURL,
 		Degraded:      in.Degraded,
 		ReportLabel:   r.tr.Translate(locale, "action.report"),

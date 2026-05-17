@@ -1130,9 +1130,14 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 			ReasonCodes: res.ReasonCodes,
 			Locale:      locale,
 		}
-		// ActionToken is required for tiers that allow Mark Safe; we
-		// only synthesise one when the JWT issuer is wired. The
-		// action is left as "mark_safe" so the banner CTA matches
+		// Mint an ActionToken so the Mark Safe / Report / Trust Sender
+		// CTAs in the rendered banner carry a usable JWT for posting
+		// feedback. We only attempt this when the JWT issuer is
+		// wired — in deployments without a feedback-token issuer the
+		// banner renderer suppresses the interactive CTAs and still
+		// emits the informational body, so the banner is published
+		// either way (see banner_renderer.go BannerInput.ActionToken).
+		// The action is left as "mark_safe" so the banner CTA matches
 		// the canonical FeedbackAction value enforced by the banner
 		// handler.
 		if input.Tier.AllowsMarkSafe() && a.jwtIssuer != nil {
