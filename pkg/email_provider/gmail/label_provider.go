@@ -143,6 +143,23 @@ func (p *LabelProvider) EnsureLabel(ctx context.Context, email, name string, col
 	endpoint := fmt.Sprintf("%s/gmail/v1/users/%s/labels", p.baseURL, url.PathEscape(email))
 	var out gmailLabel
 	if err := p.do(ctx, http.MethodPost, endpoint, body, &out); err != nil {
+		// Mirror the Outlook provider's idempotent semantics:
+		// when two replicas race to create the same label, the
+		// loser sees 409 Conflict. The label exists by the time
+		// we observe the error, so re-resolve the ID by name
+		// instead of bubbling a transient failure to the
+		// LabelApplier (which would mark this tenant degraded).
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusConflict {
+			id, lerr := p.findLabelID(ctx, email, name)
+			if lerr != nil {
+				return "", fmt.Errorf("gmail: create label %q conflict, re-lookup failed: %w", name, lerr)
+			}
+			if id == "" {
+				return "", fmt.Errorf("gmail: create label %q returned 409 but lookup found no label", name)
+			}
+			return id, nil
+		}
 		return "", fmt.Errorf("gmail: create label %q: %w", name, err)
 	}
 	if out.ID == "" {
