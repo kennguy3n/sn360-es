@@ -76,6 +76,27 @@ func (s *Service) Publish(ctx context.Context, subject string, data []byte, opts
 	return s.publisher.Publish(ctx, subject, data, opts...)
 }
 
+// Health implements events.EventService by probing the NATS connection
+// and JetStream account without publishing anything. It is safe to call
+// on every readiness probe — JetStream AccountInfo is the canonical
+// server-side liveness query and produces no durable state.
+func (s *Service) Health(ctx context.Context) error {
+	if s == nil || s.client == nil {
+		return errors.New("nats: service not initialized")
+	}
+	if !s.client.IsConnected() {
+		return errors.New("nats: connection not established")
+	}
+	js := s.client.JetStream()
+	if js == nil {
+		return errors.New("nats: jetstream context not available")
+	}
+	if _, err := js.AccountInfo(ctx); err != nil {
+		return fmt.Errorf("nats: AccountInfo: %w", err)
+	}
+	return nil
+}
+
 // Subscribe implements events.EventService.
 //
 // It resolves the target JetStream stream from the subject (based on the

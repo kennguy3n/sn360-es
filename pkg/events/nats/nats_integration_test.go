@@ -81,6 +81,60 @@ func newService(t *testing.T, url string) *natsbus.Service {
 	return svc
 }
 
+func TestNATSIntegration_HealthReportsConnected(t *testing.T) {
+	url := startNATS(t)
+	svc := newService(t, url)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := svc.Health(ctx); err != nil {
+		t.Fatalf("Health on a fresh connection returned error: %v", err)
+	}
+
+	// Health must NOT touch the existing streams. Verify by reading
+	// the evaluate stream's MsgCount before + after a couple of probes
+	// and asserting it stays at zero.
+	js := svc.Client().JetStream()
+	stream, err := js.Stream(ctx, natsbus.StreamEvaluate)
+	if err != nil {
+		t.Fatalf("lookup evaluate stream: %v", err)
+	}
+	before, err := stream.Info(ctx)
+	if err != nil {
+		t.Fatalf("info before: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := svc.Health(ctx); err != nil {
+			t.Fatalf("Health iter %d: %v", i, err)
+		}
+	}
+	after, err := stream.Info(ctx)
+	if err != nil {
+		t.Fatalf("info after: %v", err)
+	}
+	if before.State.Msgs != after.State.Msgs {
+		t.Fatalf("Health published messages to evaluate stream: msgs %d -> %d",
+			before.State.Msgs, after.State.Msgs)
+	}
+}
+
+func TestNATSIntegration_HealthReportsDisconnected(t *testing.T) {
+	url := startNATS(t)
+	svc := newService(t, url)
+
+	// Close the underlying connection out from under the service. The
+	// service-level Close drains and nils the connection, so a follow-up
+	// Health call must report not connected rather than crashing.
+	if err := svc.Client().Close(); err != nil {
+		t.Fatalf("close client: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := svc.Health(ctx); err == nil {
+		t.Fatal("Health returned nil after the underlying connection was closed")
+	}
+}
+
 func TestNATSIntegration_PublishSubscribeRoundtrip(t *testing.T) {
 	url := startNATS(t)
 	svc := newService(t, url)

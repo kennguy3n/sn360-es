@@ -99,12 +99,12 @@ func buildMux(cfg *config.Config, logger *slog.Logger, metrics *telemetry.Metric
 			if eventBus == nil {
 				return errors.New("event bus not configured")
 			}
-			// Round-trip the bus by publishing a self-test on the
-			// reserved system subject. Implementations that don't
-			// recognise the subject still return nil on healthy
-			// connections (cheap publish noop), which is the
-			// signal we want for readiness probes.
-			return eventBus.Publish(ctx, "sn360.system.healthcheck", nil)
+			// Health is the canonical side-effect-free liveness
+			// probe; for NATS it round-trips AccountInfo, for
+			// Redis it PINGs. Publishing on every readiness probe
+			// would emit messages to a stream that may or may not
+			// exist and is the wrong shape for a k8s probe.
+			return eventBus.Health(ctx)
 		}},
 	}
 	health := handler.NewHealthHandler(handler.HealthConfig{Logger: logger, Checkers: checkers})
