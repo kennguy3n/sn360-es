@@ -116,6 +116,18 @@ func (c *Client) jsonRequest(ctx context.Context, method, path string, payload, 
 			// caller cannot accidentally double-submit on 5xx.
 			req.GetBody = nil
 		}
+	} else if retryable {
+		// Bodyless retryable POST (PostJSONIdempotent with a nil
+		// payload). Without this branch req.GetBody would stay nil
+		// — http.NewRequestWithContext does not auto-set it when body
+		// is nil — and isIdempotent would then classify the request
+		// as non-retryable, silently breaking the caller's explicit
+		// opt-in to retries. Install a NoBody rewinder so the
+		// opt-in signal is preserved on the wire while still sending
+		// a zero-byte body.
+		req.GetBody = func() (io.ReadCloser, error) {
+			return http.NoBody, nil
+		}
 	}
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.Do(ctx, req)

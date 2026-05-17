@@ -159,6 +159,37 @@ func TestClient_PostJSONIdempotentRetriesOn500(t *testing.T) {
 	}
 }
 
+// TestClient_PostJSONIdempotentBodylessRetriesOn500 closes the contract
+// gap where PostJSONIdempotent with a nil payload would silently
+// become non-retryable. With body=nil and retryable=true, helpers
+// must install a NoBody rewinder so isIdempotent still classifies
+// the POST as retryable and Do drives the retry loop.
+func TestClient_PostJSONIdempotentBodylessRetriesOn500(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Bodyless retry should send a zero-byte body each time.
+		buf := make([]byte, 8)
+		n, _ := r.Body.Read(buf)
+		if n != 0 {
+			t.Errorf("bodyless retry %d sent %d bytes", calls.Load(), n)
+		}
+		if calls.Add(1) < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv, WithMaxRetries(3))
+	if err := c.PostJSONIdempotent(context.Background(), "/", nil, &struct{}{}); err != nil {
+		t.Fatalf("PostJSONIdempotent: %v", err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("expected 3 attempts on bodyless PostJSONIdempotent, got %d", got)
+	}
+}
+
 // TestClient_PutJSONRetriesAndRewindsBody verifies that the helper path
 // for PUT consents to retries (PUT is semantically idempotent) and that
 // the retry attempts receive the full body payload, not an empty body.
