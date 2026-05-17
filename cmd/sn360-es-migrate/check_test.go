@@ -63,6 +63,47 @@ func TestCheckMigrations_UnbalancedTransaction(t *testing.T) {
 	}
 }
 
+// TestCheckMigrations_TransactionTokensInCommentsAndStrings ensures the
+// BEGIN/COMMIT balance check ignores tokens that live inside line
+// comments, block comments, or single-quoted string literals. The
+// previous implementation counted naively against the upper-cased
+// source and would flag this file as unbalanced even though the only
+// real transaction is the outer BEGIN; … COMMIT;.
+func TestCheckMigrations_TransactionTokensInCommentsAndStrings(t *testing.T) {
+	dir := t.TempDir()
+	body := `-- This comment mentions BEGIN; and COMMIT; which must be ignored.
+/* Block comment also says BEGIN; / COMMIT; */
+BEGIN;
+INSERT INTO log (msg) VALUES ('a message that contains BEGIN; and COMMIT;');
+INSERT INTO log (msg) VALUES ('escaped '' single quote, still inside string BEGIN;');
+COMMIT;
+`
+	writeMigration(t, dir, "0001_init.up.sql", body)
+	writeMigration(t, dir, "0001_init.down.sql", "BEGIN;\nDROP TABLE log;\nCOMMIT;\n")
+	if err := checkMigrations(dir); err != nil {
+		t.Fatalf("expected ok with tokens in comments/strings, got: %v", err)
+	}
+}
+
+// TestStripSQLNoise_KillsCommentsAndStrings is a unit test for the
+// helper that powers TestCheckMigrations_TransactionTokensInCommentsAndStrings.
+// It pins the exact stripping rules so future changes to the helper
+// cannot silently re-introduce the false-positive regression.
+func TestStripSQLNoise_KillsCommentsAndStrings(t *testing.T) {
+	input := `-- BEGIN; COMMIT;
+SELECT 1; /* BEGIN; */ INSERT INTO t (x) VALUES ('BEGIN;');
+COMMIT;`
+	got := stripSQLNoise(input)
+	if strings.Contains(strings.ToUpper(got), "BEGIN;") {
+		// Find which BEGIN; survived to help debugging.
+		idx := strings.Index(strings.ToUpper(got), "BEGIN;")
+		t.Fatalf("BEGIN; should not survive stripping; index=%d stripped=%q", idx, got)
+	}
+	if !strings.Contains(strings.ToUpper(got), "COMMIT;") {
+		t.Fatalf("the real COMMIT; on the last line must survive; stripped=%q", got)
+	}
+}
+
 func TestCheckMigrations_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
 	err := checkMigrations(dir)

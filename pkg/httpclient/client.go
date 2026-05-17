@@ -68,7 +68,17 @@ type Config struct {
 
 	// MaxRetries is the number of retry attempts for idempotent
 	// failures. Default: 2 (so each call makes at most 3 attempts).
+	//
+	// The zero value triggers the default. To explicitly disable
+	// retries pass 0 via WithMaxRetries / WithNoRetries — the option
+	// pattern flips an internal flag so the defaulting logic can
+	// distinguish "unset" from "explicitly zero".
 	MaxRetries int
+	// maxRetriesExplicit is set by WithMaxRetries / WithNoRetries so
+	// defaulted() can leave MaxRetries==0 alone when it was passed
+	// deliberately. The field is unexported so struct-literal
+	// callers cannot accidentally toggle it.
+	maxRetriesExplicit bool
 
 	// RetryBaseDelay is the first retry backoff. Each subsequent retry
 	// doubles. Default: 100ms.
@@ -116,7 +126,7 @@ func (c Config) defaulted() Config {
 	}
 	if c.MaxRetries < 0 {
 		c.MaxRetries = 0
-	} else if c.MaxRetries == 0 {
+	} else if c.MaxRetries == 0 && !c.maxRetriesExplicit {
 		c.MaxRetries = 2
 	}
 	if c.RetryBaseDelay == 0 {
@@ -211,8 +221,26 @@ func FromHTTPClient(name string, hc *http.Client, opts ...Option) *Client {
 // Option mutates a Config (used by FromHTTPClient).
 type Option func(*Config)
 
-// WithMaxRetries overrides the retry budget.
-func WithMaxRetries(n int) Option { return func(c *Config) { c.MaxRetries = n } }
+// WithMaxRetries overrides the retry budget. n=0 explicitly disables
+// retries (each call makes exactly one attempt); the option pattern
+// records the override so defaulted() will not overwrite it with the
+// package default of 2.
+func WithMaxRetries(n int) Option {
+	return func(c *Config) {
+		c.MaxRetries = n
+		c.maxRetriesExplicit = true
+	}
+}
+
+// WithNoRetries is a readability shortcut for WithMaxRetries(0).
+// Useful for callers whose endpoints are not idempotent and who
+// prefer the intent to be obvious at the call site.
+func WithNoRetries() Option {
+	return func(c *Config) {
+		c.MaxRetries = 0
+		c.maxRetriesExplicit = true
+	}
+}
 
 // WithRetryBaseDelay overrides the base retry delay.
 func WithRetryBaseDelay(d time.Duration) Option { return func(c *Config) { c.RetryBaseDelay = d } }
@@ -246,9 +274,20 @@ func (c *Client) CircuitState() State { return c.breaker.stateForRead() }
 
 // Do executes req with retry + circuit-breaker semantics.
 //
-// Retries are only applied to idempotent verbs (GET / HEAD / PUT / DELETE
-// / OPTIONS) and to network-level / 5xx responses. Callers that need
-// retry on POST should set req.GetBody.
+// Retries are only applied to idempotent requests on network-level or
+// 5xx responses. A request counts as idempotent when:
+//
+//   - The method is GET / HEAD / OPTIONS (bodyless safe verbs), OR
+//   - The method is PUT / DELETE *and* req.GetBody is non-nil so the
+//     body can be rewound between attempts (PUT/DELETE without GetBody
+//     and with a non-empty body would silently retry with an empty body
+//     and corrupt server state, so those are treated as non-idempotent), OR
+//   - The method is POST *and* req.GetBody is non-nil — the explicit
+//     opt-in callers acknowledge their POST endpoint is safe to retry.
+//
+// Helpers in helpers.go consent to retries by populating req.GetBody;
+// callers using Do directly are responsible for setting it when they
+// want retries.
 func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	if !c.breaker.allow() {
 		return nil, &Error{Op: "request", URL: req.URL.String(), Status: 0, Cause: ErrCircuitOpen}
@@ -307,15 +346,27 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 
 func isIdempotent(req *http.Request) bool {
 	switch req.Method {
-	case http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodOptions:
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		// Bodyless safe verbs are always retryable.
 		return true
-	}
-	// POST may carry GetBody for retry support; treat it as
-	// idempotent only when the caller opted in.
-	if req.Method == http.MethodPost && req.GetBody != nil {
-		return true
+	case http.MethodPut, http.MethodDelete:
+		// Semantically idempotent verbs, but only safe to retry when
+		// we can rewind the body. A PUT/DELETE without GetBody and
+		// with a non-empty body would retry with an empty body —
+		// silently corrupting server state — so we treat that case
+		// as non-idempotent.
+		return !hasNonEmptyBody(req) || req.GetBody != nil
+	case http.MethodPost:
+		// POST is non-idempotent unless the caller explicitly opted
+		// in by setting GetBody. helpers.PostJSON intentionally does
+		// not set GetBody; helpers.PostJSONIdempotent does.
+		return req.GetBody != nil
 	}
 	return false
+}
+
+func hasNonEmptyBody(req *http.Request) bool {
+	return req.Body != nil && req.Body != http.NoBody
 }
 
 // --- breaker -------------------------------------------------------------

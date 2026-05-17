@@ -271,6 +271,19 @@ func (s *Service) Subscribe(ctx context.Context, subject string, handler events.
 	return sub, nil
 }
 
+// Health implements events.EventService by PINGing the Redis server.
+// It is safe to call on every readiness probe — PING does not mutate
+// any stream state and is the canonical Redis liveness query.
+func (s *Service) Health(ctx context.Context) error {
+	if s == nil || s.client == nil {
+		return errors.New("redis: service not initialized")
+	}
+	if err := s.client.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("redis: PING: %w", err)
+	}
+	return nil
+}
+
 // Close stops all subscriptions and closes the underlying client.
 func (s *Service) Close() error {
 	s.mu.Lock()
