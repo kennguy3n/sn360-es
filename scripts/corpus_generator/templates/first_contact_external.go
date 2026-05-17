@@ -2,7 +2,6 @@ package templates
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/kennguy3n/sn360-es/internal/constant"
 )
@@ -82,6 +81,3 @@ func (g *FirstContactExternal) Generate(opts Options) Result {
 		ExpectedSignals: []string{"FIRST_CONTACT_EXTERNAL", "FAKE_REPLY_PREFIX", "BANK_DETAIL_CHANGE", "AUTH_FAIL"},
 	}
 }
-
-// unused but keeps strings import in case future templates want it.
-var _ = strings.Builder{}

@@ -10,11 +10,18 @@ metadata:
 spec:
   replicas: 1
   revisionHistoryLimit: 5
+  # The PVC below is ReadWriteOnce and HPA is pinned to replicas=1
+  # (see hpa.yaml). A rolling update with maxSurge>=1 would try to
+  # bring up a second pod before the old one terminates and the new
+  # pod would block in ContainerCreating waiting for the RWO volume
+  # to detach — every rollout would deadlock until
+  # progressDeadlineSeconds (default 600s) before succeeding. Use
+  # Recreate so the old pod is torn down first; this accepts a brief
+  # outage per deploy as the cost of the RWO + replicas=1 lock.
+  # Lifts naturally to RollingUpdate once the StatefulSet-with-per-
+  # pod-PVC follow-up lands (or we move to an RWX storage class).
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: sn360-es-llm
@@ -69,6 +76,12 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+        # Scratch tmpfs for the download-model init container. curl on
+        # Alpine writes resolver / CA cache files under /tmp when
+        # readOnlyRootFilesystem is set on the container.
+        - name: init-tmp
+          emptyDir:
+            sizeLimit: 16Mi
         # download-model.sh is mounted from a ConfigMap so the URL or
         # auth flags can be patched without rebuilding the init image.
         # Build the ConfigMap from deployments/llm/download-model.sh in
@@ -120,6 +133,16 @@ spec:
             - name: download-script
               mountPath: /scripts
               readOnly: true
+            # readOnlyRootFilesystem: true below blocks every write
+            # outside an explicitly-mounted volume. curl's libcurl /
+            # NSS / CA-bundle code paths can scratch into /tmp
+            # (resolver cache, CA hash dir, multipart spool); without
+            # a writable /tmp the download silently fails on some
+            # base images. Give the init container its own tmpfs
+            # scratch volume — separate from the main container's
+            # `tmp` volume so the two pods can't trample each other.
+            - name: init-tmp
+              mountPath: /tmp
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
