@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: sn360-es-llm
+  namespace: sn360-es
+  labels:
+    app.kubernetes.io/name: sn360-es-llm
+    app.kubernetes.io/component: tier2-inference
+    app.kubernetes.io/part-of: sn360-es
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: sn360-es-llm
+  ports:
+    # The SN360-ES `AI` config (internal/config/config.go AI.URL) points
+    # at port 80 on this service; llama-server listens on 9000 inside
+    # the pod. Cluster-local URL becomes:
+    #   http://sn360-es-llm.sn360-es.svc.cluster.local
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: http

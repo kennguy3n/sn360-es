@@ -1,0 +1,64 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sn360-es-llm
+  namespace: sn360-es
+  labels:
+    app.kubernetes.io/name: sn360-es-llm
+    app.kubernetes.io/part-of: sn360-es
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sn360-es-llm
+  # Ternary-Bonsai-8B Q2_0 on CPU is ~2-5s per request; aggressive
+  # scale-up keeps the Tier 2 queue from blocking the evaluate pipeline.
+  minReplicas: 1
+  maxReplicas: 4
+  behavior:
+    scaleDown:
+      # llama-server takes 30-60s to warm up on a cold node, so be slow
+      # to scale down — we'd rather pay for one idle replica than cause
+      # a cold-start storm on the next burst.
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+      selectPolicy: Max
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+    # Custom metric: queue depth on the Tier 2 NATS consumer that feeds
+    # this LLM. The Prometheus adapter must surface this as
+    # `external.metrics.k8s.io/v1beta1` for this block to activate.
+    - type: External
+      external:
+        metric:
+          name: nats_consumer_pending_messages
+          selector:
+            matchLabels:
+              consumer: es-evaluate-tier2
+              stream: ES_EVALUATE
+        target:
+          type: AverageValue
+          averageValue: "10"
