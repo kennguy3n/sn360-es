@@ -136,6 +136,10 @@ type Redis struct {
 	ReconnectTimeout time.Duration
 	MinRetryBackoff  time.Duration
 	ConsumerBlock    time.Duration
+	// FetchBatchSize is the default XREADGROUP COUNT used when the
+	// Redis backend is the event-bus implementation. Has no effect
+	// when EVENT_BUS_TYPE=nats.
+	FetchBatchSize int
 }
 
 // Postgres carries database connection config.
@@ -294,6 +298,7 @@ func Load() (Config, error) {
 			ReconnectTimeout: getDuration("REDIS_RECONNECT_TIMEOUT", 30*time.Second),
 			MinRetryBackoff:  getDuration("REDIS_MIN_RETRY_BACKOFF", 100*time.Millisecond),
 			ConsumerBlock:    getDuration("REDIS_CONSUMER_BLOCK", 0),
+			FetchBatchSize:   getInt("REDIS_FETCH_BATCH_SIZE", 10),
 		},
 		Postgres: Postgres{
 			Host:            getStr("PG_HOST", "127.0.0.1"),

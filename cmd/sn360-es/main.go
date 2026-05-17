@@ -161,7 +161,7 @@ func factoryConfigFromAppConfig(cfg *config.Config) bus.Config {
 			Password:       cfg.Redis.Password,
 			PoolSize:       cfg.Redis.PoolSize,
 			ReadBlock:      cfg.Redis.ConsumerBlock,
-			FetchBatchSize: cfg.NATS.FetchBatchSize,
+			FetchBatchSize: cfg.Redis.FetchBatchSize,
 		},
 	}
 }
