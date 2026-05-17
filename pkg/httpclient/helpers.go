@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -97,7 +98,13 @@ func (c *Client) jsonRequest(ctx context.Context, method, path string, payload, 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 		if retryable {
-			raw := body.Bytes()
+			// Clone the buffer's backing slice so the rewinder is
+			// decoupled from the *bytes.Buffer's lifecycle. body.Bytes()
+			// returns a slice into the buffer's internal array, which is
+			// safe today (Buffer.Read only advances an offset) but would
+			// silently break if anyone ever called Reset/Write on the
+			// buffer between this capture and a retry.
+			raw := slices.Clone(body.Bytes())
 			req.GetBody = func() (io.ReadCloser, error) {
 				return io.NopCloser(bytes.NewReader(raw)), nil
 			}
