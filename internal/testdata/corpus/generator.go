@@ -56,16 +56,16 @@ func Generate(cfg Config) []LabeledEmail {
 	return corpus
 }
 
-// applyDefaults fills in zero-valued cfg fields.
+// applyDefaults fills in zero-valued cfg fields. Note that Seed=0 is a
+// valid input to math/rand.NewSource and is treated literally — callers
+// who want a specific seed (CLI, tests, benchstat reruns) supply one
+// explicitly via Config.Seed.
 func applyDefaults(cfg Config) Config {
 	if cfg.Size <= 0 {
 		cfg.Size = 1000
 	}
 	if cfg.MinPerCategory <= 0 {
 		cfg.MinPerCategory = 50
-	}
-	if cfg.Seed == 0 {
-		cfg.Seed = 42
 	}
 	if len(cfg.Locales) == 0 {
 		cfg.Locales = DefaultLocaleWeights
