@@ -1177,9 +1177,9 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 // `es.education.simulation.send`. It carries the campaign ID and the
 // target list assembled by the management service.
 type simulationSendEnvelope struct {
-	CampaignID string                          `json:"campaign_id"`
-	Targets    []simulationSendTargetEnvelope  `json:"targets"`
-	Params     map[string]string               `json:"params,omitempty"`
+	CampaignID string                         `json:"campaign_id"`
+	Targets    []simulationSendTargetEnvelope `json:"targets"`
+	Params     map[string]string              `json:"params,omitempty"`
 }
 
 type simulationSendTargetEnvelope struct {
@@ -1318,10 +1318,10 @@ type escalationCreateEnvelope struct {
 }
 
 type escalationResolveEnvelope struct {
-	TicketID     string                 `json:"ticket_id"`
-	ResolverHash string                 `json:"resolver_hash"`
-	Outcome      dto.EscalationOutcome  `json:"outcome"`
-	Notes        string                 `json:"notes,omitempty"`
+	TicketID     string                `json:"ticket_id"`
+	ResolverHash string                `json:"resolver_hash"`
+	Outcome      dto.EscalationOutcome `json:"outcome"`
+	Notes        string                `json:"notes,omitempty"`
 }
 
 // handleEscalation dispatches by subject suffix between Escalate (for

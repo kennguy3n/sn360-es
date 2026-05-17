@@ -195,14 +195,14 @@ type smtpClientAdapter struct {
 	c *smtp.Client
 }
 
-func (a *smtpClientAdapter) Hello(localName string) error          { return a.c.Hello(localName) }
-func (a *smtpClientAdapter) Extension(ext string) (bool, string)   { return a.c.Extension(ext) }
-func (a *smtpClientAdapter) StartTLS(cfg *tls.Config) error        { return a.c.StartTLS(cfg) }
-func (a *smtpClientAdapter) Auth(auth smtp.Auth) error             { return a.c.Auth(auth) }
-func (a *smtpClientAdapter) Mail(from string) error                { return a.c.Mail(from) }
-func (a *smtpClientAdapter) Rcpt(to string) error                  { return a.c.Rcpt(to) }
-func (a *smtpClientAdapter) Quit() error                           { return a.c.Quit() }
-func (a *smtpClientAdapter) Close() error                          { return a.c.Close() }
+func (a *smtpClientAdapter) Hello(localName string) error        { return a.c.Hello(localName) }
+func (a *smtpClientAdapter) Extension(ext string) (bool, string) { return a.c.Extension(ext) }
+func (a *smtpClientAdapter) StartTLS(cfg *tls.Config) error      { return a.c.StartTLS(cfg) }
+func (a *smtpClientAdapter) Auth(auth smtp.Auth) error           { return a.c.Auth(auth) }
+func (a *smtpClientAdapter) Mail(from string) error              { return a.c.Mail(from) }
+func (a *smtpClientAdapter) Rcpt(to string) error                { return a.c.Rcpt(to) }
+func (a *smtpClientAdapter) Quit() error                         { return a.c.Quit() }
+func (a *smtpClientAdapter) Close() error                        { return a.c.Close() }
 
 func (a *smtpClientAdapter) Data() (writeCloser, error) {
 	w, err := a.c.Data()

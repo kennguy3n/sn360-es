@@ -312,11 +312,11 @@ func TestDo_TokenError_Propagates(t *testing.T) {
 
 func TestMergeCategory(t *testing.T) {
 	tests := []struct {
-		name    string
+		name     string
 		existing []string
-		input   string
-		mode    op
-		want    []string
+		input    string
+		mode     op
+		want     []string
 	}{
 		{"add new", []string{"A"}, "B", addOp, []string{"A", "B"}},
 		{"add duplicate", []string{"A"}, "A", addOp, []string{"A"}},

@@ -76,10 +76,10 @@ func NewRspamdHTTPClient(cfg RspamdHTTPConfig) (*RspamdHTTPClient, error) {
 // pull the fields the orchestrator and banner renderer consume; the
 // full Rspamd response is much richer.
 type rspamdResponse struct {
-	Score     float64 `json:"score"`
-	Required  float64 `json:"required_score"`
-	Action    string  `json:"action"`
-	Symbols   map[string]struct {
+	Score    float64 `json:"score"`
+	Required float64 `json:"required_score"`
+	Action   string  `json:"action"`
+	Symbols  map[string]struct {
 		Score  float64 `json:"score"`
 		Name   string  `json:"name"`
 		Metric string  `json:"metric_score,omitempty"`

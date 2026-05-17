@@ -116,12 +116,14 @@ type payloadMessage struct {
 	subject string
 }
 
-func (m payloadMessage) Data() []byte                              { return m.data }
-func (m payloadMessage) Subject() string                           { return m.subject }
-func (m payloadMessage) Headers() map[string]string                { return nil }
-func (m payloadMessage) Ack() error                                { return nil }
-func (m payloadMessage) Nak(time.Duration) error                   { return nil }
-func (m payloadMessage) Metadata() (events.MessageMetadata, error) { return events.MessageMetadata{}, nil }
+func (m payloadMessage) Data() []byte               { return m.data }
+func (m payloadMessage) Subject() string            { return m.subject }
+func (m payloadMessage) Headers() map[string]string { return nil }
+func (m payloadMessage) Ack() error                 { return nil }
+func (m payloadMessage) Nak(time.Duration) error    { return nil }
+func (m payloadMessage) Metadata() (events.MessageMetadata, error) {
+	return events.MessageMetadata{}, nil
+}
 
 // fakeTier1 produces a deterministic, high-risk score so the evaluator
 // drops the message in the Warning band without contacting any
