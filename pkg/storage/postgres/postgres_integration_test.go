@@ -132,7 +132,7 @@ func TestPostgresIntegration_TenantRepositoryCRUD(t *testing.T) {
 	tenant := &repository.Tenant{
 		Name:          "acme",
 		DisplayName:   "Acme",
-		Provider:      "google",
+		Provider:      "gws",
 		PrimaryDomain: "acme.test",
 		Region:        "ap-southeast-1",
 		KMSKeyARN:     "arn:aws:kms:ap-southeast-1:000:key/test",
@@ -153,7 +153,7 @@ func TestPostgresIntegration_TenantRepositoryCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get by id: %v", err)
 	}
-	if got.Name != "acme" || got.DisplayName != "Acme" || got.Provider != "google" {
+	if got.Name != "acme" || got.DisplayName != "Acme" || got.Provider != "gws" {
 		t.Fatalf("unexpected tenant: %+v", got)
 	}
 	if got.Metadata["sla"] != "gold" {
@@ -201,7 +201,7 @@ func TestPostgresIntegration_EvaluationResultCreate(t *testing.T) {
 	ctx := context.Background()
 
 	tenant := &repository.Tenant{
-		Name: "tenant-eval", DisplayName: "Eval", Provider: "google",
+		Name: "tenant-eval", DisplayName: "Eval", Provider: "gws",
 		PrimaryDomain: "eval.test", Region: "ap-southeast-1",
 		KMSKeyARN: "arn", ScoreBase: 100, RetentionDays: 30, Locale: "en", Status: "active",
 	}

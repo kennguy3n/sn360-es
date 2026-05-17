@@ -1,0 +1,42 @@
+# QA overlay — pre-production tier. Sized between dev and prod: two
+# replicas, autoscaling on (modest range), strict log level, NATS
+# JetStream cluster enabled but with a smaller PVC than prod.
+replicaCount: 2
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+config:
+  logLevel: info
+  eventBusType: nats
+  pgSSLMode: require
+nats:
+  enabled: true
+  config:
+    cluster:
+      enabled: true
+      replicas: 3
+    jetstream:
+      enabled: true
+      fileStore:
+        pvc:
+          size: 10Gi
+serviceMonitor:
+  enabled: true
+ingress:
+  enabled: false

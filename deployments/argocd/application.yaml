@@ -77,7 +77,7 @@ spec:
     helm:
       valueFiles:
         - values.yaml
-        - values.dev.yaml
+        - values.qa.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: sn360-qa
