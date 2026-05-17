@@ -362,6 +362,31 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		logger.Warn("sn360-es: escalation service init failed", slog.Any("error", eerr))
 	}
 
+	// Dashboard generator. The MetricsSource is backed by Postgres
+	// when the management schema is reachable; without it the
+	// generator stays nil and the /v1/dashboard handler responds 503
+	// (the contract documented in README "Project Status"). The
+	// narrative slot is intentionally left nil so the generator falls
+	// back to the deterministic narrative — wiring the support agent
+	// here would couple it to the LLM tier, which is optional.
+	if app.pgDB != nil {
+		src, serr := dashboard.NewPostgresSource(app.pgDB)
+		if serr != nil {
+			logger.Warn("sn360-es: dashboard metrics source init failed",
+				slog.Any("error", serr))
+		} else if gen, gerr := dashboard.NewDashboardGenerator(dashboard.DashboardGeneratorConfig{
+			Source: src,
+			Logger: logger,
+		}); gerr != nil {
+			logger.Warn("sn360-es: dashboard generator init failed",
+				slog.Any("error", gerr))
+		} else {
+			app.dashboardGen = gen
+		}
+	} else {
+		logger.Info("sn360-es: dashboard generator disabled (postgres not configured)")
+	}
+
 	return app, nil
 }
 
@@ -529,7 +554,19 @@ func (a *application) handleEducationTrigger(ctx context.Context, msg events.Mes
 		events.WithCorrelationID(res.CorrelationID),
 	}
 	if err := a.eventBus.Publish(ctx, "es.education.trigger", data, opts...); err != nil {
-		a.logger.Warn("sn360-es: education trigger publish failed", slog.Any("error", err))
+		// Best-effort fan-out: we deliberately swallow the error so
+		// a transient bus failure does not redeliver the original
+		// es.evaluate.result message (the persist consumer has
+		// already handled it, redelivery would double-write).
+		// Log at Error with the correlation/tenant ids so the
+		// silent drop is loud in observability.
+		a.logger.ErrorContext(ctx, "sn360-es: education trigger publish failed; lesson trigger dropped",
+			slog.String("tenant_id", res.TenantID),
+			slog.String("correlation_id", res.CorrelationID),
+			slog.String("tier", string(res.Tier)),
+			slog.String("category", string(res.Primary)),
+			slog.Any("error", err),
+		)
 	}
 	return nil
 }
@@ -660,7 +697,16 @@ func wrapMiddleware(mux http.Handler, app *application) http.Handler {
 	h = middleware.NewRequestLogger(h, middleware.RequestLoggerConfig{Logger: logger})
 
 	// Telemetry (counters + latency histograms; tracing optional).
-	h = middleware.NewTelemetry(h, middleware.TelemetryConfig{Metrics: app.metrics})
+	// The route patterns collapse parameterised paths so Prometheus
+	// does not see one series per ticket id / signed URL token. Add
+	// new patterns here when introducing routes with path params.
+	h = middleware.NewTelemetry(h, middleware.TelemetryConfig{
+		Metrics: app.metrics,
+		RoutePatterns: []middleware.RoutePattern{
+			{Prefix: "/v1/escalation/", Label: "/v1/escalation/:id"},
+			{Prefix: "/l/", Label: "/l/:token"},
+		},
+	})
 
 	return h
 }
