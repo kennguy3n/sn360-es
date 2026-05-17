@@ -1129,6 +1129,16 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 			Secondary:   res.Secondary,
 			ReasonCodes: res.ReasonCodes,
 			Locale:      locale,
+			// Propagate the evaluator's degraded signal so the
+			// rendered banner carries the `sn360-degraded` CSS
+			// class (verified by
+			// TestBannerRendererInjectsDegradedNotice). The
+			// evaluator sets this in evaluator.go::markDegraded
+			// when Tier 1 / Tier 2 / Rspamd was unavailable at
+			// scoring time; dropping it here would hide that the
+			// verdict ran with reduced inputs, even though the
+			// renderer template explicitly renders a notice.
+			Degraded: res.Degraded,
 		}
 		// Mint an ActionToken so the banner CTAs (Report Phishing
 		// always; Mark Safe / Trust Sender on AllowsMarkSafe tiers)

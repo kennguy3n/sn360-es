@@ -589,6 +589,58 @@ func TestHandleIngestionAction_HighRiskSurfacesReportPhishing(t *testing.T) {
 	}
 }
 
+// TestHandleIngestionAction_PropagatesDegraded is the regression test
+// for the Devin Review finding on commit 20ba347 — the consumer-path
+// BannerInput literal previously dropped res.Degraded on the floor,
+// so banners rendered through the bus consumer never carried the
+// `sn360-degraded` CSS notice even when the evaluator marked the
+// verdict as degraded (Tier 1 / Tier 2 / Rspamd unavailable). The
+// renderer side of the contract is already locked in by
+// TestBannerRendererInjectsDegradedNotice; this test pins the wiring
+// side so the two halves cannot silently drift again.
+func TestHandleIngestionAction_PropagatesDegraded(t *testing.T) {
+	bus := &recordingBus{}
+	app := newTestApp(t)
+	app.eventBus = bus
+
+	cat, err := action.DefaultBannerCatalog()
+	if err != nil {
+		t.Fatalf("default catalog: %v", err)
+	}
+	br, err := action.NewBannerRenderer(cat)
+	if err != nil {
+		t.Fatalf("renderer: %v", err)
+	}
+	app.bannerRenderer = br
+
+	res := dto.EvaluateResult{
+		MessageID:     "msg-deg-1",
+		TenantID:      "t-1",
+		CorrelationID: "corr-1",
+		Tier:          constant.TierWarning,
+		Primary:       constant.CategoryCredentialHarvesting,
+		Degraded:      true,
+	}
+	body, _ := json.Marshal(res)
+	if err := app.handleIngestionAction(context.Background(), payloadMessage{data: body}); err != nil {
+		t.Fatalf("handleIngestionAction: %v", err)
+	}
+
+	payload := bus.firstPayload("es.action.banner")
+	if payload == nil {
+		t.Fatalf("expected banner published; got subjects: %v", bus.publishedSubjects())
+	}
+	var evt struct {
+		HTML string `json:"html"`
+	}
+	if err := json.Unmarshal(payload, &evt); err != nil {
+		t.Fatalf("unmarshal banner envelope: %v", err)
+	}
+	if !contains(evt.HTML, "sn360-degraded") {
+		t.Errorf("degraded verdict missing sn360-degraded notice in rendered banner:\n%s", evt.HTML)
+	}
+}
+
 // TestHandleIngestionAction_DropsMalformed asserts the poison-message
 // behaviour: invalid JSON or a payload missing identifiers must
 // short-circuit to nil without publishing anything.
