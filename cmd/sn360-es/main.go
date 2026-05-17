@@ -382,11 +382,31 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	}
 
 	// Simulation engine — memory-backed store + embedded templates.
-	// The sender stays nil so dry-run campaigns remain testable; real
-	// send-out only happens once a provider sender is wired.
+	// An SMTP sender is wired when SMTP_HOST + SMTP_FROM are
+	// configured; otherwise the engine stays in dry-run mode (renders
+	// templates and publishes interactions without actually mailing).
+	var simSender education.SimulationSender
+	if cfg.SMTP.Host != "" && cfg.SMTP.From != "" {
+		smtpSender, serr := education.NewSMTPSender(education.SMTPConfig{
+			Host:       cfg.SMTP.Host,
+			Port:       cfg.SMTP.Port,
+			User:       cfg.SMTP.User,
+			Password:   cfg.SMTP.Password,
+			From:       cfg.SMTP.From,
+			StartTLS:   cfg.SMTP.StartTLS,
+			Timeout:    cfg.SMTP.Timeout,
+			SkipVerify: cfg.SMTP.SkipVerify,
+		})
+		if serr != nil {
+			logger.Warn("sn360-es: smtp simulation sender init failed", slog.Any("error", serr))
+		} else {
+			simSender = smtpSender
+		}
+	}
 	if eng, eerr := education.NewSimulationEngine(education.EngineConfig{
 		Store:     education.NewMemoryCampaignStore(),
 		Templates: education.NewTemplateLibrary(),
+		Sender:    simSender,
 		Publisher: eventBus,
 		Logger:    logger,
 	}); eerr == nil {

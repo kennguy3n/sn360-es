@@ -79,6 +79,7 @@ type Config struct {
 	Score      ScoreThresholds
 	URLRewrite URLRewrite
 	CORS       CORS
+	SMTP       SMTP
 }
 
 // Log carries structured-logging configuration.
@@ -244,6 +245,22 @@ type URLRewrite struct {
 	Base string
 }
 
+// SMTP configures the simulation-email transport used by the
+// education engine. All fields are optional; when Host or From is
+// empty the simulation sender is disabled and SimulationEngine
+// continues to record interactions without dispatching mail.
+type SMTP struct {
+	Host        string
+	Port        int
+	User        string
+	Password    string
+	From        string
+	StartTLS    bool
+	Timeout     time.Duration
+	SkipVerify  bool
+	LandingBase string
+}
+
 // CORS configures the cross-origin policy applied to every HTTP route.
 //
 // AllowedOrigins is read from the CORS_ALLOWED_ORIGINS environment
@@ -389,6 +406,17 @@ func Load() (Config, error) {
 		},
 		CORS: CORS{
 			AllowedOrigins: parseCSV(getStr("CORS_ALLOWED_ORIGINS", "")),
+		},
+		SMTP: SMTP{
+			Host:        getStr("SMTP_HOST", ""),
+			Port:        getInt("SMTP_PORT", 587),
+			User:        getStr("SMTP_USER", ""),
+			Password:    getStr("SMTP_PASSWORD", ""),
+			From:        getStr("SMTP_FROM", ""),
+			StartTLS:    getBool("SMTP_STARTTLS", true),
+			Timeout:     getDuration("SMTP_TIMEOUT", 10*time.Second),
+			SkipVerify:  getBool("SMTP_SKIP_VERIFY", false),
+			LandingBase: getStr("SMTP_LANDING_BASE", ""),
 		},
 	}
 
