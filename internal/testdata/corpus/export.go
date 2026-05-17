@@ -120,13 +120,20 @@ func WriteCSV(w io.Writer, c []LabeledEmail) error {
 
 // WriteFile serialises c to a file at path. The format is inferred
 // from the path suffix (.json / .csv). Any other suffix defaults to
-// JSON to stay close to the principle of least surprise.
-func WriteFile(path string, c []LabeledEmail, format string) error {
+// JSON to stay close to the principle of least surprise. A failed
+// Close (e.g. deferred-writeback errors on NFS or ENOSPC during the
+// final flush) is surfaced to the caller so the gen-corpus CLI does
+// not falsely report success on a truncated file.
+func WriteFile(path string, c []LabeledEmail, format string) (err error) {
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("corpus: create %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("corpus: close %s: %w", path, cerr)
+		}
+	}()
 	switch format {
 	case "csv":
 		return WriteCSV(f, c)
