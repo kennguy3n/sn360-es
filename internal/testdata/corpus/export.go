@@ -87,7 +87,6 @@ func WriteCSV(w io.Writer, c []LabeledEmail) error {
 		return err
 	}
 	cw := csv.NewWriter(w)
-	defer cw.Flush()
 	header := []string{
 		"test_id", "message_id", "tenant_id", "correlation_id",
 		"sender", "recipient", "subject", "body", "locale",
@@ -112,6 +111,7 @@ func WriteCSV(w io.Writer, c []LabeledEmail) error {
 			return fmt.Errorf("corpus: write csv row: %w", err)
 		}
 	}
+	cw.Flush()
 	if err := cw.Error(); err != nil {
 		return fmt.Errorf("corpus: flush csv: %w", err)
 	}

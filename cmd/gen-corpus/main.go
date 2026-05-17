@@ -26,7 +26,7 @@ func main() {
 	seed := flag.Int64("seed", 42, "PRNG seed; same seed → byte-identical output")
 	minPerCategory := flag.Int("min-per-category", 50, "minimum number of emails generated per category")
 	out := flag.String("out", "internal/testdata/corpus/corpus_1000.json", "output file path")
-	format := flag.String("format", "json", "output format: json | csv (inferred from -out suffix when unset)")
+	format := flag.String("format", "", "output format: json | csv (inferred from -out suffix when unset)")
 	flag.Parse()
 
 	if err := run(*size, *seed, *minPerCategory, *out, *format); err != nil {
