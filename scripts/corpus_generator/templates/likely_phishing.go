@@ -31,7 +31,13 @@ func (g *LikelyPhishing) Generate(opts Options) Result {
 	if !opts.IsThreat {
 		// Benign look-alike: real internal IT bulletin with no
 		// credential prompt or rewritten URL.
-		subj := pool.t("Reminder: Quarterly password reset", "Reminder: %s", display)
+		subj := pool.t("Reminder: Quarterly password reset",
+			"เตือนเปลี่ยนรหัสผ่านประจำไตรมาส",
+			"四半期パスワードリセットのお知らせ",
+			"분기별 비밀번호 재설정 알림",
+			"季度密码重置提醒",
+			"Nhắc nhở đổi mật khẩu định kỳ")
+		_ = display
 		body := pool.body([]string{
 			"As part of our scheduled IT hygiene, please change your password from the company portal at your convenience.",
 			"No action is required if you have already rotated credentials this quarter.",

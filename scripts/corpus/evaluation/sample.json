@@ -288,7 +288,7 @@
       "from_display": "FedEx Shipping",
       "to": "hideo@acme.example",
       "subject": "การยืนยันด่วน: บัญชีจะถูกระงับใน 24 ชั่วโมง",
-      "body_text": "สวัสดีค่ะ, การยืนยันด่วน: บัญชีจะถูกระงับใน 24 ชั่วโมง กรุณายืนยันข้อมูลการเข้าสู่ระบบของคุณทันทีเพื่อหลีกเลี่ยงการระงับบริการ ยืนยัน: https://xn--logn-3oa.microsoft.com/auth ขอคบุณครับ, ทีมไอที",
+      "body_text": "สวัสดีค่ะ,\n\nการยืนยันด่วน: บัญชีจะถูกระงับใน 24  ชั่วโมง\n\nกรุณายืนยันข้อมูลการเข้าสู่ระบบของคุณทันทีเพื่อหลีกเลี่ยงการระงับบริการ\n\nยืนยัน: https://xn--logn-3oa.microsoft.com/auth\n\nขอคบุณครับ,\nทีมไอที",
       "body_html": "\u003cp\u003eการยืนยันด่วน: บัญชีจะถูกระงับใน 24 ชั่วโมง\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://xn--logn-3oa.microsoft.com/auth\"\u003eคลิกที่นี่เพื่อยืนยัน\u003c/a\u003e\u003c/p\u003e",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none",
@@ -322,7 +322,7 @@
       "from_display": "IT Helpdesk",
       "to": "alice@acme.example",
       "subject": "Reminder: Quarterly password reset",
-      "body_text": "Dear team, As part of our scheduled IT hygiene, please change your password from the company portal at your convenience. No action is ReQuIred if you have already rotated credentials this quarter. Need help? Reply to this threda and the helpdesk will reach out. Regards, Procuremnet"
+      "body_text": "Dear team,\n\nAs part of our scheduled IT hygiene,  please change your password from the company portal at your convenience.\n\nNo action is ReQuIred if you have already rotated credentials this quarter.\n\nNeed help? Reply to this threda and the helpdesk will reach out.\n\nRegards,\nProcuremnet"
     }
   },
   {
@@ -351,7 +351,7 @@
       "from_display": "IT Helpdesk",
       "to": "bob@acme.example",
       "subject": "Reminder: Quarterly password reset",
-      "body_text": "Good morning, As part of our scheduled IT hygiene, please change your password from the company portal at your convenience. No action is required if you haev already rotated credentials this quarter. Need hELp? Reply to this thread and the helpdesk will reach out. Regadrs, Procurement"
+      "body_text": "Good morning,\n\nAs part of our scheduled IT hygiene, please change your password from the company portal at your convenience.\n\nNo action is required if you haev already rotated credentials this quarter.\n\nNeed hELp? Reply to this thread and the helpdesk will reach out.\n\nRegadrs,\nProcurement"
     }
   },
   {
@@ -644,7 +644,7 @@
       "from_display": "David Chen, CEO",
       "to": "hideo@acme.example",
       "subject": "URGENT — confidential wire request",
-      "body_text": "Dear team, Hi, are you at your desk? I need you to handle a confidential wire transfer of USD 31301 todya. The vendor is expecting payment beFORe lcose of business. Send me the confirmation directly. Do not loop in finance. Sent from my iPhone Cheers, Accounts Payable",
+      "body_text": "Dear team,\n\nHi, are you at your desk? I need you to handle a confidential wire transfer of USD 31301 todya. The vendor is expecting payment beFORe lcose of business.\n\nSend me  the confirmation directly. Do not loop in finance.\n\nSent from my iPhone\n\nCheers,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=fail dkim=none dmarc=fail",
         "Reply-To": "david.9830@yahoo.com"
@@ -677,7 +677,7 @@
       "from_display": "Akira Tanaka",
       "to": "alice@acme.example",
       "subject": "OOO next week",
-      "body_text": "Hello, Hi, just a heads-up that I'll be travelling next week. Akira will be covering apyment approvals. Thanks, Akira TANaKa Best regards, Accounts Payable",
+      "body_text": "Hello,\n\nHi, just a heads-up that I'll be travelling next week. Akira will be covering  apyment approvals.\n\nThanks,\nAkira TANaKa\n\nBest regards,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       }
@@ -709,7 +709,7 @@
       "from_display": "Maria Sousa",
       "to": "bob@acme.example",
       "subject": "OOO next week",
-      "body_text": "Hi, ujst a heads-up that I'll be travelling next WeEK. Maria will be covering payment approvals. Thanks, Maria Sousa Cheers, Procurement",
+      "body_text": "Hi, ujst a heads-up that I'll be travelling next WeEK. Maria will be covering payment  approvals.\n\nThanks,\nMaria Sousa\n\nCheers,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       }
@@ -983,7 +983,7 @@
       "from_display": "google Account Team",
       "to": "hideo@acme.example",
       "subject": "Account settings updated",
-      "body_text": "Hi, Your google account preferences were updated. If this wasn't you, sign in and review oyur activity. Thanks, cAcounts PAYABle",
+      "body_text": "Hi,\n\nYour google account preferences were updated.\n\nIf this wasn't you, sign in and review oyur activity.\n\nThanks,\ncAcounts PAYABle",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       }
@@ -1015,7 +1015,7 @@
       "from_display": "apple Account Team",
       "to": "alice@acme.example",
       "subject": "Account settings updated",
-      "body_text": "Good morning, oYur apple account preferences were updated. If this wasn't you, sign in and review your ActiviTY. Cheers, Accounts Payable",
+      "body_text": "Good morning,\n\noYur apple account preferences were updated.\n\nIf this wasn't you, sign in and review your ActiviTY.\n\nCheers,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       }
@@ -1047,7 +1047,7 @@
       "from_display": "paypal Account Team",
       "to": "bob@acme.example",
       "subject": "계정 설정 업데이트",
-      "body_text": "안녕하십니까, apypal 계정 환경설정이 업데이트되었습니다 본인이 아닌 경우 로그인하여 활동을 확인하요세 잘 부탁드립니다, IT팀",
+      "body_text": "안녕하십니까,\n\napypal 계정 환경설정이 업데이트되었습니다\n\n본인이 아닌 경우 로그인하여  활동을 확인하요세\n\n잘 부탁드립니다,\nIT팀",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       }
@@ -1321,7 +1321,7 @@
       "from_display": "Trusted Vendor",
       "to": "hideo@acme.example",
       "subject": "Q3 report",
-      "body_text": "Hell,o Here's the QUarTERLY report we discussed earlier. https://docs.acme.example/reports/q3-2025.pdf Thanks, Prcourement",
+      "body_text": "Hell,o\n\nHere's the QUarTERLY report we discussed earlier.\n\nhttps://docs.acme.example/reports/q3-2025.pdf\n\nThanks,\nPrcourement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       }
@@ -1353,7 +1353,7 @@
       "from_display": "Trusted Vendor",
       "to": "alice@acme.example",
       "subject": "Q3 report",
-      "body_text": "Dear team, Here's the quarterly report we discUsSeD eralier. https://docs.acme.example/reports/q3-2025.pdf Best regards, Accounts Payable",
+      "body_text": "Dear team,\n\nHere's the quarterly report we discUsSeD eralier.\n\nhttps://docs.acme.example/reports/q3-2025.pdf\n\nBest regards,\nAccounts  Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       }
@@ -1385,7 +1385,7 @@
       "from_display": "Trusted Vendor",
       "to": "bob@acme.example",
       "subject": "Q3 report",
-      "body_text": "Hello, Here's the quarterly reoprt we discussed earlier. https://docs.acme.example/reports/q3-2025.pdf Regards, acCoUnTs Payable",
+      "body_text": "Hello,\n\nHere's the quarterly reoprt we  discussed earlier.\n\nhttps://docs.acme.example/reports/q3-2025.pdf\n\nRegards,\nacCoUnTs Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       }
@@ -1712,7 +1712,7 @@
       "from_display": "Acme HR",
       "to": "hideo@acme.example",
       "subject": "Updated employee handbook",
-      "body_text": "Hi, Please find the ltaest haNdBOOk attacehd. Best regards, Procurement",
+      "body_text": "Hi,\n\nPlease find the ltaest haNdBOOk attacehd.\n\nBest  regards,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       },
@@ -1751,7 +1751,7 @@
       "from_display": "Acme HR",
       "to": "alice@acme.example",
       "subject": "직원 핸드북 업데이트",
-      "body_text": "팀 여러분께, 최신 핸드북을 첨했부습다니 안부 전합니다, 구매팀",
+      "body_text": "팀 여러분께,\n\n최신  핸드북을 첨했부습다니\n\n안부 전합니다,\n구매팀",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       },
@@ -1774,7 +1774,7 @@
     ],
     "is_threat": false,
     "difficulty": "hard",
-    "locale": "zh",
+    "locale": "en",
     "attack_type": "Legitimate PDF handbook",
     "description": "Clean PDF attachment from internal HR — should not trip attachment heuristics.",
     "expected_signals": [
@@ -1789,8 +1789,8 @@
       "from": "hr@acme.example",
       "from_display": "Acme HR",
       "to": "bob@acme.example",
-      "subject": "员工手册更新",
-      "body_text": "团队您好, 请看查附件中的最新手册 顺颂商祺, 信技息术部",
+      "subject": "Updated employee handbook",
+      "body_text": "Hi,\n\nPLEASE find the ltaest handbook attached.\n\nRegards,\nIT Hepldesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       },
@@ -1805,78 +1805,6 @@
   },
   {
     "test_id": "first-000000",
-    "category": "FIRST_CONTACT_EXTERNAL",
-    "expected_tier": "Blocked",
-    "expected_score_range": [
-      85,
-      100
-    ],
-    "is_threat": true,
-    "difficulty": "easy",
-    "locale": "vi",
-    "attack_type": "First-contact pretending to be prior thread",
-    "description": "Brand-new external sender claiming a previous conversation, asking to update banking details.",
-    "expected_signals": [
-      "AUTH_FAIL",
-      "BANK_DETAIL_CHANGE",
-      "FAKE_REPLY_PREFIX",
-      "FIRST_CONTACT_EXTERNAL"
-    ],
-    "tier0_bypass": false,
-    "expected_tier1_verdict": "flag",
-    "expected_tier2_needed": true,
-    "expected_tier2_categories": [
-      "FIRST_CONTACT_EXTERNAL"
-    ],
-    "payload": {
-      "from": "john.smith@cold-outreach-000.com",
-      "from_display": "John Smith",
-      "to": "alice@acme.example",
-      "subject": "Re: theo dõi hóa đơn",
-      "body_text": "Xin chào,\n\nTiếp nối cuộc trò chuyện trước, vui lòng gửi thông tin ngân hàng mới đến ar@cold-outreach-000.com\n\nCảm ơn,\nPhòng Mua hàng",
-      "headers": {
-        "Authentication-Results": "spf=none dkim=none dmarc=none"
-      }
-    }
-  },
-  {
-    "test_id": "first-000001",
-    "category": "FIRST_CONTACT_EXTERNAL",
-    "expected_tier": "Blocked",
-    "expected_score_range": [
-      85,
-      100
-    ],
-    "is_threat": true,
-    "difficulty": "easy",
-    "locale": "th",
-    "attack_type": "First-contact pretending to be prior thread",
-    "description": "Brand-new external sender claiming a previous conversation, asking to update banking details.",
-    "expected_signals": [
-      "AUTH_FAIL",
-      "BANK_DETAIL_CHANGE",
-      "FAKE_REPLY_PREFIX",
-      "FIRST_CONTACT_EXTERNAL"
-    ],
-    "tier0_bypass": false,
-    "expected_tier1_verdict": "flag",
-    "expected_tier2_needed": true,
-    "expected_tier2_categories": [
-      "FIRST_CONTACT_EXTERNAL"
-    ],
-    "payload": {
-      "from": "john.smith@cold-outreach-001.com",
-      "from_display": "John Smith",
-      "to": "bob@acme.example",
-      "subject": "Re: ติดตามใบแจ้งหนี้",
-      "body_text": "สวัสดีค่ะ,\n\nต่อจากการสนทนาครั้งก่อน กรุณาส่งรายละเอียดบัญชีธนาคารใหม่ไปยัง ar@cold-outreach-001.com\n\nด้วยความเคารพ,\nฝ่ายจัดซื้อ",
-      "headers": {
-        "Authentication-Results": "spf=none dkim=none dmarc=none"
-      }
-    }
-  },
-  {
-    "test_id": "first-000002",
     "category": "FIRST_CONTACT_EXTERNAL",
     "expected_tier": "Blocked",
     "expected_score_range": [
@@ -1901,11 +1829,83 @@
       "FIRST_CONTACT_EXTERNAL"
     ],
     "payload": {
+      "from": "john.smith@cold-outreach-000.com",
+      "from_display": "John Smith",
+      "to": "alice@acme.example",
+      "subject": "Re: invoice follow-up",
+      "body_text": "Dear team,\n\nFollowing up on our last conversation — please send the updated bank details to ar@cold-outreach-000.com.\n\nBest regards,\nProcurement",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "first-000001",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "en",
+    "attack_type": "First-contact pretending to be prior thread",
+    "description": "Brand-new external sender claiming a previous conversation, asking to update banking details.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "BANK_DETAIL_CHANGE",
+      "FAKE_REPLY_PREFIX",
+      "FIRST_CONTACT_EXTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "FIRST_CONTACT_EXTERNAL"
+    ],
+    "payload": {
+      "from": "john.smith@cold-outreach-001.com",
+      "from_display": "John Smith",
+      "to": "bob@acme.example",
+      "subject": "Re: invoice follow-up",
+      "body_text": "Hi,\n\nFollowing up on our last conversation — please send the updated bank details to ar@cold-outreach-001.com.\n\nBest regards,\nIT Helpdesk",
+      "headers": {
+        "Authentication-Results": "spf=none dkim=none dmarc=none"
+      }
+    }
+  },
+  {
+    "test_id": "first-000002",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "expected_tier": "Blocked",
+    "expected_score_range": [
+      85,
+      100
+    ],
+    "is_threat": true,
+    "difficulty": "easy",
+    "locale": "ko",
+    "attack_type": "First-contact pretending to be prior thread",
+    "description": "Brand-new external sender claiming a previous conversation, asking to update banking details.",
+    "expected_signals": [
+      "AUTH_FAIL",
+      "BANK_DETAIL_CHANGE",
+      "FAKE_REPLY_PREFIX",
+      "FIRST_CONTACT_EXTERNAL"
+    ],
+    "tier0_bypass": false,
+    "expected_tier1_verdict": "flag",
+    "expected_tier2_needed": true,
+    "expected_tier2_categories": [
+      "FIRST_CONTACT_EXTERNAL"
+    ],
+    "payload": {
       "from": "john.smith@cold-outreach-002.com",
       "from_display": "John Smith",
       "to": "carol@acme.example",
-      "subject": "Re: invoice follow-up",
-      "body_text": "Dear team,\n\nFollowing up on our last conversation — please send the updated bank details to ar@cold-outreach-002.com.\n\nBest regards,\nAccounts Payable",
+      "subject": "Re: 송장 후속 조치",
+      "body_text": "안녕하십니까,\n\n지난 대화에 이어 변경된 은행 정보를 ar@cold-outreach-002.com 로 보내주세요\n\n감사합니다,\n재무팀",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       }
@@ -1941,7 +1941,7 @@
       "from_display": "John Smith",
       "to": "david@acme.example",
       "subject": "Re: invoice follow-up",
-      "body_text": "Good morning,\n\nFollowing up on our last conversation — please send the updated bank details to ar@cold-outreach-003.com.\n\nCheers,\nAccounts Payable",
+      "body_text": "Hello,\n\nFollowing up on our last conversation — please send the updated bank details to ar@cold-outreach-003.com.\n\nBest regards,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       }
@@ -1977,7 +1977,7 @@
       "from_display": "John Smith",
       "to": "ellen@acme.example",
       "subject": "Re: invoice follow-up",
-      "body_text": "Hi,\n\nFollowing up on our last conversation  — please send the updated bank details to ar@cold-outreach-004.com.\n\nThanks,\nProcurement",
+      "body_text": "Hi,\n\nFollowing up on our last conversation — please send the updated bank details to ar@cold-outreach-004.com.\n\nCheers,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       }
@@ -2013,7 +2013,7 @@
       "from_display": "John Smith",
       "to": "fionn@acme.example",
       "subject": "Re: invoice follow-up",
-      "body_text": "Good morning,\n\nFollowing up on our last conversation  — please send the updated bank details to ar@cold-outreach-005.com.\n\nCheers,\nProcurement",
+      "body_text": "Dear team,\n\nFollowing up on our last conversation — please send  the updated bank details to ar@cold-outreach-005.com.\n\nThanks,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       }
@@ -2046,7 +2046,7 @@
       "from_display": "Cold Outreach Sales",
       "to": "grace@acme.example",
       "subject": "Quick intro",
-      "body_text": "Hello,\n\nHi, I'm reaching out from cold-outreach-006.com about our analytics platform.\n\nIf you'd prefer not to hear from us, please reply 'unsubscribe' and I'll remove you from our list.\n\nBest regards,\nIT Helpdesk",
+      "body_text": "Dear team,\n\nHi, I'm reaching out from cold-outreach-006.com about our analytics platform.\n\nIf you'd prefer not to hear from us, please reply 'unsubscribe'  and I'll remove you from our list.\n\nThanks,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@cold-outreach-006.com\u003e"
@@ -2063,7 +2063,7 @@
     ],
     "is_threat": false,
     "difficulty": "hard",
-    "locale": "th",
+    "locale": "en",
     "attack_type": "Legitimate cold outreach",
     "description": "First-contact-external sales email that authenticates and offers unsubscribe — should label Informational, not flag.",
     "expected_signals": [
@@ -2079,8 +2079,8 @@
       "from": "sales@cold-outreach-007.com",
       "from_display": "Cold Outreach Sales",
       "to": "hideo@acme.example",
-      "subject": "แนะนำสั้น ๆ",
-      "body_text": "เรียนคุณ, สวัสดี ฉันติดต่อจาก ColD-outReACh-007.Com เกี่วยกับแพลตฟอร์มของเรา หากไม่สนใจ กรุณาตอบกลับ 'unsubscribe' เราจะลบรายชื่อของคุณ ขอบคณุครับ, ฝ่ายบัญชี",
+      "subject": "Quick intro",
+      "body_text": "Good mornInG,\n\nHi, I'm reaching out from cold-outreach-007.com about our analytics platform.\n\nIf you'd prefer not to hear from us, please reply 'unsbuscribe' and I'll remove you from our list.\n\nThanks,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@cold-outreach-007.com\u003e"
@@ -2114,7 +2114,7 @@
       "from_display": "Cold Outreach Sales",
       "to": "alice@acme.example",
       "subject": "Quick intro",
-      "body_text": "Dear team, Hi, I'm reaching out form cold-outreach-008.com about our analytics platform. If you'd prefer not to hear from us, please reply 'unsubscribe' and I'll ReMOVe you from our list. Regards, Procurement",
+      "body_text": "DEAr team,\n\nHi, I'm reaching out from cold-outreach-008.com about our analytics platform.\n\nIf you'd prefre not to hear from us, please reply 'unsubscribe' and I'll remove you from our list.\n\nCheers,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@cold-outreach-008.com\u003e"
@@ -2148,7 +2148,7 @@
       "from_display": "Cold Outreach Sales",
       "to": "bob@acme.example",
       "subject": "Quick intro",
-      "body_text": "Hi, I'm reaching out FROm cold-outreach-009.com about our analytics platform. If you'd prefre not to hear from us, please reply 'unsubscribe' and I'll remove you from our list. Best regards, Procurement",
+      "body_text": "Hello,\n\nHi, I'm reaching out from cold-outreach-009.com about our analytics platform.\n\nIf you'd PrefEr not to hear from us, please reply 'unsubscribe' and I'll rmeove you from our list.\n\nRegards,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@cold-outreach-009.com\u003e"
@@ -2185,12 +2185,12 @@
       "from_display": "alice",
       "to": "payroll@acme.example",
       "subject": "URGENT — need payroll export now",
-      "body_text": "Good morning,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet to my personal address.\n\nSend to: alice.9796@proton.me\n\nCheers,\nIT Helpdesk",
+      "body_text": "Hello,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet to my personal address.\n\nSend to: alice.2208@gmx.com\n\nRegards,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "alice.0889@tutanota.com",
+        "Reply-To": "alice.7297@gmail.com",
         "X-Mailer": "OWA/16.0",
-        "X-Originating-IP": "[129.9.202.237]"
+        "X-Originating-IP": "[143.122.7.61]"
       }
     }
   },
@@ -2224,12 +2224,12 @@
       "from_display": "bob",
       "to": "payroll@acme.example",
       "subject": "URGENT — need payroll export now",
-      "body_text": "Good morning,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet to my personal address.\n\nSend to: bob.0743@mail.ru\n\nRegards,\nAccounts Payable",
+      "body_text": "Hi,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet to my personal address.\n\nSend to: bob.8289@gmx.com\n\nRegards,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "bob.2996@proton.me",
+        "Reply-To": "bob.8464@yandex.com",
         "X-Mailer": "OWA/16.0",
-        "X-Originating-IP": "[109.176.118.3]"
+        "X-Originating-IP": "[160.233.203.113]"
       }
     }
   },
@@ -2263,12 +2263,12 @@
       "from_display": "carol",
       "to": "payroll@acme.example",
       "subject": "URGENT — need payroll export now",
-      "body_text": "Hello,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet to my personal address.\n\nSend to: carol.1657@gmail.com\n\nRegards,\nIT Helpdesk",
+      "body_text": "Good morning,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet to my personal address.\n\nSend to: carol.5806@proton.me\n\nBest regards,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "carol.7878@gmail.com",
+        "Reply-To": "carol.8606@gmail.com",
         "X-Mailer": "OWA/16.0",
-        "X-Originating-IP": "[92.31.192.188]"
+        "X-Originating-IP": "[124.29.176.224]"
       }
     }
   },
@@ -2302,12 +2302,12 @@
       "from_display": "david",
       "to": "payroll@acme.example",
       "subject": "URGENT — need payroll export now",
-      "body_text": "Hi,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet to my personal address.\n\nSend to: david.9597@gmx.com\n\nRegards,\nIT Helpdesk",
+      "body_text": "Good morning,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet to my personal address.\n\nSend to: david.4728@proton.me\n\nThanks,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "david.3820@proton.me",
+        "Reply-To": "david.1786@proton.me",
         "X-Mailer": "OWA/16.0",
-        "X-Originating-IP": "[95.79.253.173]"
+        "X-Originating-IP": "[158.230.139.199]"
       }
     }
   },
@@ -2341,12 +2341,12 @@
       "from_display": "alice",
       "to": "payroll@acme.example",
       "subject": "URGENT — need payroll export now",
-      "body_text": "Dear team,\n\nQuick favour —  I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet to my personal address.\n\nSend to: alice.6337@outlook.com\n\nRegards,\nProcurement",
+      "body_text": "Hi,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet  to my personal address.\n\nSend to: alice.9125@gmail.com\n\nRegards,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "alice.7090@mail.ru",
+        "Reply-To": "alice.9812@tutanota.com",
         "X-Mailer": "OWA/16.0",
-        "X-Originating-IP": "[178.228.82.27]"
+        "X-Originating-IP": "[117.29.244.190]"
       }
     }
   },
@@ -2380,12 +2380,12 @@
       "from_display": "bob",
       "to": "payroll@acme.example",
       "subject": "URGENT — need payroll export now",
-      "body_text": "Good morning,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet to my personal address.\n\nSend to: bob.4667@yandex.com\n\nCheers,\nProcurement",
+      "body_text": "Dear team,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet to my personal address.\n\nSend to: bob.3328@gmx.com\n\nRegards,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "bob.6627@yandex.com",
+        "Reply-To": "bob.7345@gmx.com",
         "X-Mailer": "OWA/16.0",
-        "X-Originating-IP": "[115.198.62.194]"
+        "X-Originating-IP": "[93.204.5.91]"
       }
     }
   },
@@ -2419,12 +2419,12 @@
       "from_display": "carol",
       "to": "payroll@acme.example",
       "subject": "URGENT — need payroll export now",
-      "body_text": "Hello,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet  to my personal address.\n\nSend to: carol.0666@yandex.com\n\nCheers,\nIT Helpdesk",
+      "body_text": "Hello,\n\nQuick favour — I'm in a meeting and need you to forward me the latest payroll export and the W-2 spreadsheet to my personal address.\n\nSend to: carol.9431@tutanota.com\n\nThanks,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "carol.7148@proton.me",
+        "Reply-To": "carol.3246@yahoo.com",
         "X-Mailer": "OWA/16.0",
-        "X-Originating-IP": "[179.65.233.176]"
+        "X-Originating-IP": "[113.5.19.179]"
       }
     }
   },
@@ -2438,7 +2438,7 @@
     ],
     "is_threat": true,
     "difficulty": "hard",
-    "locale": "en",
+    "locale": "vi",
     "attack_type": "Compromised internal mailbox exfil request",
     "description": "Email sent from an authenticated internal mailbox requesting payroll exfiltration to a personal address — classic ATO signal.",
     "expected_signals": [
@@ -2457,13 +2457,13 @@
       "from": "david@acme.example",
       "from_display": "david",
       "to": "payroll@acme.example",
-      "subject": "URGENT — need payroll export now",
-      "body_text": "Hi, Quick favour — I'm in a meeting and need you to forward me the ltaest payroll export and the W-2 spreadsheet to my personal address. Send to: david.4875@yahoo.com eBst regards, Procurement",
+      "subject": "GẤP — gửi dữ liệu lương",
+      "body_text": "Xin chào,\n\nĐang họp, vui lòng chuyển dữ liệu lương mới nhất và bảng W-2 đến emali cá HnÂn của tôi\n\nSend to: david.9730@gmail.com\n\nTrân trọng,\nPhòng IT",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "david.4230@proton.me",
+        "Reply-To": "david.1703@mail.ru",
         "X-Mailer": "OWA/16.0",
-        "X-Originating-IP": "[165.90.114.23]"
+        "X-Originating-IP": "[159.114.77.115]"
       }
     }
   },
@@ -2493,7 +2493,7 @@
       "from_display": "alice (User)",
       "to": "itsupport@acme.example",
       "subject": "Possible phishing click",
-      "body_text": "Hello, I think I clicked on a suspicious link earlier today. Can you chekc my account for anything unUsUaL? Regards, Procureemnt",
+      "body_text": "Dear team,\n\nI think I clickde  on a suspicious link earlier today. Can you check my account for anything unusual?\n\nRegards,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       }
@@ -2525,7 +2525,7 @@
       "from_display": "bob (User)",
       "to": "itsupport@acme.example",
       "subject": "Possible phishing click",
-      "body_text": "Good morning, I think I clicked on a suspicious ilnk earlier today. Can you check my account for anything unusUAL? Regards, IT Helpdesk",
+      "body_text": "Good morinng,\n\nI ThINk I lcicked on a suspicious link earlier today. Can you check my account for anything unusual?\n\nCheers,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       }
@@ -2561,10 +2561,10 @@
       "from_display": "Alpha Supply A/R",
       "to": "alice@acme.example",
       "subject": "Banking details update — invoice 9821",
-      "body_text": "Hello,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: Wells Fargo\nAccount: 8841860551\nSWIFT: WFBIUS6S\n\nApologies for the short notice.\n\nRegards,\nIT Helpdesk",
+      "body_text": "Hello,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: HSBC\nAccount: 9190167434\nSWIFT: WFBIUS6S\n\nApologies for the short notice.\n\nBest regards,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "ar@alpha-supply.co"
+        "Reply-To": "ar@alpha-supply-support.biz"
       }
     }
   },
@@ -2598,10 +2598,10 @@
       "from_display": "Alpha Supply A/R",
       "to": "bob@acme.example",
       "subject": "Banking details update — invoice 9821",
-      "body_text": "Hello,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: Standard Chartered\nAccount: 9073371895\nSWIFT: HSBCHKHH\n\nApologies for the short notice.\n\nThanks,\nIT Helpdesk",
+      "body_text": "Good morning,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: HSBC\nAccount: 4773112584\nSWIFT: WFBIUS6S\n\nApologies for the short notice.\n\nBest regards,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "ar@beta-logistics-support.net"
+        "Reply-To": "ar@beta-l0gistics.co"
       }
     }
   },
@@ -2635,10 +2635,10 @@
       "from_display": "Alpha Supply A/R",
       "to": "carol@acme.example",
       "subject": "Banking details update — invoice 9821",
-      "body_text": "Dear team,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: Standard Chartered\nAccount: 1317938184\nSWIFT: HSBCHKHH\n\nApologies for the short notice.\n\nCheers,\nProcurement",
+      "body_text": "Dear team,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: Wells Fargo\nAccount: 0602875183\nSWIFT: SCBLSG22\n\nApologies for the short notice.\n\nRegards,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "ar@gamma-print.com"
+        "Reply-To": "ar@gamma-print.co"
       }
     }
   },
@@ -2672,10 +2672,10 @@
       "from_display": "Alpha Supply A/R",
       "to": "david@acme.example",
       "subject": "Banking details update — invoice 9821",
-      "body_text": "Dear team,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: Wells Fargo\nAccount: 0916621183\nSWIFT: SCBLSG22\n\nApologies for the short notice.\n\nBest regards,\nAccounts Payable",
+      "body_text": "Hello,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: HSBC\nAccount: 1479328101\nSWIFT: SCBLSG22\n\nApologies for the short notice.\n\nThanks,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "ar@alpha-supply.net"
+        "Reply-To": "ar@alpha-supply.biz"
       }
     }
   },
@@ -2709,10 +2709,10 @@
       "from_display": "Alpha Supply A/R",
       "to": "ellen@acme.example",
       "subject": "Banking details update — invoice 9821",
-      "body_text": "Good morning,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: Standard Chartered\nAccount:  7506664339\nSWIFT: WFBIUS6S\n\nApologies for the short notice.\n\nCheers,\nIT Helpdesk",
+      "body_text": "Hi,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: HSBC\nAccount: 0025911738\nSWIFT: WFBIUS6S\n\nApologies for the short notice.\n\nBest regards,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "ar@beta-1ogistics.net"
+        "Reply-To": "ar@beta-logistics.co"
       }
     }
   },
@@ -2726,7 +2726,7 @@
     ],
     "is_threat": true,
     "difficulty": "medium",
-    "locale": "en",
+    "locale": "ko",
     "attack_type": "Vendor mid-thread bank-detail change",
     "description": "Previously-known vendor address pushing a banking change with reply-to redirected to a lookalike domain.",
     "expected_signals": [
@@ -2745,11 +2745,11 @@
       "from": "ar@gamma-print.com",
       "from_display": "Alpha Supply A/R",
       "to": "fionn@acme.example",
-      "subject": "Banking details update — invoice 9821",
-      "body_text": "Dear team,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments  to:\n\nBank: Standard Chartered\nAccount: 7765716712\nSWIFT: WFBIUS6S\n\nApologies for the short notice.\n\nThanks,\nIT Helpdesk",
+      "subject": "은행 정보 변경 안내 — 9821",
+      "body_text": "팀 여러분께,\n\n송장 9821 관련, 은행 정보가 변경되었습니다. 즉시 아래로 송금해 주세요\n\nBank: Standard Chartered\nAccount: 9111331902\nSWIFT: WFBIUS6S\n\n급한 안내 드려 죄송합니다\n\n안부 전합니다,\n재무팀",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "ar@gamma-print.net"
+        "Reply-To": "ar@gamma-print-support.co"
       }
     }
   },
@@ -2783,10 +2783,10 @@
       "from_display": "Alpha Supply A/R",
       "to": "grace@acme.example",
       "subject": "Banking details update — invoice 9821",
-      "body_text": "Hello,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: Standard Chartered\nAccount: 7271570887\nSWIFT: SCBLSG22\n\nApologies for the short notice.\n\nCheers,\nIT Helpdesk",
+      "body_text": "Hi,\n\nFurther to invoice 9821, please note our banking has changed. Effective immediately, route payments to:\n\nBank: Standard Chartered\nAccount: 5397555491\nSWIFT: HSBCHKHH\n\nApologies for the short notice.\n\nThanks,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "ar@alpha-supply.net"
+        "Reply-To": "ar@alpha-supply.com"
       }
     }
   },
@@ -2820,10 +2820,10 @@
       "from_display": "Alpha Supply A/R",
       "to": "hideo@acme.example",
       "subject": "Banking details update — invoice 9821",
-      "body_text": "Dear etam, Further to invoice 9821, please note our banking has changed. Effective immediately, route payments to: Bank: Standard Chartered Account: 3346546539 SWIFT: WFBIUS6S ApOlogIes for the short notiec. Cheers, Procurement",
+      "body_text": "Dear team,\n\nFurther to invoice 9821, please note our banking has chnaged. Effective  immediately, route payments to:\n\nBank: Wells Fargo\nAccount: 3566472100\nSWIFT: WFBIUS6S\n\nApologies for the short notice.\n\nBeST regards,\nProcuremnet",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "ar@beta-logistics-secure.com"
+        "Reply-To": "ar@beta-logistics-secure.app"
       }
     }
   },
@@ -2853,7 +2853,7 @@
       "from_display": "Alpha Supply A/R",
       "to": "alice@acme.example",
       "subject": "Statement for September",
-      "body_text": "Dear team, Statement attached. No action erquired if all entries look correct. Best REGaRdS, Procurement",
+      "body_text": "Good moRnING,\n\nStatement attached. No atcion required if  all entries look correct.\n\nRegards,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       }
@@ -2885,7 +2885,7 @@
       "from_display": "Alpha Supply A/R",
       "to": "bob@acme.example",
       "subject": "Statement for September",
-      "body_text": "Hello, Statement attaChED. No action required if all entires look correct. Regards, Procureemnt",
+      "body_text": "Hleol,\n\nStatement  attached. No action required if all entries look correct.\n\nBest regards,\nPrOcUReMEnt",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       }
@@ -2901,7 +2901,7 @@
     ],
     "is_threat": true,
     "difficulty": "easy",
-    "locale": "en",
+    "locale": "ko",
     "attack_type": "Password-expiry credential harvest",
     "description": "Fake password-expiry warning directing the recipient to an off-brand login page that captures credentials.",
     "expected_signals": [
@@ -2917,12 +2917,12 @@
       "CREDENTIAL_HARVESTING"
     ],
     "payload": {
-      "from": "passwordreset.1064@yandex.com",
+      "from": "passwordreset.3026@gmail.com",
       "from_display": "IT Support",
       "to": "alice@acme.example",
-      "subject": "Action required: password expiry",
-      "body_text": "Dear team,\n\nYour mailbox password will expire in 24 hours. Re-confirm your password to keep service active.\n\nRe-confirm: http://verify-account-now.tk/login\n\nRegards,\nProcurement",
-      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://verify-account-now.tk/login\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
+      "subject": "필수 조치: 비밀번호 만료",
+      "body_text": "팀 여러분께,\n\n24시간 안에 메일 비밀번호가 만료됩니다. 비밀번호를 재확인하세요\n\nRe-confirm: http://verify-account-now.tk/login\n\n안부 전합니다,\n구매팀",
+      "body_html": "\u003cp\u003e비밀번호 재확인\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://verify-account-now.tk/login\"\u003e지금 확인\u003c/a\u003e\u003c/p\u003e",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       }
@@ -2954,12 +2954,12 @@
       "CREDENTIAL_HARVESTING"
     ],
     "payload": {
-      "from": "passwordreset.3768@outlook.com",
+      "from": "passwordreset.0651@outlook.com",
       "from_display": "IT Support",
       "to": "bob@acme.example",
       "subject": "Action required: password expiry",
-      "body_text": "Good morning,\n\nYour mailbox password will expire in 24 hours. Re-confirm your password to keep service active.\n\nRe-confirm: http://office365-renew.gq/signin\n\nRegards,\nAccounts Payable",
-      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://office365-renew.gq/signin\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
+      "body_text": "Hello,\n\nYour mailbox password will expire in 24 hours. Re-confirm your password to keep service active.\n\nRe-confirm: http://microsoft-security-update.cf/auth\n\nBest regards,\nAccounts Payable",
+      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://microsoft-security-update.cf/auth\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       }
@@ -2991,11 +2991,11 @@
       "CREDENTIAL_HARVESTING"
     ],
     "payload": {
-      "from": "passwordreset.9513@gmx.com",
+      "from": "passwordreset.9249@proton.me",
       "from_display": "IT Support",
       "to": "carol@acme.example",
       "subject": "Action required: password expiry",
-      "body_text": "Dear team,\n\nYour mailbox password will expire in 24 hours. Re-confirm your password to keep service active.\n\nRe-confirm: http://microsoft-security-update.cf/auth\n\nBest regards,\nAccounts Payable",
+      "body_text": "Dear team,\n\nYour mailbox password will expire in 24 hours. Re-confirm your password to keep service active.\n\nRe-confirm: http://microsoft-security-update.cf/auth\n\nThanks,\nAccounts Payable",
       "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://microsoft-security-update.cf/auth\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
@@ -3012,7 +3012,7 @@
     ],
     "is_threat": true,
     "difficulty": "easy",
-    "locale": "en",
+    "locale": "ja",
     "attack_type": "Password-expiry credential harvest",
     "description": "Fake password-expiry warning directing the recipient to an off-brand login page that captures credentials.",
     "expected_signals": [
@@ -3028,12 +3028,12 @@
       "CREDENTIAL_HARVESTING"
     ],
     "payload": {
-      "from": "passwordreset.6808@outlook.com",
+      "from": "passwordreset.9164@gmail.com",
       "from_display": "IT Support",
       "to": "david@acme.example",
-      "subject": "Action required: password expiry",
-      "body_text": "Hi,\n\nYour mailbox password will expire in 24 hours. Re-confirm your password to keep service active.\n\nRe-confirm: http://office365-renew.gq/signin\n\nCheers,\nIT Helpdesk",
-      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://office365-renew.gq/signin\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
+      "subject": "対応必須: パスワード失効",
+      "body_text": "お世話になっております,\n\n24時間以内にメールパスワードが失効します。パスワードを再確認してください\n\nRe-confirm: http://office365-renew.gq/signin\n\nよろしくお願いいたします,\n購買部",
+      "body_html": "\u003cp\u003eパスワードを再確認\u003c/p\u003e\u003cp\u003e\u003ca href=\"http://office365-renew.gq/signin\"\u003e今すぐ確認\u003c/a\u003e\u003c/p\u003e",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       }
@@ -3065,11 +3065,11 @@
       "CREDENTIAL_HARVESTING"
     ],
     "payload": {
-      "from": "passwordreset.5183@mail.ru",
+      "from": "passwordreset.7996@outlook.com",
       "from_display": "IT Support",
       "to": "ellen@acme.example",
       "subject": "Action required: password expiry",
-      "body_text": "Dear team,\n\nYour mailbox password will expire in 24  hours. Re-confirm your password to keep service active.\n\nRe-confirm: https://login-microsoftonline.co/verify\n\nRegards,\nProcurement",
+      "body_text": "Hello,\n\nYour mailbox password will expire in 24 hours. Re-confirm your password to keep service  active.\n\nRe-confirm: https://login-microsoftonline.co/verify\n\nRegards,\nIT Helpdesk",
       "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://login-microsoftonline.co/verify\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
@@ -3102,12 +3102,12 @@
       "CREDENTIAL_HARVESTING"
     ],
     "payload": {
-      "from": "passwordreset.0903@tutanota.com",
+      "from": "passwordreset.6808@outlook.com",
       "from_display": "IT Support",
       "to": "fionn@acme.example",
       "subject": "Action required: password expiry",
-      "body_text": "Hello,\n\nYour mailbox password will expire  in 24 hours. Re-confirm your password to keep service active.\n\nRe-confirm: https://login-microsoftonline.co/verify\n\nCheers,\nIT Helpdesk",
-      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://login-microsoftonline.co/verify\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
+      "body_text": "Hi,\n\nYour mailbox password will expire in 24 hours. Re-confirm your password to keep service active.\n\nRe-confirm: https://o365-portal.app/login\n\nCheers,\nIT Helpdesk",
+      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://o365-portal.app/login\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       }
@@ -3123,7 +3123,7 @@
     ],
     "is_threat": true,
     "difficulty": "medium",
-    "locale": "en",
+    "locale": "zh",
     "attack_type": "Password-expiry credential harvest",
     "description": "Fake password-expiry warning directing the recipient to an off-brand login page that captures credentials.",
     "expected_signals": [
@@ -3139,12 +3139,12 @@
       "CREDENTIAL_HARVESTING"
     ],
     "payload": {
-      "from": "passwordreset.2553@tutanota.com",
+      "from": "passwordreset.1253@gmx.com",
       "from_display": "IT Support",
       "to": "grace@acme.example",
-      "subject": "Action required: password expiry",
-      "body_text": "Hi,\n\nYour mailbox password will expire in 24 hours. Re-confirm your password to keep service active.\n\nRe-confirm: https://o365-portal.app/login\n\nRegards,\nProcurement",
-      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://o365-portal.app/login\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
+      "subject": "需要操作：密码即将过期",
+      "body_text": "您好,\n\n您的邮箱密码将在24小时内过期，请重新确认密码\n\nRe-confirm: https://o365-portal.app/login\n\n顺颂商祺,\n财务部",
+      "body_html": "\u003cp\u003e重新确认密码\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://o365-portal.app/login\"\u003e立即验证\u003c/a\u003e\u003c/p\u003e",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       }
@@ -3176,12 +3176,12 @@
       "CREDENTIAL_HARVESTING"
     ],
     "payload": {
-      "from": "passwordreset.3016@yandex.com",
+      "from": "passwordreset.5284@outlook.com",
       "from_display": "IT Support",
       "to": "hideo@acme.example",
       "subject": "Action required: password expiry",
-      "body_text": "eDar team, Your mailbox password WiLl expire in 24 hours. Re-confirm your password to keep service active. Re-confirm: https://xn--logn-3oa.microsoft.com/auth Thanks, IT Helpdesk",
-      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://xn--logn-3oa.microsoft.com/auth\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
+      "body_text": "Good  morning,\n\nYour mailbox password will expire in 24 hours. RE-CONfiRM your passwodr to keep service active.\n\nRe-confirm: https://login.microsoftonline.com.security-verify.app/auth?id=98e94856\n\nRegards,\nAccounts Payable",
+      "body_html": "\u003cp\u003eRe-confirm your password.\u003c/p\u003e\u003cp\u003e\u003ca href=\"https://login.microsoftonline.com.security-verify.app/auth?id=98e94856\"\u003eVerify now\u003c/a\u003e\u003c/p\u003e",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       }
@@ -3197,7 +3197,7 @@
     ],
     "is_threat": false,
     "difficulty": "hard",
-    "locale": "ja",
+    "locale": "en",
     "attack_type": "Legitimate MFA enrolment reminder",
     "description": "Genuine internal security bulletin requesting users self-enrol via the SSO portal — no credential prompt.",
     "expected_signals": [
@@ -3212,8 +3212,8 @@
       "from": "security@acme.example",
       "from_display": "Acme Security",
       "to": "alice@acme.example",
-      "subject": "金曜までに MFA 登録を完了してください",
-      "body_text": "お世話になっております, 会社の SSO ーポタルから MFA を登録てしください。本メールでは認証情報を求めません ご確認のほどお願いいたします, 購買部",
+      "subject": "MFA enrolment is mandatory by Friday",
+      "body_text": "Dear team,\n\nVisit the company SSO portal to enrol your MFA device. No credentials are required rfom this emali.\n\nThanks,\nPROCuREMEnT",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       }
@@ -3245,7 +3245,7 @@
       "from_display": "Acme Security",
       "to": "bob@acme.example",
       "subject": "MFA enrolment is mandatory by Friday",
-      "body_text": "Good mornnig, Vsiit the company SSO portal to enROL your MFA device. No credentials are required from this email. Thanks, IT Helpdesk",
+      "body_text": "Dear team,\n\nVisit the company SSO portal to  enrol your MFA device. No credentials are required from thsi email.\n\nBESt regards,\nIT Hlepdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       }
@@ -3261,7 +3261,7 @@
     ],
     "is_threat": true,
     "difficulty": "easy",
-    "locale": "ko",
+    "locale": "en",
     "attack_type": "Fake invoice with lookalike vendor",
     "description": "Invoice fraud sent from a lookalike of a known vendor, with payment redirected via a fresh-domain link.",
     "expected_signals": [
@@ -3277,14 +3277,14 @@
       "INVOICE_FRAUD"
     ],
     "payload": {
-      "from": "billing@alpha-supply-secure.net",
+      "from": "billing@a1pha-supply.biz",
       "from_display": "Alpha Supply Billing",
       "to": "alice@acme.example",
       "subject": "URGENT: Past-due invoice INV-90000",
-      "body_text": "안녕하세요,\n\n청구서 32192원 즉시 결제 부탁드립니다\n\n지금 결제: http://microsoft-security-update.cf/auth\n\n안부 전합니다,\nIT팀",
+      "body_text": "Dear team,\n\nPlease find invoice INV-90000 for $20931 due immediately. Pay via the secure link below.\n\nPay Now: http://microsoft-security-update.cf/auth\n\nCheers,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=fail dkim=none dmarc=fail",
-        "Reply-To": "ar@alpha-supply-secure.net"
+        "Reply-To": "ar@a1pha-supply.biz"
       }
     }
   },
@@ -3298,7 +3298,7 @@
     ],
     "is_threat": true,
     "difficulty": "easy",
-    "locale": "zh",
+    "locale": "en",
     "attack_type": "Fake invoice with lookalike vendor",
     "description": "Invoice fraud sent from a lookalike of a known vendor, with payment redirected via a fresh-domain link.",
     "expected_signals": [
@@ -3314,14 +3314,14 @@
       "INVOICE_FRAUD"
     ],
     "payload": {
-      "from": "billing@beta-logistics.co",
+      "from": "billing@beta-l0gistics.biz",
       "from_display": "Alpha Supply Billing",
       "to": "bob@acme.example",
       "subject": "URGENT: Past-due invoice INV-90001",
-      "body_text": "团队您好,\n\n发票金额 25675 元请立即支付\n\n立即付款: http://office365-renew.gq/signin\n\n祝好,\n采购部",
+      "body_text": "Dear team,\n\nPlease find invoice INV-90001 for $47437 due immediately. Pay via the secure link below.\n\nPay Now: http://office365-renew.gq/signin\n\nRegards,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=fail dkim=none dmarc=fail",
-        "Reply-To": "ar@beta-logistics.co"
+        "Reply-To": "ar@beta-l0gistics.biz"
       }
     }
   },
@@ -3351,14 +3351,14 @@
       "INVOICE_FRAUD"
     ],
     "payload": {
-      "from": "billing@gamma-print-support.net",
+      "from": "billing@garnma-print.co",
       "from_display": "Alpha Supply Billing",
       "to": "carol@acme.example",
       "subject": "URGENT: Past-due invoice INV-90002",
-      "body_text": "Hi,\n\nPlease find invoice INV-90002 for $51019 due immediately. Pay via the secure link below.\n\nPay Now: http://microsoft-security-update.cf/auth\n\nThanks,\nIT Helpdesk",
+      "body_text": "Dear team,\n\nPlease find invoice INV-90002 for $29746 due immediately. Pay via the secure link below.\n\nPay Now: http://microsoft-security-update.cf/auth\n\nCheers,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=fail dkim=none dmarc=fail",
-        "Reply-To": "ar@gamma-print-support.net"
+        "Reply-To": "ar@garnma-print.co"
       }
     }
   },
@@ -3388,14 +3388,14 @@
       "INVOICE_FRAUD"
     ],
     "payload": {
-      "from": "billing@alpha-supply.co",
+      "from": "billing@alpha-supply-secure.com",
       "from_display": "Alpha Supply Billing",
       "to": "david@acme.example",
       "subject": "URGENT: Past-due invoice INV-90003",
-      "body_text": "Dear team,\n\nPlease find invoice INV-90003 for $32538 due immediately. Pay via the secure link below.\n\nPay Now: http://verify-account-now.tk/login\n\nCheers,\nProcurement",
+      "body_text": "Dear team,\n\nPlease find invoice INV-90003 for $24282 due immediately. Pay via the secure link below.\n\nPay Now: http://microsoft-security-update.cf/auth\n\nThanks,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=fail dkim=none dmarc=fail",
-        "Reply-To": "ar@alpha-supply.co"
+        "Reply-To": "ar@alpha-supply-secure.com"
       }
     }
   },
@@ -3425,14 +3425,14 @@
       "INVOICE_FRAUD"
     ],
     "payload": {
-      "from": "billing@beta-l0gistics.biz",
+      "from": "billing@beta-logistics-secure.app",
       "from_display": "Alpha Supply Billing",
       "to": "ellen@acme.example",
       "subject": "URGENT: Past-due invoice INV-90004",
-      "body_text": "Hi,\n\nPlease find invoice INV-90004 for $30289 due immediately. Pay via the secure link below.\n\nPay Now: https://login-microsoftonline.co/verify\n\nThanks,\nIT Helpdesk",
+      "body_text": "Good morning,\n\nPlease find invoice INV-90004 for $49976 due immediately. Pay via the secure link below.\n\nPay Now: https://accounts-google.support/secure\n\nThanks,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=fail dkim=none dmarc=fail",
-        "Reply-To": "ar@beta-l0gistics.biz"
+        "Reply-To": "ar@beta-logistics-secure.app"
       }
     }
   },
@@ -3462,14 +3462,14 @@
       "INVOICE_FRAUD"
     ],
     "payload": {
-      "from": "billing@gamma-print-secure.com",
+      "from": "billing@gamma-print.co",
       "from_display": "Alpha Supply Billing",
       "to": "fionn@acme.example",
       "subject": "URGENT: Past-due invoice INV-90005",
-      "body_text": "Dear team,\n\nPlease find invoice INV-90005 for $26249 due immediately. Pay via the secure link below.\n\nPay Now: https://o365-portal.app/login\n\nBest regards,\nProcurement",
+      "body_text": "Hello,\n\nPlease find invoice INV-90005 for $47229 due immediately. Pay via the secure link below.\n\nPay Now: https://accounts-google.support/secure\n\nRegards,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=fail dkim=none dmarc=fail",
-        "Reply-To": "ar@gamma-print-secure.com"
+        "Reply-To": "ar@gamma-print.co"
       }
     }
   },
@@ -3483,7 +3483,7 @@
     ],
     "is_threat": true,
     "difficulty": "medium",
-    "locale": "en",
+    "locale": "ko",
     "attack_type": "Fake invoice with lookalike vendor",
     "description": "Invoice fraud sent from a lookalike of a known vendor, with payment redirected via a fresh-domain link.",
     "expected_signals": [
@@ -3499,14 +3499,14 @@
       "INVOICE_FRAUD"
     ],
     "payload": {
-      "from": "billing@alpha-supply-secure.com",
+      "from": "billing@alpha-supply.co",
       "from_display": "Alpha Supply Billing",
       "to": "grace@acme.example",
       "subject": "URGENT: Past-due invoice INV-90006",
-      "body_text": "Good morning,\n\nPlease find  invoice INV-90006 for $21206 due immediately. Pay via the secure link below.\n\nPay Now: https://accounts-google.support/secure\n\nThanks,\nAccounts Payable",
+      "body_text": "팀 여러분께,\n\n청구서 17013원 즉시 결제 부탁드립니다\n\n지금 결제:  https://o365-portal.app/login\n\n안부 전합니다,\nIT팀",
       "headers": {
         "Authentication-Results": "spf=fail dkim=none dmarc=fail",
-        "Reply-To": "ar@alpha-supply-secure.com"
+        "Reply-To": "ar@alpha-supply.co"
       }
     }
   },
@@ -3520,7 +3520,7 @@
     ],
     "is_threat": true,
     "difficulty": "hard",
-    "locale": "zh",
+    "locale": "en",
     "attack_type": "Fake invoice with lookalike vendor",
     "description": "Invoice fraud sent from a lookalike of a known vendor, with payment redirected via a fresh-domain link.",
     "expected_signals": [
@@ -3536,14 +3536,14 @@
       "INVOICE_FRAUD"
     ],
     "payload": {
-      "from": "billing@beta-logistics.biz",
+      "from": "billing@beta-1ogistics.biz",
       "from_display": "Alpha Supply Billing",
       "to": "hideo@acme.example",
       "subject": "URGENT: Past-due invoice INV-90007",
-      "body_text": "团队您好, 发票金额 38982 请元立即支付 立即付款: https://xn--logn-3oa.microsoft.com/auth 此致礼敬, 信息技术部",
+      "body_text": "Dear team,\n\nlPease fnid invoice INV-90007 for $33855 due immediately. Pay via the secure link below.\n\nPay Now: https://login.microsoftonline.com.security-verify.app/auth?id=dd50e842\n\nRegards,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=fail dkim=none dmarc=fail",
-        "Reply-To": "ar@beta-logistics.biz"
+        "Reply-To": "ar@beta-1ogistics.biz"
       }
     }
   },
@@ -3573,7 +3573,7 @@
       "from_display": "Alpha Supply Billing",
       "to": "alice@acme.example",
       "subject": "Invoice INV-10008",
-      "body_text": "Dear tEAm, Invoice for $4221 attached. Net 30 terms apply. Pay via the same ACH details on file. Cehers, Accounts Payable",
+      "body_text": "eDar team,\n\nInVoICE for $35500 attached. Net 30 trems apply. Pay via the same ACH details on file.\n\nRegards,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       },
@@ -3596,7 +3596,7 @@
     ],
     "is_threat": false,
     "difficulty": "hard",
-    "locale": "th",
+    "locale": "en",
     "attack_type": "Legitimate vendor invoice",
     "description": "Genuine vendor invoice with consistent banking and authenticated sender — should classify Trusted/Informational.",
     "expected_signals": [
@@ -3612,7 +3612,7 @@
       "from_display": "Alpha Supply Billing",
       "to": "bob@acme.example",
       "subject": "Invoice INV-10009",
-      "body_text": "สวัสดีครับ, ใบแจ้งหนี้ 44612 บาท แนบมาด้วย ชำระตาขม้อมูลธนาคารเดิม ด้วยความเคารพ, ฝ่ายบัญชี",
+      "body_text": "Good morning,\n\nInVOiCE for $1612 attached.  Net 30 terms apply. Pay via the same ACH details on ifle.\n\nThanks,\nProcuremnet",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       },
@@ -3651,11 +3651,11 @@
       "QR_PHISHING"
     ],
     "payload": {
-      "from": "delivery.6280@tutanota.com",
+      "from": "delivery.3946@mail.ru",
       "from_display": "Package Delivery",
       "to": "alice@acme.example",
       "subject": "Action required: re-deliver package",
-      "body_text": "Good morning,\n\nScan the QR below to confirm your delivery address.\n\nBest regards,\nIT Helpdesk",
+      "body_text": "Dear team,\n\nScan the QR below to confirm your delivery address.\n\nBest regards,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       },
@@ -3664,7 +3664,7 @@
           "filename": "redelivery.png",
           "content_type": "image/png",
           "size_bytes": 18000,
-          "qr_target_url": "http://office365-renew.gq/signin"
+          "qr_target_url": "http://microsoft-security-update.cf/auth"
         }
       ]
     }
@@ -3695,11 +3695,11 @@
       "QR_PHISHING"
     ],
     "payload": {
-      "from": "delivery.2277@gmx.com",
+      "from": "delivery.7845@outlook.com",
       "from_display": "Package Delivery",
       "to": "bob@acme.example",
       "subject": "Action required: re-deliver package",
-      "body_text": "Good morning,\n\nScan the QR below to confirm your delivery address.\n\nThanks,\nProcurement",
+      "body_text": "Hi,\n\nScan the QR below to confirm your delivery address.\n\nRegards,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       },
@@ -3723,7 +3723,7 @@
     ],
     "is_threat": true,
     "difficulty": "easy",
-    "locale": "en",
+    "locale": "vi",
     "attack_type": "QR-coded credential harvest",
     "description": "QR attachment whose decoded URL points to an off-brand login page — quishing.",
     "expected_signals": [
@@ -3739,11 +3739,11 @@
       "QR_PHISHING"
     ],
     "payload": {
-      "from": "delivery.8146@yahoo.com",
+      "from": "delivery.9028@outlook.com",
       "from_display": "Package Delivery",
       "to": "carol@acme.example",
-      "subject": "Action required: re-deliver package",
-      "body_text": "Dear team,\n\nScan the QR below to confirm your delivery address.\n\nThanks,\nIT Helpdesk",
+      "subject": "Yêu cầu: giao lại bưu kiện",
+      "body_text": "Chào nhóm,\n\nQuét QR bên dưới để xác nhận địa chỉ giao hàng\n\nKính chúc,\nPhòng Mua hàng",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       },
@@ -3767,7 +3767,7 @@
     ],
     "is_threat": true,
     "difficulty": "easy",
-    "locale": "zh",
+    "locale": "ko",
     "attack_type": "QR-coded credential harvest",
     "description": "QR attachment whose decoded URL points to an off-brand login page — quishing.",
     "expected_signals": [
@@ -3783,11 +3783,11 @@
       "QR_PHISHING"
     ],
     "payload": {
-      "from": "delivery.2776@proton.me",
+      "from": "delivery.7625@yahoo.com",
       "from_display": "Package Delivery",
       "to": "david@acme.example",
-      "subject": "需要操作：包裹改派",
-      "body_text": "您好，,\n\n扫描下方 QR 确认收货地址\n\n祝好,\n采购部",
+      "subject": "필수 조치: 재배송 요청",
+      "body_text": "안녕하십니까,\n\n아래 QR을 스캔해 배송 주소를 확인하세요\n\n안부 전합니다,\n재무팀",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       },
@@ -3796,7 +3796,7 @@
           "filename": "redelivery.png",
           "content_type": "image/png",
           "size_bytes": 18000,
-          "qr_target_url": "http://verify-account-now.tk/login"
+          "qr_target_url": "http://office365-renew.gq/signin"
         }
       ]
     }
@@ -3827,11 +3827,11 @@
       "QR_PHISHING"
     ],
     "payload": {
-      "from": "delivery.6341@yandex.com",
+      "from": "delivery.3366@tutanota.com",
       "from_display": "Package Delivery",
       "to": "ellen@acme.example",
       "subject": "Action required: re-deliver package",
-      "body_text": "Hi,\n\nScan the QR below  to confirm your delivery address.\n\nCheers,\nProcurement",
+      "body_text": "Dear team,\n\nScan the QR below to confirm your delivery address.\n\nRegards,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       },
@@ -3840,7 +3840,7 @@
           "filename": "redelivery.png",
           "content_type": "image/png",
           "size_bytes": 18000,
-          "qr_target_url": "https://o365-portal.app/login"
+          "qr_target_url": "https://login-microsoftonline.co/verify"
         }
       ]
     }
@@ -3855,7 +3855,7 @@
     ],
     "is_threat": true,
     "difficulty": "medium",
-    "locale": "ja",
+    "locale": "en",
     "attack_type": "QR-coded credential harvest",
     "description": "QR attachment whose decoded URL points to an off-brand login page — quishing.",
     "expected_signals": [
@@ -3871,11 +3871,11 @@
       "QR_PHISHING"
     ],
     "payload": {
-      "from": "delivery.3846@proton.me",
+      "from": "delivery.6547@mail.ru",
       "from_display": "Package Delivery",
       "to": "fionn@acme.example",
-      "subject": "対応必須: 再配達のお願い",
-      "body_text": "こんにちは,\n\n以下のQRをスキャンして配達先を確認してください\n\nよろしくお願いいたします,\n経理部",
+      "subject": "Action required: re-deliver package",
+      "body_text": "Dear team,\n\nScan the QR below to confirm your delivery  address.\n\nCheers,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       },
@@ -3884,7 +3884,7 @@
           "filename": "redelivery.png",
           "content_type": "image/png",
           "size_bytes": 18000,
-          "qr_target_url": "https://login-microsoftonline.co/verify"
+          "qr_target_url": "https://accounts-google.support/secure"
         }
       ]
     }
@@ -3899,7 +3899,7 @@
     ],
     "is_threat": false,
     "difficulty": "medium",
-    "locale": "vi",
+    "locale": "en",
     "attack_type": "Legitimate event QR badge",
     "description": "QR attachment resolving to a tenant-owned event URL — should classify Trusted.",
     "expected_signals": [
@@ -3914,8 +3914,8 @@
       "from": "events@acme.example",
       "from_display": "Acme Events",
       "to": "grace@acme.example",
-      "subject": "Thẻ tham dự",
-      "body_text": "Kính gửi anh/chị,\n\nQuét QR đính  kèm để check-in\n\nCảm ơn,\nPhòng IT",
+      "subject": "Your conference badge",
+      "body_text": "Dear team,\n\nScan the attached QR to check in.\n\nRegards,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       },
@@ -3939,7 +3939,7 @@
     ],
     "is_threat": false,
     "difficulty": "hard",
-    "locale": "zh",
+    "locale": "vi",
     "attack_type": "Legitimate event QR badge",
     "description": "QR attachment resolving to a tenant-owned event URL — should classify Trusted.",
     "expected_signals": [
@@ -3954,8 +3954,8 @@
       "from": "events@acme.example",
       "from_display": "Acme Events",
       "to": "hideo@acme.example",
-      "subject": "您的参会证",
-      "body_text": "团队您好, 请描扫附件中的 QR 进行签到 此致敬礼, 采购部",
+      "subject": "Thẻ tham dự",
+      "body_text": "Chào nhóm,\n\nQuét QR đính kèm để check-in\n\nKíNH cúhc,\nPhòng  Tài hcính",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       },
@@ -3995,7 +3995,7 @@
       "from_display": "Acme Events",
       "to": "alice@acme.example",
       "subject": "Your conference badge",
-      "body_text": "Hello, SCAn the attached QR to check in. Regards, Procurement",
+      "body_text": "Good MORnIng,\n\nScan the attached QR to check in.\n\nBest regards,\nAccounts Payabel",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       },
@@ -4035,7 +4035,7 @@
       "from_display": "Acme Events",
       "to": "bob@acme.example",
       "subject": "Your conference badge",
-      "body_text": "Daer TeAm, Scan the attached QR to check in. Cheers, Procurement",
+      "body_text": "Hello,\n\nScna the atatched QR to check in.\n\nREGaRdS,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass"
       },
@@ -4075,11 +4075,11 @@
       "SCAM_FRAUD"
     ],
     "payload": {
-      "from": "agent.4162@gmx.com",
+      "from": "agent.7067@outlook.com",
       "from_display": "International Lottery Commission",
       "to": "alice@acme.example",
       "subject": "YOU HAVE WON!",
-      "body_text": "Good morning,\n\nCongratulations! You have been selected to receive $4352761 USD as part of an international lottery promotion.\n\nTo claim, send your full name, address, and a $500 processing fee to our agent.\n\nCheers,\nIT Helpdesk",
+      "body_text": "Dear team,\n\nCongratulations! You have been selected to receive $3982083 USD as part of an international lottery promotion.\n\nTo claim, send your full name, address, and a $500 processing fee to our agent.\n\nCheers,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       }
@@ -4111,11 +4111,11 @@
       "SCAM_FRAUD"
     ],
     "payload": {
-      "from": "agent.7764@outlook.com",
+      "from": "agent.1397@outlook.com",
       "from_display": "International Lottery Commission",
       "to": "bob@acme.example",
       "subject": "YOU HAVE WON!",
-      "body_text": "Dear team,\n\nCongratulations! You have been selected to receive $3109635 USD as part of an international lottery promotion.\n\nTo claim, send your full name, address, and a $500 processing fee to our agent.\n\nCheers,\nProcurement",
+      "body_text": "Hi,\n\nCongratulations! You have been selected to receive $4018352 USD as part of an international lottery promotion.\n\nTo claim, send your full name, address, and a $500 processing fee to our agent.\n\nCheers,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       }
@@ -4147,11 +4147,11 @@
       "SCAM_FRAUD"
     ],
     "payload": {
-      "from": "agent.7800@mail.ru",
+      "from": "agent.2947@outlook.com",
       "from_display": "International Lottery Commission",
       "to": "carol@acme.example",
       "subject": "YOU HAVE WON!",
-      "body_text": "Dear team,\n\nCongratulations! You have been selected to receive $4248958 USD as part of an international lottery promotion.\n\nTo claim, send your full name, address, and a $500 processing fee to our agent.\n\nThanks,\nAccounts Payable",
+      "body_text": "Good morning,\n\nCongratulations! You have been selected to receive $4320759 USD as part of an international lottery promotion.\n\nTo claim, send your full name, address, and a $500 processing fee to our agent.\n\nThanks,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       }
@@ -4183,11 +4183,11 @@
       "SCAM_FRAUD"
     ],
     "payload": {
-      "from": "agent.6623@proton.me",
+      "from": "agent.7181@gmx.com",
       "from_display": "International Lottery Commission",
       "to": "david@acme.example",
       "subject": "YOU HAVE WON!",
-      "body_text": "Dear team,\n\nCongratulations! You have been selected to receive $7279350 USD as part of an international lottery promotion.\n\nTo claim, send your full name, address, and a $500 processing fee to our agent.\n\nThanks,\nIT Helpdesk",
+      "body_text": "Dear team,\n\nCongratulations! You have been selected to receive $3429874 USD as part of an international lottery promotion.\n\nTo claim, send your full name, address, and a $500 processing fee to our agent.\n\nCheers,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       }
@@ -4219,11 +4219,11 @@
       "SCAM_FRAUD"
     ],
     "payload": {
-      "from": "agent.4221@gmail.com",
+      "from": "agent.3316@gmx.com",
       "from_display": "International Lottery Commission",
       "to": "ellen@acme.example",
       "subject": "YOU HAVE WON!",
-      "body_text": "Hello,\n\nCongratulations! You have been selected to receive $9479908 USD as part of an international lottery promotion.\n\nTo claim, send your full name, address, and a $500 processing fee to our agent.\n\nThanks,\nProcurement",
+      "body_text": "Hello,\n\nCongratulations! You have been selected to receive $4193669 USD as part of an international lottery promotion.\n\nTo claim, send your full name, address, and a  $500 processing fee to our agent.\n\nRegards,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       }
@@ -4239,7 +4239,7 @@
     ],
     "is_threat": true,
     "difficulty": "medium",
-    "locale": "en",
+    "locale": "ja",
     "attack_type": "Advance-fee lottery scam",
     "description": "Classic lottery / advance-fee scam asking for a processing fee to release fictitious winnings.",
     "expected_signals": [
@@ -4255,11 +4255,11 @@
       "SCAM_FRAUD"
     ],
     "payload": {
-      "from": "agent.8705@gmail.com",
+      "from": "agent.1920@mail.ru",
       "from_display": "International Lottery Commission",
       "to": "fionn@acme.example",
-      "subject": "YOU HAVE WON!",
-      "body_text": "Hello,\n\nCongratulations! You have been selected to receive $1468301 USD as part of an international lottery promotion.\n\nTo claim, send your full name, address, and  a $500 processing fee to our agent.\n\nCheers,\nAccounts Payable",
+      "subject": "ご当選おめでとうございます!",
+      "body_text": "いつもお世話になっております,\n\nおめでとうございます！国際抽選で  4421694 円が当選しました\n\n請求するには氏名、住所、500ドルの手数料を送ってください\n\nよろしくお願いいたします,\n情報システム部",
       "headers": {
         "Authentication-Results": "spf=none dkim=none dmarc=none"
       }
@@ -4275,7 +4275,7 @@
     ],
     "is_threat": false,
     "difficulty": "medium",
-    "locale": "en",
+    "locale": "ko",
     "attack_type": "Legitimate fundraising newsletter",
     "description": "Real alumni newsletter offering optional donations — should classify Informational.",
     "expected_signals": [
@@ -4290,8 +4290,8 @@
       "from": "alumni@university.example",
       "from_display": "University Alumni Office",
       "to": "grace@acme.example",
-      "subject": "Alumni newsletter",
-      "body_text": "Hi,\n\nAnnual fundraising update — no purchase necessary, donations are optional.\n\nRegards,\nProcurement",
+      "subject": "동문 뉴스레터",
+      "body_text": "팀 여러분께,\n\n연례  모금 안내, 기부는 선택사항입니다\n\n감사합니다,\n재무팀",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@university.example\u003e"
@@ -4308,7 +4308,7 @@
     ],
     "is_threat": false,
     "difficulty": "hard",
-    "locale": "vi",
+    "locale": "en",
     "attack_type": "Legitimate fundraising newsletter",
     "description": "Real alumni newsletter offering optional donations — should classify Informational.",
     "expected_signals": [
@@ -4323,8 +4323,8 @@
       "from": "alumni@university.example",
       "from_display": "University Alumni Office",
       "to": "hideo@acme.example",
-      "subject": "Bản tin cựu sinh viên",
-      "body_text": "Xin chào, Cập nhật gây quỹ thường niên, đóng góp tự nguyện Cảm ơn, HPòng IT",
+      "subject": "Alumni newsletter",
+      "body_text": "Hello,\n\nAnnual fundraising update — no purchase necessary, donations are  optional.\n\nCheers,\nAccounts payabeL",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@university.example\u003e"
@@ -4357,7 +4357,7 @@
       "from_display": "University Alumni Office",
       "to": "alice@acme.example",
       "subject": "Alumni newsletter",
-      "body_text": "Dear tae,m Annual FundRaIsiNG update — no purchase necessary, donations are optional. Best regards, Procurement",
+      "body_text": "Hello,\n\nAnnual fundraising update — no pruchase NeCEssarY,  donations are optional.\n\nBest regards,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@university.example\u003e"
@@ -4374,7 +4374,7 @@
     ],
     "is_threat": false,
     "difficulty": "hard",
-    "locale": "th",
+    "locale": "en",
     "attack_type": "Legitimate fundraising newsletter",
     "description": "Real alumni newsletter offering optional donations — should classify Informational.",
     "expected_signals": [
@@ -4389,8 +4389,8 @@
       "from": "alumni@university.example",
       "from_display": "University Alumni Office",
       "to": "bob@acme.example",
-      "subject": "จดหมายข่าวศิษย์เก่า",
-      "body_text": "สวัสดีครับ, อัปเดตการระดมทุนประจำปี การบริจาคไม่บังคับ ขอบคุณครบั, ฝ่ายจัดซื้อ",
+      "subject": "Alumni newsletter",
+      "body_text": "Hi,\n\nannuAl fundraising update — no purchase necessary, donations are optionla.\n\nRegards,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@university.example\u003e"
@@ -4428,10 +4428,10 @@
       "from_display": "Acme CEO",
       "to": "alice@acme.example",
       "subject": "Quick favor",
-      "body_text": "Good morning,\n\nAre you available? I need a quick favour while I'm in a meeting.\n\nBest regards,\nProcurement",
+      "body_text": "Hello,\n\nAre you available? I need a quick favour while I'm in a meeting.\n\nCheers,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=fail dkim=fail dmarc=fail",
-        "Received": "from relay-0.suspicious-host.example ([203.0.113.170])"
+        "Received": "from relay-0.suspicious-host.example ([203.0.113.213])"
       }
     }
   },
@@ -4445,7 +4445,7 @@
     ],
     "is_threat": true,
     "difficulty": "easy",
-    "locale": "en",
+    "locale": "ko",
     "attack_type": "SPF/DKIM/DMARC failed spoof",
     "description": "Header from-address spoofs an internal user, but SPF/DKIM/DMARC all fail — classic direct spoof.",
     "expected_signals": [
@@ -4465,11 +4465,11 @@
       "from": "ceo@acme.example",
       "from_display": "Acme CEO",
       "to": "bob@acme.example",
-      "subject": "Quick favor",
-      "body_text": "Good morning,\n\nAre you available? I need a quick favour while I'm in a meeting.\n\nBest regards,\nIT Helpdesk",
+      "subject": "부탁이 있어요",
+      "body_text": "안녕하십니까,\n\n잠깐 도와줄 수 있어요? 회의 중입니다\n\n안부 전합니다,\nIT팀",
       "headers": {
         "Authentication-Results": "spf=fail dkim=fail dmarc=fail",
-        "Received": "from relay-1.suspicious-host.example ([203.0.113.10])"
+        "Received": "from relay-1.suspicious-host.example ([203.0.113.161])"
       }
     }
   },
@@ -4483,7 +4483,7 @@
     ],
     "is_threat": true,
     "difficulty": "easy",
-    "locale": "en",
+    "locale": "ko",
     "attack_type": "SPF/DKIM/DMARC failed spoof",
     "description": "Header from-address spoofs an internal user, but SPF/DKIM/DMARC all fail — classic direct spoof.",
     "expected_signals": [
@@ -4503,11 +4503,11 @@
       "from": "ceo@acme.example",
       "from_display": "Acme CEO",
       "to": "carol@acme.example",
-      "subject": "Quick favor",
-      "body_text": "Hello,\n\nAre you available? I need a quick favour while I'm in a meeting.\n\nBest regards,\nAccounts Payable",
+      "subject": "부탁이 있어요",
+      "body_text": "팀 여러분께,\n\n잠깐 도와줄 수 있어요? 회의 중입니다\n\n잘 부탁드립니다,\n구매팀",
       "headers": {
         "Authentication-Results": "spf=fail dkim=fail dmarc=fail",
-        "Received": "from relay-2.suspicious-host.example ([203.0.113.32])"
+        "Received": "from relay-2.suspicious-host.example ([203.0.113.48])"
       }
     }
   },
@@ -4542,10 +4542,10 @@
       "from_display": "Acme CEO",
       "to": "david@acme.example",
       "subject": "Quick favor",
-      "body_text": "Hi,\n\nAre you available? I need a quick favour while I'm in a meeting.\n\nRegards,\nIT Helpdesk",
+      "body_text": "Good morning,\n\nAre you available? I need a quick favour while I'm in a meeting.\n\nRegards,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=fail dkim=fail dmarc=fail",
-        "Received": "from relay-3.suspicious-host.example ([203.0.113.45])"
+        "Received": "from relay-3.suspicious-host.example ([203.0.113.243])"
       }
     }
   },
@@ -4580,10 +4580,10 @@
       "from_display": "Acme CEO",
       "to": "ellen@acme.example",
       "subject": "Quick favor",
-      "body_text": "Hi,\n\nAre you available? I need a quick favour  while I'm in a meeting.\n\nCheers,\nIT Helpdesk",
+      "body_text": "Dear team,\n\nAre you available? I need a quick favour while I'm in a meeting.\n\nRegards,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=fail dkim=fail dmarc=fail",
-        "Received": "from relay-4.suspicious-host.example ([203.0.113.82])"
+        "Received": "from relay-4.suspicious-host.example ([203.0.113.153])"
       }
     }
   },
@@ -4618,10 +4618,10 @@
       "from_display": "Acme CEO",
       "to": "fionn@acme.example",
       "subject": "Quick favor",
-      "body_text": "Dear team,\n\nAre you available? I need a quick favour while I'm in a meeting.\n\nThanks,\nAccounts Payable",
+      "body_text": "Dear team,\n\nAre  you available? I need a quick favour while I'm in a meeting.\n\nBest regards,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=fail dkim=fail dmarc=fail",
-        "Received": "from relay-5.suspicious-host.example ([203.0.113.129])"
+        "Received": "from relay-5.suspicious-host.example ([203.0.113.36])"
       }
     }
   },
@@ -4635,7 +4635,7 @@
     ],
     "is_threat": false,
     "difficulty": "medium",
-    "locale": "ko",
+    "locale": "en",
     "attack_type": "ESP transient DKIM tempfail",
     "description": "Authenticated partner sender with a transient DKIM tempfail — should not be flagged as a spoof.",
     "expected_signals": [
@@ -4650,8 +4650,8 @@
       "from": "notifications@partner.example",
       "from_display": "Partner Notifications",
       "to": "grace@acme.example",
-      "subject": "주간 상태 다이제스트",
-      "body_text": "팀 여러분께,\n\n정기 상태 메일입니다, 별도 조치 불필요\n\n잘 부탁드립니다,\n구매팀",
+      "subject": "Weekly status digest",
+      "body_text": "Hi,\n\nThis is a routine status email. No action required.\n\nRegards,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=temperror dmarc=pass"
       }
@@ -4667,7 +4667,7 @@
     ],
     "is_threat": false,
     "difficulty": "hard",
-    "locale": "ko",
+    "locale": "en",
     "attack_type": "ESP transient DKIM tempfail",
     "description": "Authenticated partner sender with a transient DKIM tempfail — should not be flagged as a spoof.",
     "expected_signals": [
@@ -4682,8 +4682,8 @@
       "from": "notifications@partner.example",
       "from_display": "Partner Notifications",
       "to": "hideo@acme.example",
-      "subject": "주간 상태 다이제스트",
-      "body_text": "안녕하세요, 정기 상태 메일입니다, 별도 조치 불필요 안부 전합니,다 IT팀",
+      "subject": "Weekly status digest",
+      "body_text": "Dear team,\n\nThis is a routine status emali. No action rqeuired.\n\nBeST  regards,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=temperror dmarc=pass"
       }
@@ -4715,7 +4715,7 @@
       "from_display": "Partner Notifications",
       "to": "alice@acme.example",
       "subject": "Weekly status digest",
-      "body_text": "Dear team, This is a routien status email. No AcTIOn required. Best regards, IT Helpdesk",
+      "body_text": "Dear team,\n\nThis is a orutnie status email. No actiOn required.\n\nRegards,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=temperror dmarc=pass"
       }
@@ -4731,7 +4731,7 @@
     ],
     "is_threat": false,
     "difficulty": "hard",
-    "locale": "ja",
+    "locale": "en",
     "attack_type": "ESP transient DKIM tempfail",
     "description": "Authenticated partner sender with a transient DKIM tempfail — should not be flagged as a spoof.",
     "expected_signals": [
@@ -4746,8 +4746,8 @@
       "from": "notifications@partner.example",
       "from_display": "Partner Notifications",
       "to": "bob@acme.example",
-      "subject": "週次ステータスダイジェスト",
-      "body_text": "お世話になっております, 通常の状態通知メールすで、対応不要です よろしくお願いいたします, 経理部",
+      "subject": "Weekly status digest",
+      "body_text": "eDar TeAm,\n\nThis is a routine status email. No action required.\n\nThanks,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=temperror dmarc=pass"
       }
@@ -4783,10 +4783,10 @@
       "from_display": "alice",
       "to": "finance@acme.example",
       "subject": "Quick wire",
-      "body_text": "Good morning,\n\nAre you at your desk? I need to push a same-day wire of $73906 to a new supplier.\n\nSend the confirmation to my personal mail — IT has my work account locked.\n\nThanks,\nProcurement",
+      "body_text": "Good morning,\n\nAre you at your desk? I need to push a same-day wire of $38326 to a new supplier.\n\nSend the confirmation to my personal mail — IT has my work account locked.\n\nRegards,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "alice.9407@gmail.com"
+        "Reply-To": "alice.3227@tutanota.com"
       }
     }
   },
@@ -4800,7 +4800,7 @@
     ],
     "is_threat": false,
     "difficulty": "easy",
-    "locale": "en",
+    "locale": "vi",
     "attack_type": "Routine internal collaboration",
     "description": "Intra-tenant message between known internal users — must bypass Tier 0 and classify Trusted.",
     "expected_signals": [
@@ -4816,7 +4816,7 @@
       "from_display": "bob@acme",
       "to": "bob@acme.example",
       "subject": "Project plan",
-      "body_text": "Dear team,\n\nSharing notes from today's sync. Let me know if anything is missing.\n\nBest regards,\nIT Helpdesk",
+      "body_text": "Kính gửi anh/chị,\n\nChia sẻ ghi chú họp hôm nay, có gì thiếu hãy báo lại\n\nTrân trọng,\nPhòng IT",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "X-Tenant-Origin": "acme.example"
@@ -4849,7 +4849,7 @@
       "from_display": "carol@acme",
       "to": "carol@acme.example",
       "subject": "Quarterly OKRs",
-      "body_text": "Dear team,\n\nSharing notes from today's sync. Let me know if anything is missing.\n\nCheers,\nIT Helpdesk",
+      "body_text": "Good morning,\n\nSharing notes from today's sync. Let me know if anything is missing.\n\nRegards,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "X-Tenant-Origin": "acme.example"
@@ -4882,7 +4882,7 @@
       "from_display": "david@acme",
       "to": "david@acme.example",
       "subject": "Engineering update",
-      "body_text": "Dear team,\n\nSharing notes from today's sync. Let me know if anything is missing.\n\nBest regards,\nProcurement",
+      "body_text": "Hello,\n\nSharing notes from today's sync. Let me know if anything is missing.\n\nCheers,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "X-Tenant-Origin": "acme.example"
@@ -4899,7 +4899,7 @@
     ],
     "is_threat": false,
     "difficulty": "medium",
-    "locale": "ja",
+    "locale": "ko",
     "attack_type": "Routine internal collaboration",
     "description": "Intra-tenant message between known internal users — must bypass Tier 0 and classify Trusted.",
     "expected_signals": [
@@ -4915,7 +4915,7 @@
       "from_display": "emma@acme",
       "to": "ellen@acme.example",
       "subject": "Hiring loop",
-      "body_text": "いつもお世話になっております,\n\n本日の打ち合わせメモを共有します。漏れがあれば教えてください\n\nよろしくお願いいたします,\n情報システム部",
+      "body_text": "팀 여러분께,\n\n오늘  회의 메모를 공유합니다. 누락된 부분 알려주세요\n\n감사합니다,\nIT팀",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "X-Tenant-Origin": "acme.example"
@@ -4965,7 +4965,7 @@
     ],
     "is_threat": false,
     "difficulty": "medium",
-    "locale": "th",
+    "locale": "vi",
     "attack_type": "Routine internal collaboration",
     "description": "Intra-tenant message between known internal users — must bypass Tier 0 and classify Trusted.",
     "expected_signals": [
@@ -4981,7 +4981,7 @@
       "from_display": "alice@acme",
       "to": "grace@acme.example",
       "subject": "Project plan",
-      "body_text": "เรียนคุณ,\n\nแนบบันทึกการประชุม  หากต้องเพิ่มเติมแจ้งได้\n\nขอบคุณครับ,\nทีมไอที",
+      "body_text": "Chào nhóm,\n\nChia sẻ ghi chú họp hôm nay, có gì thiếu hãy báo lại\n\nKính chúc,\nPhòng IT",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "X-Tenant-Origin": "acme.example"
@@ -5014,7 +5014,7 @@
       "from_display": "bob@acme",
       "to": "hideo@acme.example",
       "subject": "Quarterly OKRs",
-      "body_text": "GOod morning, Sharing notes from today's sync. Let me know if anything is missing. Cheers, Procurement",
+      "body_text": "Good morning,\n\nhSaring notes rfom today's sync. Let me know if anything is missing.\n\nRegards,\nPrOcUremEnT",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "X-Tenant-Origin": "acme.example"
@@ -5031,7 +5031,7 @@
     ],
     "is_threat": false,
     "difficulty": "hard",
-    "locale": "th",
+    "locale": "en",
     "attack_type": "Routine internal collaboration",
     "description": "Intra-tenant message between known internal users — must bypass Tier 0 and classify Trusted.",
     "expected_signals": [
@@ -5047,7 +5047,7 @@
       "from_display": "carol@acme",
       "to": "alice@acme.example",
       "subject": "Engineering update",
-      "body_text": "เรียนทีม, แนบบันทึกการประชุม หากต้องเพิ่มเติมแจ้งได้ ขอบคุณครั,บ ฝ่ายจัดซื้อ",
+      "body_text": "Godo  morning,\n\nSharing notes from today's sync. Let me KnOW if anything is missing.\n\neRgards,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "X-Tenant-Origin": "acme.example"
@@ -5064,7 +5064,7 @@
     ],
     "is_threat": false,
     "difficulty": "hard",
-    "locale": "ko",
+    "locale": "en",
     "attack_type": "Routine internal collaboration",
     "description": "Intra-tenant message between known internal users — must bypass Tier 0 and classify Trusted.",
     "expected_signals": [
@@ -5080,7 +5080,7 @@
       "from_display": "david@acme",
       "to": "bob@acme.example",
       "subject": "Hiring loop",
-      "body_text": "팀 여러분께, 오늘 회의 메모를 공유니합다. 누락된 부분 알려주세요 안부 전합니다, 재무팀",
+      "body_text": "Hello,\n\nSharing notes from today's SyNc. Let me know if anything is missin.g\n\nThanks,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "X-Tenant-Origin": "acme.example"
@@ -5117,10 +5117,10 @@
       "from_display": "alpha-supply.com Billing",
       "to": "alice@acme.example",
       "subject": "Urgent: contract auto-renewal at 5x rate",
-      "body_text": "Hi,\n\nPer the auto-renewal clause, your contract renews tomorrow at a 5x rate. Pay now to avoid the price change.\n\nPay: http://office365-renew.gq/signin\n\nCheers,\nProcurement",
+      "body_text": "Hello,\n\nPer the auto-renewal clause, your contract renews tomorrow at a 5x rate. Pay now to avoid the price change.\n\nPay: http://office365-renew.gq/signin\n\nBest regards,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
-        "Reply-To": "billing@alpha-supply.com"
+        "Reply-To": "billing@a1pha-supply.biz"
       }
     }
   },
@@ -5151,7 +5151,7 @@
       "from_display": "beta-logistics.com Billing",
       "to": "bob@acme.example",
       "subject": "Monthly subscription receipt",
-      "body_text": "Hi,\n\nYour subscription has renewed. No action required.\n\nBest regards,\nProcurement",
+      "body_text": "Good morning,\n\nYour subscription has renewed. No action required.\n\nCheers,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@beta-logistics.com\u003e"
@@ -5168,7 +5168,7 @@
     ],
     "is_threat": false,
     "difficulty": "easy",
-    "locale": "en",
+    "locale": "zh",
     "attack_type": "Routine vendor billing receipt",
     "description": "Allow-listed vendor's automated billing notification — must Tier 0 bypass and classify Trusted.",
     "expected_signals": [
@@ -5184,8 +5184,8 @@
       "from": "billing@gamma-print.com",
       "from_display": "gamma-print.com Billing",
       "to": "carol@acme.example",
-      "subject": "Monthly subscription receipt",
-      "body_text": "Hello,\n\nYour subscription has renewed. No action required.\n\nThanks,\nAccounts Payable",
+      "subject": "月度订阅收据",
+      "body_text": "您好,\n\n您的订阅已续订，无需操作\n\n顺颂商祺,\n信息技术部",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@gamma-print.com\u003e"
@@ -5219,7 +5219,7 @@
       "from_display": "delta-software.com Billing",
       "to": "david@acme.example",
       "subject": "Monthly subscription receipt",
-      "body_text": "Dear team,\n\nYour subscription has renewed. No action required.\n\nCheers,\nProcurement",
+      "body_text": "Dear team,\n\nYour subscription has renewed. No action required.\n\nBest regards,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@delta-software.com\u003e"
@@ -5253,7 +5253,7 @@
       "from_display": "alpha-supply.com Billing",
       "to": "ellen@acme.example",
       "subject": "Monthly subscription receipt",
-      "body_text": "Hi,\n\nYour subscription has renewed.  No action required.\n\nThanks,\nIT Helpdesk",
+      "body_text": "Hello,\n\nYour subscription has renewed.  No action required.\n\nBest regards,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@alpha-supply.com\u003e"
@@ -5287,7 +5287,7 @@
       "from_display": "beta-logistics.com Billing",
       "to": "fionn@acme.example",
       "subject": "Monthly subscription receipt",
-      "body_text": "Hello,\n\nYour subscription has renewed. No action required.\n\nCheers,\nAccounts  Payable",
+      "body_text": "Hi,\n\nYour subscription has renewed.  No action required.\n\nCheers,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@beta-logistics.com\u003e"
@@ -5321,7 +5321,7 @@
       "from_display": "gamma-print.com Billing",
       "to": "grace@acme.example",
       "subject": "Monthly subscription receipt",
-      "body_text": "Hello,\n\nYour subscription has  renewed. No action required.\n\nBest regards,\nProcurement",
+      "body_text": "Hello,\n\nYour subscription has renewed.  No action required.\n\nCheers,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@gamma-print.com\u003e"
@@ -5355,7 +5355,7 @@
       "from_display": "delta-software.com Billing",
       "to": "hideo@acme.example",
       "subject": "Monthly subscription receipt",
-      "body_text": "Good morning, oYur subscrpition has renewed. No action REQuIREd. Regards, Procurement",
+      "body_text": "Dear taem,\n\nYoUR subscription has renewed. No actoin required.\n\nThanks,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@delta-software.com\u003e"
@@ -5389,7 +5389,7 @@
       "from_display": "alpha-supply.com Billing",
       "to": "alice@acme.example",
       "subject": "Monthly subscription receipt",
-      "body_text": "Hello, Your subscription has ernewed. No aCtioN required. Bets regards, IT Helpdesk",
+      "body_text": "Hello,\n\nYour subscription has renewed. No action required.\n\nthansk,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@alpha-supply.com\u003e"
@@ -5406,7 +5406,7 @@
     ],
     "is_threat": false,
     "difficulty": "hard",
-    "locale": "vi",
+    "locale": "en",
     "attack_type": "Routine vendor billing receipt",
     "description": "Allow-listed vendor's automated billing notification — must Tier 0 bypass and classify Trusted.",
     "expected_signals": [
@@ -5422,8 +5422,8 @@
       "from": "billing@beta-logistics.com",
       "from_display": "beta-logistics.com Billing",
       "to": "bob@acme.example",
-      "subject": "Biên lai đăng ký hàng tháng",
-      "body_text": "Kính gửi anh/chị, Đăng ký đã được gia hạn, không cần xử lý Kính chúc, hPòng Mua hàng",
+      "subject": "Monthly subscription receipt",
+      "body_text": "Dear taem,\n\nYOuR subscription has renewed. No action required.\n\nThanks,\nIT Heldpesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@beta-logistics.com\u003e"
@@ -5459,7 +5459,7 @@
       "from_display": "Exclusive Member Offer",
       "to": "alice@acme.example",
       "subject": "Account verification needed for newsletter benefits",
-      "body_text": "Hi,\n\nAs a subscriber, please re-verify your work email to unlock this month's premium content.\n\nVerify: http://microsoft-security-update.cf/auth\n\nBest regards,\nIT Helpdesk",
+      "body_text": "Hi,\n\nAs a subscriber, please re-verify your work email to unlock this month's premium content.\n\nVerify: http://office365-renew.gq/signin\n\nCheers,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@mailchimp.example\u003e",
@@ -5494,7 +5494,7 @@
       "from_display": "Industry Weekly",
       "to": "bob@acme.example",
       "subject": "Industry Weekly — top 5 stories",
-      "body_text": "Dear team,\n\nTop stories this week, curated for you.\n\nCheers,\nIT Helpdesk",
+      "body_text": "Hello,\n\nTop stories this week, curated for you.\n\nRegards,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@sendgrid.example\u003e",
@@ -5564,7 +5564,7 @@
       "from_display": "Industry Weekly",
       "to": "david@acme.example",
       "subject": "Industry Weekly — top 5 stories",
-      "body_text": "Good morning,\n\nTop stories this week, curated for you.\n\nRegards,\nProcurement",
+      "body_text": "Dear team,\n\nTop stories this week, curated for you.\n\nThanks,\nProcurement",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@hubspot.example\u003e",
@@ -5599,7 +5599,7 @@
       "from_display": "Industry Weekly",
       "to": "ellen@acme.example",
       "subject": "Industry Weekly — top 5 stories",
-      "body_text": "Hello,\n\nTop stories this week,  curated for you.\n\nCheers,\nProcurement",
+      "body_text": "Hi,\n\nTop stories this week,  curated for you.\n\nCheers,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@mailchimp.example\u003e",
@@ -5634,7 +5634,7 @@
       "from_display": "Industry Weekly",
       "to": "fionn@acme.example",
       "subject": "Industry Weekly — top 5 stories",
-      "body_text": "Hello,\n\nTop  stories this week, curated for you.\n\nBest regards,\nIT Helpdesk",
+      "body_text": "Hello,\n\nTop stories this week, curated for you.\n\nCheers,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@sendgrid.example\u003e",
@@ -5669,7 +5669,7 @@
       "from_display": "Industry Weekly",
       "to": "grace@acme.example",
       "subject": "Industry Weekly — top 5 stories",
-      "body_text": "Hi,\n\nTop stories this week, curated for  you.\n\nRegards,\nAccounts Payable",
+      "body_text": "Hi,\n\nTop stories this week, curated for you.\n\nCheers,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@marketo.example\u003e",
@@ -5687,7 +5687,7 @@
     ],
     "is_threat": false,
     "difficulty": "hard",
-    "locale": "ja",
+    "locale": "zh",
     "attack_type": "Routine bulk newsletter",
     "description": "Authenticated, unsubscribable bulk mailer — must Tier 0 bypass and classify Informational/Trusted.",
     "expected_signals": [
@@ -5703,8 +5703,8 @@
       "from": "newsletter@hubspot.example",
       "from_display": "Industry Weekly",
       "to": "hideo@acme.example",
-      "subject": "業界ウィークリー",
-      "body_text": "お世話になっております, 今週主の要記事をお届けします 敬具, 情シ報ステム部",
+      "subject": "行业周刊",
+      "body_text": "您好，,\n\n本周精选门热讯资\n\n顺颂商祺,\n采购部",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@hubspot.example\u003e",
@@ -5739,7 +5739,7 @@
       "from_display": "Industry Weekly",
       "to": "alice@acme.example",
       "subject": "Industry Weekly — top 5 stories",
-      "body_text": "Good morning, Top storise this week, CuratED for you. Cheers, Procuremetn",
+      "body_text": "Good mornInG,\n\nTop stories tihs week, curated for oyu.\n\nThanks,\nAccounts Payable",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@mailchimp.example\u003e",
@@ -5774,7 +5774,7 @@
       "from_display": "Industry Weekly",
       "to": "bob@acme.example",
       "subject": "Industry Weekly — top 5 stories",
-      "body_text": "Hello, Top stOrIES tshi week, curated for you. Regards, IT Helpdesk",
+      "body_text": "DEAr etam,\n\nTop stories this week, curated for yo.u\n\nThanks,\nIT Helpdesk",
       "headers": {
         "Authentication-Results": "spf=pass dkim=pass dmarc=pass",
         "List-Unsubscribe": "\u003cmailto:unsub@sendgrid.example\u003e",

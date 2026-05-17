@@ -408,20 +408,44 @@ func dedupStrings(in []string) []string {
 }
 
 // loadCorpus reads the per-category JSON files under dir and returns
-// a flat slice. Used by the validator and the model validator. Files
-// that are not <category>.json or all.json are ignored. all.json is
-// also ignored to avoid double-counting.
+// a flat slice. Used by the validator and the model validator.
+//
+// Two filenames are normally excluded to avoid double-counting:
+//
+//   - all.json:    the aggregated combined output written by Run().
+//   - sample.json: the small checked-in CI fixture in
+//     scripts/corpus/evaluation/. It shares test_ids with the
+//     freshly generated per-category files (e.g. phish-000000), so
+//     including it alongside a fresh corpus would always trigger the
+//     validator's duplicate-test_id and dedup checks.
+//
+// As a convenience, if the directory contains no per-category files
+// at all and sample.json IS present, sample.json is loaded as a
+// fallback. This lets `make validate-corpus` run in CI against the
+// checked-in fixture without first having to invoke generate-corpus.
+//
+// All other *.json files are treated as per-category corpus files.
 func loadCorpus(dir string) ([]TestEmail, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("read dir %s: %w", dir, err)
 	}
-	var all []TestEmail
+	var (
+		all              []TestEmail
+		sawSample        bool
+		samplePath       string
+		perCategoryCount int
+	)
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
 		if e.Name() == "all.json" {
+			continue
+		}
+		if e.Name() == "sample.json" {
+			sawSample = true
+			samplePath = filepath.Join(dir, e.Name())
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
@@ -433,6 +457,18 @@ func loadCorpus(dir string) ([]TestEmail, error) {
 			return nil, fmt.Errorf("decode %s: %w", e.Name(), err)
 		}
 		all = append(all, batch...)
+		perCategoryCount++
+	}
+	// Fixture-only fallback: when nothing else is on disk, load the
+	// checked-in sample so `validate-corpus` works in CI.
+	if perCategoryCount == 0 && sawSample {
+		b, err := os.ReadFile(samplePath)
+		if err != nil {
+			return nil, fmt.Errorf("read sample.json: %w", err)
+		}
+		if err := json.Unmarshal(b, &all); err != nil {
+			return nil, fmt.Errorf("decode sample.json: %w", err)
+		}
 	}
 	if len(all) == 0 {
 		return nil, errors.New("no test emails found")
