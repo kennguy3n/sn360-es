@@ -127,7 +127,8 @@ func sanityCheckSQL(path string) error {
 	if text == "" {
 		return errors.New("empty SQL file")
 	}
-	upper := strings.ToUpper(text)
+	stripped := stripSQLNoise(text)
+	upper := strings.ToUpper(stripped)
 	begins := strings.Count(upper, "BEGIN;")
 	commits := strings.Count(upper, "COMMIT;")
 	if begins != commits {
@@ -137,4 +138,81 @@ func sanityCheckSQL(path string) error {
 		return errors.New("file does not end with `;`")
 	}
 	return nil
+}
+
+// stripSQLNoise removes single-line `-- …` comments, `/* … */` block
+// comments, and single-quoted string literals (with `”` escapes) so
+// downstream token counts ignore tokens that don't represent executable
+// SQL. The result preserves the original line structure — comments and
+// strings are replaced with spaces rather than excised — so error
+// messages computed against the stripped text still point at the
+// right column. We do not handle PostgreSQL dollar-quoted bodies
+// (`$$ … $$`) because migrations in this repo do not currently use
+// them; if that changes, extend this routine before relying on its
+// output.
+func stripSQLNoise(s string) string {
+	out := make([]byte, 0, len(s))
+	var (
+		inLine  bool // inside `-- ...` until newline
+		inBlock bool // inside `/* ... */`
+		inStr   bool // inside single-quoted string
+	)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case inLine:
+			if c == '\n' {
+				inLine = false
+				out = append(out, c)
+			} else {
+				out = append(out, ' ')
+			}
+		case inBlock:
+			if c == '*' && i+1 < len(s) && s[i+1] == '/' {
+				inBlock = false
+				out = append(out, ' ', ' ')
+				i++
+			} else if c == '\n' {
+				out = append(out, c)
+			} else {
+				out = append(out, ' ')
+			}
+		case inStr:
+			// `''` is an escaped single quote inside a string;
+			// stay in-string for both bytes.
+			if c == '\'' && i+1 < len(s) && s[i+1] == '\'' {
+				out = append(out, ' ', ' ')
+				i++
+				continue
+			}
+			if c == '\'' {
+				inStr = false
+				out = append(out, ' ')
+			} else if c == '\n' {
+				out = append(out, c)
+			} else {
+				out = append(out, ' ')
+			}
+		default:
+			if c == '-' && i+1 < len(s) && s[i+1] == '-' {
+				inLine = true
+				out = append(out, ' ', ' ')
+				i++
+				continue
+			}
+			if c == '/' && i+1 < len(s) && s[i+1] == '*' {
+				inBlock = true
+				out = append(out, ' ', ' ')
+				i++
+				continue
+			}
+			if c == '\'' {
+				inStr = true
+				out = append(out, ' ')
+				continue
+			}
+			out = append(out, c)
+		}
+	}
+	return string(out)
 }

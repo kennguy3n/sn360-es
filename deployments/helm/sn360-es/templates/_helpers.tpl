@@ -72,14 +72,3 @@ Checksum of the rendered ConfigMap so Pods restart when config changes.
 {{- $cm := include (print $.Template.BasePath "/configmap.yaml") . -}}
 {{- $cm | sha256sum -}}
 {{- end -}}
-
-{{/*
-Templated config values rendered with the release context so
-expressions like "{{ .Release.Name }}-nats:4222" in values.yaml
-resolve as expected.
-*/}}
-{{- define "sn360-es.config" -}}
-{{- range $k, $v := .Values.config -}}
-{{ $k }}: {{ tpl ($v | toString) $ | quote }}
-{{ end -}}
-{{- end -}}
