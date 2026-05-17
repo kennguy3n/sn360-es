@@ -250,15 +250,14 @@ type URLRewrite struct {
 // empty the simulation sender is disabled and SimulationEngine
 // continues to record interactions without dispatching mail.
 type SMTP struct {
-	Host        string
-	Port        int
-	User        string
-	Password    string
-	From        string
-	StartTLS    bool
-	Timeout     time.Duration
-	SkipVerify  bool
-	LandingBase string
+	Host       string
+	Port       int
+	User       string
+	Password   string
+	From       string
+	StartTLS   bool
+	Timeout    time.Duration
+	SkipVerify bool
 }
 
 // CORS configures the cross-origin policy applied to every HTTP route.
@@ -408,15 +407,14 @@ func Load() (Config, error) {
 			AllowedOrigins: parseCSV(getStr("CORS_ALLOWED_ORIGINS", "")),
 		},
 		SMTP: SMTP{
-			Host:        getStr("SMTP_HOST", ""),
-			Port:        getInt("SMTP_PORT", 587),
-			User:        getStr("SMTP_USER", ""),
-			Password:    getStr("SMTP_PASSWORD", ""),
-			From:        getStr("SMTP_FROM", ""),
-			StartTLS:    getBool("SMTP_STARTTLS", true),
-			Timeout:     getDuration("SMTP_TIMEOUT", 10*time.Second),
-			SkipVerify:  getBool("SMTP_SKIP_VERIFY", false),
-			LandingBase: getStr("SMTP_LANDING_BASE", ""),
+			Host:       getStr("SMTP_HOST", ""),
+			Port:       getInt("SMTP_PORT", 587),
+			User:       getStr("SMTP_USER", ""),
+			Password:   getStr("SMTP_PASSWORD", ""),
+			From:       getStr("SMTP_FROM", ""),
+			StartTLS:   getBool("SMTP_STARTTLS", true),
+			Timeout:    getDuration("SMTP_TIMEOUT", 10*time.Second),
+			SkipVerify: getBool("SMTP_SKIP_VERIFY", false),
 		},
 	}
 
