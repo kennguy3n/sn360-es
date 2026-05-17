@@ -584,6 +584,48 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		Observer:           app.metrics.PipelineObserver(),
 	})
 
+	// Optional Tier 1 batch orchestrator. When enabled it pulls
+	// es.evaluate.request in batches, runs Tier 0 in-process, batches
+	// the Tier 1 HTTP call, and escalates "escalate" verdicts through
+	// the full evaluator. Requires NATS JetStream (it uses pull-fetch)
+	// and a wired Tier 1 client; degrades to "skip" when either is
+	// missing so single-message consumer (handleEvaluateRequest) still
+	// covers the path.
+	if cfg.Tier1.BatchEnabled {
+		switch {
+		case app.tier1Raw == nil:
+			logger.Warn("sn360-es: TIER1_BATCH_ENABLED set but tier1 client unavailable; batch orchestrator disabled")
+		default:
+			natsSvc, ok := app.eventBus.(*natsbus.Service)
+			if !ok {
+				logger.Warn("sn360-es: TIER1_BATCH_ENABLED set but event bus is not NATS; batch orchestrator disabled",
+					slog.String("event_bus", string(cfg.EventBus)))
+			} else {
+				orch, oerr := evaluate.NewBatchOrchestrator(evaluate.BatchOrchestratorConfig{
+					JS:        natsSvc.Client(),
+					BatchSize: cfg.Tier1.BatchSize,
+					Tier0:     tier0BatchAdapter{gate: app.tier0Gate},
+					Tier1:     app.tier1Raw,
+					Thresholds: tier1.Thresholds{
+						PassBelow: cfg.Tier1.PassThreshold,
+						FlagAbove: cfg.Tier1.FlagThreshold,
+					},
+					Fallback: fallbackEvaluatorAdapter{eval: app.evaluator},
+					Sink:     app.eventBus,
+					Logger:   logger,
+				})
+				if oerr != nil {
+					logger.Warn("sn360-es: tier1 batch orchestrator init failed; falling back to single-message consumer",
+						slog.Any("error", oerr))
+				} else {
+					app.batchOrch = orch
+					logger.Info("sn360-es: tier1 batch orchestrator wired",
+						slog.Int("batch_size", cfg.Tier1.BatchSize))
+				}
+			}
+		}
+	}
+
 	return app, nil
 }
 
@@ -847,6 +889,14 @@ func (a *application) StopConsumers(logger *slog.Logger) {
 			logger.Warn("sn360-es: dlq processor stop error", slog.Any("error", err))
 		}
 		a.dlqProc = nil
+	}
+	if a.batchOrch != nil {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := a.batchOrch.Stop(stopCtx); err != nil {
+			logger.Warn("sn360-es: tier1 batch orchestrator stop error", slog.Any("error", err))
+		}
+		cancel()
+		a.batchOrch = nil
 	}
 	a.subsMu.Lock()
 	subs := a.subs
@@ -1886,6 +1936,73 @@ func (a escalationPublisherAdapter) Publish(ctx context.Context, subject string,
 		return nil
 	}
 	return a.bus.Publish(ctx, subject, data, opts...)
+}
+
+// tier0BatchAdapter adapts tier0.Gate to the evaluate.Tier0BatchGate
+// interface used by BatchOrchestrator. The orchestrator wants a single
+// call that says "did Tier 0 short-circuit, and if so, here is the
+// final result"; the underlying gate returns a richer Tier0Outcome
+// with Bypass/SkipML/RspamdOnly flags. The adapter only short-circuits
+// on Bypass (the case where the gate has a forced category and the
+// whole pipeline can be skipped). SkipML/RspamdOnly hits fall through
+// to Tier 1 so the orchestrator's escalation path still runs them
+// through the full evaluator if needed.
+type tier0BatchAdapter struct{ gate *tier0.Gate }
+
+func (a tier0BatchAdapter) Apply(req dto.EvaluateRequest, signals dto.RiskSignals) (dto.EvaluateResult, bool) {
+	if a.gate == nil {
+		return dto.EvaluateResult{}, false
+	}
+	// The batch envelope carries Signals alongside the request, but the
+	// gate reads from req.Signals. Splice the batch signals onto the
+	// request so the gate sees the same view the single-message path
+	// would after unmarshalling.
+	req.Signals = signals
+	out := a.gate.Apply(req)
+	if !out.Bypass {
+		return dto.EvaluateResult{}, false
+	}
+	res := dto.EvaluateResult{
+		TenantID:      req.TenantID,
+		MessageID:     req.MessageID,
+		CorrelationID: req.CorrelationID,
+		EvaluatedAt:   time.Now().UTC(),
+		Primary:       out.ForcedCategory,
+		Tier:          forcedBatchTierFor(out.ForcedCategory),
+		Tier0:         &out,
+	}
+	if out.Reason != "" {
+		res.ReasonCodes = append(res.ReasonCodes, out.Reason)
+	}
+	return res, true
+}
+
+// forcedBatchTierFor mirrors evaluate.forcedTierFor (unexported there).
+// Kept in sync with internal/service/evaluate/evaluator.go.
+func forcedBatchTierFor(c constant.Category) constant.Tier {
+	switch c {
+	case constant.CategoryInternalTrusted, constant.CategoryVendorTrusted:
+		return constant.TierTrusted
+	case constant.CategoryNewsletter:
+		return constant.TierInformational
+	default:
+		return constant.TierTrusted
+	}
+}
+
+// fallbackEvaluatorAdapter adapts *evaluate.Evaluator (which exposes
+// Evaluate(ctx, req)) to evaluate.MessageEvaluator (which expects
+// Evaluate(ctx, req, signals)). The evaluator reads signals from
+// req.Signals internally; the adapter splices the batch signals into
+// the request before delegating.
+type fallbackEvaluatorAdapter struct{ eval *evaluate.Evaluator }
+
+func (a fallbackEvaluatorAdapter) Evaluate(ctx context.Context, req dto.EvaluateRequest, signals dto.RiskSignals) (dto.EvaluateResult, error) {
+	if a.eval == nil {
+		return dto.EvaluateResult{}, errors.New("evaluate: fallback evaluator unavailable")
+	}
+	req.Signals = signals
+	return a.eval.Evaluate(ctx, req)
 }
 
 func factoryConfigFromAppConfig(cfg *config.Config) bus.Config {
