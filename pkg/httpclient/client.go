@@ -345,17 +345,20 @@ func (s State) String() string {
 //
 // It transitions Closed -> Open after `threshold` consecutive failures.
 // While Open it rejects every call until `timeout` elapses, after which
-// the next call moves the breaker to Half-Open and is allowed through
-// as a trial. A successful trial closes the breaker; a failed trial
-// reopens it (and resets the cooldown).
+// the NEXT call moves the breaker to Half-Open and is allowed through
+// as a SINGLE trial. While that trial is in flight every other caller
+// is short-circuited so a struggling upstream does not get flooded.
+// A successful trial closes the breaker; a failed trial reopens it
+// (and resets the cooldown).
 type breaker struct {
-	threshold    int32
-	timeout      time.Duration
-	mu           sync.Mutex
-	failures     int32
-	state        State
-	openedAt     time.Time
-	tripDisabled bool
+	threshold     int32
+	timeout       time.Duration
+	mu            sync.Mutex
+	failures      int32
+	state         State
+	openedAt      time.Time
+	tripDisabled  bool
+	trialInFlight bool
 }
 
 func newBreaker(threshold int, timeout time.Duration) *breaker {
@@ -383,13 +386,22 @@ func (b *breaker) allow() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	switch b.state {
-	case StateClosed, StateHalfOpen:
+	case StateClosed:
+		return true
+	case StateHalfOpen:
+		// Half-Open admits exactly one concurrent trial caller; the
+		// rest are rejected until success/failure decides the state.
+		if b.trialInFlight {
+			return false
+		}
+		b.trialInFlight = true
 		return true
 	case StateOpen:
 		if time.Since(b.openedAt) < b.timeout {
 			return false
 		}
 		b.state = StateHalfOpen
+		b.trialInFlight = true
 		return true
 	}
 	return false
@@ -400,6 +412,7 @@ func (b *breaker) success() {
 	defer b.mu.Unlock()
 	b.failures = 0
 	b.state = StateClosed
+	b.trialInFlight = false
 }
 
 func (b *breaker) failure() {
@@ -412,6 +425,7 @@ func (b *breaker) failure() {
 	if b.failures >= b.threshold || b.state == StateHalfOpen {
 		b.state = StateOpen
 		b.openedAt = time.Now()
+		b.trialInFlight = false
 	}
 }
 

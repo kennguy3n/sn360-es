@@ -146,6 +146,52 @@ func TestClient_CircuitBreaker_OpensThenRecovers(t *testing.T) {
 	}
 }
 
+func TestClient_CircuitBreaker_HalfOpenAdmitsSingleTrial(t *testing.T) {
+	b := newBreaker(2, 10*time.Millisecond)
+	// Trip the breaker.
+	b.failure()
+	b.failure()
+	if got := b.currentState(); got != StateOpen {
+		t.Fatalf("breaker not open: %s", got)
+	}
+	// Within cooldown: all callers rejected.
+	if b.allow() {
+		t.Fatal("allow returned true within cooldown")
+	}
+	time.Sleep(15 * time.Millisecond)
+	// After cooldown: first caller becomes the trial; concurrent
+	// callers must be rejected until success/failure decides.
+	if !b.allow() {
+		t.Fatal("first half-open caller not allowed")
+	}
+	if got := b.currentState(); got != StateHalfOpen {
+		t.Fatalf("expected HalfOpen, got %s", got)
+	}
+	for i := 0; i < 5; i++ {
+		if b.allow() {
+			t.Fatalf("concurrent half-open caller #%d was admitted", i)
+		}
+	}
+	// Trial fails -> reopen, fresh cooldown.
+	b.failure()
+	if got := b.currentState(); got != StateOpen {
+		t.Fatalf("breaker did not reopen after failed trial: %s", got)
+	}
+	time.Sleep(15 * time.Millisecond)
+	if !b.allow() {
+		t.Fatal("first half-open trial not admitted on second attempt")
+	}
+	// Successful trial closes the breaker AND clears trialInFlight so
+	// subsequent callers are admitted normally.
+	b.success()
+	if got := b.currentState(); got != StateClosed {
+		t.Fatalf("breaker not closed after successful trial: %s", got)
+	}
+	if !b.allow() {
+		t.Fatal("closed breaker rejected a caller")
+	}
+}
+
 func TestClient_NoBaseURL_RelativePath(t *testing.T) {
 	c, err := New(Config{Name: "noop"})
 	if err != nil {
