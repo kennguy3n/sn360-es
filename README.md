@@ -22,6 +22,12 @@ education — all operated by AI agents.
 
 ## Architecture at a Glance
 
+SN360-ES ships as a **single `sn360-es` Go binary** that exposes an HTTP
+API and runs four cooperating domains in-process. They communicate via
+NATS JetStream (or Redis Streams in the fallback configuration), so the
+same binary can be scaled horizontally by running more replicas behind
+the same event bus.
+
 ```mermaid
 graph LR
     subgraph "Email Providers"
@@ -29,11 +35,11 @@ graph LR
         O365["Microsoft 365"]
     end
 
-    subgraph "SN360-ES Platform"
-        Ingestion["Ingestion Service"]
-        Evaluate["Evaluation Service"]
-        Management["Management Service"]
-        Education["Education Service"]
+    subgraph "sn360-es binary (one process)"
+        Ingestion["Ingestion domain"]
+        Evaluate["Evaluation domain"]
+        Management["Management domain"]
+        Education["Education domain"]
     end
 
     subgraph "Event Bus"
@@ -43,7 +49,7 @@ graph LR
     subgraph "Detection Pipeline"
         T0["Tier 0: Classification Gate"]
         T1["Tier 1: Encoder Model"]
-        T2["Tier 2: Full LLM"]
+        T2["Tier 2: Ternary-Bonsai-8B"]
         Rspamd["Rspamd Heuristics"]
     end
 
@@ -69,12 +75,17 @@ graph LR
     Management --> Redis
 ```
 
-## Core Services
+## Core Domains
 
-| Service | Purpose |
+The four domains below are **packages within the single `sn360-es`
+binary**, not separate deployments. They share configuration, the event
+bus client, and the process lifecycle; what differs is which subjects
+they subscribe to and which HTTP routes they own.
+
+| Domain | Purpose |
 |---|---|
 | **Ingestion** | Polls GWS/O365 mailboxes, normalizes emails, publishes events, applies post-evaluation actions (tiered banners, native labels, quarantine) |
-| **Evaluation** | 3-tier ML detection: classification gate → encoder model → LLM. Parallel Rspamd heuristics. Weighted risk scoring |
+| **Evaluation** | 3-tier ML detection: classification gate → encoder model → Ternary-Bonsai-8B. Parallel Rspamd heuristics. Weighted risk scoring |
 | **Management** | Multi-tenant admin: tenants, users, groups, labels, score engine, vendors, relationships, education campaigns |
 | **Education** | Manages phishing simulations, micro-lessons, in-context teachable moments, and employee resilience scoring |
 
@@ -84,14 +95,16 @@ graph LR
 |---|---|---|---|---|
 | **Tier 0** | Rule-based classification | <1ms | ~$0 | Every email — skips ML for internal, vendor, newsletter |
 | **Tier 1** | XLM-RoBERTa encoder (self-hosted) | 50-200ms | ~$0.00005 | External unknown emails surviving Tier 0 |
-| **Tier 2** | SLM | 2-5s | ~$0.001-0.005 | Ambiguous emails from Tier 1 (10-20% of Tier 1 input) |
+| **Tier 2** | Ternary-Bonsai-8B (self-hosted SLM) | 2-5s | ~$0.001-0.005 | Ambiguous emails from Tier 1 (10-20% of Tier 1 input) |
 | **Rspamd** | Heuristics (SPF/DKIM/DMARC/RBL) | 100-500ms | ~$0 | Always-on, parallel with ML tiers |
+
+The Tier 2 deployment manifests live in [`deployments/llm/`](./deployments/llm/);
+alternative model providers are not supported.
 
 ## End-User Experience — Tiered Banners & Native Labels
 
-SN360-ES does not stop at a single "FYI" label. Drawing on patterns proven
-by INKY, Material Security, Avanan, Proofpoint, IRONSCALES, and Microsoft
-Defender, every email is decorated with **two** end-user signals:
+SN360-ES does not stop at a single "FYI" label. Every email is decorated
+with **two** end-user signals:
 
 1. **Inline banner** (HTML, injected into the message body, severity-themed)
 2. **Native provider label** (Gmail Label / Outlook Category, color-coded)
@@ -124,7 +137,7 @@ Defender, every email is decorated with **two** end-user signals:
 - **Learn more** → contextual micro-lesson from Education service
 - **Why am I seeing this?** expander with category + signal explanation
 
-### Pre-Send & Pre-Open Warnings (Tessian-Style, Optional Add-In)
+### Pre-Send & Pre-Open Warnings (Optional Add-In)
 
 - Outlook / Gmail add-in detects suspicious recipient before send (lookalike
   recipient domain, unusual external recipient) and prompts confirmation
@@ -167,14 +180,55 @@ Built-in security awareness that teaches through the email experience:
 - **Adaptive difficulty**: Simulation complexity adjusts to employee performance
 - **Zero-setup**: Campaigns auto-generated based on tenant's threat profile
 
+## Project Status
+
+This is an active development codebase. The matrix below reflects what
+is wired into the `sn360-es` binary today versus what is implemented as
+a package but is still optional / degraded when its backing
+infrastructure is missing.
+
+| Area | Implemented | Wired into `cmd/sn360-es` | Notes |
+|---|---|---|---|
+| HTTP server, health, metrics, OpenAPI/docs | Yes | Yes | Always on |
+| Middleware (telemetry, request logger, CORS, JWT auth) | Yes | Yes | JWT skips `/healthz`, `/readyz`, `/metrics`, `/docs`, `/openapi.yaml` |
+| Event bus (NATS JetStream + Redis Streams fallback + factory) | Yes | Yes | Selected via `EVENT_BUS=nats\|redis` |
+| Tier 0 classification gate | Yes | Yes | Pure CPU, in-process |
+| Tier 1 encoder client | Yes | Optional | Requires the encoder service from [`deployments/encoder/`](./deployments/encoder/) |
+| Tier 2 SLM (Ternary-Bonsai-8B) client | Yes | Optional | Requires the deployment from [`deployments/llm/`](./deployments/llm/) |
+| Rspamd client + cache | Yes | Optional | Requires Rspamd |
+| Evaluator, scorer, categorizer | Yes | Yes | Drives the `es.evaluate.request` → `es.evaluate.result` flow |
+| Banner / label / quarantine / URL-rewrite / feedback services | Yes | Partial | URL rewriter and quarantine release require Redis + JWT secret; degrade to 503 when unset |
+| Predict (recipient / open) | Yes | Yes | Tier-based pre-open and recipient warning HTTP endpoints |
+| Education (micro-lessons, simulation, resilience, adaptive) | Yes | Yes | The `/v1/education/lesson/` route + `es.education.lesson.trigger` consumer |
+| Onboarding (OAuth, discovery, agent) | Yes | Optional | Requires provider OAuth credentials |
+| Dashboard generator | Yes | Optional | 503 when generator is not configured |
+| Escalation (resolve + get) | Yes | Yes | In-memory or PG-backed ticket store |
+| PostgreSQL repositories (Atlas-managed) | Yes | Optional | Degraded mode (503 on PG-backed routes) when DSN is unset |
+| Privacy primitives (Blake2 hashing, AES-GCM, JWT, KMS adapter) | Yes | Yes | KMS adapter is pluggable; falls back to a local key in dev |
+| Tier 1 / Tier 2 deployments | Manifests only | Out of scope | See `deployments/encoder/` and `deployments/llm/` |
+| Benchmark + accuracy harness | Yes | N/A | Build-tagged `//go:build benchmark`; see [`benchmarks/`](./benchmarks/) |
+
+In short: the binary runs and serves every wired route on its own, but
+routes that depend on optional infrastructure return `503` with a
+machine-readable error when their dependency is unconfigured rather
+than crashing the process.
+
 ## Quick Start (Development)
+
+Prerequisites:
+
+- Go 1.22+ (matches `go.mod`)
+- Docker / Docker Compose for the local NATS + PostgreSQL + Redis + Rspamd stack
+- Optional: a running Tier 1 encoder ([`deployments/encoder/`](./deployments/encoder/))
+  and Tier 2 SLM ([`deployments/llm/`](./deployments/llm/)) for end-to-end ML;
+  the binary degrades gracefully when either is missing.
 
 ```bash
 cp .env.example .env
 docker-compose up -d        # NATS, Redis, PostgreSQL, Rspamd
-make migrate-up             # Apply database migrations
+make migrate-up             # Apply database migrations (Atlas via cmd/sn360-es-migrate)
 make test                   # Unit tests
-make run                    # Start service
+make run                    # Start sn360-es
 ```
 
 ## Running Tests
@@ -202,72 +256,60 @@ datestamp; the most recent baseline is summarised in
 profile tests are gated by `//go:build benchmark` so they stay out of
 `make test` — see [`benchmarks/README.md`](./benchmarks/README.md) for
 details on what each artefact contains and how to compare runs with
-`benchstat`.
+`benchstat`. The labelled corpus itself lives at
+[`scripts/corpus/`](./scripts/corpus/) and is generated by the
+generator documented in
+[`scripts/corpus_generator/README.md`](./scripts/corpus_generator/README.md);
+[`scripts/CORPUS.md`](./scripts/CORPUS.md) explains the dataset
+contract.
 
 ## Documentation
 
 | Doc | Purpose |
 |---|---|
-| [`internal/docs/PROPOSAL.md`](./internal/docs/PROPOSAL.md) | Full v2 product + technical specification (8 phases, 51 tasks) |
-| [`internal/docs/ARCHITECTURE.md`](./internal/docs/ARCHITECTURE.md) | System architecture: streams, consumer groups, services, data flow |
-| [`internal/docs/PHASES.md`](./internal/docs/PHASES.md) | Phase-level rollup with code pointers and remaining scope |
-| [`internal/docs/PROGRESS.md`](./internal/docs/PROGRESS.md) | Per-task checkbox tracker and changelog |
+| [`internal/docs/PROPOSAL.md`](./internal/docs/PROPOSAL.md) | Design document: tiered pipeline, privacy, zero-admin, banner UX, education |
+| [`internal/docs/ARCHITECTURE.md`](./internal/docs/ARCHITECTURE.md) | System architecture: single-binary deployment, streams, consumers, data flow |
+| [`internal/docs/PHASES.md`](./internal/docs/PHASES.md) | Development history with code pointers and remaining wiring |
+| [`internal/docs/PROGRESS.md`](./internal/docs/PROGRESS.md) | Per-task changelog |
+| [`scripts/CORPUS.md`](./scripts/CORPUS.md) | Labelled corpus dataset contract |
+| [`scripts/corpus_generator/README.md`](./scripts/corpus_generator/README.md) | How the corpus is generated and which models are targeted |
+| [`benchmarks/README.md`](./benchmarks/README.md) | Benchmark suite, baselines, and how to compare runs |
+| [`deployments/helm/sn360-es/README.md`](./deployments/helm/sn360-es/README.md) | Helm chart values, subcharts, and upgrade notes |
+| [`migrations/README.md`](./migrations/README.md) | Atlas-managed SQL schema evolution |
 
 ## Repository Structure
 
 ```
 sn360-es/
 ├── api/                                 # OpenAPI 3.1 spec (api/openapi.yaml)
+├── benchmarks/                          # Bench artefacts (txt/md) + BASELINE.md + README.md
 ├── cmd/
-│   ├── sn360-es/                        # Main service entrypoint
-│   └── sn360-es-migrate/                # golang-migrate runner CLI
+│   ├── sn360-es/                        # Main service entrypoint (single binary)
+│   ├── sn360-es-migrate/                # golang-migrate runner CLI
+│   └── gen-corpus/                      # Corpus generator CLI driver
 ├── deployments/
 │   ├── addins/
 │   │   ├── outlook/                     # Outlook Office Add-in (Manifest v3)
 │   │   └── gmail/                       # Gmail Add-on (Apps Script)
 │   ├── encoder/                         # Tier 1 encoder service skeleton
+│   ├── llm/                             # Tier 2 Ternary-Bonsai-8B SLM deployment
 │   ├── helm/sn360-es/                   # Helm chart (Deployment, Service, HPA, NATS subchart)
 │   └── argocd/                          # ArgoCD Application manifests (dev/qa/uat/prod)
 ├── internal/
 │   ├── config/                          # Environment-based configuration
 │   ├── constant/                        # Event types, Redis keys, categories
 │   ├── dto/                             # Request/response DTOs
-│   │   ├── dashboard.go                 # Dashboard summary DTOs
-│   │   ├── education.go                 # Education + simulation DTOs
-│   │   ├── escalation.go                # SN360 SecOps escalation DTOs
-│   │   ├── risk_signals.go              # RelationshipCategory + timing-anomaly score
-│   │   └── ...
-│   ├── handler/                         # HTTP handlers
-│   │   ├── banner_action.go             # POST /v1/banner/action
-│   │   ├── dashboard.go                 # GET /v1/dashboard/summary
-│   │   ├── education.go                 # GET /v1/education/lesson/{category}
-│   │   ├── escalation.go                # POST /v1/escalation/resolve
-│   │   ├── predict.go                   # POST /v1/predict/recipient + /open
-│   │   ├── quarantine.go                # POST /v1/quarantine/release
-│   │   ├── health.go                    # GET /healthz, /readyz
-│   │   └── docs.go                      # GET /docs (Swagger UI), /openapi.yaml
-│   ├── middleware/                      # Auth, CORS, logging, log sanitiser
+│   ├── handler/                         # HTTP handlers (banner, dashboard, education, …)
+│   ├── middleware/                      # Auth, CORS, request logger, telemetry, log sanitiser
 │   ├── numutil/                         # Small numeric helpers
 │   ├── repository/                      # Database repositories (Postgres + in-memory)
 │   ├── service/
-│   │   ├── action/                      # 6-tier banner / labels / quarantine / feedback
-│   │   │   ├── catalogs/                # en, vi, th, ja, ko, zh i18n catalogs
-│   │   │   ├── banner_renderer.go       # role="alert" + dir="rtl" WCAG 2.1 AA
-│   │   │   ├── quarantine.go            # Hidden label + stub body
-│   │   │   ├── quarantine_release.go    # Tier 0 + Tier 1 re-eval gate
-│   │   │   ├── report_workflow.go       # User-reported phishing workflow
-│   │   │   └── subject_tag.go           # Optional [SN360: WARN] subject-line prefix
-│   │   ├── agent/                       # AI agents
-│   │   │   ├── onboarding.go
-│   │   │   ├── tuning.go
-│   │   │   ├── support.go
-│   │   │   └── escalation.go            # SN360 SecOps escalation service
+│   │   ├── action/                      # 6-tier banner / labels / quarantine / feedback / URL rewriter
+│   │   ├── agent/                       # AI agents (onboarding, tuning, support, escalation)
 │   │   ├── cache/                       # AI + Rspamd Redis-backed result caches
 │   │   ├── dashboard/                   # AI-generated admin dashboard
 │   │   ├── education/                   # Micro-lessons, simulation, resilience, adaptive
 │   │   ├── evaluate/                    # Tier 0/1/2 + score + URL + attachment pre-scan
-│   │   │   ├── url_scanner.go           # VirusTotal-backed URL pre-screen
-│   │   │   └── attachment_scanner.go    # YARA + ClamAV INSTREAM pre-screen
 │   │   ├── onboarding/                  # OAuth flow + org graph builder
 │   │   ├── predict/                     # Pre-send / pre-open recipient analysis
 │   │   ├── relationship/                # Categories, vulnerability, vendor, timing
@@ -275,26 +317,21 @@ sn360-es/
 │   │   ├── tier0/                       # Pure-CPU classification gates
 │   │   └── tier1/                       # Encoder client + batch orchestration
 │   ├── docs/                            # Internal documentation
-│   │   ├── PROPOSAL.md                  # v2 proposal (8 phases, 51 tasks)
-│   │   ├── ARCHITECTURE.md              # System architecture document
-│   │   ├── PHASES.md                    # Phase-level rollup with code pointers
-│   │   └── PROGRESS.md                  # Per-task tracker + changelog
 │   └── translation/                     # Cross-service i18n bundles (banners/)
 ├── pkg/
-│   ├── events/
-│   │   ├── bus/                         # Event-bus factory (nats|redis selector)
-│   │   ├── nats/                        # NATS JetStream client + DLQ
-│   │   └── redis/                       # Redis Streams fallback bus
+│   ├── events/                          # bus factory, NATS JetStream, Redis Streams fallback
 │   ├── httpclient/                      # HTTP/2 pooled client + circuit breaker
 │   ├── privacy/                         # Pseudonymisation, KMS, encryption, JWT, erasure
-│   ├── storage/
-│   │   ├── postgres/                    # pgx-based PostgreSQL wrapper
-│   │   ├── redis/                       # Redis pipeline wrapper + helpers
-│   │   └── s3/                          # AWS S3 client wrapper
-│   └── telemetry/                       # OpenTelemetry tracer, propagation, Prometheus metrics
-├── migrations/                          # golang-migrate SQL files (0001_init.{up,down}.sql, ...)
+│   ├── storage/                         # Postgres, Redis, S3 wrappers
+│   └── telemetry/                       # OpenTelemetry tracer + Prometheus metrics
+├── migrations/                          # golang-migrate SQL files + README.md
+├── scripts/
+│   ├── CORPUS.md                        # Dataset contract for the labelled corpus
+│   ├── corpus/                          # Generated corpus artefacts (all.json, …)
+│   ├── corpus_generator/                # Generator source + README.md
+│   └── corpus_schema.json               # JSON schema for corpus entries
 ├── docker-compose.yml                   # Local NATS + Postgres + Redis + Rspamd + ClamAV
 ├── Dockerfile
-├── Makefile                             # test, lint, migrate-up/-down/-check targets
+├── Makefile                             # test, lint, migrate-up/-down/-check, bench-* targets
 └── README.md
 ```

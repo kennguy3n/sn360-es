@@ -9,7 +9,6 @@ import (
 	"errors"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 // WarningLevel matches the banner tier scale (0 = none .. 4 = critical).
@@ -172,67 +171,6 @@ func (s *RecipientService) checkRecipient(ctx context.Context, req RecipientRequ
 		}
 	}
 	return RecipientWarning{UserHash: r.UserHash, Level: WarnNone}
-}
-
-// OpenRequest is the request body for POST /v1/predict/open. It carries
-// a pseudonymised message ID and the tier/category the message already
-// received from the evaluation pipeline.
-type OpenRequest struct {
-	TenantID        string `json:"tenant_id"`
-	PseudoMessageID string `json:"pseudo_message_id"`
-	Tier            string `json:"tier"`
-	Category        string `json:"category"`
-}
-
-// OpenResponse is returned by the pre-open predictor.
-type OpenResponse struct {
-	ShowWarning bool         `json:"show_warning"`
-	Level       WarningLevel `json:"level"`
-	Code        string       `json:"code"`
-	Message     string       `json:"message"`
-	LatencyMs   int64        `json:"latency_ms"`
-}
-
-// OpenService implements the pre-open warning predictor.
-type OpenService struct {
-	now func() time.Time
-}
-
-// NewOpenService constructs the service.
-func NewOpenService() *OpenService {
-	return &OpenService{now: func() time.Time { return time.Now().UTC() }}
-}
-
-// Predict returns the warning payload. For tiers below Warning, no
-// warning is returned (and the add-in renders the message normally).
-func (s *OpenService) Predict(_ context.Context, req OpenRequest) (OpenResponse, error) {
-	start := s.now()
-	if req.TenantID == "" {
-		return OpenResponse{}, errors.New("predict: tenant_id is required")
-	}
-	if utf8.RuneCountInString(req.PseudoMessageID) == 0 {
-		return OpenResponse{}, errors.New("predict: pseudo_message_id is required")
-	}
-	tier := strings.ToLower(strings.TrimSpace(req.Tier))
-	out := OpenResponse{}
-	switch tier {
-	case "blocked":
-		out = OpenResponse{ShowWarning: true, Level: WarnHigh, Code: "tier_blocked",
-			Message: "This message was blocked by SN360. Open the quarantine to review."}
-	case "high_risk", "highrisk":
-		out = OpenResponse{ShowWarning: true, Level: WarnHigh, Code: "tier_high_risk",
-			Message: "High risk: this message looks like a phishing attempt."}
-	case "warning":
-		out = OpenResponse{ShowWarning: true, Level: WarnWarning, Code: "tier_warning",
-			Message: "Be careful — this message has suspicious indicators."}
-	case "caution":
-		out = OpenResponse{ShowWarning: true, Level: WarnCaution, Code: "tier_caution",
-			Message: "Use caution. Verify before clicking links or sharing data."}
-	default:
-		// Informational and Trusted do not trigger pre-open warnings.
-	}
-	out.LatencyMs = s.now().Sub(start).Milliseconds()
-	return out, nil
 }
 
 // StaticLookalikeChecker is a deterministic LookalikeChecker for tests

@@ -22,7 +22,10 @@ type DashboardHandler struct {
 	gen    *dashboard.DashboardGenerator
 }
 
-// NewDashboardHandler wires the handler. gen must be non-nil.
+// NewDashboardHandler wires the handler. gen is optional: when nil
+// the handler responds 503 to every request so the route stays
+// navigable in partially-wired deployments (see the README "Project
+// Status" matrix entry for /v1/dashboard/summary).
 func NewDashboardHandler(logger *slog.Logger, gen *dashboard.DashboardGenerator) *DashboardHandler {
 	if logger == nil {
 		logger = slog.Default()

@@ -11,8 +11,8 @@ per category plus an aggregated `all.json`.
 
 ## Models referenced
 
-This tool only knows about two model deployments and will not be made
-generic. All references below match the schema at
+This tool targets two specific model deployments for reproducibility.
+All references below match the schema at
 [`scripts/corpus_schema.json`](../corpus_schema.json) and the
 service URLs at:
 
@@ -26,8 +26,8 @@ service URLs at:
   variation and Tier 2 agreement checks.
 
 No other LLM provider, runtime, or upstream llama.cpp build is
-supported. Do not patch the references — the corpus must remain
-reproducible against this exact pipeline.
+supported. Changing model references invalidates corpus
+reproducibility.
 
 ## Usage
 

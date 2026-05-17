@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -29,6 +30,7 @@ func NewPostgresRegistry(db *postgres.DB) *Registry {
 		Vendors:                &pgVendors{db: db},
 		EvaluationResults:      &pgEvalResults{db: db},
 		CommunicationHistories: &pgCommHistory{db: db},
+		FeedbackEvents:         &pgFeedbackEvents{db: db},
 	}
 }
 
@@ -581,6 +583,43 @@ SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, count_7d,
 		return nil, ErrNotFound
 	}
 	return &h, err
+}
+
+// --- feedback events ----------------------------------------------------
+
+type pgFeedbackEvents struct{ db *postgres.DB }
+
+func (p *pgFeedbackEvents) Create(ctx context.Context, e *FeedbackEvent) error {
+	if e == nil {
+		return errors.New("repository: feedback event is required")
+	}
+	if e.ID == "" {
+		e.ID = uuid.NewString()
+	}
+	_, err := p.db.ExecContext(ctx, `
+INSERT INTO feedback_events (id, tenant_id, pseudo_message_id, action, tier, correlation_id, occurred_at)
+VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),COALESCE($7,NOW()))
+`,
+		e.ID, e.TenantID, e.PseudoMessageID, e.Action, e.Tier,
+		e.CorrelationID, nullableTime(e.OccurredAt),
+	)
+	return err
+}
+
+func (p *pgFeedbackEvents) Counts(ctx context.Context, tenantID string, start, end time.Time) (FeedbackCounts, error) {
+	row := p.db.QueryRowContext(ctx, `
+SELECT
+    COUNT(*) FILTER (WHERE action = 'report_phishing') AS reported,
+    COUNT(*) FILTER (WHERE action = 'mark_safe')       AS marked,
+    COUNT(*) FILTER (WHERE action = 'trust_sender')    AS trusted
+  FROM feedback_events
+ WHERE tenant_id = $1 AND occurred_at >= $2 AND occurred_at < $3`,
+		tenantID, start, end)
+	var c FeedbackCounts
+	if err := row.Scan(&c.ReportedPhishing, &c.MarkedSafe, &c.TrustedSender); err != nil {
+		return FeedbackCounts{}, err
+	}
+	return c, nil
 }
 
 // --- helpers ------------------------------------------------------------

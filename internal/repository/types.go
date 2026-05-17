@@ -151,6 +151,27 @@ type EvaluationResult struct {
 	CreatedAt         time.Time
 }
 
+// FeedbackEvent is a single verified banner-action click. Rows live
+// in `feedback_events` (migration 0002) and back dto.FeedbackStats on
+// the dashboard.
+type FeedbackEvent struct {
+	ID              string
+	TenantID        string
+	PseudoMessageID string
+	Action          string
+	Tier            string
+	CorrelationID   string
+	OccurredAt      time.Time
+	CreatedAt       time.Time
+}
+
+// FeedbackCounts is the per-action aggregate the dashboard reads.
+type FeedbackCounts struct {
+	ReportedPhishing int
+	MarkedSafe       int
+	TrustedSender    int
+}
+
 // CommunicationHistory is a relationship aggregate keyed by sender +
 // recipient hash.
 type CommunicationHistory struct {
@@ -232,6 +253,13 @@ type CommunicationHistoryRepository interface {
 	Get(ctx context.Context, tenantID string, senderHash, recipientHash []byte) (*CommunicationHistory, error)
 }
 
+// FeedbackEventRepository persists FeedbackEvent rows and exposes the
+// per-action aggregate the dashboard relies on.
+type FeedbackEventRepository interface {
+	Create(ctx context.Context, e *FeedbackEvent) error
+	Counts(ctx context.Context, tenantID string, start, end time.Time) (FeedbackCounts, error)
+}
+
 // Registry bundles all repositories for convenient wiring.
 type Registry struct {
 	Tenants                TenantRepository
@@ -243,4 +271,5 @@ type Registry struct {
 	Vendors                VendorRepository
 	EvaluationResults      EvaluationResultRepository
 	CommunicationHistories CommunicationHistoryRepository
+	FeedbackEvents         FeedbackEventRepository
 }
