@@ -2,9 +2,18 @@
 
 ## 1. System Overview
 
-SN360-ES is a multi-tenant, privacy-first email security platform composed of
-four core services connected by NATS JetStream, with Redis for caching and
-PostgreSQL for encrypted persistent storage.
+SN360-ES is a multi-tenant, privacy-first email security platform. It
+ships as a **single `sn360-es` Go binary** (`cmd/sn360-es/`) that owns
+the HTTP API, the NATS JetStream / Redis Streams consumers, and the
+periodic workers. The codebase is organised into four logical
+**domains** — Ingestion, Evaluation, Management, and Education — but
+those domains are packages compiled into the same process, not
+separate microservices. Replicas of the same binary are scaled
+horizontally behind the same event bus and database; what differs
+between replicas is consumer-group routing rather than the build.
+
+Redis is used for caching and distributed locking, and PostgreSQL is
+used for encrypted persistent storage.
 
 ### High-Level Topology
 
@@ -13,36 +22,35 @@ graph TD
     subgraph "External APIs"
         GWS["Google Workspace API"]
         O365["Microsoft Graph API"]
-        LLM["LLM API (Tier 2)"]
+        SLM["Tier 2 SLM (Ternary-Bonsai-8B)"]
     end
 
-    subgraph "SN360-ES Platform"
-        subgraph "Ingestion Layer"
-            IngAPI["Ingestion API"]
-            IngListener["Ingestion Listener"]
+    subgraph "sn360-es binary (single process)"
+        subgraph "Ingestion domain"
+            IngAPI["Ingestion HTTP routes"]
             PollDispatcher["Poll Dispatcher"]
             ActionSvc["Action Service"]
             OnboardSvc["Onboarding Service"]
         end
 
-        subgraph "Evaluation Layer"
-            EvalListener["Evaluation Listener"]
+        subgraph "Evaluation domain"
+            EvalConsumer["Evaluate consumer"]
             Tier0["Tier 0: Classification Gate"]
             Tier1["Tier 1: Encoder Model"]
-            Tier2["Tier 2: LLM Service"]
-            RspamdSvc["Rspamd Service"]
+            Tier2["Tier 2: SLM client"]
+            RspamdSvc["Rspamd client"]
             ShieldNet["ShieldNet Worker"]
         end
 
-        subgraph "Management Layer"
-            MgmtAPI["Management API"]
-            MgmtListener["Management Listener"]
+        subgraph "Management domain"
+            MgmtAPI["Management HTTP routes"]
+            MgmtConsumer["Management consumer"]
             RelWorker["Relationship Aggregation"]
             CleanupWorker["Cleanup Worker"]
             AIAgents["AI Agent Controller"]
         end
 
-        subgraph "Education Layer"
+        subgraph "Education domain"
             EduEngine["Education Engine"]
             SimGenerator["Simulation Generator"]
             ResilienceTracker["Resilience Tracker"]
@@ -78,13 +86,13 @@ graph TD
     NATS --> Tier0
     Tier0 --> Tier1
     Tier1 --> Tier2
-    Tier2 --> LLM
-    EvalListener --> RspamdSvc
+    Tier2 --> SLM
+    EvalConsumer --> RspamdSvc
     RspamdSvc --> Rspamd
     Rspamd --> Unbound
-    EvalListener -->|"result"| NATS
+    EvalConsumer -->|"result"| NATS
     NATS --> ActionSvc
-    NATS --> MgmtListener
+    NATS --> MgmtConsumer
     NATS --> EduEngine
     ActionSvc --> GWS
     ActionSvc --> O365
@@ -99,8 +107,11 @@ graph TD
 
 ### Why NATS JetStream
 
-NATS JetStream replaces Redis Streams as the inter-service event bus. Redis
-remains exclusively for caching and distributed locking.
+NATS JetStream is the primary inter-domain event bus. A Redis Streams
+implementation behind the same `events.EventService` interface
+(`pkg/events/`) remains available as a fallback selected via
+`EVENT_BUS=nats|redis`. Redis is otherwise used exclusively for
+caching and distributed locking.
 
 ### Stream Architecture
 
@@ -140,7 +151,7 @@ sequenceDiagram
         alt Clear safe or clear threat
             T1-->>E: Tier 1 score
         else Ambiguous
-            T1->>T2: LLM analysis
+            T1->>T2: SLM analysis
             T2-->>E: Tier 2 score + reasons
         end
     end
@@ -161,6 +172,9 @@ sequenceDiagram
 ```
 
 ### Consumer Groups
+
+Although the consumers live in the same binary, JetStream still groups
+them by name so multiple replicas of `sn360-es` can share work.
 
 | Consumer Group | Stream | Filter | Max Deliver | Ack Wait | Purpose |
 |---|---|---|---|---|---|
@@ -187,15 +201,15 @@ graph TD
     end
 
     subgraph "Tier 1: Encoder Model (50-200ms)"
-        Encoder["XLM-RoBERTa / mDeBERTa"]
+        Encoder["XLM-RoBERTa"]
         T1Gate{"Confidence level?"}
         Safe["< 20 → PASS"]
         Ambiguous["20-60 → ESCALATE"]
         Threat["> 60 → FLAG"]
     end
 
-    subgraph "Tier 2: Full LLM (2-10s)"
-        LLM["SLM / Claude / DeepSeek"]
+    subgraph "Tier 2: SLM (2-10s)"
+        SLM["Ternary-Bonsai-8B"]
         Aspects["Aspect-level reasoning"]
         Reasons["Human-readable reasons"]
     end
@@ -215,9 +229,9 @@ graph TD
     T1Gate --> Safe
     T1Gate --> Ambiguous
     T1Gate --> Threat
-    Ambiguous --> LLM
-    LLM --> Aspects
-    LLM --> Reasons
+    Ambiguous --> SLM
+    SLM --> Aspects
+    SLM --> Reasons
 
     Rspamd --> WeightedScore["Weighted Aggregation"]
     Internal --> WeightedScore
@@ -235,7 +249,7 @@ Weights per category (configurable per tenant):
 
 | Category | Default Weight | Source |
 |---|---|---|
-| `ai` (Tier 1 or Tier 2) | 80% | Encoder or LLM score |
+| `ai` (Tier 1 or Tier 2) | 80% | Encoder or SLM score |
 | `rspamd` | 20% | Heuristic score |
 | `attachments` | 0% (reserved) | ShieldNet sandbox |
 | `links` | 0% (reserved) | URL threat intel |
@@ -248,10 +262,21 @@ Formula: `final_score = Σ(category_weight × normalized_category_score)`, clamp
 |---|---|
 | **Tier 0** | Language-agnostic (metadata-based rules) |
 | **Tier 1** | XLM-RoBERTa: 100+ languages native, code-switching aware |
-| **Tier 2** | SLM (Claude / DeepSeek class) multilingual; receives language hint from Tier 1 |
+| **Tier 2** | Ternary-Bonsai-8B SLM, multilingual; receives language hint from Tier 1 |
 | **Rspamd** | Language-agnostic heuristics (SPF/DKIM/RBL) |
 | **Banners** | i18n templates (en, vi, th, ja, ko, zh, etc.) |
 | **Education** | Simulations and lessons in employee's language |
+
+### Tier 2 SLM Deployment
+
+The Tier 2 model is a **self-hosted Ternary-Bonsai-8B SLM**. The
+deployment manifests live in [`deployments/llm/`](../../deployments/llm/);
+the in-process Go client is `internal/service/evaluate/tier2.go` and
+uses the shared `pkg/httpclient` pool. Corpus generation and accuracy
+baselines are pinned to this deployment for reproducibility — see
+[`scripts/CORPUS.md`](../../scripts/CORPUS.md) and
+[`scripts/corpus_generator/README.md`](../../scripts/corpus_generator/README.md).
+Alternative model providers are not supported.
 
 ## 4. Privacy Architecture
 
@@ -289,71 +314,81 @@ Email arrives → Fetch via API
 
 ## 5. Service Architecture
 
-### 5.1 Ingestion Service
+The four "services" below are **packages within the single
+`cmd/sn360-es/` binary**. They share the same configuration, event-bus
+client, HTTP server, and lifecycle. What distinguishes them is which
+NATS subjects they subscribe to, which periodic workers they own, and
+which HTTP routes they register. Horizontal scaling is done by running
+multiple replicas of the same binary behind the same event bus.
 
-**Dual-mode**: API (health/docs) + Listener (polling + event processing)
+### 5.1 Ingestion Domain
 
 - **Poll Dispatcher**: Distributed lock per `(tenant, provider, email)`, concurrent worker pool
 - **Provider abstraction**: GWS (domain-wide delegation) + O365 (client credentials)
 - **Normalizer**: Provider-specific → unified `EmailEvent` with PII tagging
 - **Action Pipeline**: Tiered banner injection + native label application + quarantine (see Section 8)
-- **NATS Publisher**: Publishes to `es.evaluate.request`, consumes from `es.evaluate.result`
+- **Event bridge**: Publishes to `es.evaluate.request`, consumes from `es.evaluate.result`
 
-### 5.2 Evaluation Service
-
-**Listener-only**: Consumes evaluate requests from NATS JetStream
+### 5.2 Evaluation Domain
 
 - **Tier 0 Gate**: Rule-based classification using `buildRiskSignals()`
-- **Tier 1 Encoder**: HTTP call to self-hosted XLM-RoBERTa inference service
-- **Tier 2 LLM**: HTTP call to external AI API (only for ambiguous)
+- **Tier 1 Encoder**: HTTP call to self-hosted XLM-RoBERTa inference service (`deployments/encoder/`)
+- **Tier 2 SLM**: HTTP call to the self-hosted Ternary-Bonsai-8B deployment (`deployments/llm/`)
 - **Rspamd**: Always-on parallel heuristic check
 - **ShieldNet**: Async attachment sandbox submission
 - **Scorer**: Weighted aggregation with per-tenant overrides from Redis
+- **Consumer**: `es.evaluate.request` from NATS / Redis Streams
 
-### 5.3 Management Service
-
-**Dual-mode**: API (REST management) + Listener (event processing + workers)
+### 5.3 Management Domain
 
 - **Domain entities**: Tenants, Users, Groups, Labels, Score Engine, Email Classifications, Vendors, Evaluation Results, Communication History
 - **Persistence**: `internal/repository/` exposes one interface per entity backed by both a Postgres (pgx) implementation and an in-memory fixture for tests. The Postgres schema is defined under `migrations/` and applied via `make migrate-up`.
 - **Relationship Aggregation Worker**: Runs every 4h, computes 7d/30d sender→receiver stats, caches in Redis
 - **AI Agent Controller**: Orchestrates auto-tuning, onboarding, support agents
 - **Cleanup Worker**: Stream + data retention enforcement
+- **HTTP routes**: Tenant/user/group/label CRUD, dashboard summary, escalation get/resolve
 
-### 5.5 Shared Packages
-
-- **`pkg/httpclient/`**: HTTP/2 pooled client with retry, circuit breaker, and per-call timeout. Shared by the VirusTotal URL scanner, the encoder client (Tier 1), the LLM client (Tier 2), and tenant provider clients.
-- **`pkg/storage/postgres/`**: pgx-based PostgreSQL connection helper with structured `Config` and `Open` / `Close` / `Ping` / `Driver` accessors.
-- **`pkg/storage/redis/`**: Redis pipeline wrapper, scan / prefix helpers, and JSON serialization helpers used by the `internal/service/cache/` AI + Rspamd caches and the action-token cache.
-- **`pkg/storage/s3/`**: AWS S3 client wrapper for raw-body offload (optional).
-- **`pkg/events/bus/`**: Bus factory that selects between `pkg/events/nats/` (default) and `pkg/events/redis/` based on the `EVENT_BUS_TYPE` config flag.
-- **`internal/translation/banners/`**: Banner i18n bundles re-exported from `internal/service/action/catalogs/` so other services can reuse the same wording.
-
-### 5.4 Education Service
-
-**New service**: Manages security awareness program
+### 5.4 Education Domain
 
 - **Simulation Generator**: AI-powered phishing simulation creation
 - **Campaign Scheduler**: Auto-schedules based on tenant threat profile
 - **Interaction Tracker**: Records user responses to simulations and micro-lessons
 - **Resilience Scorer**: Computes per-employee and per-group security awareness scores
 - **Micro-Lesson Engine**: Generates contextual lessons matched to detected threat types
+- **HTTP route**: `GET /v1/education/lesson/{category}` returns the contextual lesson; `es.education.lesson.trigger` consumer fans out lessons after escalated evaluations
+
+### 5.5 Shared Packages
+
+- **`pkg/httpclient/`**: HTTP/2 pooled client with retry, circuit breaker, and per-call timeout. Shared by the VirusTotal URL scanner, the encoder client (Tier 1), the SLM client (Tier 2), and tenant provider clients.
+- **`pkg/storage/postgres/`**: pgx-based PostgreSQL connection helper with structured `Config` and `Open` / `Close` / `Ping` / `Driver` accessors.
+- **`pkg/storage/redis/`**: Redis pipeline wrapper, scan / prefix helpers, and JSON serialization helpers used by the `internal/service/cache/` AI + Rspamd caches and the action-token cache.
+- **`pkg/storage/s3/`**: AWS S3 client wrapper for raw-body offload (optional).
+- **`pkg/events/`**: Bus factory that selects between `pkg/events/nats/` (default) and `pkg/events/redis/` based on the `EVENT_BUS` config flag.
+- **`internal/translation/banners/`**: Banner i18n bundles re-exported from `internal/service/action/catalogs/` so other domains can reuse the same wording.
 
 ## 6. Infrastructure
 
 ### 6.1 Kubernetes Deployment
+
+SN360-ES deploys as a **single Deployment** running the `sn360-es`
+binary; there is no per-domain Deployment object. Scaling is done by
+increasing the replica count on this Deployment — NATS consumer groups
+take care of work distribution across replicas. Periodic workers
+(relationship aggregation, cleanup, education scheduler) elect a
+leader via a Redis lock so only one replica runs them at a time.
 
 - **Platform**: AWS EKS
 - **GitOps**: ArgoCD with auto-sync
 - **Environments**: dev → qa → uat → prod (namespace isolation)
 - **Secrets**: AWS Secrets Manager via CSI Driver
 - **Encryption**: AWS KMS for tenant data keys
-- **NATS**: Deployed as StatefulSet with persistent volumes (3-node cluster)
-- **Encoder Model**: Deployed as GPU-enabled Deployment (or CPU with HPA)
+- **NATS**: Deployed as StatefulSet with persistent volumes (3-node cluster), pulled in as a Helm subchart of `deployments/helm/sn360-es/`
+- **Encoder Model**: Deployed as GPU-enabled Deployment (or CPU with HPA) from `deployments/encoder/`
+- **Tier 2 SLM**: Deployed from `deployments/llm/` (Ternary-Bonsai-8B)
 
 ### 6.2 Observability
 
-- **Logging**: Structured JSON via `slog`, PII-sanitized through `pkg/privacy/`.
+- **Logging**: Structured JSON via `slog`, PII-sanitized through `internal/middleware/log_sanitizer.go`.
 - **Tracing**: OpenTelemetry W3C Trace Context (HTTP + NATS propagation) from `pkg/telemetry/tracer.go`.
 - **Metrics**: Prometheus counters / histograms registered in `pkg/telemetry/metrics.go` (namespace `sn360`, subsystem `es`). The metrics handler is exposed at `GET /metrics` from `cmd/sn360-es/main.go`. A `ServiceMonitor` ships in the Helm chart for scrape config.
 - **Health probes**: `GET /healthz` (liveness — always 200) and `GET /readyz` (readiness — runs NATS / Redis / PG probes with a 2 s timeout) via `internal/handler/health.go`. Wired into the Helm chart's `livenessProbe` / `readinessProbe`.
@@ -380,9 +415,9 @@ Email arrives → Fetch via API
 
 | Component | Strategy |
 |---|---|
-| **Ingestion** | HPA based on NATS consumer lag |
-| **Evaluation** | HPA based on NATS pending messages + GPU utilization |
+| **`sn360-es` Deployment** | HPA based on NATS consumer lag + CPU |
 | **Encoder Model** | HPA based on inference queue depth |
+| **Tier 2 SLM** | HPA based on inference queue depth |
 | **NATS** | 3-node Raft cluster, horizontal scaling via additional routes |
 | **Redis** | Cluster mode for cache, Sentinel for HA |
 | **PostgreSQL** | Read replicas for management queries, primary for writes |
@@ -400,8 +435,8 @@ With NATS JetStream handling all event streaming, Redis serves exclusively as:
 | Label configs | `tenant:{name}:labels` | 8h |
 | Relationship stats | `tenant:{name}:relationship:{hash_sender}:{hash_receiver}` | 8h |
 | High-volume sender tracking | `tenant:{name}:high_volume_sender:{hash}` | Configurable |
-| AI result cache (new) | `ai_cache:{content_fingerprint}` | 1h |
-| Rspamd result cache (new) | `rspamd_cache:{raw_fingerprint}` | 30m |
+| AI result cache | `ai_cache:{content_fingerprint}` | 1h |
+| Rspamd result cache | `rspamd_cache:{raw_fingerprint}` | 30m |
 | Provider label ID cache | `{provider}:{tenant}:{email}:label:{tier}` | 24h |
 | Banner action token cache | `banner:token:{token_id}` | 7d |
 
@@ -412,7 +447,7 @@ and allows using a smaller, cheaper Redis instance.
 
 This section is the architectural complement to `PROPOSAL.md` Section 6
 ("End-User Label & Banner UX"). It defines how the tiered banner + native
-label system is implemented across services.
+label system is implemented across packages.
 
 ### 8.1 Action Pipeline
 
@@ -444,37 +479,47 @@ in parallel per result:
 
 ### 8.2 Tier Decider
 
+Tier identifiers are typed `string` (not `int iota`) so they remain
+stable across services, persisted records, and the NATS payload. The
+canonical definitions live in
+[`internal/constant/tiers.go`](../constant/tiers.go):
+
 ```go
-type Tier int
+type Tier string
 
 const (
-    TierTrusted Tier = iota
-    TierInformational
-    TierCaution
-    TierWarning
-    TierHighRisk
-    TierBlocked
+    TierBlocked       Tier = "Blocked"
+    TierHighRisk      Tier = "HighRisk"
+    TierWarning       Tier = "Warning"
+    TierCaution       Tier = "Caution"
+    TierInformational Tier = "Informational"
+    TierTrusted       Tier = "Trusted"
 )
 
 // DecideTier maps a normalized score (0-100) and risk signals to a tier.
 // Thresholds are loaded per-tenant from the score engine cache.
-func (d *Decider) DecideTier(score int, signals RiskSignals, cfg TierConfig) Tier {
+func (d *Decider) DecideTier(score int, signals RiskSignals, cfg TierConfig) constant.Tier {
     switch {
     case score >= cfg.BlockedThreshold:    // default 85
-        return TierBlocked
+        return constant.TierBlocked
     case score >= cfg.HighRiskThreshold:   // default 70
-        return TierHighRisk
+        return constant.TierHighRisk
     case score >= cfg.WarningThreshold:    // default 50
-        return TierWarning
+        return constant.TierWarning
     case score >= cfg.CautionThreshold:    // default 30
-        return TierCaution
-    case score >= cfg.InfoThreshold || signals.IsExternal && signals.IsFirstContact:
-        return TierInformational
+        return constant.TierCaution
+    case score >= cfg.InfoThreshold || (signals.IsExternal && signals.IsFirstContact):
+        return constant.TierInformational
     default:
-        return TierTrusted
+        return constant.TierTrusted
     }
 }
 ```
+
+`constant.Tier` carries the helper methods used across the action
+pipeline: `Severity()` (ordinal 0–5), `IsBlocking()`,
+`AllowsURLRewrite()`, `AllowsMarkSafe()`, and `LabelName()` (e.g.
+`"SN360 / HighRisk"`).
 
 Per-tenant threshold overrides live in Redis at
 `tenant:{name}:score_engine:tier_thresholds`.
@@ -489,9 +534,9 @@ Per-tenant threshold overrides live in Redis at
 
 ```go
 type BannerInput struct {
-    Tier              Tier
-    PrimaryCategory   Category
-    SecondaryCategories []Category
+    Tier              constant.Tier
+    PrimaryCategory   constant.Category
+    SecondaryCategories []constant.Category
     ReasonCodes       []ReasonCode  // fixed enum, not free text
     SenderAuth        AuthVerdict   // Verified / Unverified / Failed
     Locale            string        // e.g., "en-US", "vi-VN"
@@ -526,13 +571,13 @@ on first use and cached.
 
 ### 8.5 URL Rewriting
 
-- **Trigger**: Only `TierHighRisk` and `TierBlocked`
+- **Trigger**: Only `constant.TierHighRisk` and `constant.TierBlocked`
 - **Mechanism**: Replace `href` attributes in HTML body with
   `https://l.sn360.io/{token}` where `token` is a signed payload containing
   `tenant_id`, `pseudonymized_message_id`, `original_url_hash`, `expires_at`.
-- **Interstitial**: A lightweight stateless service redeems the token,
-  re-checks the URL against threat intel, and either redirects or shows a
-  blocked page.
+- **Interstitial**: A lightweight stateless handler (`/l/{token}` on the
+  same `sn360-es` binary) redeems the token, re-checks the URL against
+  threat intel, and either redirects or shows a blocked page.
 - **Storage**: URL pre-image is stored encrypted in Redis with a short TTL
   (default 30 days) keyed by `original_url_hash`. The token itself never
   contains the URL.
@@ -558,7 +603,7 @@ POST /v1/banner/action
 
 - Token is a short-lived signed JWT (HS256 with per-tenant secret).
 - Token contains only opaque IDs — no email content, no PII.
-- Click is recorded in the management service via NATS:
+- Click is recorded in the management domain via NATS:
   `es.action.feedback.{action_type}`.
 
 ### 8.8 Pre-Send / Pre-Open Add-In
@@ -569,7 +614,7 @@ Optional Outlook (Office Add-in) and Gmail (Add-on) modules:
   tenant's admin console during onboarding (AI Onboarding Agent automates
   the install).
 - **Communication**: Add-in calls `POST /v1/predict/recipient` and
-  `POST /v1/predict/open` against the Evaluation service.
+  `POST /v1/predict/open` against the same `sn360-es` binary.
 - **Latency budget**: < 300ms p95 (otherwise the prompt is skipped).
 - **Privacy**: Add-in sends only pseudonymized recipient hashes for the
   pre-send check; full content is sent only if the user confirms a "deep
@@ -599,7 +644,7 @@ All metrics are registered in `pkg/telemetry/metrics.go` under namespace `sn360`
 | `sn360_es_tier0_bypass_total{reason}` | Counter | Tier 0 short-circuit reasons |
 | `sn360_es_tier1_verdict_total{verdict}` | Counter | Tier 1 pass / flag / escalate distribution |
 | `sn360_es_tier1_latency_seconds` | Histogram | Tier 1 encoder latency |
-| `sn360_es_tier2_outcome_total{outcome}` | Counter | Tier 2 LLM categorical outcome |
+| `sn360_es_tier2_outcome_total{outcome}` | Counter | Tier 2 SLM categorical outcome |
 | `sn360_es_rspamd_latency_seconds` | Histogram | Rspamd round-trip latency |
 | `sn360_es_evaluate_latency_seconds{tier}` | Histogram | End-to-end evaluator latency |
 | `sn360_es_education_simulation_sent_total` | Counter | Education simulation send rate |

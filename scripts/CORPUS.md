@@ -43,8 +43,8 @@ either; the corpus is reproducible only against this pipeline.
   image.
 
 No other LLM provider, runtime, or upstream `ggerganov/llama.cpp`
-build is supported by this corpus. Patches that reference Claude,
-DeepSeek, OpenAI, etc. will be rejected.
+build is supported by this corpus. Alternative model providers are
+not supported.
 
 ## Pipeline mapping
 

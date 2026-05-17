@@ -1,24 +1,26 @@
-# SN360-ES v2 — Proposal: Tiered ML Pipeline, Privacy Architecture & Zero-Admin Platform
+# SN360-ES — Design Document: Tiered ML Pipeline, Privacy Architecture & Zero-Admin Platform
 
 ## Executive Summary
 
-SN360-ES v1 (NGES) delivers a functional email security pipeline but sends every
-email through a full LLM call, uses Redis Streams without durability guarantees,
-stores email metadata without privacy controls, exposes a single generic "FYI"
-label to end users, and requires manual admin for configuration and monitoring.
+SN360-ES is a **privacy-first, zero-admin, cost-effective email security
+product** for SMEs. It is delivered as a single `sn360-es` Go binary
+powered by a 3-tier ML pipeline, a NATS JetStream event bus, AI agent
+operation, a severity-tiered banner and native-label end-user UX, and an
+integrated email education service.
 
-This proposal transforms the platform into a **privacy-first, zero-admin, cost-
-effective email security product** for SMEs — powered by a 3-tier ML pipeline,
-NATS JetStream event bus, AI agent operation, a competitor-grade tiered banner
-and native-label UX, and integrated email education.
+This document describes the design of the system and is updated to
+reflect what is actually built. Anything labelled "Out of scope" or
+called out in the project status matrix in
+[`README.md`](../../README.md) is not yet wired into the running
+binary.
 
 ---
 
-## 1. NATS JetStream — Replacing Redis Streams
+## 1. NATS JetStream — The Event Bus
 
-### Why Replace Redis Streams
+### Why NATS JetStream
 
-| Concern | Redis Streams (current) | NATS JetStream (proposed) |
+| Concern | Redis Streams (fallback) | NATS JetStream (primary) |
 |---|---|---|
 | **Durability** | In-memory; data lost on Redis restart without AOF | Persistent file-based storage with configurable retention |
 | **Dead-letter queue** | Manual implementation required | Built-in max delivery count → DLQ subject |
@@ -28,6 +30,11 @@ and native-label UX, and integrated email education.
 | **Multi-tenancy** | Flat key namespace | Subject hierarchy (`es.{tenant}.evaluate.request`) |
 | **Ops overhead** | Redis cluster for HA | NATS cluster with built-in Raft consensus |
 | **Cost** | Redis memory = expensive at scale | NATS file storage = cheap, memory for hot path only |
+
+Both buses share the same `events.EventService` interface
+(`pkg/events/`). NATS JetStream is the production transport; Redis
+Streams remains as a fallback for environments without NATS. Selection
+is via `EVENT_BUS=nats|redis`.
 
 ### JetStream Subject Design
 
@@ -112,14 +119,16 @@ consumers:
     deliver_group: "ingestion-svc"
 ```
 
-### Migration Path
+### Implementation Notes
 
-1. Implement `pkg/events/nats/` with same `EventService` interface as current `pkg/events/redis/`
-2. Feature-flag: `EVENT_BUS_TYPE=nats|redis` (default `redis` during transition)
-3. Run dual-write during migration window
-4. Cut over service-by-service
-5. Remove Redis Streams code after full migration
-6. Redis remains for caching (score weights, classifications, vendor lists, relationships, poller locks)
+- `pkg/events/` provides a `Factory` selecting between the NATS
+  JetStream client (`pkg/events/nats/`) and the Redis Streams client
+  (`pkg/events/redis/`) based on `EVENT_BUS`.
+- Both implementations satisfy the same `EventService` interface so
+  consumers and publishers in `cmd/sn360-es/main.go` are bus-agnostic.
+- Redis remains in the deployment for caching (score weights,
+  classifications, vendor lists, relationships, poller locks) regardless
+  of the event-bus selection.
 
 ### Micro-Batching with JetStream
 
@@ -133,7 +142,7 @@ msgs, err := sub.Fetch(50, nats.MaxWait(200*time.Millisecond))
 This enables:
 - Batch Tier 0 classification (rule-based, CPU-only)
 - Batch Tier 1 encoder inference (GPU batch = higher throughput)
-- Batch Tier 2 LLM calls (batch API endpoints)
+- Batch Tier 2 SLM calls (batch API endpoints)
 - Single Redis pipeline for loading all tenant configs per batch
 
 ---
@@ -245,7 +254,8 @@ All structured logging passes through a sanitizer that:
 - Masks tenant credentials
 - Preserves correlation IDs, timestamps, and error codes
 
-Current Rspamd already has `subject_privacy` with Blake2 hashing — extend this pattern platform-wide.
+Rspamd has `subject_privacy` with Blake2 hashing; this pattern is
+applied platform-wide via `internal/middleware/log_sanitizer.go`.
 
 ### Compliance Matrix
 
@@ -264,25 +274,26 @@ Current Rspamd already has `subject_privacy` with Blake2 hashing — extend this
 
 ### Tier 0 — Classification Gate (cost: ~$0, latency: <1ms)
 
-Uses existing `buildRiskSignals()` output as **gates** instead of just metadata:
+Uses `buildRiskSignals()` output as **gates** instead of just metadata:
 
 | Signal | Action | Estimated Bypass |
 |---|---|---|
 | `IsInternal` | Skip all ML → Score 0 + "Internal" trusted chip | 30-40% of total |
 | `IsFromVendor` | Skip all ML → Score 0 + "Vendor" trusted chip | 10-15% |
 | `IsHighVolumeSender` | Skip ML → Rspamd-only score | 10-15% |
-| `IsRecurringService` (new) | Skip ML → Score 0 (noreply@, mailer-daemon) | 5-10% |
-| `RelationshipCategory == Partner/Customer` (new) | Lower Tier 1 threshold | N/A (threshold adjust) |
-| `RelationshipCategory == FirstTimeExternal` (new) | Always escalate to Tier 1 | N/A (force escalation) |
+| `IsRecurringService` | Skip ML → Score 0 (noreply@, mailer-daemon) | 5-10% |
+| `RelationshipCategory == Partner/Customer` | Lower Tier 1 threshold | N/A (threshold adjust) |
+| `RelationshipCategory == FirstTimeExternal` | Always escalate to Tier 1 | N/A (force escalation) |
 
 **Total Tier 0 bypass: 60-70% of emails never touch ML.**
 
-Implementation: Early return in `processEvaluate()` before launching goroutines.
-Config flags: `TIER0_SKIP_INTERNAL`, `TIER0_SKIP_VENDOR`, `TIER0_SKIP_RECURRING`.
+Implementation: early return in `internal/service/evaluate/evaluator.go`
+before launching ML goroutines. Config flags: `TIER0_SKIP_INTERNAL`,
+`TIER0_SKIP_VENDOR`, `TIER0_SKIP_RECURRING`.
 
 ### Tier 1 — Encoder-Only Model (cost: ~$0.00005, latency: 50-200ms)
 
-Self-hosted **XLM-RoBERTa-base** or **mDeBERTa-v3** on K8s:
+Self-hosted **XLM-RoBERTa-base** on Kubernetes:
 
 - **Multilingual native**: 100+ languages, handles mixed-language (e.g., English subject + Thai body)
 - **Fine-tuned** on multilingual phishing/BEC/scam datasets
@@ -290,33 +301,47 @@ Self-hosted **XLM-RoBERTa-base** or **mDeBERTa-v3** on K8s:
 - **Batch inference**: Processes up to 64 emails per GPU batch
 - **CPU fallback**: ~200ms on CPU, ~20ms on GPU
 
+The deployment manifests for the encoder service live in
+[`deployments/encoder/`](../../deployments/encoder/). The Go client is
+`internal/service/tier1/encoder.go`.
+
 Thresholds (configurable per tenant via score engine):
 - Score < 20 → **PASS** (clear safe)
 - Score 20-60 → **ESCALATE** to Tier 2 (ambiguous)
-- Score > 60 → **FLAG** (high-confidence threat, skip LLM)
+- Score > 60 → **FLAG** (high-confidence threat, skip Tier 2)
 
 **Tier 2 escalation rate: 10-20% of Tier 1 input.**
 
-### Tier 2 — Full LLM (cost: ~$0.001-0.005, latency: 2-5s)
+### Tier 2 — Ternary-Bonsai-8B (cost: ~$0.001-0.005, latency: 2-5s)
 
-Current AI service, invoked only for ambiguous emails:
-- Full contextual analysis with aspect-level reasoning
-- Relationship awareness (sender history, timing anomaly)
-- Multilingual reasoning (language detected by Tier 1, passed as hint)
-- Actionable recommendations in user's language
+Tier 2 is served by a **self-hosted Ternary-Bonsai-8B** small language
+model (SLM), deployed from
+[`deployments/llm/`](../../deployments/llm/). It is invoked only for
+emails Tier 1 marks as ambiguous, and:
+
+- Performs full contextual analysis with aspect-level reasoning
+- Receives relationship awareness (sender history, timing anomaly) as
+  structured context
+- Receives the language hint detected by Tier 1
+- Returns actionable recommendations in the user's language
+
+Alternative model providers are not supported; the corpus and accuracy
+baselines are pinned to this specific deployment for reproducibility.
+See [`scripts/CORPUS.md`](../../scripts/CORPUS.md) and
+[`scripts/corpus_generator/README.md`](../../scripts/corpus_generator/README.md).
 
 ### Graceful Degradation
 
-| Failure | Current Behavior | Proposed Behavior |
-|---|---|---|
-| AI/LLM down | **Total failure** (Rspamd discarded) | Tier 0 + Tier 1 + Rspamd continue; LLM results marked "pending" |
-| Tier 1 encoder down | N/A | All external emails escalate to Tier 2 (cost spike but no outage) |
-| Rspamd down | Silent skip | Log warning; ML tiers continue independently |
-| NATS down | N/A (Redis currently) | Messages buffered in NATS file store; auto-recovery on reconnect |
+| Failure | Behavior |
+|---|---|
+| Tier 2 SLM down | Tier 0 + Tier 1 + Rspamd continue; Tier 2 results marked "pending" |
+| Tier 1 encoder down | All external emails escalate to Tier 2 (cost spike, no outage) |
+| Rspamd down | Log warning; ML tiers continue independently |
+| NATS down | Messages buffered in NATS file store; auto-recovery on reconnect; Redis Streams fallback available via config |
 
 ### Combined Impact
 
-| Metric | v1 (Current) | v2 (Proposed) |
+| Metric | Conventional LLM-per-email | SN360-ES tiered pipeline |
 |---|---|---|
 | LLM calls/day (100 tenants × 5K emails) | ~500,000 | ~15,000-50,000 |
 | Avg latency/email (p95) | 2-20s | 50-200ms |
@@ -397,9 +422,9 @@ graph LR
 
 ### Philosophy
 
-Security awareness training fails because it's boring, infrequent, and disconnected
-from real threats. SN360-ES embeds education **inside the email experience** — teaching
-at the moment of relevance.
+Security awareness training fails when it is boring, infrequent, and
+disconnected from real threats. SN360-ES embeds education **inside the
+email experience** — teaching at the moment of relevance.
 
 ### Education Components
 
@@ -492,53 +517,34 @@ graph TD
 
 ---
 
-## 6. End-User Label & Banner UX — Competitor Research & Redesign
+## 6. End-User Label & Banner UX
 
-### Why the v1 "FYI Label" Is Not Enough
+### Design Goals
 
-v1 ships a single generic `FYI` label per tenant — flat, monochrome, and devoid of
-context. Users cannot tell at a glance whether an email is mildly external or an
-active phishing attempt. Top-tier competitors all converged years ago on a richer
-model: a **severity-tiered inline banner**, paired with a **native provider label**
-(color-coded), specific **category names** instead of generic "suspicious", and
-**one-click actions**. SN360-ES v2 adopts and improves on these patterns.
+Every email is decorated with two end-user signals:
+1. **Inline banner** — HTML, injected into the message body, severity-themed
+2. **Native provider label** — Gmail Label / Outlook Category, color-coded
 
-### Competitor Comparison
+Each signal carries a **specific category** (not a generic "suspicious"
+tag), supports **one-click actions** (report phishing, mark safe), and
+is **multilingual** based on the recipient's locale.
 
-| Vendor | Inline Banner | Native Label / Tag | Severity Levels | One-Click Report | Categories Surface to User | Pre-Send Warning | URL Rewriting |
-|---|---|---|---|---|---|---|---|
-| **Microsoft Defender for O365** | First-contact tip + impersonation banner | "External" tag + safety tips | 2-3 (Tip / Warn / Block) | Built-in "Report message" add-in | Limited (External, First contact, Impersonation) | No (out of box) | Yes (Safe Links) |
-| **Google Workspace** | External recipient warning bar | "External" label (gray) | 2 (Notice / Warn) | "Report phishing" menu | Limited (External, Encrypted notices) | Pre-send to external (Workspace add-on) | No |
-| **Material Security** | Inline "Security Card" overlay | Gmail label per category | 3-4 | Yes (inline) | Yes (Phishing, BEC, Account Takeover, External) | No | Optional (selective redaction instead) |
-| **Avanan / Check Point Harmony** | Color-coded severity banner | Gmail label + Outlook category | 3 (Suspected / Phishing / Malicious) | Yes (Restore / Report) | Yes (Phishing, Malware, Spam, etc.) | No | Yes (selective) |
-| **Mimecast** | Header banner + footer disclaimer | "External" header tag | 3 (Notice / Caution / Hold) | "Report Phishing" add-in | Yes (Impersonation, URL, Attachment) | Yes (Outlook add-in) | Yes (URL Rewrite + Browser Isolation) |
-| **Proofpoint Essentials** | "Email Warning Tag" colored banner | Subject-line prefix + label | 4 (Info / Caution / Warn / Danger) | "Report Suspicious" button | Yes (Impostor, Suspicious, Newsletter, External) | No (separate product) | Yes (URL Defense) |
-| **IRONSCALES** | Themis banner | Gmail label + Outlook category | 3 (Spam / Suspicious / Phishing) | Yes (Themis bar, one-click) | Yes (Phishing, Spoofing, Impersonation) | Yes (Themis add-in) | Optional |
-| **INKY** | "INKY Banner" with severity stripe | Gmail label per category | 3 (Neutral / Caution / Danger) | One-click "Mark as Phishing" | Yes (Lookalike, Stylometry, Brand Impersonation, External, etc.) | No | Yes |
-| **Vade Secure (Hornetsecurity)** | Inline banner with category | Gmail label / Outlook category | 4 (Newsletter / Commercial / Suspicious / Phishing) | "Block Sender" / "Report" inline | Yes (granular categories) | No | Yes |
-| **Tessian (Proofpoint)** | Real-time pop-up modal | None (modal-based) | 3 (Inform / Warn / Block) | Modal CTA + reporting | Yes (Misdirected, Impersonation, Anomaly) | **Yes — strongest** | No |
-| **Abnormal Security** | Minimal / silent removal | Inbox cleaning (no end-user banner by default) | Admin tiers only | Admin console | N/A to end-user | No | No (rewrite is optional) |
-| **Cofense** | Reporter add-in (no inline banner) | None | N/A | **Strongest reporter UX** | N/A | No | No |
-| **SN360-ES v1** | Single static banner | Single "FYI" label | 1 (FYI only) | No | None (generic FYI) | No | No |
+### Design Influences
 
-### What SN360-ES v2 Adopts
+The design draws on patterns that have become industry-standard for
+post-delivery email security: severity-tiered colored banners, native
+provider labels per severity, specific category names instead of
+generic "suspicious", one-click "Report Phishing" actions, sender-auth
+chips, URL rewriting at high severity, pre-send / pre-open warnings via
+add-ins, and quarantine + release flows. SN360-ES extends these
+patterns with two design choices that are particular to this product:
 
-| Pattern | Source | Adoption |
-|---|---|---|
-| Severity-tiered colored banner | INKY, Proofpoint, Avanan | **Yes** — 6 tiers (Blocked / High / Warning / Caution / Info / Trusted) |
-| Native provider labels per severity | Avanan, Material, INKY | **Yes** — Gmail labels + Outlook categories, color-mapped |
-| Specific category in banner copy | INKY, Material, Vade | **Yes** — 16 categories (LIKELY_PHISHING, BEC_IMPERSONATION, …) |
-| One-click "Report Phishing" | IRONSCALES, Cofense, Defender | **Yes** — inline button + Outlook/Gmail add-in |
-| "Mark as Safe" / "Trust Sender" | Vade, Avanan | **Yes** — at Warning tier and below |
-| Sender-authentication chip | Defender, INKY | **Yes** — SPF/DKIM/DMARC verdict pill |
-| URL rewriting at high severity | Mimecast, Proofpoint, Defender | **Yes** — High Risk + Blocked only |
-| Pre-send warning | Tessian, Mimecast | **Yes (optional add-in)** — Tessian-style |
-| Pre-open confirm on Warning+ | Mimecast, Material | **Yes (optional add-in)** |
-| Quarantine + release flow | All enterprise vendors | **Yes** — AI-agent or admin release |
-| Subject-line tag | Proofpoint, Mimecast | **Optional** — `[SN360: WARN]` at Warning+ only, configurable |
-| Multilingual banners | Vade, INKY | **Yes** — i18n per user locale |
-| In-banner micro-lesson | (novel — competitor gap) | **Yes** — Education service integration |
-| Privacy-preserving banner copy | (novel — competitor gap) | **Yes** — no email content quoted in stored reasons |
+- **In-banner micro-lessons** sourced from the Education service, so
+  the same UI surface that warns about a threat also teaches the
+  recipient about it.
+- **Privacy-preserving banner copy** that maps reasons to a fixed
+  `reason_code` enum so no email content ever appears in stored
+  detection reasons, logs, or audit trails.
 
 ### Severity Tiers — Authoritative Spec
 
@@ -552,6 +558,9 @@ model: a **severity-tiered inline banner**, paired with a **native provider labe
 | **Trusted** | 0-14 | Green chip | "Verified internal / trusted vendor." | `SN360 / Trusted` (green) | Optional positive chip |
 
 Score → tier mapping is configurable per tenant via the score engine.
+The actual tier values live in
+[`internal/constant/tiers.go`](../constant/tiers.go) and are typed as
+`Tier string` (not `int iota`).
 
 ### Category Vocabulary
 
@@ -576,6 +585,9 @@ include up to two secondary categories:
 | `INTERNAL_TRUSTED` | Same tenant domain | "From your organization" |
 | `VENDOR_TRUSTED` | Approved vendor list | "From a trusted vendor" |
 | `NEWSLETTER` | Bulk sender / list-unsubscribe present | "Newsletter / mailing list" |
+
+The canonical category constants are defined in
+[`internal/constant/categories.go`](../constant/categories.go).
 
 ### Banner Anatomy
 
@@ -651,7 +663,7 @@ sequenceDiagram
 
 ### Pre-Send & Pre-Open Warnings (Optional Add-In)
 
-Outlook and Gmail add-ins (Manifest v3) provide Tessian-style real-time UX:
+Outlook and Gmail add-ins (Manifest v3) provide real-time UX:
 
 - **Pre-send**: Detects lookalike recipient domains, unusual recipients
   (e.g., personal address from a Finance user), and external recipients on
@@ -659,6 +671,8 @@ Outlook and Gmail add-ins (Manifest v3) provide Tessian-style real-time UX:
   override + reason capture.
 - **Pre-open**: At `Warning+` tier, shows a modal before the body renders —
   useful on mobile clients that auto-render HTML.
+
+The add-in skeletons live in [`deployments/addins/`](../../deployments/addins/).
 
 ### Accessibility
 
@@ -693,7 +707,7 @@ Outlook and Gmail add-ins (Manifest v3) provide Tessian-style real-time UX:
 | **Typical send times** | Message timestamps | Detect timing anomalies |
 | **Vendor auto-discovery** | Analyze 30-day email history | Auto-populate vendor list from recurring external senders |
 
-### Expanded Relationship Categories
+### Relationship Categories
 
 | Category | Detection | Risk | Action |
 |---|---|---|---|
@@ -719,46 +733,46 @@ Employee Vulnerability Score = f(
 
 ---
 
-## 8. Comprehensive Optimization Techniques
+## 8. Optimisation Techniques
 
-### From Top Competitors
+### Detection-Pipeline Optimisations
 
-| Technique | Source | SN360-ES Implementation |
-|---|---|---|
-| **Behavioral baselining** | Abnormal Security | Communication history + send-time patterns → anomaly score |
-| **Supply chain detection** | Abnormal Security | Detect vendor account compromise via relationship + content anomaly |
-| **VIP impersonation** | Abnormal Security | Detect emails impersonating C-suite using org graph |
-| **Message hold/clawback** | Material Security | Add quarantine action via transport rules (GWS routing / O365 transport) |
-| **Crowdsourced intel** | IRONSCALES | Aggregate anonymized threat signals across tenants (privacy-safe) |
-| **User-reported phishing** | IRONSCALES, Cofense | One-click "Report Phish" button via Gmail add-on / Outlook add-in |
-| **SOC-lite dashboard** | All competitors | AI-generated threat summary dashboard (auto-produced, no manual setup) |
-| **Inline pre-delivery** | Avanan/Check Point | Investigate O365 journaling rules / GWS content compliance rules |
-| **Selective URL rewrite** | Mimecast, Proofpoint, Defender | Rewrite only at High Risk + Blocked tiers |
-| **Pre-send warnings** | Tessian, Mimecast | Outlook/Gmail add-in detects risky recipients |
-| **Severity-tiered banner** | INKY, Proofpoint, Avanan | 6-tier banner with category-specific copy |
-| **Native provider labels** | Avanan, Material, INKY | Gmail labels + Outlook categories color-mapped to tier |
+| Technique | SN360-ES Implementation |
+|---|---|
+| **Behavioral baselining** | Communication history + send-time patterns → anomaly score |
+| **Supply-chain detection** | Detect vendor account compromise via relationship + content anomaly |
+| **VIP impersonation** | Detect emails impersonating C-suite using org graph |
+| **Message hold / clawback** | Quarantine action via transport rules (GWS routing / O365 transport) |
+| **Crowdsourced intel** | Aggregate anonymized threat signals across tenants (privacy-safe) |
+| **User-reported phishing** | One-click "Report Phish" button via Gmail add-on / Outlook add-in |
+| **SOC-lite dashboard** | AI-generated threat summary dashboard (auto-produced, no manual setup) |
+| **Inline pre-delivery** | O365 journaling rules / GWS content compliance rules |
+| **Selective URL rewrite** | Rewrite only at High Risk + Blocked tiers |
+| **Pre-send warnings** | Outlook/Gmail add-in detects risky recipients |
+| **Severity-tiered banner** | 6-tier banner with category-specific copy |
+| **Native provider labels** | Gmail labels + Outlook categories color-mapped to tier |
 
-### Infrastructure Optimizations
+### Infrastructure Optimisations
 
-| Area | Current | Proposed |
-|---|---|---|
-| **Event bus** | Redis Streams (no DLQ, no dedup) | NATS JetStream (DLQ, dedup, replay, file storage) |
-| **Graceful degradation** | AI failure = total failure | Fallback to Tier 0 + Tier 1 + Rspamd |
-| **Micro-batching** | 1 email = 1 API call | Batch fetch from NATS, batch Tier 1 inference, batch LLM API |
-| **AI result caching** | None | `sha256(normalized_body + sender_domain)` → TTL cache |
-| **Rspamd result caching** | Rspamd internal only | App-level `sha256(raw_mail)` → 30min cache |
-| **Redis pipelining** | Individual commands | Pipeline batch reads per evaluation batch |
-| **Connection pooling** | New HTTP client per call | Persistent HTTP/2 pools to AI + Rspamd |
-| **URL pre-scanning** | URLs sent as metadata to LLM | Parallel scan against VirusTotal, URLScan.io, Google Safe Browsing |
-| **Attachment pre-screen** | ShieldNet only (disabled) | YARA + ClamAV lightweight scan → sandbox only if suspicious |
-| **Distributed tracing** | Not implemented | OpenTelemetry W3C Trace Context end-to-end |
+| Area | Implementation |
+|---|---|
+| **Event bus** | NATS JetStream (DLQ, dedup, replay, file storage); Redis Streams fallback |
+| **Graceful degradation** | Tier 0 + Tier 1 + Rspamd continue even on Tier 2 outage |
+| **Micro-batching** | Batch fetch from NATS, batch Tier 1 inference, batch Tier 2 SLM |
+| **AI result caching** | `sha256(normalized_body + sender_domain)` → TTL cache |
+| **Rspamd result caching** | App-level `sha256(raw_mail)` → 30min cache |
+| **Redis pipelining** | Pipeline batch reads per evaluation batch |
+| **Connection pooling** | Persistent HTTP/2 pools to encoder and SLM |
+| **URL pre-scanning** | Parallel scan against VirusTotal, URLScan.io, Google Safe Browsing |
+| **Attachment pre-screen** | YARA + ClamAV lightweight scan → sandbox only if suspicious |
+| **Distributed tracing** | OpenTelemetry W3C Trace Context end-to-end |
 
 ### Cost Impact Summary
 
 | Technique | Estimated Savings |
 |---|---|
 | Tier 0 bypass (internal + vendor + newsletter) | 60-70% reduction in ML calls |
-| Tier 1 encoder for clear cases | 80-90% reduction in LLM calls |
+| Tier 1 encoder for clear cases | 80-90% reduction in Tier 2 calls |
 | AI result caching (campaign dedup) | 10-20% additional |
 | Micro-batching (batch inference) | 30-50% lower per-unit cost |
 | Self-hosted encoder model | Fixed cost vs per-call |
@@ -767,15 +781,19 @@ Employee Vulnerability Score = f(
 
 ---
 
-## 9. Implementation Phases
+## 9. Development Phases
 
-| Phase | Scope | Business Impact |
-|---|---|---|
-| **Phase 1** | Tier 0 gates in `prefilter.go` + graceful degradation + NATS JetStream migration | 60-70% cost reduction, improved reliability |
-| **Phase 2** | Privacy layer (`pkg/privacy/`), PII stripping, per-tenant encryption | Compliance readiness (GDPR, SOC 2) |
-| **Phase 3** | Tier 1 encoder model deployment + micro-batching | 90%+ total cost reduction, <200ms p95 |
-| **Phase 4** | Zero-admin AI agents (onboarding, tuning, support) | SME-ready, no IT required |
-| **Phase 5** | Tiered banner + native label UX (Section 6) + URL rewriting | Competitor parity on end-user UX |
-| **Phase 6** | Email education platform (simulations, micro-lessons, resilience scoring) | Complete product for SME market |
-| **Phase 7** | Enriched onboarding (org graph, vulnerability scoring, expanded relationships) | Superior detection accuracy |
-| **Phase 8** | Pre-send / pre-open add-ins + admin dashboard + quarantine + user-reported phishing | Tessian-style UX + feature parity |
+| Phase | Scope |
+|---|---|
+| **Phase 1** | Tier 0 gates + graceful degradation + NATS JetStream |
+| **Phase 2** | Privacy layer (`pkg/privacy/`), PII stripping, per-tenant encryption |
+| **Phase 3** | Tier 1 encoder client + micro-batching |
+| **Phase 4** | Zero-admin AI agents (onboarding, tuning, support) |
+| **Phase 5** | Tiered banner + native label UX (Section 6) + URL rewriting |
+| **Phase 6** | Email education platform (simulations, micro-lessons, resilience scoring) |
+| **Phase 7** | Enriched onboarding (org graph, vulnerability scoring, expanded relationships) |
+| **Phase 8** | Pre-send / pre-open add-ins + admin dashboard + quarantine + user-reported phishing |
+
+Detailed development history with code pointers is tracked in
+[`PHASES.md`](./PHASES.md); a per-task changelog is kept in
+[`PROGRESS.md`](./PROGRESS.md).
