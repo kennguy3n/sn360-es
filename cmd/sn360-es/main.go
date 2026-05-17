@@ -1110,12 +1110,25 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 	// `es.action.banner` subject. We publish the rendered HTML so the
 	// downstream injector does not have to know about templates.
 	if a.bannerRenderer != nil && res.Tier.Valid() && res.Tier != constant.TierTrusted {
+		// Banner locale comes from the operator-configured default
+		// (BANNER_DEFAULT_LOCALE). The HTTP banner-render path uses the
+		// same value; we deliberately re-use it here so verdicts
+		// reaching ingestion-action through the bus produce identical
+		// banner HTML to those rendered synchronously by the HTTP
+		// handler. Per-request locale overrides aren't surfaced on
+		// dto.EvaluateResult today; if they ever need to be, the
+		// override should land on the result type so both paths can
+		// honour it without diverging.
+		locale := a.cfg.Banner.DefaultLocale
+		if locale == "" {
+			locale = "en"
+		}
 		input := action.BannerInput{
 			Tier:        res.Tier,
 			Primary:     res.Primary,
 			Secondary:   res.Secondary,
 			ReasonCodes: res.ReasonCodes,
-			Locale:      "en",
+			Locale:      locale,
 		}
 		// ActionToken is required for tiers that allow Mark Safe; we
 		// only synthesise one when the JWT issuer is wired. The
