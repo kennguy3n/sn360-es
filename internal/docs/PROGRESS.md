@@ -88,6 +88,12 @@
 | **Distributed tracing (OTel)** | ✅ Done | Medium | Phase 8 |
 | **URL pre-scanning (VirusTotal)** | ✅ Done | Medium | Phase 8 |
 | **Attachment pre-screen (YARA/ClamAV)** | ✅ Done | Medium | Phase 8 |
+| **Labelled corpus generator (1 000+ emails, 16 categories, 6 tiers)** | ✅ Done | High | Benchmarks |
+| **Accuracy / precision / recall / F1 measurement suite** | ✅ Done | High | Benchmarks |
+| **Go microbenchmarks (evaluator / scorer / categorizer / gate / banner / simulation)** | ✅ Done | High | Benchmarks |
+| **Resource utilisation profiling (memory, latency percentiles, throughput)** | ✅ Done | Medium | Benchmarks |
+| **Latency distribution histogram (Prometheus buckets)** | ✅ Done | Medium | Benchmarks |
+| **Baseline benchmark artefacts committed (`benchmarks/*.{txt,md,json}`)** | ✅ Done | Medium | Benchmarks |
 
 ### Cross-Cutting / Infrastructure Tasks
 

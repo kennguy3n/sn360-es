@@ -1,0 +1,15 @@
+Resource Profile
+================
+Timestamp:        2026-05-17T03:43:14Z
+Corpus size:      10000
+Total duration:   96.879081ms
+Avg latency:      9.479µs
+p50 latency:      7.043µs
+p95 latency:      25.173µs
+p99 latency:      40.084µs
+max latency:      312.304µs
+Throughput:       103221.46 emails/sec
+Peak memory:      14.08 MB
+Total alloc:      30.30 MB
+GC pauses:        4 (max 0.238 ms)
+Peak goroutines:  2

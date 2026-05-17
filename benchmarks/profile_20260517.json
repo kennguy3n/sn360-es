@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-05-17T03:43:14.561476027Z",
+  "corpus_size": 10000,
+  "total_duration": 96879081,
+  "avg_latency": 9479,
+  "p50_latency": 7043,
+  "p95_latency": 25173,
+  "p99_latency": 40084,
+  "max_latency": 312304,
+  "throughput_eps": 103221.45809785293,
+  "peak_memory_mb": 14.078140258789062,
+  "total_allocs_mb": 30.303321838378906,
+  "gc_pauses": 4,
+  "gc_pause_max_ms": 0.238074,
+  "peak_goroutines": 2
+}

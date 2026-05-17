@@ -1,0 +1,17 @@
+=== RUN   TestAccuracy_FullPipeline
+    accuracy_test.go:61: evaluated 1000 emails in 19.950551ms
+    accuracy_test.go:63: accuracy: overall TP=713 FP=0 FN=14 TN=273 precision=1.0000 recall=0.9807 f1=0.9903
+    accuracy_test.go:66: false-positive rate: 0.0000 (target <0.05)
+    accuracy_test.go:67: false-negative rate: 0.0193 (target <0.02)
+    accuracy_test.go:93: wrote markdown report to /home/ubuntu/repos/sn360-es/benchmarks/accuracy_20260517.md
+--- PASS: TestAccuracy_FullPipeline (0.02s)
+=== RUN   TestAccuracy_PerfectEvaluator
+--- PASS: TestAccuracy_PerfectEvaluator (0.00s)
+=== RUN   TestAccuracy_RandomEvaluator
+--- PASS: TestAccuracy_RandomEvaluator (0.00s)
+=== RUN   TestAccuracy_ConfusionMatrixSumsToCorpus
+--- PASS: TestAccuracy_ConfusionMatrixSumsToCorpus (0.01s)
+=== RUN   TestAccuracy_ReportFormatMarkdownStable
+--- PASS: TestAccuracy_ReportFormatMarkdownStable (0.00s)
+PASS
+ok  	github.com/kennguy3n/sn360-es/internal/service/evaluate	0.048s

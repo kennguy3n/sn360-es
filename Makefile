@@ -161,6 +161,63 @@ docker-build-llm:
 docker-run-llm:
 	docker run --rm -p 9000:9000 -v $$(pwd)/models:/models ghcr.io/kennguy3n/sn360-es-llm:latest
 
+# --- Benchmarks & Performance Profiling ---------------------------------
+#
+# The benchmark suite drives the corpus generator (internal/testdata/corpus),
+# Go testing.B microbenchmarks, an accuracy harness that reports
+# precision/recall/F1/confusion-matrix, and a resource profiler that
+# records latency percentiles, GC pauses, and peak memory.
+#
+# Run `make bench-all` for the full suite. Results land under benchmarks/
+# with a UTC datestamp and are committed for regression tracking; use
+# `benchstat` to diff successive runs.
+
+BENCH_DIR         ?= benchmarks
+BENCH_DATE        := $(shell date -u +%Y%m%d)
+BENCH_COUNT       ?= 3
+BENCH_TIME        ?= 1s
+CORPUS_SIZE       ?= 1000
+CORPUS_BENCH_SEED ?= 42
+CORPUS_FILE       ?= internal/testdata/corpus/corpus_$(CORPUS_SIZE).json
+
+.PHONY: gen-corpus
+gen-corpus:
+	$(GO) run ./cmd/gen-corpus \
+		-size=$(CORPUS_SIZE) \
+		-seed=$(CORPUS_BENCH_SEED) \
+		-out=$(CORPUS_FILE)
+
+.PHONY: bench
+bench: $(BENCH_DIR)
+	$(GO) test -bench=. -benchmem -benchtime=$(BENCH_TIME) -count=$(BENCH_COUNT) -run=^$$ \
+		./internal/service/evaluate/... \
+		./internal/service/tier0/... \
+		./internal/service/action/... \
+		./internal/service/education/... \
+		| tee $(BENCH_DIR)/bench_$(BENCH_DATE).txt
+
+.PHONY: bench-accuracy
+bench-accuracy: $(BENCH_DIR)
+	ACCURACY_REPORT_DIR=$(abspath $(BENCH_DIR)) \
+	$(GO) test -tags=benchmark -run=TestAccuracy -v -timeout=300s \
+		./internal/service/evaluate/... \
+		| tee $(BENCH_DIR)/accuracy_$(BENCH_DATE).log
+
+.PHONY: bench-profile
+bench-profile: $(BENCH_DIR)
+	BENCH_PROFILE_DIR=$(abspath $(BENCH_DIR)) \
+	$(GO) test -tags=benchmark -run='TestResourceProfile|TestLatencyDistribution' -v -timeout=600s \
+		./internal/service/evaluate/... \
+		| tee $(BENCH_DIR)/profile_$(BENCH_DATE).log
+
+.PHONY: bench-all
+bench-all: gen-corpus bench bench-accuracy bench-profile
+	@echo ""
+	@echo "Benchmarks complete. Artefacts in $(BENCH_DIR)/."
+
+$(BENCH_DIR):
+	@mkdir -p $(BENCH_DIR)
+
 .PHONY: clean
 clean:
 	rm -rf $(BIN_DIR) coverage.out
