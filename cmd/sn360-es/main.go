@@ -612,7 +612,15 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 					},
 					Fallback: fallbackEvaluatorAdapter{eval: app.evaluator},
 					Sink:     app.eventBus,
-					Logger:   logger,
+					// Match the per-message handler's output subject so the
+					// management-persist / education-trigger / ingestion-action
+					// consumers receive batch-produced verdicts the same way
+					// they receive single-message ones. The package default
+					// (es.action.banner) is intended for setups where the batch
+					// path is the only one running; we always have the
+					// downstream consumers on es.evaluate.result.
+					ResultSubject: "es.evaluate.result",
+					Logger:        logger,
 				})
 				if oerr != nil {
 					logger.Warn("sn360-es: tier1 batch orchestrator init failed; falling back to single-message consumer",
@@ -718,9 +726,16 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	// through Tier 0 → Tier 1 → Tier 2 → Rspamd via the evaluator,
 	// and publishes the resulting EvaluateResult on
 	// `es.evaluate.result` for the persist + action consumers to
-	// pick up. The evaluator is constructed unconditionally so this
-	// subscription is always critical when wired.
-	if a.evaluator != nil {
+	// pick up.
+	//
+	// Mutually exclusive with the Tier 1 batch orchestrator: both
+	// would otherwise compete for messages on the same WorkQueue
+	// stream with different wire formats (the batch path expects a
+	// BatchMessage envelope; the per-message path expects a flat
+	// EvaluateRequest), causing JetStream to split messages across
+	// consumers and produce verdicts with empty IDs. When batch is
+	// active the orchestrator owns the subject end-to-end.
+	if a.evaluator != nil && a.batchOrch == nil {
 		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.request", a.handleEvaluateRequest,
 			events.WithDurable("evaluate-svc"),
 			events.WithMaxDeliver(5))
