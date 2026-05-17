@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kennguy3n/sn360-es/internal/constant"
 	"github.com/kennguy3n/sn360-es/internal/dto"
@@ -224,9 +225,20 @@ func buildTier2UserPrompt(req dto.EvaluateRequest, hint dto.Tier1Outcome) string
 	// well under the model's context window. Tier 2 is a classifier
 	// not a summariser — the first ~4kB of body is overwhelmingly
 	// sufficient signal.
+	//
+	// Slicing at a raw byte offset can split a multi-byte UTF-8 rune
+	// (Vietnamese, Thai, CJK, Arabic, etc. — see ARCHITECTURE.md §3.5)
+	// and feed invalid UTF-8 into the chat prompt, where it manifests
+	// as replacement characters or tokenizer errors at the LLM. Walk
+	// back to the last rune boundary at or before maxBody so the
+	// truncated prefix is always valid UTF-8.
 	const maxBody = 4096
 	if len(body) > maxBody {
-		body = body[:maxBody] + "\n[truncated]"
+		cut := maxBody
+		for cut > 0 && !utf8.RuneStart(body[cut]) {
+			cut--
+		}
+		body = body[:cut] + "\n[truncated]"
 	}
 	if body != "" {
 		b.WriteString("Body:\n")

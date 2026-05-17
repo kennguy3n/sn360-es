@@ -104,19 +104,23 @@ func (c *RspamdHTTPClient) Score(ctx context.Context, req dto.EvaluateRequest) (
 	}
 	httpReq.Header.Set("Content-Type", "text/plain; charset=utf-8")
 	if c.password != "" {
-		httpReq.Header.Set("Password", c.password)
+		httpReq.Header.Set("Password", sanitiseHeaderValue(c.password))
 	}
 	// Hint Rspamd about the envelope identities so plugins like SPF
 	// have something to work with. These are also recognised
 	// alternatives to embedding Return-Path / Received headers.
+	// Each value is CRLF-stripped — Go's net/http already rejects
+	// CRLF at write time, but doing it here makes the contract
+	// explicit and matches the buildRawEmail() body, where stdlib
+	// validation does not apply.
 	if req.Sender != "" {
-		httpReq.Header.Set("From", req.Sender)
+		httpReq.Header.Set("From", sanitiseHeaderValue(req.Sender))
 	}
 	if req.Recipient != "" {
-		httpReq.Header.Set("Rcpt", req.Recipient)
+		httpReq.Header.Set("Rcpt", sanitiseHeaderValue(req.Recipient))
 	}
 	if req.MessageID != "" {
-		httpReq.Header.Set("Queue-Id", req.MessageID)
+		httpReq.Header.Set("Queue-Id", sanitiseHeaderValue(req.MessageID))
 	}
 
 	start := time.Now()
@@ -157,31 +161,48 @@ func (c *RspamdHTTPClient) Score(ctx context.Context, req dto.EvaluateRequest) (
 // is willing to score. We avoid pulling in net/mail builders because
 // the wire format is trivially small for our needs and we don't want
 // to mask the actual subject / body when Rspamd parses headers.
+//
+// Every header value is fed through sanitiseHeaderValue() before being
+// written into the byte buffer. That strips embedded CR / LF bytes so
+// an attacker cannot smuggle additional headers (e.g.
+// "X-Spamd-Result: default: True") through a maliciously crafted
+// Sender / Recipient / Subject / MessageID. Ingestion is expected to
+// normalise these upstream, but defending at the boundary is cheap
+// and removes the assumption from the trust calculation.
 func buildRawEmail(req dto.EvaluateRequest) []byte {
 	var b bytes.Buffer
 	if req.MessageID != "" {
-		fmt.Fprintf(&b, "Message-ID: <%s>\r\n", req.MessageID)
+		fmt.Fprintf(&b, "Message-ID: <%s>\r\n", sanitiseHeaderValue(req.MessageID))
 	}
 	if req.Sender != "" {
-		fmt.Fprintf(&b, "From: %s\r\n", req.Sender)
+		fmt.Fprintf(&b, "From: %s\r\n", sanitiseHeaderValue(req.Sender))
 	}
 	if req.Recipient != "" {
-		fmt.Fprintf(&b, "To: %s\r\n", req.Recipient)
+		fmt.Fprintf(&b, "To: %s\r\n", sanitiseHeaderValue(req.Recipient))
 	}
 	for _, cc := range req.CC {
 		if cc == "" {
 			continue
 		}
-		fmt.Fprintf(&b, "Cc: %s\r\n", cc)
+		fmt.Fprintf(&b, "Cc: %s\r\n", sanitiseHeaderValue(cc))
 	}
 	if req.Subject != "" {
-		fmt.Fprintf(&b, "Subject: %s\r\n", req.Subject)
+		fmt.Fprintf(&b, "Subject: %s\r\n", sanitiseHeaderValue(req.Subject))
 	}
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
 	b.WriteString("\r\n")
 	b.WriteString(req.Body)
 	return b.Bytes()
+}
+
+// sanitiseHeaderValue strips CR and LF bytes from s so it can be
+// safely interpolated into an RFC-5322 header line or a Go HTTP
+// header value without enabling header-injection attacks. We
+// deliberately replace with "" rather than " " to avoid silently
+// joining tokens an attacker tried to split.
+func sanitiseHeaderValue(s string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
 }
 
 // clampRspamdScore caps the score into a reasonable range. Rspamd's
