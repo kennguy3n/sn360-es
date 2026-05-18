@@ -423,7 +423,7 @@ func (o *BatchOrchestrator) aggregateLightweight(res *dto.EvaluateResult, sig dt
 	// outcomes under DefaultWeights), and any TierDecider band
 	// straddling that ratio would classify the same message
 	// differently depending on which consumer handled it.
-	res.Score = Score(FromResult(res), o.cfg.Weights)
+	res.Score = ScoreWithAvailability(FromResultEx(res), o.cfg.Weights)
 	if o.cfg.Categorizer != nil {
 		primary, secondary, reasons := o.cfg.Categorizer.Categorise(*res, sig)
 		res.Primary = primary

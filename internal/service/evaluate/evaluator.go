@@ -302,7 +302,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 	}
 
 	// 4. Aggregate.
-	res.Score = Score(FromResult(&res), e.cfg.Weights)
+	res.Score = ScoreWithAvailability(FromResultEx(&res), e.cfg.Weights)
 	if e.cfg.Categorizer != nil {
 		primary, secondary, reasons := e.cfg.Categorizer.Categorise(res, req.Signals)
 		res.Primary = primary
