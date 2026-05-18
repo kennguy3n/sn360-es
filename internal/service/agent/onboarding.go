@@ -71,7 +71,7 @@ func NewOnboardingAgent(cfg OnboardingConfig) (*OnboardingAgent, error) {
 		cfg.MinVendorConfidence = 0.6
 	}
 	if cfg.DefaultWeights == (ScoreWeights{}) {
-		cfg.DefaultWeights = ScoreWeights{AI: 0.8, Rspamd: 0.2}
+		cfg.DefaultWeights = ScoreWeights{AI: 0.60, Rspamd: 0.10, Attachments: 0.15, Links: 0.15}
 	}
 	if cfg.DefaultThresholds == (Thresholds{}) {
 		cfg.DefaultThresholds = Thresholds{

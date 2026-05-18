@@ -108,8 +108,10 @@ func (sc *ShadowClient) Predict(ctx context.Context, in PredictRequest, threshol
 	}
 
 	// Fire shadow in background if enabled and within sample rate.
+	// Use context.WithoutCancel so the shadow call isn't cancelled
+	// when the production request's context completes.
 	if sc.cfg.Enabled && sc.shadow != nil && sc.shouldSample() {
-		go sc.runShadow(ctx, in, thresholds, score, verdict)
+		go sc.runShadow(context.WithoutCancel(ctx), in, thresholds, score, verdict)
 	}
 
 	return verdict, score, resp, nil

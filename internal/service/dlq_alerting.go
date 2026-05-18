@@ -108,7 +108,7 @@ func (s *DLQAlertService) RecordDLQ(ctx context.Context, tenantID string) {
 			Window:    "1h",
 			AlertedAt: now,
 		}
-		go s.fireAlert(ctx, alert)
+		go s.fireAlert(context.WithoutCancel(ctx), alert)
 	}
 }
 

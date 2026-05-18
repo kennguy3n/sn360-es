@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/kennguy3n/sn360-es/internal/service/action"
 )
@@ -16,7 +17,8 @@ var _ action.BodyRewriter = (*BodyRewriter)(nil)
 // body, and on write-back re-import with the modified body and trash
 // the original.
 type BodyRewriter struct {
-	inj *BannerInjector
+	inj   *BannerInjector
+	cache sync.Map // key: "email\x00messageID" → *fetchState
 }
 
 // NewBodyRewriter constructs a Gmail BodyRewriter from an existing
@@ -31,33 +33,43 @@ func NewBodyRewriter(inj *BannerInjector) *BodyRewriter {
 type fetchState struct {
 	raw      []byte
 	threadID string
-	email    string
-	msgID    string
 }
 
-// stateCache is a per-instance in-flight cache keyed by
-// email+messageID. This is safe because the URL rewrite consumer
-// processes one message at a time per goroutine.
-// A production-hardened version would use a sync.Map, but for the
-// action consumer's single-message-at-a-time flow this suffices.
+func cacheKey(email, messageID string) string {
+	return email + "\x00" + messageID
+}
 
 // FetchBody retrieves the message's HTML body by fetching the raw
-// RFC-2822 and extracting the text/html MIME part.
+// RFC-2822 and extracting the text/html MIME part. The raw bytes and
+// thread ID are cached so WriteBody can reuse them.
 func (g *BodyRewriter) FetchBody(ctx context.Context, email, messageID string) (string, error) {
-	raw, _, err := g.inj.fetchRaw(ctx, email, messageID)
+	raw, threadID, err := g.inj.fetchRaw(ctx, email, messageID)
 	if err != nil {
 		return "", fmt.Errorf("gmail body_rewriter: fetch raw: %w", err)
 	}
+	g.cache.Store(cacheKey(email, messageID), &fetchState{raw: raw, threadID: threadID})
 	html := extractHTMLFromRFC822(raw)
 	return html, nil
 }
 
 // WriteBody re-imports the message with the modified HTML body using
-// Gmail's shadow-copy approach.
+// Gmail's shadow-copy approach. If FetchBody was called first, the
+// cached raw bytes are reused to avoid a second API call.
 func (g *BodyRewriter) WriteBody(ctx context.Context, email, messageID, htmlBody string) error {
-	raw, threadID, err := g.inj.fetchRaw(ctx, email, messageID)
-	if err != nil {
-		return fmt.Errorf("gmail body_rewriter: fetch raw for write: %w", err)
+	key := cacheKey(email, messageID)
+	var raw []byte
+	var threadID string
+
+	if v, ok := g.cache.LoadAndDelete(key); ok {
+		st := v.(*fetchState)
+		raw = st.raw
+		threadID = st.threadID
+	} else {
+		var err error
+		raw, threadID, err = g.inj.fetchRaw(ctx, email, messageID)
+		if err != nil {
+			return fmt.Errorf("gmail body_rewriter: fetch raw for write: %w", err)
+		}
 	}
 
 	modified, mutated := replaceHTMLInRFC822(raw, htmlBody)

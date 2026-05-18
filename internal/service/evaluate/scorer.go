@@ -76,6 +76,72 @@ func FromResult(r *dto.EvaluateResult) Components {
 	return c
 }
 
+// EffectiveWeights returns weights adjusted for component availability.
+// When a scanner (Links or Attachments) produced no score (value == 0
+// and the pointer was nil in EvaluateResult), its weight is
+// redistributed proportionally to AI and Rspamd. This prevents score
+// regression when scanners are not wired up.
+func EffectiveWeights(w Weights, hasLinks, hasAttachments bool) Weights {
+	ew := w
+	redistribute := 0.0
+	if !hasLinks {
+		redistribute += ew.Links
+		ew.Links = 0
+	}
+	if !hasAttachments {
+		redistribute += ew.Attachments
+		ew.Attachments = 0
+	}
+	if redistribute > 0 {
+		base := ew.AI + ew.Rspamd
+		if base > 0 {
+			ew.AI += redistribute * (ew.AI / base)
+			ew.Rspamd += redistribute * (ew.Rspamd / base)
+		} else {
+			ew.AI += redistribute
+		}
+	}
+	return ew
+}
+
+// FromResultWithAvailability derives Components and records which
+// optional scanners actually produced data.
+type ComponentsWithAvailability struct {
+	Components
+	HasLinks       bool
+	HasAttachments bool
+}
+
+// FromResultEx is like FromResult but also reports scanner availability.
+func FromResultEx(r *dto.EvaluateResult) ComponentsWithAvailability {
+	c := ComponentsWithAvailability{}
+	if r == nil {
+		return c
+	}
+	if r.Tier2 != nil {
+		if r.Tier2.Score > c.AI {
+			c.AI = r.Tier2.Score
+		}
+	}
+	if r.Tier1 != nil {
+		if r.Tier1.Score > c.AI {
+			c.AI = r.Tier1.Score
+		}
+	}
+	if r.Rspamd != nil {
+		c.Rspamd = normaliseRspamd(r.Rspamd.Score, r.Rspamd.Threshold)
+	}
+	if r.LinkScore != nil {
+		c.Links = *r.LinkScore
+		c.HasLinks = true
+	}
+	if r.AttachmentScore != nil {
+		c.Attachments = *r.AttachmentScore
+		c.HasAttachments = true
+	}
+	return c
+}
+
 // Score aggregates the components using the given weights. The result is
 // clamped to [0, 100].
 //
@@ -94,6 +160,13 @@ func Score(comp Components, w Weights) int {
 			float64(comp.Attachments)*w.Attachments +
 			float64(comp.Links)*w.Links
 	return clampScore(int(math.Round(weighted / total)))
+}
+
+// ScoreWithAvailability is the preferred entry point. It adjusts weights
+// for absent scanners before computing the final score.
+func ScoreWithAvailability(cwa ComponentsWithAvailability, w Weights) int {
+	ew := EffectiveWeights(w, cwa.HasLinks, cwa.HasAttachments)
+	return Score(cwa.Components, ew)
 }
 
 // normaliseRspamd maps an Rspamd score (unbounded; reject threshold is

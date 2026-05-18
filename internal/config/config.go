@@ -617,14 +617,11 @@ func (c Config) validate() error {
 	if c.Onboarding.StateSecret != "" && len(c.Onboarding.StateSecret) < 16 {
 		return errors.New("ONBOARDING_STATE_SECRET must be at least 16 bytes when set")
 	}
-	// B3: Block KMS_USE_MOCK in production.
+	// B3 + B4: Production-only security validations.
 	if !c.Environment.IsDevelopment() && c.Environment != "test" {
 		if c.AWS.KMSUseMock {
 			return errors.New("KMS_USE_MOCK=true is not allowed in non-dev environments (current: " + string(c.Environment) + ")")
 		}
-	}
-	// B4: Validate BANNER_TOKEN_SECRET entropy.
-	if !c.Environment.IsDevelopment() && c.Environment != "test" {
 		secret := c.Banner.TokenSecret
 		if secret != "" && (len(secret) < 32 || secret == "replace-me-with-a-strong-secret") {
 			return errors.New("BANNER_TOKEN_SECRET must be at least 32 bytes and not the default placeholder in non-dev environments")

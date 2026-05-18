@@ -33,7 +33,11 @@ func (h *PushWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	provider := parts[0]
-	tenantID := parts[1]
+	tenantID := strings.TrimRight(parts[1], "/")
+	if strings.Contains(tenantID, "/") {
+		http.Error(w, "invalid tenant ID: must not contain slashes", http.StatusBadRequest)
+		return
+	}
 
 	// Microsoft Graph sends a validation request with a
 	// validationToken query param that must be echoed back.
