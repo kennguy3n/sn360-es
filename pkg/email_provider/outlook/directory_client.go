@@ -145,14 +145,14 @@ func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]age
 				}
 			}
 
-			// Detect shared mailbox.
+			// Detect shared mailbox (resource/shared mailboxType only).
 			isShared := false
 			if u.MailboxSettings != nil && u.MailboxSettings.MailboxType == "shared" {
 				isShared = true
 			}
-			if u.UserType == "Guest" {
-				isShared = true
-			}
+
+			// Detect service account (Guest users are external collaborators, not shared mailboxes).
+			isServiceAccount := u.UserType == "Guest"
 
 			// Extract aliases from proxyAddresses (smtp: prefixed).
 			var aliases []string
@@ -171,19 +171,20 @@ func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]age
 				managerID = u.Manager.ID
 			}
 
-			out = append(out, agent.DiscoveredUser{
-				ID:              u.ID,
-				Email:           strings.ToLower(email),
-				DisplayName:     u.DisplayName,
-				Department:      u.Department,
-				JobTitle:        u.JobTitle,
-				IsAdmin:         isAdmin,
-				IsSuspended:     !u.AccountEnabled,
-				GroupIDs:        groupIDs,
-				ManagerID:       managerID,
-				Aliases:         aliases,
-				IsSharedMailbox: isShared,
-			})
+				out = append(out, agent.DiscoveredUser{
+					ID:               u.ID,
+					Email:            strings.ToLower(email),
+					DisplayName:      u.DisplayName,
+					Department:       u.Department,
+					JobTitle:         u.JobTitle,
+					IsAdmin:          isAdmin,
+					IsSuspended:      !u.AccountEnabled,
+					GroupIDs:         groupIDs,
+					ManagerID:        managerID,
+					Aliases:          aliases,
+					IsSharedMailbox:  isShared,
+					IsServiceAccount: isServiceAccount,
+				})
 		}
 		endpoint = list.NextLink
 	}

@@ -163,7 +163,7 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 			EmailHash:       emailHash,
 			Role:            u.JobTitle,
 			Department:      u.Department,
-			SensitivityTier: sens.String(),
+			SensitivityTier: sens.DBTier(),
 			Locale:          "",
 		}
 		_ = confidence
@@ -191,6 +191,19 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 		}
 	}
 
+	// Re-fetch users from DB to resolve actual UUIDs for membership FK.
+	resolvedUsers, err := j.cfg.Users.List(ctx, tenantID, 0)
+	if err != nil {
+		j.cfg.Logger.Warn("directory sync: failed to re-fetch users for membership resolution",
+			slog.String("tenant_id", tenantID),
+			slog.String("err", err.Error()))
+		resolvedUsers = nil
+	}
+	resolvedByHash := make(map[string]string, len(resolvedUsers)) // emailHash hex → DB UUID
+	for _, ru := range resolvedUsers {
+		resolvedByHash[fmt.Sprintf("%x", ru.EmailHash)] = ru.ID
+	}
+
 	// Upsert groups.
 	for _, g := range groups {
 		repoGroup := &repository.Group{
@@ -198,28 +211,40 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 			TenantID:    tenantID,
 			Name:        g.Name,
 			Description: g.Description,
+			RiskClass:   "standard",
 		}
 		if err := j.cfg.Groups.Upsert(ctx, repoGroup); err != nil {
 			j.cfg.Logger.Warn("directory sync: group upsert failed",
 				slog.String("tenant_id", tenantID),
 				slog.String("name", g.Name),
 				slog.String("err", err.Error()))
+			continue
 		}
 
-		// Update memberships.
-		if j.cfg.Memberships != nil {
+		// Resolve actual DB group ID (ON CONFLICT keeps original ID for existing groups).
+		dbGroupID := repoGroup.ID
+		if resolved, resolveErr := j.cfg.Groups.GetByName(ctx, tenantID, g.Name); resolveErr == nil {
+			dbGroupID = resolved.ID
+		}
+
+		// Update memberships using resolved DB user UUIDs (not provider IDs).
+		if j.cfg.Memberships != nil && len(resolvedByHash) > 0 {
 			memberIDs := make([]string, 0)
 			for _, u := range users {
 				for _, gid := range u.GroupIDs {
 					if gid == g.ID {
-						memberIDs = append(memberIDs, u.ID)
+						if h, hErr := j.cfg.Hasher(tenantID, u.Email); hErr == nil {
+							if dbUID, ok := resolvedByHash[fmt.Sprintf("%x", h)]; ok {
+								memberIDs = append(memberIDs, dbUID)
+							}
+						}
 						break
 					}
 				}
 			}
-			if err := j.cfg.Memberships.ReplaceForGroup(ctx, g.ID, memberIDs); err != nil {
+			if err := j.cfg.Memberships.ReplaceForGroup(ctx, dbGroupID, memberIDs); err != nil {
 				j.cfg.Logger.Warn("directory sync: membership update failed",
-					slog.String("group_id", g.ID),
+					slog.String("group_id", dbGroupID),
 					slog.String("err", err.Error()))
 			}
 		}

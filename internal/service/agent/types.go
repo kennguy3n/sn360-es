@@ -117,6 +117,20 @@ func (s Sensitivity) String() string {
 	}
 }
 
+// DBTier returns the database-compatible sensitivity tier string.
+// The users.sensitivity_tier CHECK constraint accepts only
+// ('standard', 'elevated', 'executive').
+func (s Sensitivity) DBTier() string {
+	switch s {
+	case SensitivityElevated:
+		return "elevated"
+	case SensitivityHigh, SensitivityMax:
+		return "executive"
+	default:
+		return "standard"
+	}
+}
+
 // FeedbackKind captures the user action that produced a feedback signal.
 type FeedbackKind string
 
