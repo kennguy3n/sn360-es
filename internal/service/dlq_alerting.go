@@ -45,6 +45,7 @@ type DLQAlertService struct {
 	mu         sync.Mutex
 	counts     map[string]*tenantDLQCounter
 	lastAlert  map[string]time.Time
+	alertSem   chan struct{} // bounds concurrent webhook goroutines
 }
 
 type tenantDLQCounter struct {
@@ -75,6 +76,7 @@ func NewDLQAlertService(cfg DLQAlertConfig) *DLQAlertService {
 		now:       cfg.Clock,
 		counts:    make(map[string]*tenantDLQCounter),
 		lastAlert: make(map[string]time.Time),
+		alertSem:  make(chan struct{}, 16), // cap concurrent webhook goroutines
 	}
 }
 
@@ -108,7 +110,16 @@ func (s *DLQAlertService) RecordDLQ(ctx context.Context, tenantID string) {
 			Window:    "1h",
 			AlertedAt: now,
 		}
-		go s.fireAlert(context.WithoutCancel(ctx), alert)
+		go func() {
+			select {
+			case s.alertSem <- struct{}{}:
+				defer func() { <-s.alertSem }()
+				s.fireAlert(context.WithoutCancel(ctx), alert)
+			default:
+				s.log.Warn("dlq_alert: webhook backpressure, dropping alert",
+					slog.String("tenant", alert.TenantID))
+			}
+		}()
 	}
 }
 

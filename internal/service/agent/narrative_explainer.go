@@ -68,7 +68,7 @@ func NewTier2Explainer(cfg Tier2ExplainerConfig) (*Tier2Explainer, error) {
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = 256
 	}
-	if cfg.Temperature <= 0 {
+	if cfg.Temperature < 0 {
 		cfg.Temperature = 0.3
 	}
 	if cfg.HTTPClient == nil {

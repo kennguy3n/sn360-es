@@ -117,6 +117,15 @@ func TestValidate_KMSUseMockAllowedInDev(t *testing.T) {
 	}
 }
 
+func TestValidate_KMSUseMockAllowedInQA(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Environment = EnvironmentQA
+	cfg.AWS.KMSUseMock = true
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("KMS_USE_MOCK should be allowed in QA: %v", err)
+	}
+}
+
 func TestValidate_BannerTokenSecretTooShortInProd(t *testing.T) {
 	cfg := validProdConfig()
 	cfg.Banner.TokenSecret = "short"

@@ -84,7 +84,6 @@ func (a *TuningAgent) Tune(ctx context.Context, tenantID string) (TuningDecision
 	if tenantID == "" {
 		return TuningDecision{}, errors.New("agent: tuning tenantID required")
 	}
-	log := a.log.With(slog.String("tenant_id", tenantID))
 	now := time.Now().UTC()
 	windowStart := now.Add(-a.cfg.Window)
 
@@ -123,23 +122,33 @@ func (a *TuningAgent) Tune(ctx context.Context, tenantID string) (TuningDecision
 	decision.TenantID = tenantID
 	decision.DecidedAt = now
 
+	if err := a.ApplyDecision(ctx, snap, decision); err != nil {
+		return decision, err
+	}
+	return decision, nil
+}
+
+// ApplyDecision persists a TuningDecision that was computed from snap.
+// This is separated from Tune so callers that already hold a snapshot
+// (e.g. ApprovalGatedTuningAgent) can apply without re-fetching state.
+func (a *TuningAgent) ApplyDecision(ctx context.Context, snap TuningSnapshot, decision TuningDecision) error {
 	if decision.NewWeights != nil {
-		if err := a.cfg.Config.UpdateWeights(ctx, tenantID, *decision.NewWeights); err != nil {
-			return decision, fmt.Errorf("tuning: persist weights: %w", err)
+		if err := a.cfg.Config.UpdateWeights(ctx, decision.TenantID, *decision.NewWeights); err != nil {
+			return fmt.Errorf("tuning: persist weights: %w", err)
 		}
 	}
 	if decision.NewThresholds != nil {
-		if err := a.cfg.Config.UpdateThresholds(ctx, tenantID, *decision.NewThresholds); err != nil {
-			return decision, fmt.Errorf("tuning: persist thresholds: %w", err)
+		if err := a.cfg.Config.UpdateThresholds(ctx, decision.TenantID, *decision.NewThresholds); err != nil {
+			return fmt.Errorf("tuning: persist thresholds: %w", err)
 		}
 	}
 	if a.cfg.Audit != nil {
 		_ = a.cfg.Audit.Record(ctx, AuditEntry{
 			Agent:      a.Name(),
-			TenantID:   tenantID,
+			TenantID:   decision.TenantID,
 			Action:     "tuning.decision",
 			Reason:     summariseNotes(decision.Notes),
-			OccurredAt: now,
+			OccurredAt: decision.DecidedAt,
 			Detail: map[string]any{
 				"total":          snap.TotalEvaluations,
 				"fp":             snap.FalsePositives,
@@ -149,12 +158,13 @@ func (a *TuningAgent) Tune(ctx context.Context, tenantID string) (TuningDecision
 			},
 		})
 	}
+	log := a.log.With(slog.String("tenant_id", decision.TenantID))
 	log.Info("agent.tuning: decision",
 		slog.Int("total", snap.TotalEvaluations),
 		slog.Int("fp", snap.FalsePositives),
 		slog.Int("fn", snap.FalseNegatives),
 		slog.Any("notes", decision.Notes))
-	return decision, nil
+	return nil
 }
 
 // Decide is the pure-function tuning policy, exposed so tests can pin

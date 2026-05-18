@@ -176,8 +176,12 @@ func (a *ApprovalGatedTuningAgent) Tune(ctx context.Context, tenantID string) (T
 		return a.holdForApproval(ctx, tenantID, decision)
 	}
 
-	// Auto-apply.
-	return a.inner.Tune(ctx, tenantID)
+	// Auto-apply using the snapshot we already have, avoiding a second
+	// store round-trip and the TOCTOU window that re-fetching would create.
+	if err := a.inner.ApplyDecision(ctx, snap, decision); err != nil {
+		return decision, err
+	}
+	return decision, nil
 }
 
 func (a *ApprovalGatedTuningAgent) buildSnapshot(ctx context.Context, tenantID string) (TuningSnapshot, error) {

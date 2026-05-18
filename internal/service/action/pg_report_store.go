@@ -2,7 +2,6 @@ package action
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 
 	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
@@ -62,9 +61,6 @@ func (s *PostgresReportStore) Get(ctx context.Context, tenantID, pseudoMessageID
 		WHERE tenant_id = $1 AND message_id = $2
 	`, tenantID, pseudoMessageID).Scan(&count)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return 0, nil
-		}
 		return 0, fmt.Errorf("report: get: %w", err)
 	}
 	return count, nil

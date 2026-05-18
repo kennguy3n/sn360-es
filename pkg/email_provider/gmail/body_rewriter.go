@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/service/action"
 )
@@ -33,6 +34,7 @@ func NewBodyRewriter(inj *BannerInjector) *BodyRewriter {
 type fetchState struct {
 	raw      []byte
 	threadID string
+	storedAt time.Time
 }
 
 func cacheKey(email, messageID string) string {
@@ -47,9 +49,34 @@ func (g *BodyRewriter) FetchBody(ctx context.Context, email, messageID string) (
 	if err != nil {
 		return "", fmt.Errorf("gmail body_rewriter: fetch raw: %w", err)
 	}
-	g.cache.Store(cacheKey(email, messageID), &fetchState{raw: raw, threadID: threadID})
+	g.cache.Store(cacheKey(email, messageID), &fetchState{
+		raw:      raw,
+		threadID: threadID,
+		storedAt: time.Now(),
+	})
+	g.evictStale()
 	html := extractHTMLFromRFC822(raw)
 	return html, nil
+}
+
+// EvictCache removes the cached fetch state for a message. Callers
+// should call this when WriteBody will not be called (e.g., no URLs
+// to rewrite) to prevent cache leaks.
+func (g *BodyRewriter) EvictCache(email, messageID string) {
+	g.cache.Delete(cacheKey(email, messageID))
+}
+
+// evictStale removes cache entries older than 5 minutes. This handles
+// the case where FetchBody is called but WriteBody never follows.
+func (g *BodyRewriter) evictStale() {
+	cutoff := time.Now().Add(-5 * time.Minute)
+	g.cache.Range(func(key, value any) bool {
+		st := value.(*fetchState)
+		if st.storedAt.Before(cutoff) {
+			g.cache.Delete(key)
+		}
+		return true
+	})
 }
 
 // WriteBody re-imports the message with the modified HTML body using
