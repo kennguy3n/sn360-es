@@ -177,6 +177,16 @@ func NewBatchOrchestrator(cfg BatchOrchestratorConfig) (*BatchOrchestrator, erro
 	if (cfg.Thresholds == tier1.Thresholds{}) {
 		cfg.Thresholds = tier1.DefaultThresholds()
 	}
+	if (cfg.Weights == Weights{}) {
+		// Mirror the per-message evaluator default so a caller who
+		// leaves Weights unset (or a future test that constructs the
+		// orchestrator with only the required fields) still gets the
+		// weighted aggregate documented in the field comment. Without
+		// this default, Score()'s zero-weight fallback returned the
+		// raw AI score and aggregateLightweight published a tier
+		// landed against a different scale than the per-message path.
+		cfg.Weights = DefaultWeights()
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
