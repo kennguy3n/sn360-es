@@ -71,6 +71,19 @@ type graphDirectoryUser struct {
 	Department        string `json:"department"`
 	JobTitle          string `json:"jobTitle"`
 	AccountEnabled    bool   `json:"accountEnabled"`
+	UserType          string `json:"userType"`
+	MailboxSettings   *struct {
+		MailboxType string `json:"mailboxType"`
+	} `json:"mailboxSettings,omitempty"`
+	MemberOf []struct {
+		ODataType   string `json:"@odata.type"`
+		ID          string `json:"id"`
+		DisplayName string `json:"displayName"`
+	} `json:"memberOf,omitempty"`
+	Manager *struct {
+		ID string `json:"id"`
+	} `json:"manager,omitempty"`
+	ProxyAddresses []string `json:"proxyAddresses"`
 }
 
 type graphDirectoryUserList struct {
@@ -97,7 +110,8 @@ type graphGroupList struct {
 func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]agent.DiscoveredUser, error) {
 	_ = tenantID
 	endpoint := c.baseURL + "/users?" + url.Values{
-		"$select": []string{"id,displayName,userPrincipalName,mail,department,jobTitle,accountEnabled"},
+		"$select": []string{"id,displayName,userPrincipalName,mail,department,jobTitle,accountEnabled,userType,proxyAddresses,mailboxSettings"},
+		"$expand": []string{"memberOf($select=id,displayName,@odata.type),manager($select=id)"},
 		"$top":    []string{"200"},
 	}.Encode()
 	var out []agent.DiscoveredUser
@@ -114,13 +128,61 @@ func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]age
 			if email == "" {
 				continue
 			}
+
+			// Extract group IDs and detect admin roles from memberOf.
+			var groupIDs []string
+			isAdmin := false
+			for _, m := range u.MemberOf {
+				switch {
+				case m.ODataType == "#microsoft.graph.group":
+					groupIDs = append(groupIDs, m.ID)
+				case m.ODataType == "#microsoft.graph.directoryRole":
+					if strings.Contains(m.DisplayName, "Global Administrator") ||
+						strings.Contains(m.DisplayName, "Exchange Administrator") {
+						isAdmin = true
+					}
+				}
+			}
+
+			// Detect shared mailbox (resource/shared mailboxType only).
+			isShared := false
+			if u.MailboxSettings != nil && u.MailboxSettings.MailboxType == "shared" {
+				isShared = true
+			}
+
+			// Detect service account (Guest users are external collaborators, not shared mailboxes).
+			isServiceAccount := u.UserType == "Guest"
+
+			// Extract aliases from proxyAddresses (smtp: prefixed).
+			var aliases []string
+			for _, addr := range u.ProxyAddresses {
+				if strings.HasPrefix(strings.ToLower(addr), "smtp:") {
+					alias := strings.TrimPrefix(strings.ToLower(addr), "smtp:")
+					if alias != strings.ToLower(email) {
+						aliases = append(aliases, alias)
+					}
+				}
+			}
+
+			// ManagerID resolved via $expand=manager in the initial query.
+			var managerID string
+			if u.Manager != nil {
+				managerID = u.Manager.ID
+			}
+
 			out = append(out, agent.DiscoveredUser{
-				ID:          u.ID,
-				Email:       strings.ToLower(email),
-				DisplayName: u.DisplayName,
-				Department:  u.Department,
-				JobTitle:    u.JobTitle,
-				IsSuspended: !u.AccountEnabled,
+				ID:               u.ID,
+				Email:            strings.ToLower(email),
+				DisplayName:      u.DisplayName,
+				Department:       u.Department,
+				JobTitle:         u.JobTitle,
+				IsAdmin:          isAdmin,
+				IsSuspended:      !u.AccountEnabled,
+				GroupIDs:         groupIDs,
+				ManagerID:        managerID,
+				Aliases:          aliases,
+				IsSharedMailbox:  isShared,
+				IsServiceAccount: isServiceAccount,
 			})
 		}
 		endpoint = list.NextLink

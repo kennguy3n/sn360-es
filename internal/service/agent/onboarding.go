@@ -18,6 +18,12 @@ type OnboardingConfig struct {
 	Events        EventPublisher
 	Audit         AuditLog
 	Config        ConfigStore
+	Hasher        PIIHasher
+
+	// Persister stores discovered users/groups to Postgres after onboarding.
+	Persister UserPersister
+	// SensitivityClassifier is the tiered ML classifier (encoder+bonsai+fallback).
+	SensitivityClassifier SensitivityClassifier
 
 	// VendorScanWindow controls how far back the vendor scan looks
 	// (default 30 days).
@@ -33,6 +39,12 @@ type OnboardingConfig struct {
 	DefaultThresholds Thresholds
 
 	Logger *slog.Logger
+}
+
+// UserPersister stores discovered users and groups to persistent storage
+// after the onboarding flow completes.
+type UserPersister interface {
+	PersistDiscoveredUsers(ctx context.Context, tenantID string, users []DiscoveredUser, groups []DiscoveredGroup) error
 }
 
 // OnboardingAgent runs once per new tenant, performing the
@@ -126,8 +138,47 @@ func (a *OnboardingAgent) Onboard(ctx context.Context, tctx TenantContext) (Onbo
 
 	groupIndex := indexGroups(groups)
 
-	for i := range users {
-		users[i].SensitivityHint = ClassifyUserSensitivity(users[i], groupIndex)
+	// Classify sensitivity using tiered ML classifier if available,
+	// otherwise fall back to keyword-based classification.
+	if a.cfg.SensitivityClassifier != nil && len(users) > 0 {
+		inputs := make([]UserClassifyInput, len(users))
+		for i, u := range users {
+			var groupNames []string
+			for _, gid := range u.GroupIDs {
+				if g, ok := groupIndex[gid]; ok {
+					groupNames = append(groupNames, g.Name)
+				}
+			}
+			inputs[i] = UserClassifyInput{
+				JobTitle:    u.JobTitle,
+				Department:  u.Department,
+				DisplayName: u.DisplayName,
+				GroupNames:  groupNames,
+				IsAdmin:     u.IsAdmin,
+			}
+		}
+		results, classErr := a.cfg.SensitivityClassifier.ClassifyBatch(ctx, inputs)
+		if classErr != nil {
+			log.Warn("agent.onboarding: ML classification failed, falling back to keywords",
+				slog.String("err", classErr.Error()))
+			for i := range users {
+				users[i].SensitivityHint = ClassifyUserSensitivity(users[i], groupIndex)
+				users[i].SensitivityConfidence = 1.0
+			}
+		} else {
+			for i := range users {
+				if i < len(results) {
+					users[i].SensitivityHint = results[i].Sensitivity
+					users[i].SensitivityConfidence = results[i].Confidence
+					users[i].NeedsAdminReview = results[i].NeedsReview
+				}
+			}
+		}
+	} else {
+		for i := range users {
+			users[i].SensitivityHint = ClassifyUserSensitivity(users[i], groupIndex)
+			users[i].SensitivityConfidence = 1.0
+		}
 	}
 
 	for _, u := range users {
@@ -145,6 +196,13 @@ func (a *OnboardingAgent) Onboard(ctx context.Context, tctx TenantContext) (Onbo
 			log.Warn("agent.onboarding: emit user event failed",
 				slog.String("mailbox", u.Email),
 				slog.String("err", err.Error()))
+		}
+	}
+
+	// Persist discovered users/groups to the database.
+	if a.cfg.Persister != nil {
+		if err := a.cfg.Persister.PersistDiscoveredUsers(ctx, tctx.TenantID, users, groups); err != nil {
+			log.Warn("agent.onboarding: persist users failed", slog.String("err", err.Error()))
 		}
 	}
 
@@ -204,15 +262,27 @@ func (a *OnboardingAgent) publishUserEvent(ctx context.Context, tctx TenantConte
 	if a.cfg.Events == nil {
 		return nil
 	}
+
+	// Pseudonymize PII before publishing — never emit raw email or
+	// display name to the event bus.
+	var emailHash, displayHash string
+	if a.cfg.Hasher != nil {
+		emailHash = a.cfg.Hasher.HashPII(tctx.TenantID, u.Email)
+		displayHash = a.cfg.Hasher.HashPII(tctx.TenantID, u.DisplayName)
+	} else {
+		emailHash = "<redacted>"
+		displayHash = "<redacted>"
+	}
+
 	payload := map[string]any{
 		"tenant_id":    tctx.TenantID,
 		"provider":     string(tctx.Provider),
 		"user_id":      u.ID,
-		"email":        u.Email,
-		"display_name": u.DisplayName,
+		"email_hash":   emailHash,
+		"display_hash": displayHash,
 		"department":   u.Department,
-		"job_title":    u.JobTitle,
 		"sensitivity":  u.SensitivityHint.String(),
+		"confidence":   u.SensitivityConfidence,
 		"occurred_at":  time.Now().UTC(),
 	}
 	blob, err := json.Marshal(payload)

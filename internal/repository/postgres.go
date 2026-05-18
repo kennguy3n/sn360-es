@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +25,7 @@ func NewPostgresRegistry(db *postgres.DB) *Registry {
 		Tenants:                &pgTenants{db: db},
 		Users:                  &pgUsers{db: db},
 		Groups:                 &pgGroups{db: db},
+		GroupMemberships:       &pgGroupMemberships{db: db},
 		Labels:                 &pgLabels{db: db},
 		ScoreEngines:           &pgScoreEngines{db: db},
 		EmailClassifications:   &pgClassifications{db: db},
@@ -31,6 +33,7 @@ func NewPostgresRegistry(db *postgres.DB) *Registry {
 		EvaluationResults:      &pgEvalResults{db: db},
 		CommunicationHistories: &pgCommHistory{db: db},
 		FeedbackEvents:         &pgFeedbackEvents{db: db},
+		AuditLogs:              NewPgAuditLogs(db),
 	}
 }
 
@@ -199,6 +202,19 @@ VALUES ($1,$2,$3,$4,$5)`,
 	if isUniqueViolation(err) {
 		return ErrConflict
 	}
+	return err
+}
+
+func (p *pgGroups) Upsert(ctx context.Context, g *Group) error {
+	if g.ID == "" {
+		g.ID = uuid.NewString()
+	}
+	_, err := p.db.ExecContext(ctx, `
+INSERT INTO groups (id, tenant_id, name, description, risk_class)
+VALUES ($1,$2,$3,$4,$5)
+ON CONFLICT (tenant_id, name) DO UPDATE SET
+    description=EXCLUDED.description, risk_class=EXCLUDED.risk_class, updated_at=NOW()`,
+		g.ID, g.TenantID, g.Name, g.Description, g.RiskClass)
 	return err
 }
 
@@ -704,6 +720,87 @@ SELECT
 		return FeedbackCounts{}, err
 	}
 	return c, nil
+}
+
+// --- group memberships --------------------------------------------------
+
+type pgGroupMemberships struct{ db *postgres.DB }
+
+func (p *pgGroupMemberships) Upsert(ctx context.Context, gm *GroupMembership) error {
+	if gm.CreatedAt.IsZero() {
+		gm.CreatedAt = time.Now().UTC()
+	}
+	_, err := p.db.ExecContext(ctx, `
+INSERT INTO group_memberships (group_id, user_id, created_at)
+VALUES ($1,$2,$3)
+ON CONFLICT (group_id, user_id) DO NOTHING`,
+		gm.GroupID, gm.UserID, gm.CreatedAt)
+	return err
+}
+
+func (p *pgGroupMemberships) ListByGroup(ctx context.Context, groupID string) ([]GroupMembership, error) {
+	rows, err := p.db.QueryContext(ctx, `
+SELECT group_id, user_id, created_at FROM group_memberships WHERE group_id=$1`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []GroupMembership
+	for rows.Next() {
+		var gm GroupMembership
+		if err := rows.Scan(&gm.GroupID, &gm.UserID, &gm.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, gm)
+	}
+	return out, rows.Err()
+}
+
+func (p *pgGroupMemberships) ListByUser(ctx context.Context, userID string) ([]GroupMembership, error) {
+	rows, err := p.db.QueryContext(ctx, `
+SELECT group_id, user_id, created_at FROM group_memberships WHERE user_id=$1`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []GroupMembership
+	for rows.Next() {
+		var gm GroupMembership
+		if err := rows.Scan(&gm.GroupID, &gm.UserID, &gm.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, gm)
+	}
+	return out, rows.Err()
+}
+
+func (p *pgGroupMemberships) DeleteByGroup(ctx context.Context, groupID string) error {
+	_, err := p.db.ExecContext(ctx, `DELETE FROM group_memberships WHERE group_id=$1`, groupID)
+	return err
+}
+
+func (p *pgGroupMemberships) ReplaceForGroup(ctx context.Context, groupID string, userIDs []string) error {
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("replace group memberships: begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	_, err = tx.ExecContext(ctx, `DELETE FROM group_memberships WHERE group_id=$1`, groupID)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	for _, uid := range userIDs {
+		_, err = tx.ExecContext(ctx, `
+INSERT INTO group_memberships (group_id, user_id, created_at)
+VALUES ($1,$2,$3)
+ON CONFLICT (group_id, user_id) DO NOTHING`, groupID, uid, now)
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // --- helpers ------------------------------------------------------------

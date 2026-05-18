@@ -19,6 +19,7 @@ func NewInMemoryRegistry() *Registry {
 		Tenants:                newMemoryTenants(),
 		Users:                  newMemoryUsers(),
 		Groups:                 newMemoryGroups(),
+		GroupMemberships:       newMemoryGroupMemberships(),
 		Labels:                 newMemoryLabels(),
 		ScoreEngines:           newMemoryScoreEngines(),
 		EmailClassifications:   newMemoryClassifications(),
@@ -26,6 +27,7 @@ func NewInMemoryRegistry() *Registry {
 		EvaluationResults:      newMemoryEvalResults(),
 		CommunicationHistories: newMemoryCommHistory(),
 		FeedbackEvents:         newMemoryFeedbackEvents(),
+		AuditLogs:              NewMemoryAuditLogs(),
 	}
 }
 
@@ -187,6 +189,31 @@ func (m *memoryGroups) Create(_ context.Context, g *Group) error {
 	now := time.Now().UTC()
 	if g.CreatedAt.IsZero() {
 		g.CreatedAt = now
+	}
+	g.UpdatedAt = now
+	m.rows[g.ID] = *g
+	m.byName[key] = g.ID
+	return nil
+}
+
+func (m *memoryGroups) Upsert(_ context.Context, g *Group) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := g.TenantID + ":" + g.Name
+	if g.ID == "" {
+		if existingID, exists := m.byName[key]; exists {
+			g.ID = existingID
+		} else {
+			g.ID = uuid.NewString()
+		}
+	}
+	now := time.Now().UTC()
+	if g.CreatedAt.IsZero() {
+		if existing, ok := m.rows[g.ID]; ok {
+			g.CreatedAt = existing.CreatedAt
+		} else {
+			g.CreatedAt = now
+		}
 	}
 	g.UpdatedAt = now
 	m.rows[g.ID] = *g
@@ -589,4 +616,88 @@ func (m *memoryFeedbackEvents) Counts(_ context.Context, tenantID string, start,
 		}
 	}
 	return c, nil
+}
+
+// --- group memberships ---------------------------------------------------
+
+type memoryGroupMemberships struct {
+	mu   sync.RWMutex
+	rows []GroupMembership
+}
+
+func newMemoryGroupMemberships() *memoryGroupMemberships {
+	return &memoryGroupMemberships{}
+}
+
+func (m *memoryGroupMemberships) Upsert(_ context.Context, gm *GroupMembership) error {
+	if gm.CreatedAt.IsZero() {
+		gm.CreatedAt = time.Now().UTC()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, r := range m.rows {
+		if r.GroupID == gm.GroupID && r.UserID == gm.UserID {
+			return nil // already exists
+		}
+	}
+	m.rows = append(m.rows, *gm)
+	return nil
+}
+
+func (m *memoryGroupMemberships) ListByGroup(_ context.Context, groupID string) ([]GroupMembership, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []GroupMembership
+	for _, r := range m.rows {
+		if r.GroupID == groupID {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+func (m *memoryGroupMemberships) ListByUser(_ context.Context, userID string) ([]GroupMembership, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []GroupMembership
+	for _, r := range m.rows {
+		if r.UserID == userID {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+func (m *memoryGroupMemberships) DeleteByGroup(_ context.Context, groupID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	filtered := m.rows[:0]
+	for _, r := range m.rows {
+		if r.GroupID != groupID {
+			filtered = append(filtered, r)
+		}
+	}
+	m.rows = filtered
+	return nil
+}
+
+func (m *memoryGroupMemberships) ReplaceForGroup(_ context.Context, groupID string, userIDs []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	filtered := m.rows[:0]
+	for _, r := range m.rows {
+		if r.GroupID != groupID {
+			filtered = append(filtered, r)
+		}
+	}
+	now := time.Now().UTC()
+	for _, uid := range userIDs {
+		filtered = append(filtered, GroupMembership{
+			GroupID:   groupID,
+			UserID:    uid,
+			CreatedAt: now,
+		})
+	}
+	m.rows = filtered
+	return nil
 }

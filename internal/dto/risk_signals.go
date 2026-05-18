@@ -92,6 +92,16 @@ type RiskSignals struct {
 	// heuristics can match against them.
 	SenderDomain    string `json:"sender_domain,omitempty"`
 	RecipientDomain string `json:"recipient_domain,omitempty"`
+
+	// Directory-context signals populated by normalizer when repos available.
+	SenderSensitivity      string `json:"sender_sensitivity,omitempty"`
+	RecipientSensitivity   string `json:"recipient_sensitivity,omitempty"`
+	RecipientDepartment    string `json:"recipient_department,omitempty"`
+	SenderKnownTitle       string `json:"sender_known_title,omitempty"`
+	CommunicationFrequency int    `json:"communication_frequency,omitempty"`
+	TypicalSendHour        int    `json:"typical_send_hour,omitempty"`
+	CurrentHourUTC         int    `json:"current_hour_utc,omitempty"`
+	IsFirstContact         bool   `json:"is_first_contact,omitempty"`
 }
 
 // AnyAuthFailed reports whether at least one of SPF/DKIM/DMARC failed.

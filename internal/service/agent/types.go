@@ -73,9 +73,14 @@ type DiscoveredUser struct {
 	IsSuspended bool
 	GroupIDs    []string
 	ManagerID   string
+	Aliases          []string // email aliases
+	IsSharedMailbox  bool     // shared/resource mailbox (O365 mailboxType)
+	IsServiceAccount bool     // service account / app user
 	// SensitivityHint is the per-role sensitivity boost applied during
 	// onboarding (e.g. C-suite / Finance / HR get higher sensitivity).
-	SensitivityHint Sensitivity
+	SensitivityHint       Sensitivity
+	SensitivityConfidence float64 // 0.0-1.0
+	NeedsAdminReview      bool    // true when confidence < 0.5
 }
 
 // DiscoveredGroup is the canonical group/distribution-list shape.
@@ -109,6 +114,20 @@ func (s Sensitivity) String() string {
 		return "max"
 	default:
 		return "default"
+	}
+}
+
+// DBTier returns the database-compatible sensitivity tier string.
+// The users.sensitivity_tier CHECK constraint accepts only
+// ('standard', 'elevated', 'executive').
+func (s Sensitivity) DBTier() string {
+	switch s {
+	case SensitivityElevated:
+		return "elevated"
+	case SensitivityHigh, SensitivityMax:
+		return "executive"
+	default:
+		return "standard"
 	}
 }
 
@@ -267,4 +286,12 @@ type ConfigStore interface {
 // stored verdict for a message (so it can explain it back to the user).
 type EvaluationLookup interface {
 	FindResult(ctx context.Context, tenantID, messageID string) (dto.EvaluateResult, error)
+}
+
+// PIIHasher produces stable, opaque pseudonyms for PII values using a
+// per-tenant key. Wraps pkg/privacy.Pseudonymizer so the agent package
+// does not import the privacy package directly (avoiding potential
+// circular deps in larger builds).
+type PIIHasher interface {
+	HashPII(tenantID string, input string) string
 }

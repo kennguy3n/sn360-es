@@ -98,6 +98,14 @@ type PostConsentTrigger interface {
 	StartOnboarding(ctx context.Context, tenantID string, provider ProviderType) error
 }
 
+// ProviderRegistrar registers a new provider entry in the runtime
+// registry from a freshly acquired OAuth token. Called after token
+// persistence but before triggering onboarding, so that the tenant's
+// providers are available for label application immediately.
+type ProviderRegistrar interface {
+	RegisterFromToken(ctx context.Context, tenantID string, provider ProviderType, token Token) error
+}
+
 // StateSigner is the small HMAC helper used to bind tenant_id +
 // provider + nonce into the OAuth `state` parameter so the callback
 // can verify the consent originated from us.
@@ -181,22 +189,28 @@ func (s *StateSigner) Verify(token string) (StatePayload, error) {
 // callbacks, exchanges codes, persists tokens, and kicks off the
 // onboarding agent.
 type Service struct {
-	providers map[ProviderType]ProviderConfig
-	store     TokenStore
-	exch      TokenExchanger
-	state     *StateSigner
-	trigger   PostConsentTrigger
-	log       *slog.Logger
+	providers  map[ProviderType]ProviderConfig
+	store      TokenStore
+	exch       TokenExchanger
+	state      *StateSigner
+	trigger    PostConsentTrigger
+	registrar  ProviderRegistrar
+	nonces     NonceStore
+	validator  PostConsentValidator
+	log        *slog.Logger
 }
 
 // ServiceConfig bundles the inputs to NewService.
 type ServiceConfig struct {
-	Providers map[ProviderType]ProviderConfig
-	Store     TokenStore
-	Exch      TokenExchanger
-	State     *StateSigner
-	Trigger   PostConsentTrigger
-	Logger    *slog.Logger
+	Providers  map[ProviderType]ProviderConfig
+	Store      TokenStore
+	Exch       TokenExchanger
+	State      *StateSigner
+	Trigger    PostConsentTrigger
+	Registrar  ProviderRegistrar
+	Nonces     NonceStore
+	Validator  PostConsentValidator
+	Logger     *slog.Logger
 }
 
 // NewService validates cfg and returns a Service.
@@ -222,17 +236,21 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 		cfg.Logger = slog.Default()
 	}
 	return &Service{
-		providers: cfg.Providers,
-		store:     cfg.Store,
-		exch:      cfg.Exch,
-		state:     cfg.State,
-		trigger:   cfg.Trigger,
-		log:       cfg.Logger,
+		providers:  cfg.Providers,
+		store:      cfg.Store,
+		exch:       cfg.Exch,
+		state:      cfg.State,
+		trigger:    cfg.Trigger,
+		registrar:  cfg.Registrar,
+		nonces:     cfg.Nonces,
+		validator:  cfg.Validator,
+		log:        cfg.Logger,
 	}, nil
 }
 
 // AuthURL returns the consent URL the user should visit. Includes a
-// signed state binding tenantID + provider.
+// signed state binding tenantID + provider. Parameters are
+// provider-aware: Google gets access_type=offline; Microsoft does not.
 func (s *Service) AuthURL(provider ProviderType, tenantID string) (string, error) {
 	p, ok := s.providers[provider]
 	if !ok {
@@ -246,20 +264,39 @@ func (s *Service) AuthURL(provider ProviderType, tenantID string) (string, error
 	q.Set("client_id", p.ClientID)
 	q.Set("redirect_uri", p.RedirectURL)
 	q.Set("response_type", "code")
-	q.Set("access_type", "offline")
-	q.Set("prompt", "consent")
 	q.Set("scope", strings.Join(p.Scopes, " "))
 	q.Set("state", stateTok)
+	// Provider-specific parameters.
+	switch provider {
+	case ProviderGoogle:
+		q.Set("access_type", "offline")
+		q.Set("prompt", "consent")
+	case ProviderMicrosoft:
+		q.Set("prompt", "consent")
+	default:
+		q.Set("prompt", "consent")
+	}
 	return p.AuthURL + "?" + q.Encode(), nil
 }
 
-// HandleCallback validates the state, exchanges the code, persists the
-// token, and triggers onboarding. It returns the tenant ID extracted
-// from the state on success.
+// HandleCallback validates the state, checks nonce replay, exchanges
+// the code, validates tenant access, persists the token, and triggers
+// onboarding. It returns the tenant ID extracted from the state on
+// success.
 func (s *Service) HandleCallback(ctx context.Context, stateTok, code string) (string, ProviderType, error) {
 	payload, err := s.state.Verify(stateTok)
 	if err != nil {
 		return "", "", err
+	}
+	// Nonce replay prevention.
+	if s.nonces != nil {
+		alreadyUsed, nonceErr := s.nonces.MarkUsed(ctx, payload.Nonce, 10*time.Minute)
+		if nonceErr != nil {
+			s.log.Warn("onboarding: nonce store error (proceeding)",
+				slog.String("err", nonceErr.Error()))
+		} else if alreadyUsed {
+			return "", "", errors.New("onboarding: nonce already used (replay detected)")
+		}
 	}
 	p, ok := s.providers[payload.Provider]
 	if !ok {
@@ -269,8 +306,23 @@ func (s *Service) HandleCallback(ctx context.Context, stateTok, code string) (st
 	if err != nil {
 		return "", "", fmt.Errorf("onboarding: exchange code: %w", err)
 	}
+	// Post-consent domain/tenant verification.
+	if s.validator != nil {
+		if valErr := s.validator.ValidateTenantAccess(ctx, tok, payload.TenantID, payload.Provider); valErr != nil {
+			return "", "", fmt.Errorf("onboarding: tenant validation failed: %w", valErr)
+		}
+	}
 	if err := s.store.Save(ctx, payload.TenantID, payload.Provider, tok); err != nil {
 		return "", "", fmt.Errorf("onboarding: persist token: %w", err)
+	}
+	// Register the provider in the runtime registry so it is
+	// immediately available for label application and banner injection.
+	if s.registrar != nil {
+		if regErr := s.registrar.RegisterFromToken(ctx, payload.TenantID, payload.Provider, tok); regErr != nil {
+			s.log.Warn("onboarding: provider registration failed (non-fatal)",
+				slog.String("tenant_id", payload.TenantID),
+				slog.String("err", regErr.Error()))
+		}
 	}
 	if s.trigger != nil {
 		if err := s.trigger.StartOnboarding(ctx, payload.TenantID, payload.Provider); err != nil {
