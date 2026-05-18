@@ -79,6 +79,7 @@ type Config struct {
 	Score      ScoreThresholds
 	URLRewrite URLRewrite
 	CORS       CORS
+	SMTP       SMTP
 }
 
 // Log carries structured-logging configuration.
@@ -196,6 +197,11 @@ type Tier1 struct {
 	BatchSize     int
 	PassThreshold int
 	FlagThreshold int
+	// BatchEnabled selects the batched-orchestrator path on
+	// es.evaluate.request (pulls in batches of up to BatchSize and
+	// calls the encoder's /predict/batch endpoint). When false the
+	// per-message handler is used instead.
+	BatchEnabled bool
 }
 
 // Tier0 controls the Tier 0 classification gates.
@@ -237,6 +243,21 @@ type ScoreThresholds struct {
 // URLRewrite configures the URL-rewriter interstitial.
 type URLRewrite struct {
 	Base string
+}
+
+// SMTP configures the simulation-email transport used by the
+// education engine. All fields are optional; when Host or From is
+// empty the simulation sender is disabled and SimulationEngine
+// continues to record interactions without dispatching mail.
+type SMTP struct {
+	Host       string
+	Port       int
+	User       string
+	Password   string
+	From       string
+	StartTLS   bool
+	Timeout    time.Duration
+	SkipVerify bool
 }
 
 // CORS configures the cross-origin policy applied to every HTTP route.
@@ -351,6 +372,7 @@ func Load() (Config, error) {
 			BatchSize:     getInt("TIER1_BATCH_SIZE", 64),
 			PassThreshold: getInt("TIER1_PASS_THRESHOLD", 20),
 			FlagThreshold: getInt("TIER1_FLAG_THRESHOLD", 60),
+			BatchEnabled:  getBool("TIER1_BATCH_ENABLED", false),
 		},
 		Tier0: Tier0{
 			SkipInternal:         getBool("TIER0_SKIP_INTERNAL", true),
@@ -383,6 +405,16 @@ func Load() (Config, error) {
 		},
 		CORS: CORS{
 			AllowedOrigins: parseCSV(getStr("CORS_ALLOWED_ORIGINS", "")),
+		},
+		SMTP: SMTP{
+			Host:       getStr("SMTP_HOST", ""),
+			Port:       getInt("SMTP_PORT", 587),
+			User:       getStr("SMTP_USER", ""),
+			Password:   getStr("SMTP_PASSWORD", ""),
+			From:       getStr("SMTP_FROM", ""),
+			StartTLS:   getBool("SMTP_STARTTLS", true),
+			Timeout:    getDuration("SMTP_TIMEOUT", 10*time.Second),
+			SkipVerify: getBool("SMTP_SKIP_VERIFY", false),
 		},
 	}
 

@@ -176,14 +176,45 @@ sequenceDiagram
 Although the consumers live in the same binary, JetStream still groups
 them by name so multiple replicas of `sn360-es` can share work.
 
-| Consumer Group | Stream | Filter | Max Deliver | Ack Wait | Purpose |
-|---|---|---|---|---|---|
-| `evaluate-svc` | ES_EVALUATE | `es.evaluate.request` | 5 | 60s | Evaluation processing |
-| `ingestion-action` | ES_EVALUATE | `es.evaluate.result` | 3 | 30s | Banner/label actions |
-| `management-persist` | ES_EVALUATE | `es.evaluate.result` | 3 | 30s | Result persistence |
-| `education-trigger` | ES_EVALUATE | `es.evaluate.result` | 3 | 10s | Education micro-lesson triggers |
-| `ingestion-onboard` | ES_ONBOARDING | `es.onboarding.>` | 3 | 30s | Onboarding handlers |
-| `education-sim` | ES_EDUCATION | `es.education.simulation.>` | 3 | 30s | Simulation execution |
+| Consumer Group | Stream | Filter | Max Deliver | Ack Wait | Wired in binary | Purpose |
+|---|---|---|---|---|---|---|
+| `evaluate-svc` | ES_EVALUATE | `es.evaluate.request` | 5 | 60s | Yes (critical when `evaluator` is constructed) | Multi-tier evaluation processing |
+| `ingestion-action` | ES_EVALUATE | `es.evaluate.result` | 3 | 30s | Yes (critical when banner/URL/release wired) | Banner + label + URL-rewrite + quarantine fan-out |
+| `management-persist` | ES_EVALUATE | `es.evaluate.result` | 3 | 30s | Yes (critical when Postgres repos wired) | Result persistence |
+| `education-trigger` | ES_EVALUATE | `es.evaluate.result` | 3 | 10s | Yes (critical when micro-lesson service wired) | Education micro-lesson triggers |
+| `feedback-persist` | ES_EVALUATE | `es.action.feedback.>` | 3 | 30s | Yes (critical when feedback repo wired) | Persist banner click feedback for dashboard counts |
+| `ingestion-onboard` | ES_ONBOARDING | `es.onboarding.>` | 3 | 30s | Yes (best-effort; observe-only until directory client wired) | Onboarding handlers |
+| `education-sim` | ES_EDUCATION | `es.education.simulation.send` | 3 | 30s | Yes (critical when simulation engine wired) | Simulation campaign execution |
+| `education-sim-track` | ES_EDUCATION | `es.education.simulation.result` | 3 | 30s | Yes (best-effort when tracker wired) | Record per-user interaction outcomes |
+| `quarantine-release` | ES_ACTION | `es.action.quarantine.release` | 3 | 30s | Yes (critical when release service wired) | Quarantine release flow |
+| `escalation` | ES_ACTION | `es.action.escalation.>` | 3 | 30s | Yes (critical when escalation service wired) | SecOps escalation ticket fan-out |
+
+#### `TIER1_BATCH_ENABLED` wire-format dependency
+
+The optional Tier 1 `BatchOrchestrator` (`internal/service/evaluate/batch.go`)
+shares the `es.evaluate.request` subject with the per-message
+`evaluate-svc` consumer, but the two consumers expect **different
+payloads on the wire**:
+
+| `TIER1_BATCH_ENABLED` | Active consumer | Expected payload on `es.evaluate.request` |
+|---|---|---|
+| `false` (default) | per-message `evaluate-svc` (`handleEvaluateRequest`) | `dto.EvaluateRequest` JSON |
+| `true` | `BatchOrchestrator` only (per-message consumer is suppressed) | `evaluate.BatchMessage` JSON: `{ "request": dto.EvaluateRequest, "signals": dto.RiskSignals }` |
+
+`sn360-es` enforces mutual exclusion via the `a.evaluator != nil &&
+a.batchOrch == nil` guard in `StartConsumers`, so both consumers will
+never be active at once in the same process. However, **upstream
+publishers (ingestion-svc, replay tooling, anything that calls
+`bus.Publish("es.evaluate.request", ...)`) must agree on which payload
+shape to emit for the configured mode**. A misconfigured deployment
+(batch enabled in `sn360-es` but ingestion still publishing flat
+`dto.EvaluateRequest` payloads, or vice versa) results in every message
+failing to unmarshal and being NAK'd up to `MaxDeliver=5` before
+landing in the DLQ.
+
+When flipping `TIER1_BATCH_ENABLED`, roll the publisher and the
+consumer together: both must speak the same wire format in the same
+release.
 
 ## 3. Detection Pipeline
 

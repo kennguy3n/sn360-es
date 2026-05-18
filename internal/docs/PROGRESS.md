@@ -35,11 +35,17 @@ evaluator degrades gracefully and surfaces those tiers as "pending".
 | Middleware chain (telemetry → JWT auth → CORS → request logger) | Wired |
 | Banner action, dashboard, education, predict, quarantine, escalation, interstitial handlers | Wired |
 | NATS / Redis Streams event bus selectable via `EVENT_BUS` | Wired |
-| `es.evaluate.result` consumers (`management-persist`, `education-trigger`) | Wired (critical when their service deps are present) |
+| `es.evaluate.request` consumer (`evaluate-svc` durable, evaluator entry point) | Wired (critical when the evaluator is constructed) |
+| `es.evaluate.result` consumers (`management-persist`, `education-trigger`, `ingestion-action`) | Wired (critical when their service deps are present) |
+| `es.action.feedback.>` consumer (`feedback-persist`) | Wired (critical when feedback repo present) |
+| `es.action.quarantine.release` consumer (`quarantine-release`) | Wired (critical when release service present) |
+| `es.action.escalation.>` consumer (`escalation`) | Wired (critical when escalation service present) |
+| `es.education.simulation.send` + `.result` consumers (`education-sim`, `education-sim-track`) | Wired (`send` critical, `result` best-effort) |
+| `es.onboarding.>` consumer (`ingestion-onboard`) | Wired (best-effort, observe-only until a DirectoryClient is provided) |
+| Tier 1 batch orchestrator (NATS pull-fetch, 50/msg batches, fallback to evaluator) | Wired when `TIER1_BATCH_ENABLED=true` and bus is NATS |
 | DLQ processor (`service.DLQProcessor`) on the canonical DLQ subjects | Wired (best-effort, log-only by default) |
-| Other event consumers (`es.evaluate.request`, `es.education.simulation.*`, `es.action.banner` / `.label` / `.quarantine`, `es.onboarding.>`, `es.action.feedback.>`) | Implemented per-package, NOT yet wired in `StartConsumers` |
 | Tier 0 classification gate | Wired (pure CPU) |
-| Tier 1 encoder client + Tier 2 SLM client | Wired in process; remote services optional |
+| Tier 1 encoder client + Tier 2 SLM client | Wired in process via adapters (`evaluate.Tier1Adapter`, `Tier2HTTPClient`); remote services optional |
 | Rspamd client + AI / Rspamd Redis caches | Wired (Rspamd optional via docker-compose) |
 | PostgreSQL repositories + golang-migrate runner | Wired (degrades to nil if DSN unset) |
 | Privacy layer (Blake2b pseudonymisation, KMS envelope encryption, log sanitiser) | Wired |
@@ -62,6 +68,53 @@ evaluator degrades gracefully and surfaces those tiers as "pending".
 ## Changelog
 
 The dates below are commit dates on the `main` branch.
+
+### 2026-05-17 — Evaluation pipeline wiring + provider adapters
+
+- `internal/service/evaluate/` adds three HTTP transport adapters
+  that close the gap between the multi-tier `Evaluator` and the
+  per-tier client packages: `tier1_adapter.go` bridges the existing
+  `tier1.Client` onto `evaluate.Tier1Client`; `tier2_http.go` is a new
+  OpenAI-compatible client that targets the Ternary-Bonsai-8B server
+  exposed by `kennguy3n/llama.cpp` at `POST /v1/chat/completions`;
+  `rspamd_http.go` is a standard Rspamd `POST /checkv2` client with
+  Password-header auth and score / action / symbol parsing. Each
+  adapter has table-driven tests covering happy path, timeout,
+  malformed response, and auth header propagation.
+- `cmd/sn360-es/main.go` `newApplication()` now instantiates the
+  Tier 0 gate unconditionally (pure CPU), the Tier 1 / Tier 2 /
+  Rspamd clients conditionally on their URLs being set, and the
+  `evaluate.Evaluator` whenever the bus is up — relying on the
+  evaluator's existing `markDegraded` path to keep the binary
+  bootable even when every remote tier is unreachable. The Tier 1
+  encoder health probe is added to `/readyz` when the raw client is
+  wired.
+- `StartConsumers()` now subscribes the remaining event consumers
+  documented in ARCHITECTURE.md §8.4: `es.evaluate.request`
+  (`evaluate-svc`, critical), `es.evaluate.result` →
+  `ingestion-action` (banner / label / URL-rewrite / quarantine
+  fan-out, critical), `es.education.simulation.send` and `.result`,
+  `es.onboarding.>`, `es.action.quarantine.release`, and
+  `es.action.escalation.>`. An optional Tier 1 batch orchestrator is
+  wired behind `TIER1_BATCH_ENABLED=true` when the bus is NATS.
+- `internal/service/action/banner_injector.go` introduces the
+  `BannerInjector` interface plus a `LoggingBannerInjector` adapter
+  so the action consumer chain has a typed seam for downstream
+  provider integrations.
+- `pkg/email_provider/gmail/label_provider.go` and
+  `pkg/email_provider/outlook/label_provider.go` implement the
+  `action.LabelProvider` interface against the Gmail REST API
+  (`users.labels.create` + `users.messages.modify`) and the
+  Microsoft Graph API (`PATCH /me/messages/{id}` for categories),
+  both with table-driven tests.
+- `internal/service/education/smtp_sender.go` adds an SMTP
+  `SimulationSender` (STARTTLS + implicit TLS, RFC 2047 / Q-encoded
+  display names, parameterised From / Reply-To); wired into the
+  `SimulationEngine` when `SMTP_HOST` + `SMTP_FROM` are configured.
+- `cmd/sn360-es/main_consumers_test.go` adds integration tests for
+  `handleEvaluateRequest`, `handleIngestionAction`, and the
+  `StartConsumers` / `StopConsumers` lifecycle, using a richer
+  recording bus + fake Tier 1 / Tier 2 clients.
 
 ### 2026-05-17 — Composition + middleware + missing tests
 

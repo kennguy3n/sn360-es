@@ -27,16 +27,33 @@ func TestBannerRendererRejectsNilTranslator(t *testing.T) {
 	}
 }
 
-func TestBannerRendererRequiresActionTokenForInteractiveTiers(t *testing.T) {
+// TestBannerRendererSuppressesCTAsWhenTokenMissing pins the relaxed
+// contract: a banner with no ActionToken still renders (so deployments
+// without a feedback-token issuer still surface the warning), but the
+// interactive CTAs are suppressed because their URLs would otherwise
+// embed an empty token. The structural copy (title, body, primary,
+// reasons, auth chip) must still be present.
+func TestBannerRendererSuppressesCTAsWhenTokenMissing(t *testing.T) {
 	r := mustRenderer(t)
-	in := BannerInput{
+	html, err := r.Render(BannerInput{
 		Tier:    constant.TierWarning,
 		Primary: constant.CategoryLikelyPhishing,
 		Locale:  "en",
-		// No ActionToken — Warning tier exposes Mark Safe so this should fail.
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
 	}
-	if _, err := r.Render(in); err == nil {
-		t.Fatal("expected error when token missing on interactive tier")
+	s := string(html)
+	if !strings.Contains(s, `data-sn360-tier="Warning"`) {
+		t.Errorf("output should still mark Warning tier, got: %s", s)
+	}
+	for _, banned := range []string{"report_phishing", "mark_safe", "trust_sender"} {
+		if strings.Contains(s, banned) {
+			t.Errorf("interactive CTA %q must be suppressed when no token is supplied\n%s", banned, s)
+		}
+	}
+	if strings.Contains(s, "token=\"") || strings.Contains(s, "token=&") || strings.Contains(s, "?token= ") {
+		t.Errorf("output exposes empty-token URL: %s", s)
 	}
 }
 

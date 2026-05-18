@@ -115,6 +115,13 @@ type Tier1Outcome struct {
 	Flag       bool    `json:"flag"`
 	Escalate   bool    `json:"escalate"`
 	LatencyMs  int64   `json:"latency_ms"`
+	// ReasonCodes are short signals the encoder surfaces (e.g.
+	// "URGENT_TONE", "WIRE_REQUEST"). They are folded into the
+	// per-result top-level ReasonCodes by the evaluator (and batch
+	// orchestrator), but kept here too so audit / replay tools can
+	// see which signals came from the encoder versus the
+	// categoriser without re-running the pipeline.
+	ReasonCodes []string `json:"reason_codes,omitempty"`
 }
 
 // Tier2Outcome is the LLM / SLM verdict.

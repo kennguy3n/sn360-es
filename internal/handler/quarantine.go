@@ -82,11 +82,24 @@ func (h *QuarantineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "token missing required claims")
 		return
 	}
+	// Propagate the upstream correlation ID so the release outcome
+	// event (es.action.quarantine.release) can be joined back to the
+	// HTTP request — and through it to the original evaluation — by
+	// the same correlation_id that middleware / clients already log
+	// against the request. We read X-Correlation-ID directly here
+	// rather than from request context because RequestLogger only
+	// surfaces the header for logging (request_logger.go:73) and the
+	// canonical project pattern is "read at the boundary, hand it to
+	// the service layer". Equivalent to the bus path at
+	// cmd/sn360-es/main.go::handleQuarantineRelease, which threads
+	// env.CorrelationID into the same ReleaseRequest field.
+	correlationID := strings.TrimSpace(r.Header.Get("X-Correlation-ID"))
 	outcome, err := h.release.Release(r.Context(), action.ReleaseRequest{
 		TenantID:             claims.TenantID,
 		PseudonymizedMessage: claims.PseudonymizedMessage,
 		RequestedBy:          req.RequestedBy,
 		RestoredBody:         req.RestoredBody,
+		CorrelationID:        correlationID,
 	})
 	if err != nil {
 		h.logger.WarnContext(r.Context(), "quarantine release failed",
