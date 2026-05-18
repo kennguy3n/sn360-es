@@ -1,0 +1,42 @@
+{
+  "tier_explanations": {
+    "Blocked": "This message was blocked because our detection systems classified it as a likely threat.",
+    "HighRisk": "This message was flagged as high-risk and routed to your security team.",
+    "Warning": "This message looks suspicious — please review carefully before acting.",
+    "Caution": "This message has some unusual characteristics worth checking.",
+    "Informational": "This message is informational — first contact from an external sender.",
+    "Trusted": "This message comes from a trusted sender."
+  },
+  "tier_suggestions": {
+    "Blocked": "Do not interact with this message. Report it to your security team if anything looks legitimate.",
+    "HighRisk": "Do not interact with this message. Report it to your security team if anything looks legitimate.",
+    "Warning": "Verify the sender out-of-band before clicking links or replying.",
+    "Caution": "Treat any link or attachment with caution.",
+    "Informational": "First-time external sender — confirm before acting on requests.",
+    "Trusted": "No action required."
+  },
+  "category_names": {
+    "LIKELY_PHISHING": "likely phishing",
+    "BEC_IMPERSONATION": "business-email-compromise / impersonation",
+    "LOOKALIKE_DOMAIN": "lookalike domain",
+    "SUSPICIOUS_URL": "suspicious URL",
+    "SUSPICIOUS_ATTACHMENT": "suspicious attachment",
+    "FIRST_CONTACT_EXTERNAL": "first contact from outside your organisation",
+    "ACCOUNT_TAKEOVER_SUSPECTED": "account-takeover indicators",
+    "VENDOR_COMPROMISE": "possible vendor compromise",
+    "CREDENTIAL_HARVESTING": "credential harvesting",
+    "INVOICE_FRAUD": "invoice fraud",
+    "QR_PHISHING": "QR-code phishing",
+    "SCAM_FRAUD": "scam / fraud",
+    "AUTH_FAILED": "failed sender authentication",
+    "INTERNAL_TRUSTED": "internal trusted",
+    "VENDOR_TRUSTED": "trusted vendor",
+    "NEWSLETTER": "newsletter"
+  },
+  "primary_signal": "Primary signal: ",
+  "contributing_factors": "Contributing factors: ",
+  "degraded_notice": "Note: one or more detection services were unavailable during this evaluation.",
+  "verdict_pending": "Verdict pending.",
+  "escalated_suggestion": "Escalated to your security team for review.",
+  "release_suggestion": "Your release request has been queued and will be processed within a few minutes."
+}

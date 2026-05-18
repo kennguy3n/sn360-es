@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/constant"
@@ -17,6 +18,9 @@ type SupportConfig struct {
 	Lookup EvaluationLookup
 	Audit  AuditLog
 	Events EventPublisher
+	// Explanations is the locale-aware explanation catalog. When nil,
+	// ExplainVerdict and DefaultSuggestion fall back to hardcoded English.
+	Explanations *ExplanationCatalog
 	// SecOpsSubject is the NATS subject for low-confidence escalations
 	// (default "es.action.escalate.secops").
 	SecOpsSubject string
@@ -129,8 +133,12 @@ func (a *SupportAgent) Answer(ctx context.Context, q SupportQuery) (SupportReply
 
 func (a *SupportAgent) explain(q SupportQuery, v dto.EvaluateResult) SupportReply {
 	conf := verdictConfidence(v)
-	exp := ExplainVerdict(v, q.Locale)
-	suggest := DefaultSuggestion(v.Tier)
+	cat := a.cfg.Explanations
+	if cat == nil {
+		cat = getDefaultExplanations()
+	}
+	exp := ExplainVerdictWith(cat, v, q.Locale)
+	suggest := cat.TierSuggestion(v.Tier, q.Locale)
 	return SupportReply{
 		Explanation: exp,
 		Confidence:  conf,
@@ -147,19 +155,35 @@ func (a *SupportAgent) release(ctx context.Context, q SupportQuery, v dto.Evalua
 	if err := a.cfg.Events.Publish(ctx, a.cfg.ReleaseSubject, []byte(payload)); err != nil {
 		return SupportReply{}, fmt.Errorf("support: emit release: %w", err)
 	}
+	cat := a.cfg.Explanations
+	if cat == nil {
+		cat = getDefaultExplanations()
+	}
+	releaseSuggestion := "Your release request has been queued and will be processed within a few minutes."
+	if cat != nil {
+		releaseSuggestion = cat.ReleaseSuggestion(q.Locale)
+	}
 	now := time.Now().UTC()
 	return SupportReply{
-		Explanation: ExplainVerdict(v, q.Locale),
+		Explanation: ExplainVerdictWith(cat, v, q.Locale),
 		Confidence:  verdictConfidence(v),
-		Suggestion:  "Your release request has been queued and will be processed within a few minutes.",
+		Suggestion:  releaseSuggestion,
 		ReleasedAt:  &now,
 		ReleasedAs:  constant.CategoryInternalTrusted,
 	}, nil
 }
 
 func (a *SupportAgent) escalate(ctx context.Context, q SupportQuery, v dto.EvaluateResult, reason string) (SupportReply, error) {
+	cat := a.cfg.Explanations
+	if cat == nil {
+		cat = getDefaultExplanations()
+	}
+	escSuggestion := "Escalated to your security team for review."
+	if cat != nil {
+		escSuggestion = cat.EscalatedSuggestion(q.Locale)
+	}
 	if a.cfg.Events == nil {
-		return SupportReply{Escalated: true, Suggestion: "Escalated to your security team."}, nil
+		return SupportReply{Escalated: true, Suggestion: escSuggestion}, nil
 	}
 	payload := fmt.Sprintf(`{"tenant_id":%q,"message_id":%q,"user":%q,"reason":%q,"verdict_tier":%q,"verdict_score":%d,"requested_at":%q}`,
 		q.TenantID, q.MessageID, q.UserEmail, reason, v.Tier, v.Score, time.Now().UTC().Format(time.RFC3339))
@@ -167,21 +191,66 @@ func (a *SupportAgent) escalate(ctx context.Context, q SupportQuery, v dto.Evalu
 		return SupportReply{}, fmt.Errorf("support: emit escalate: %w", err)
 	}
 	return SupportReply{
-		Explanation: ExplainVerdict(v, q.Locale),
+		Explanation: ExplainVerdictWith(cat, v, q.Locale),
 		Confidence:  verdictConfidence(v),
-		Suggestion:  "Escalated to your security team for review.",
+		Suggestion:  escSuggestion,
 		Escalated:   true,
 	}, nil
 }
 
+// defaultExplanations is the package-level catalog loaded lazily.
+var (
+	defaultExplanationsOnce sync.Once
+	defaultExplanations     *ExplanationCatalog
+)
+
+func getDefaultExplanations() *ExplanationCatalog {
+	defaultExplanationsOnce.Do(func() {
+		cat, err := DefaultExplanationCatalog()
+		if err == nil {
+			defaultExplanations = cat
+		}
+	})
+	return defaultExplanations
+}
+
 // ExplainVerdict produces a plain-language explanation for an evaluation
-// result. The output is deterministic so audit logs stay clean.
-//
-// Locale is currently advisory: the support agent always emits English
-// copy but downstream consumers (the support UI) can re-render using
-// the same template set as the banner renderer.
+// result in the requested locale. The output is deterministic so audit
+// logs stay clean. Falls back to English when the locale is unavailable.
 func ExplainVerdict(v dto.EvaluateResult, locale string) string {
-	_ = locale
+	return ExplainVerdictWith(getDefaultExplanations(), v, locale)
+}
+
+// ExplainVerdictWith is the same as ExplainVerdict but uses the supplied
+// catalog (useful for dependency injection in tests and SupportAgent).
+func ExplainVerdictWith(cat *ExplanationCatalog, v dto.EvaluateResult, locale string) string {
+	if cat == nil {
+		return explainVerdictFallback(v)
+	}
+	var b strings.Builder
+	b.WriteString(cat.TierExplanation(v.Tier, locale))
+	if v.Primary != "" {
+		b.WriteString(" ")
+		b.WriteString(cat.PrimarySignalLabel(locale))
+		b.WriteString(cat.CategoryName(v.Primary, locale))
+		b.WriteString(".")
+	}
+	if len(v.ReasonCodes) > 0 {
+		b.WriteString(" ")
+		b.WriteString(cat.ContributingFactorsLabel(locale))
+		b.WriteString(strings.Join(v.ReasonCodes, ", "))
+		b.WriteString(".")
+	}
+	if v.Degraded {
+		b.WriteString(" ")
+		b.WriteString(cat.DegradedNotice(locale))
+	}
+	return b.String()
+}
+
+// explainVerdictFallback is the hardcoded English fallback used when the
+// catalog fails to load.
+func explainVerdictFallback(v dto.EvaluateResult) string {
 	var b strings.Builder
 	switch v.Tier {
 	case constant.TierBlocked:
@@ -215,8 +284,21 @@ func ExplainVerdict(v dto.EvaluateResult, locale string) string {
 	return b.String()
 }
 
-// DefaultSuggestion returns the standard call-to-action for tier.
+// DefaultSuggestion returns the standard call-to-action for a tier in
+// the requested locale. Falls back to English.
 func DefaultSuggestion(tier constant.Tier) string {
+	return DefaultSuggestionLocale(tier, "en")
+}
+
+// DefaultSuggestionLocale returns the suggestion for a tier in the given locale.
+func DefaultSuggestionLocale(tier constant.Tier, locale string) string {
+	cat := getDefaultExplanations()
+	if cat != nil {
+		if s := cat.TierSuggestion(tier, locale); s != "" {
+			return s
+		}
+	}
+	// Hardcoded English fallback.
 	switch tier {
 	case constant.TierBlocked, constant.TierHighRisk:
 		return "Do not interact with this message. Report it to your security team if anything looks legitimate."

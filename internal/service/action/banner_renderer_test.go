@@ -312,7 +312,7 @@ func (s stackedCatalog) Translate(locale, key string) string {
 // marker.
 func TestBannerRendererNewLocales(t *testing.T) {
 	r := mustRenderer(t)
-	cases := []string{"th", "ja", "ko", "zh"}
+	cases := []string{"th", "ja", "ko", "zh", "de", "fr", "it", "ar", "fil", "ms"}
 	for _, loc := range cases {
 		t.Run(loc, func(t *testing.T) {
 			html, err := r.Render(BannerInput{
@@ -336,5 +336,29 @@ func TestBannerRendererNewLocales(t *testing.T) {
 				t.Errorf("untranslated key leaked for %q\n%s", loc, s)
 			}
 		})
+	}
+}
+
+// TestBannerRendererArabicRTLProductionCatalog verifies that the production
+// ar.json catalog (not the test-only stackedCatalog) correctly triggers
+// dir="rtl" output.
+func TestBannerRendererArabicRTLProductionCatalog(t *testing.T) {
+	r := mustRenderer(t)
+	html, err := r.Render(BannerInput{
+		Tier:        constant.TierHighRisk,
+		Primary:     constant.CategoryBECImpersonation,
+		Locale:      "ar",
+		ActionToken: "tok",
+		SenderAuth:  AuthFailed,
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	s := string(html)
+	if !strings.Contains(s, `dir="rtl"`) {
+		t.Errorf("expected dir=rtl for ar locale with production catalog\n%s", s)
+	}
+	if !strings.Contains(s, `data-sn360-locale="ar"`) {
+		t.Errorf("missing locale marker for ar\n%s", s)
 	}
 }

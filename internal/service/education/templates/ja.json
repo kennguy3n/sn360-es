@@ -1,0 +1,47 @@
+[
+  {
+    "template_id": "credential_phishing.easy.password_reset.ja",
+    "attack_type": "credential_phishing",
+    "difficulty": "easy",
+    "locale": "ja",
+    "subject_template": "【重要】パスワードの再設定をお願いします",
+    "body_template": "<p>{{.target_name}} 様</p><p>お客様のアカウントに不審なログインが検出されました。セキュリティのため、以下のリンクからパスワードを再設定してください：</p><p><a href=\"{{.landing_url}}\">パスワードを再設定する</a></p><p>心当たりのない場合は、IT部門までご連絡ください。</p><p>セキュリティチーム</p>",
+    "sender_display_template": "セキュリティチーム",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": [
+      "credential-harvest",
+      "CJK lookalike domain"
+    ]
+  },
+  {
+    "template_id": "bec.medium.ceo_urgent.ja",
+    "attack_type": "bec",
+    "difficulty": "medium",
+    "locale": "ja",
+    "subject_template": "至急のお願い – {{.target_name}}さん",
+    "body_template": "<p>{{.target_name}}さん</p><p>急ぎの件でお願いがあります。新しい取引先への送金が必要です。以下の口座に500万円を振り込んでいただけますか？</p><p>銀行名：三菱UFJ銀行<br/>口座番号：1234567</p><p>今日中に処理をお願いします。</p><p>{{.ceo_name}}</p>",
+    "sender_display_template": "{{.ceo_name}}",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "wire-transfer urgency",
+      "CEO impersonation"
+    ]
+  },
+  {
+    "template_id": "lookalike_domain.hard.vendor_invoice.ja",
+    "attack_type": "lookalike_domain",
+    "difficulty": "hard",
+    "locale": "ja",
+    "subject_template": "請求書 #{{.invoice_number}} のご確認",
+    "body_template": "<p>{{.target_name}} 様</p><p>いつもお世話になっております。添付の請求書をご確認の上、期日までにお支払いをお願いいたします。なお、振込先口座が変更になりましたのでご注意ください。</p><p>新口座情報は添付の請求書に記載しております。</p><p>よろしくお願いいたします。<br/>{{.vendor_name}}<br/>経理部</p>",
+    "sender_display_template": "{{.vendor_name}} 経理部",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "bank-detail change",
+      "CJK invoice fraud"
+    ]
+  }
+]

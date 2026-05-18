@@ -1,0 +1,42 @@
+{
+  "tier_explanations": {
+    "Blocked": "このメッセージは検出システムにより脅威と分類されたためブロックされました。",
+    "HighRisk": "このメッセージは高リスクとしてフラグが付けられ、セキュリティチームに転送されました。",
+    "Warning": "このメッセージは疑わしいようです — 行動する前に慎重に確認してください。",
+    "Caution": "このメッセージにはいくつかの異常な特徴があります。",
+    "Informational": "これは情報メッセージです — 外部の送信者からの初回連絡です。",
+    "Trusted": "このメッセージは信頼された送信者からのものです。"
+  },
+  "tier_suggestions": {
+    "Blocked": "このメッセージに反応しないでください。正当に見える場合はセキュリティチームに報告してください。",
+    "HighRisk": "このメッセージに反応しないでください。正当に見える場合はセキュリティチームに報告してください。",
+    "Warning": "リンクをクリックしたり返信する前に、別のチャネルで送信者を確認してください。",
+    "Caution": "リンクや添付ファイルには注意してください。",
+    "Informational": "初めての外部送信者です — 要求に応じる前に確認してください。",
+    "Trusted": "アクションは必要ありません。"
+  },
+  "category_names": {
+    "LIKELY_PHISHING": "フィッシングの可能性",
+    "BEC_IMPERSONATION": "ビジネスメール詐欺（BEC）",
+    "LOOKALIKE_DOMAIN": "類似ドメイン",
+    "SUSPICIOUS_URL": "不審なURL",
+    "SUSPICIOUS_ATTACHMENT": "不審な添付ファイル",
+    "FIRST_CONTACT_EXTERNAL": "外部からの初回連絡",
+    "ACCOUNT_TAKEOVER_SUSPECTED": "アカウント乗っ取りの兆候",
+    "VENDOR_COMPROMISE": "ベンダー侵害の可能性",
+    "CREDENTIAL_HARVESTING": "認証情報の収集",
+    "INVOICE_FRAUD": "請求書詐欺",
+    "QR_PHISHING": "QRコードフィッシング",
+    "SCAM_FRAUD": "詐欺",
+    "AUTH_FAILED": "送信者認証失敗",
+    "INTERNAL_TRUSTED": "信頼された内部送信者",
+    "VENDOR_TRUSTED": "信頼されたベンダー",
+    "NEWSLETTER": "ニュースレター"
+  },
+  "primary_signal": "主要シグナル: ",
+  "contributing_factors": "関連要因: ",
+  "degraded_notice": "注: 評価中に一部の検出サービスが利用できませんでした。",
+  "verdict_pending": "判定保留中。",
+  "escalated_suggestion": "セキュリティチームにエスカレーションされました。",
+  "release_suggestion": "解放リクエストがキューに入りました。数分以内に処理されます。"
+}

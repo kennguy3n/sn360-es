@@ -1467,14 +1467,10 @@ func (a *application) handleActionBanner(ctx context.Context, msg events.Message
 	return nil
 }
 
-// handleActionURLRewrite acknowledges the rewrite signal. Real URL
-// rewriting requires reading the message body, walking the HTML
-// tokens, and writing back via the provider's body API — work that
-// is owned by the BannerInjector's body splice path. Today we log
-// the signal so the operator can correlate it against the verdict;
-// the full body-rewrite implementation lands in a follow-up task
-// once the provider body abstraction is generalised across Gmail's
-// shadow-copy and Outlook's PATCH paths.
+// handleActionURLRewrite rewrites URLs in the message body via the
+// provider-specific BodyRewriter (Gmail shadow-copy, Outlook PATCH).
+// When no BodyRewriter is configured for the tenant the handler logs
+// the signal and returns without error so the consumer never blocks.
 func (a *application) handleActionURLRewrite(ctx context.Context, msg events.Message) error {
 	if a.urlRewriter == nil {
 		return nil
@@ -1485,12 +1481,41 @@ func (a *application) handleActionURLRewrite(ctx context.Context, msg events.Mes
 			slog.Any("error", err))
 		return nil
 	}
-	if env.TenantID == "" || env.MessageID == "" {
+	if env.TenantID == "" || env.MessageID == "" || env.Email == "" {
 		return nil
 	}
-	a.logger.DebugContext(ctx, "sn360-es: action.url_rewrite observed",
-		slog.String("tenant_id", env.TenantID),
-		slog.String("tier", string(env.Tier)))
+
+	kind := a.providers.resolveKind(env.TenantID)
+	if kind == "" {
+		a.logger.DebugContext(ctx, "sn360-es: action.url_rewrite: no provider registered",
+			slog.String("tenant_id", env.TenantID))
+		return nil
+	}
+
+	bw := a.providers.bodyRewriterFor(env.TenantID, kind)
+	if bw == nil {
+		a.logger.DebugContext(ctx, "sn360-es: action.url_rewrite: no body rewriter for provider",
+			slog.String("tenant_id", env.TenantID),
+			slog.String("provider", string(kind)))
+		return nil
+	}
+
+	svc := &action.URLRewriteService{
+		Rewriter: a.urlRewriter,
+		Logger:   a.logger,
+	}
+	if err := svc.RewriteBody(ctx, bw, action.BodyRewriteRequest{
+		Tenant:    env.TenantID,
+		Provider:  kind,
+		Email:     env.Email,
+		MessageID: env.MessageID,
+	}, string(env.Tier)); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: action.url_rewrite failed",
+			slog.String("tenant_id", env.TenantID),
+			slog.String("provider", string(kind)),
+			slog.Any("error", err))
+		return nil
+	}
 	return nil
 }
 

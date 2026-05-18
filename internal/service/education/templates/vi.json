@@ -1,0 +1,47 @@
+[
+  {
+    "template_id": "bec.easy.shipping_notice.vi",
+    "attack_type": "bec",
+    "difficulty": "easy",
+    "locale": "vi",
+    "subject_template": "Thông báo giao hàng – Cần xác nhận gấp",
+    "body_template": "<p>Xin chào {{.target_name}},</p><p>Đơn hàng của bạn đang được giao. Vui lòng xác nhận địa chỉ giao hàng và thanh toán phí vận chuyển bổ sung qua liên kết dưới đây:</p><p><a href=\"{{.landing_url}}\">Xác nhận giao hàng</a></p><p>Trân trọng,<br/>{{.vendor_name}}</p>",
+    "sender_display_template": "{{.vendor_name}} Giao hàng",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": [
+      "shipping-delivery themed",
+      "credential-harvest"
+    ]
+  },
+  {
+    "template_id": "credential_phishing.medium.local_bank.vi",
+    "attack_type": "credential_phishing",
+    "difficulty": "medium",
+    "locale": "vi",
+    "subject_template": "Cảnh báo bảo mật: Hoạt động đăng nhập bất thường",
+    "body_template": "<p>Kính gửi {{.target_name}},</p><p>Hệ thống đã phát hiện hoạt động đăng nhập bất thường vào tài khoản của bạn. Vui lòng xác minh danh tính để bảo vệ tài khoản:</p><p><a href=\"{{.landing_url}}\">Xác minh ngay</a></p><p>Nếu bạn không nhận ra hoạt động này, vui lòng liên hệ bộ phận CNTT ngay lập tức.</p><p>Đội An ninh Mạng</p>",
+    "sender_display_template": "Đội An ninh Mạng",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": [
+      "credential-harvest",
+      "local-bank-impersonation"
+    ]
+  },
+  {
+    "template_id": "invoice_fraud.hard.payment_update.vi",
+    "attack_type": "invoice_fraud",
+    "difficulty": "hard",
+    "locale": "vi",
+    "subject_template": "Hoá đơn #{{.invoice_number}} – Cập nhật thông tin ngân hàng",
+    "body_template": "<p>Kính gửi {{.target_name}},</p><p>Chúng tôi xin thông báo rằng thông tin tài khoản ngân hàng của chúng tôi đã thay đổi. Vui lòng sử dụng thông tin mới cho khoản thanh toán tiếp theo:</p><p>Số tài khoản: 1234567890<br/>Ngân hàng: Vietcombank</p><p>Hoá đơn được đính kèm.</p><p>Trân trọng,<br/>{{.vendor_name}}<br/>Phòng Kế toán</p>",
+    "sender_display_template": "{{.vendor_name}} Kế toán",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "bank-detail change",
+      "vietnam payment pattern"
+    ]
+  }
+]

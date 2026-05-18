@@ -1,0 +1,114 @@
+{
+  "LIKELY_PHISHING": {
+    "lesson_id": "lesson.phishing.ms",
+    "category": "LIKELY_PHISHING",
+    "title": "Mengenal pasti e-mel pancingan data",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Mengenal pasti e-mel pancingan data</h3><p>Mesej pancingan data cuba menipu anda untuk mengklik pautan berbahaya, membuka lampiran, atau mendedahkan kata laluan. Sebelum bertindak, tanya diri anda: Adakah saya mengenali penghantar? Adakah permintaan itu mendesak atau luar biasa? Adakah pautan pergi ke tempat yang didakwa? Jika ragu, laporkan mesej dan sahkan melalui saluran lain.</p></section>",
+    "estimated_seconds": 25
+  },
+  "BEC_IMPERSONATION": {
+    "lesson_id": "lesson.bec.ms",
+    "category": "BEC_IMPERSONATION",
+    "title": "Penipuan e-mel perniagaan (BEC)",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Penipuan e-mel perniagaan (BEC)</h3><p>Penyerang BEC menyamar sebagai eksekutif atau vendor untuk mengalihkan pembayaran atau mencuri data. Tanda amaran: keperluan mendesak mengenai perubahan pembayaran, alamat balas berbeza daripada penghantar, maklumat bank baharu. Sahkan perubahan pembayaran melalui telefon menggunakan nombor yang sudah anda ketahui.</p></section>",
+    "estimated_seconds": 30
+  },
+  "LOOKALIKE_DOMAIN": {
+    "lesson_id": "lesson.lookalike.ms",
+    "category": "LOOKALIKE_DOMAIN",
+    "title": "Domain serupa",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Domain serupa</h3><p>Penyerang mendaftarkan domain yang hampir sama seperti <strong>example-corp.com</strong> dan bukannya <strong>example.com</strong>. Tuding pada penghantar untuk menyemak alamat penuh sebelum membalas.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_URL": {
+    "lesson_id": "lesson.url.ms",
+    "category": "SUSPICIOUS_URL",
+    "title": "Pautan mencurigakan",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Pautan mencurigakan</h3><p>Tuding sebelum mengklik. Berhati-hati dengan URL dipendekkan, teks paparan yang tidak sepadan, dan domain yang anda tidak kenal. SN360 menghalakan pautan berisiko ke pemeriksaan keselamatan.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_ATTACHMENT": {
+    "lesson_id": "lesson.attachment.ms",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "title": "Lampiran mencurigakan",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Lampiran mencurigakan</h3><p>Jangan buka lampiran yang tidak dijangka — terutamanya dokumen Office yang meminta mengaktifkan makro, atau fail .iso/.html. Sahkan dengan penghantar terlebih dahulu.</p></section>",
+    "estimated_seconds": 25
+  },
+  "FIRST_CONTACT_EXTERNAL": {
+    "lesson_id": "lesson.first_contact.ms",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "title": "Penghantar luar kali pertama",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">Penghantar luar kali pertama</h3><p>Anda tidak pernah menerima e-mel daripada alamat ini. Sahkan identiti penghantar sebelum bertindak atau berkongsi maklumat.</p></section>",
+    "estimated_seconds": 15
+  },
+  "ACCOUNT_TAKEOVER_SUSPECTED": {
+    "lesson_id": "lesson.ato.ms",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "title": "Disyaki pengambilalihan akaun",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Disyaki pengambilalihan akaun</h3><p>Tingkah laku penghantar ini berbeza daripada biasa. Akaun mereka mungkin telah dikompromi. Elakkan membalas dengan data sensitif dan sahkan melalui saluran lain.</p></section>",
+    "estimated_seconds": 25
+  },
+  "VENDOR_COMPROMISE": {
+    "lesson_id": "lesson.vendor.ms",
+    "category": "VENDOR_COMPROMISE",
+    "title": "Pencerobohan vendor",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Pencerobohan vendor</h3><p>Akaun vendor yang dikenali mungkin sedang dipalsukan. Sahkan semula sebarang arahan pembayaran atau permintaan sensitif melalui nombor telefon daripada rekod dipercayai anda.</p></section>",
+    "estimated_seconds": 25
+  },
+  "CREDENTIAL_HARVESTING": {
+    "lesson_id": "lesson.credential.ms",
+    "category": "CREDENTIAL_HARVESTING",
+    "title": "Pencurian kelayakan",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Pencurian kelayakan</h3><p>Perkhidmatan sebenar tidak pernah meminta anda mengesahkan kata laluan dengan mengklik pautan. Jika tidak pasti, navigasi terus ke perkhidmatan dalam pelayar.</p></section>",
+    "estimated_seconds": 20
+  },
+  "INVOICE_FRAUD": {
+    "lesson_id": "lesson.invoice.ms",
+    "category": "INVOICE_FRAUD",
+    "title": "Penipuan invois",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Penipuan invois</h3><p>Berhati-hati dengan perubahan maklumat bank saat akhir, nombor PO yang tidak dikenali, atau permintaan pembayaran mendesak. Sahkan dengan menghubungi kenalan kewangan yang anda ketahui.</p></section>",
+    "estimated_seconds": 25
+  },
+  "QR_PHISHING": {
+    "lesson_id": "lesson.qr.ms",
+    "category": "QR_PHISHING",
+    "title": "Pancingan data kod QR",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Pancingan data kod QR</h3><p>Penyerang membenamkan URL berbahaya dalam kod QR untuk mengelak pemeriksaan pautan. Jangan imbas kod QR daripada e-mel yang tidak disahkan — buka perkhidmatan yang dipautkan secara terus.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SCAM_FRAUD": {
+    "lesson_id": "lesson.scam.ms",
+    "category": "SCAM_FRAUD",
+    "title": "Penipuan dan scam",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Penipuan dan scam</h3><p>Janji wang, hadiah, percintaan atau ancaman yang menuntut pembayaran adalah corak penipuan klasik. Jika ia kedengaran terlalu bagus atau terlalu menakutkan, ia biasanya tidak benar.</p></section>",
+    "estimated_seconds": 25
+  },
+  "AUTH_FAILED": {
+    "lesson_id": "lesson.auth.ms",
+    "category": "AUTH_FAILED",
+    "title": "Pengesahan penghantar gagal",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Pengesahan penghantar gagal</h3><p>Domain penghantar tidak melepasi semakan SPF/DKIM/DMARC. Mesej mungkin dipalsukan. Berhati-hati dengan sebarang pautan atau permintaan.</p></section>",
+    "estimated_seconds": 20
+  },
+  "INTERNAL_TRUSTED": {
+    "lesson_id": "lesson.internal.ms",
+    "category": "INTERNAL_TRUSTED",
+    "title": "E-mel dalaman",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">E-mel dalaman</h3><p>Mesej ini datang dari dalam organisasi anda. Walau bagaimanapun, akaun boleh dikompromi — layani permintaan luar biasa dengan berhati-hati seperti e-mel luaran.</p></section>",
+    "estimated_seconds": 15
+  },
+  "VENDOR_TRUSTED": {
+    "lesson_id": "lesson.vendor_trusted.ms",
+    "category": "VENDOR_TRUSTED",
+    "title": "Vendor dipercayai",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">Vendor dipercayai</h3><p>Penghantar ini berada dalam senarai vendor yang dibenarkan oleh organisasi anda. SN360 terus memantau corak pencerobohan vendor — laporkan apa sahaja yang kelihatan luar biasa.</p></section>",
+    "estimated_seconds": 15
+  },
+  "NEWSLETTER": {
+    "lesson_id": "lesson.newsletter.ms",
+    "category": "NEWSLETTER",
+    "title": "Surat berita / e-mel pukal",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">Surat berita / e-mel pukal</h3><p>Surat berita biasanya selamat untuk dibaca tetapi jarang memerlukan tindakan segera. Gunakan pautan nyahlanggan dan bukannya melaporkan penghantar pukal sebagai pancingan data.</p></section>",
+    "estimated_seconds": 15
+  }
+}

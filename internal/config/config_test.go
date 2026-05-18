@@ -87,3 +87,73 @@ func withEnv(t *testing.T, m map[string]string) {
 		t.Setenv(k, v)
 	}
 }
+
+// validProdConfig returns a Config that passes validation in a
+// production-like environment.
+func validProdConfig() Config {
+	return Config{
+		Environment: EnvironmentProd,
+		AppName:     "sn360-es",
+		EventBus:    EventBusNATS,
+		HTTP:        HTTP{Port: 8080},
+		Score:       ScoreThresholds{Blocked: 90, HighRisk: 70, Warning: 50, Caution: 30, Info: 10},
+	}
+}
+
+func TestValidate_KMSUseMockBlockedInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.AWS.KMSUseMock = true
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for KMS_USE_MOCK=true in prod")
+	}
+}
+
+func TestValidate_KMSUseMockAllowedInDev(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Environment = EnvironmentDev
+	cfg.AWS.KMSUseMock = true
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("KMS_USE_MOCK should be allowed in dev: %v", err)
+	}
+}
+
+func TestValidate_KMSUseMockAllowedInQA(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Environment = EnvironmentQA
+	cfg.AWS.KMSUseMock = true
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("KMS_USE_MOCK should be allowed in QA: %v", err)
+	}
+}
+
+func TestValidate_BannerTokenSecretTooShortInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Banner.TokenSecret = "short"
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for short BANNER_TOKEN_SECRET in prod")
+	}
+}
+
+func TestValidate_BannerTokenSecretDefaultPlaceholderInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Banner.TokenSecret = "replace-me-with-a-strong-secret"
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for default placeholder BANNER_TOKEN_SECRET in prod")
+	}
+}
+
+func TestValidate_BannerTokenSecretGoodInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Banner.TokenSecret = "this-is-a-sufficiently-long-secret-for-production-use"
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("valid BANNER_TOKEN_SECRET should pass: %v", err)
+	}
+}
+
+func TestValidate_BannerTokenSecretEmptyAllowedInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Banner.TokenSecret = ""
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("empty BANNER_TOKEN_SECRET should be allowed (banners just suppress CTAs): %v", err)
+	}
+}

@@ -1,0 +1,47 @@
+[
+  {
+    "template_id": "bec.easy.remittance.fil",
+    "attack_type": "bec",
+    "difficulty": "easy",
+    "locale": "fil",
+    "subject_template": "Kagyat na kahilingan sa pagpapadala ng pera",
+    "body_template": "<p>Kumusta {{.target_name}},</p><p>Kailangan ko ng kagyat na bank transfer sa bagong supplier. Maaari mo bang ilipat ang PHP 2,500,000 sa sumusunod na account?</p><p>Bank: BDO Unibank<br/>Account: 1234-5678-9012</p><p>Pakiprocess ngayong araw. Salamat,<br/>{{.ceo_name}}</p>",
+    "sender_display_template": "{{.ceo_name}}",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "wire-transfer urgency",
+      "remittance fraud"
+    ]
+  },
+  {
+    "template_id": "credential_phishing.medium.ecommerce.fil",
+    "attack_type": "credential_phishing",
+    "difficulty": "medium",
+    "locale": "fil",
+    "subject_template": "Alerto sa Seguridad: Hindi karaniwang aktibidad sa iyong account",
+    "body_template": "<p>Hi {{.target_name}},</p><p>Nakakita kami ng kahina-hinalang pag-login sa iyong account. Para protektahan ang iyong account, i-verify ang iyong identity:</p><p><a href=\"{{.landing_url}}\">I-verify ang Identity</a></p><p>Kung hindi mo kilala ang aktibidad na ito, kontakin agad ang IT.</p><p>Security Team</p>",
+    "sender_display_template": "Security Team",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": [
+      "credential-harvest",
+      "e-commerce themed"
+    ]
+  },
+  {
+    "template_id": "invoice_fraud.hard.supplier_update.fil",
+    "attack_type": "invoice_fraud",
+    "difficulty": "hard",
+    "locale": "fil",
+    "subject_template": "Invoice #{{.invoice_number}} – Na-update na bank details",
+    "body_template": "<p>Mahal na {{.target_name}},</p><p>Gusto naming ipaalam na nagbago ang aming bank details. Para sa susunod na bayad, gamitin ang sumusunod:</p><p>Bank: Metrobank<br/>Account: 123-456-789-012</p><p>Nakalakip ang invoice.</p><p>Salamat,<br/>{{.vendor_name}}<br/>Accounting Department</p>",
+    "sender_display_template": "{{.vendor_name}} Accounting",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "bank-detail change",
+      "Philippines payment pattern"
+    ]
+  }
+]

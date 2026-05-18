@@ -72,6 +72,13 @@ type EvaluateResult struct {
 	Tier2  *Tier2Outcome  `json:"tier2,omitempty"`
 	Rspamd *RspamdOutcome `json:"rspamd,omitempty"`
 
+	// LinkScore is the aggregated risk score (0-100) from the URL scanner.
+	// Zero when no URLs were scanned or the scanner was unavailable.
+	LinkScore *int `json:"link_score,omitempty"`
+	// AttachmentScore is the aggregated risk score (0-100) from the
+	// attachment scanner. Zero when no attachments were scanned.
+	AttachmentScore *int `json:"attachment_score,omitempty"`
+
 	// ReasonCodes are compact tokens (e.g. "lookalike_domain",
 	// "auth_failed_dmarc") explaining why this verdict was reached.
 	// They feed the banner template and audit log.

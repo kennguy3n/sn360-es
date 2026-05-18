@@ -1,0 +1,43 @@
+{
+  "tier.Blocked.title": "Disekat: Mesej ini berbahaya",
+  "tier.Blocked.body": "Kami telah menyekat e-mel ini kerana ia berkemungkinan besar percubaan pancingan data atau ancaman lain. Jangan buka lampiran atau klik sebarang pautan.",
+  "tier.HighRisk.title": "Risiko tinggi: Jangan bertindak berdasarkan e-mel ini",
+  "tier.HighRisk.body": "E-mel ini menunjukkan tanda-tanda kuat penyamaran, penipuan, atau pencerobohan akaun. Sahkan penghantar melalui saluran lain sebelum mengambil sebarang tindakan.",
+  "tier.Warning.title": "Amaran: E-mel ini kelihatan mencurigakan",
+  "tier.Warning.body": "E-mel ini mengandungi tanda-tanda bahawa seseorang mungkin cuba menipu anda. Semak penghantar dengan teliti sebelum mengklik pautan atau membalas.",
+  "tier.Caution.title": "Berhati-hati: Penghantar atau kandungan luar biasa",
+  "tier.Caution.body": "Ada sesuatu yang luar biasa tentang e-mel ini. Berhati-hati dengan sebarang pautan, lampiran, atau permintaan.",
+  "tier.Informational.title": "Penghantar luar kali pertama",
+  "tier.Informational.body": "Ini adalah e-mel pertama yang kami terima daripada penghantar ini. Sahkan identiti mereka sebelum bertindak atas sebarang permintaan.",
+  "tier.Trusted.title": "Penghantar yang dipercayai",
+  "tier.Trusted.body": "Mesej ini datang daripada penghantar yang sudah dipercayai oleh organisasi anda. Tiada tindakan diperlukan.",
+
+  "category.LIKELY_PHISHING": "Kemungkinan pancingan data",
+  "category.BEC_IMPERSONATION": "Kemungkinan penyamaran (BEC)",
+  "category.LOOKALIKE_DOMAIN": "Domain serupa",
+  "category.SUSPICIOUS_URL": "Pautan mencurigakan",
+  "category.SUSPICIOUS_ATTACHMENT": "Lampiran mencurigakan",
+  "category.FIRST_CONTACT_EXTERNAL": "Hubungan pertama dari luar organisasi anda",
+  "category.ACCOUNT_TAKEOVER_SUSPECTED": "Kemungkinan pengambilalihan akaun",
+  "category.VENDOR_COMPROMISE": "Kemungkinan pencerobohan vendor",
+  "category.CREDENTIAL_HARVESTING": "Pencurian kelayakan",
+  "category.INVOICE_FRAUD": "Penipuan invois",
+  "category.QR_PHISHING": "Pancingan data kod QR",
+  "category.SCAM_FRAUD": "Penipuan / scam",
+  "category.AUTH_FAILED": "Pengesahan penghantar gagal",
+  "category.INTERNAL_TRUSTED": "Penghantar dalaman",
+  "category.VENDOR_TRUSTED": "Vendor dipercayai",
+  "category.NEWSLETTER": "Surat berita",
+
+  "auth.verified": "Penghantar disahkan",
+  "auth.unverified": "Penghantar tidak disahkan",
+  "auth.failed": "Pengesahan penghantar gagal",
+  "auth.unknown": "Status pengesahan tidak diketahui",
+
+  "action.report": "Laporkan pancingan data",
+  "action.mark_safe": "Tandakan sebagai selamat",
+  "action.trust_sender": "Percayai penghantar",
+  "action.learn_more": "Ketahui lebih lanjut",
+
+  "banner.degraded": "Beberapa perkhidmatan pengesanan tidak tersedia semasa penilaian."
+}

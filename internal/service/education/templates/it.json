@@ -1,0 +1,47 @@
+[
+  {
+    "template_id": "bec.easy.bonifico.it",
+    "attack_type": "bec",
+    "difficulty": "easy",
+    "locale": "it",
+    "subject_template": "Bonifico urgente – da elaborare immediatamente",
+    "body_template": "<p>Ciao {{.target_name}},</p><p>Ho bisogno di un bonifico SEPA urgente per un nuovo fornitore. Puoi trasferire EUR 42.000 al seguente conto? È molto urgente.</p><p>IBAN: IT60 X054 2811 1010 0000 0123 456<br/>BIC: BPMOIT22XXX</p><p>Grazie,<br/>{{.ceo_name}}</p>",
+    "sender_display_template": "{{.ceo_name}}",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "wire-transfer urgency",
+      "new-supplier IBAN"
+    ]
+  },
+  {
+    "template_id": "invoice_fraud.medium.fattura.it",
+    "attack_type": "invoice_fraud",
+    "difficulty": "medium",
+    "locale": "it",
+    "subject_template": "Fattura #{{.invoice_number}} – coordinate bancarie aggiornate",
+    "body_template": "<p>Gentile {{.target_name}},</p><p>Si prega di notare che le nostre coordinate bancarie sono cambiate. Per il prossimo pagamento, utilizzare le seguenti informazioni:</p><p>IBAN: IT60 X054 2811 1010 0000 0123 456<br/>Banca: Banca Popolare di Milano</p><p>La fattura è allegata.</p><p>Cordiali saluti,<br/>{{.vendor_name}}<br/>Reparto Contabilità</p>",
+    "sender_display_template": "{{.vendor_name}} Contabilità",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "bank-detail change",
+      "EU invoice fraud pattern"
+    ]
+  },
+  {
+    "template_id": "credential_phishing.hard.microsoft365.it",
+    "attack_type": "credential_phishing",
+    "difficulty": "hard",
+    "locale": "it",
+    "subject_template": "Avviso di sicurezza: attività di accesso insolita",
+    "body_template": "<p>Gentile {{.target_name}},</p><p>Abbiamo rilevato un accesso sospetto al tuo account Microsoft 365. Per proteggere il tuo account, conferma la tua identità:</p><p><a href=\"{{.landing_url}}\">Conferma identità</a></p><p>Se non riconosci questa attività, contatta immediatamente il tuo reparto IT.</p><p>Protezione account Microsoft</p>",
+    "sender_display_template": "Protezione account Microsoft",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": [
+      "credential-harvest",
+      "lookalike-microsoft-domain"
+    ]
+  }
+]

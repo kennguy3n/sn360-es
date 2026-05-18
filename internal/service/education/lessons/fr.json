@@ -1,0 +1,114 @@
+{
+  "LIKELY_PHISHING": {
+    "lesson_id": "lesson.phishing.fr",
+    "category": "LIKELY_PHISHING",
+    "title": "Identifier un e-mail de hameçonnage",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Identifier un e-mail de hameçonnage</h3><p>Les messages de hameçonnage tentent de vous inciter à cliquer sur des liens malveillants, ouvrir des pièces jointes ou révéler des mots de passe. Avant d'agir, demandez-vous : Connaissez-vous l'expéditeur ? La demande est-elle urgente ou inhabituelle ? Le lien mène-t-il bien où il prétend ? En cas de doute, signalez le message et vérifiez par un autre canal.</p></section>",
+    "estimated_seconds": 25
+  },
+  "BEC_IMPERSONATION": {
+    "lesson_id": "lesson.bec.fr",
+    "category": "BEC_IMPERSONATION",
+    "title": "Fraude par e-mail professionnel (BEC)",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Fraude par e-mail professionnel (BEC)</h3><p>Les attaquants BEC se font passer pour des dirigeants ou des fournisseurs afin de détourner des paiements ou voler des données. Signes d'alerte : urgence autour d'un changement de paiement, adresse de réponse différente de l'expéditeur, nouvelles coordonnées bancaires. Confirmez les changements de paiement par téléphone à un numéro que vous connaissez déjà.</p></section>",
+    "estimated_seconds": 30
+  },
+  "LOOKALIKE_DOMAIN": {
+    "lesson_id": "lesson.lookalike.fr",
+    "category": "LOOKALIKE_DOMAIN",
+    "title": "Domaine similaire",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Domaine similaire</h3><p>Les attaquants enregistrent des domaines presque identiques comme <strong>example-corp.com</strong> au lieu de <strong>example.com</strong>. Survolez l'expéditeur avec la souris pour vérifier l'adresse complète avant de répondre.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_URL": {
+    "lesson_id": "lesson.url.fr",
+    "category": "SUSPICIOUS_URL",
+    "title": "Lien suspect",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Lien suspect</h3><p>Survolez avant de cliquer. Méfiez-vous des URL raccourcies, du texte d'affichage ne correspondant pas et des domaines inconnus. SN360 redirige les liens à risque vers un contrôle de sécurité.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_ATTACHMENT": {
+    "lesson_id": "lesson.attachment.fr",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "title": "Pièce jointe suspecte",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Pièce jointe suspecte</h3><p>N'ouvrez pas de pièces jointes inattendues — en particulier les documents Office demandant l'activation des macros, ou les fichiers .iso/.html. Vérifiez d'abord auprès de l'expéditeur.</p></section>",
+    "estimated_seconds": 25
+  },
+  "FIRST_CONTACT_EXTERNAL": {
+    "lesson_id": "lesson.first_contact.fr",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "title": "Premier contact d'un expéditeur externe",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">Premier contact d'un expéditeur externe</h3><p>Vous n'avez jamais reçu d'e-mail de cette adresse. Confirmez l'identité de l'expéditeur avant d'agir ou de partager des informations.</p></section>",
+    "estimated_seconds": 15
+  },
+  "ACCOUNT_TAKEOVER_SUSPECTED": {
+    "lesson_id": "lesson.ato.fr",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "title": "Suspicion de prise de contrôle de compte",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Suspicion de prise de contrôle de compte</h3><p>Le comportement de cet expéditeur est différent de l'habitude. Son compte peut être compromis. Évitez de répondre avec des données sensibles et confirmez par un autre canal.</p></section>",
+    "estimated_seconds": 25
+  },
+  "VENDOR_COMPROMISE": {
+    "lesson_id": "lesson.vendor.fr",
+    "category": "VENDOR_COMPROMISE",
+    "title": "Compromission d'un fournisseur",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Compromission d'un fournisseur</h3><p>Le compte d'un fournisseur connu peut être usurpé. Revérifiez toute instruction de paiement ou demande sensible par téléphone à un numéro issu de vos archives de confiance.</p></section>",
+    "estimated_seconds": 25
+  },
+  "CREDENTIAL_HARVESTING": {
+    "lesson_id": "lesson.credential.fr",
+    "category": "CREDENTIAL_HARVESTING",
+    "title": "Vol d'identifiants",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Vol d'identifiants</h3><p>Les vrais services ne vous demandent jamais de confirmer votre mot de passe en cliquant sur un lien. En cas de doute, accédez directement au service dans votre navigateur.</p></section>",
+    "estimated_seconds": 20
+  },
+  "INVOICE_FRAUD": {
+    "lesson_id": "lesson.invoice.fr",
+    "category": "INVOICE_FRAUD",
+    "title": "Fraude à la facture",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Fraude à la facture</h3><p>Méfiez-vous des changements de coordonnées bancaires de dernière minute, des numéros de PO inconnus ou des demandes de paiement urgentes. Vérifiez en appelant votre contact financier connu.</p></section>",
+    "estimated_seconds": 25
+  },
+  "QR_PHISHING": {
+    "lesson_id": "lesson.qr.fr",
+    "category": "QR_PHISHING",
+    "title": "Hameçonnage par QR code",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Hameçonnage par QR code</h3><p>Les attaquants intègrent des URL malveillantes dans les QR codes pour contourner les vérifications de liens. Ne scannez pas les QR codes provenant d'e-mails non vérifiés.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SCAM_FRAUD": {
+    "lesson_id": "lesson.scam.fr",
+    "category": "SCAM_FRAUD",
+    "title": "Arnaque et fraude",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Arnaque et fraude</h3><p>Les promesses d'argent, de prix, de romance ou les menaces exigeant un paiement sont des schémas d'arnaque classiques. Si cela semble trop beau ou trop effrayant, ce n'est généralement pas réel.</p></section>",
+    "estimated_seconds": 25
+  },
+  "AUTH_FAILED": {
+    "lesson_id": "lesson.auth.fr",
+    "category": "AUTH_FAILED",
+    "title": "Échec de l'authentification de l'expéditeur",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Échec de l'authentification de l'expéditeur</h3><p>Le domaine de l'expéditeur n'a pas passé les vérifications SPF/DKIM/DMARC. Le message peut être falsifié. Soyez particulièrement prudent avec les liens ou les demandes.</p></section>",
+    "estimated_seconds": 20
+  },
+  "INTERNAL_TRUSTED": {
+    "lesson_id": "lesson.internal.fr",
+    "category": "INTERNAL_TRUSTED",
+    "title": "E-mail interne",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">E-mail interne</h3><p>Ce message provient de l'intérieur de votre organisation. Néanmoins, les comptes peuvent être compromis — traitez les demandes inhabituelles avec la même prudence que les e-mails externes.</p></section>",
+    "estimated_seconds": 15
+  },
+  "VENDOR_TRUSTED": {
+    "lesson_id": "lesson.vendor_trusted.fr",
+    "category": "VENDOR_TRUSTED",
+    "title": "Fournisseur de confiance",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">Fournisseur de confiance</h3><p>Cet expéditeur figure sur la liste blanche des fournisseurs de votre organisation. SN360 continue de surveiller les schémas de compromission des fournisseurs — signalez tout ce qui semble inhabituel.</p></section>",
+    "estimated_seconds": 15
+  },
+  "NEWSLETTER": {
+    "lesson_id": "lesson.newsletter.fr",
+    "category": "NEWSLETTER",
+    "title": "Newsletter / e-mail de masse",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">Newsletter / e-mail de masse</h3><p>Les newsletters sont généralement sûres à lire mais nécessitent rarement une action urgente. Utilisez le lien de désabonnement plutôt que de signaler les expéditeurs de masse comme hameçonnage.</p></section>",
+    "estimated_seconds": 15
+  }
+}

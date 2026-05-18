@@ -1,0 +1,47 @@
+[
+  {
+    "template_id": "bec.easy.virement.fr",
+    "attack_type": "bec",
+    "difficulty": "easy",
+    "locale": "fr",
+    "subject_template": "Virement urgent – à traiter immédiatement",
+    "body_template": "<p>Bonjour {{.target_name}},</p><p>J'ai besoin d'un virement SEPA urgent vers un nouveau fournisseur. Pouvez-vous transférer CHF 38.000 sur le compte suivant ? C'est très urgent.</p><p>IBAN : CH93 0076 2011 6238 5295 7<br/>BIC : UBSWCHZH80A</p><p>Merci,<br/>{{.ceo_name}}</p>",
+    "sender_display_template": "{{.ceo_name}}",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "wire-transfer urgency",
+      "new-supplier IBAN"
+    ]
+  },
+  {
+    "template_id": "invoice_fraud.medium.facture.fr",
+    "attack_type": "invoice_fraud",
+    "difficulty": "medium",
+    "locale": "fr",
+    "subject_template": "Facture #{{.invoice_number}} – coordonnées bancaires mises à jour",
+    "body_template": "<p>Bonjour {{.target_name}},</p><p>Veuillez noter que nos coordonnées bancaires ont été modifiées. Pour le prochain paiement, merci d'utiliser les informations suivantes :</p><p>IBAN : FR76 3000 6000 0112 3456 7890 189<br/>Banque : Société Générale</p><p>La facture est jointe à ce message.</p><p>Cordialement,<br/>{{.vendor_name}}<br/>Service Comptabilité</p>",
+    "sender_display_template": "{{.vendor_name}} Comptabilité",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "bank-detail change",
+      "EU invoice fraud pattern"
+    ]
+  },
+  {
+    "template_id": "credential_phishing.hard.office365.fr",
+    "attack_type": "credential_phishing",
+    "difficulty": "hard",
+    "locale": "fr",
+    "subject_template": "Alerte de sécurité : activité de connexion inhabituelle",
+    "body_template": "<p>Bonjour {{.target_name}},</p><p>Nous avons détecté une connexion suspecte sur votre compte Microsoft 365. Pour protéger votre compte, veuillez confirmer votre identité :</p><p><a href=\"{{.landing_url}}\">Confirmer mon identité</a></p><p>Si vous ne reconnaissez pas cette activité, contactez votre service informatique immédiatement.</p><p>Protection de compte Microsoft</p>",
+    "sender_display_template": "Protection de compte Microsoft",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": [
+      "credential-harvest",
+      "lookalike-microsoft-domain"
+    ]
+  }
+]

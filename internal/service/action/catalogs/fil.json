@@ -1,0 +1,43 @@
+{
+  "tier.Blocked.title": "Na-block: Mapanganib ang mensaheng ito",
+  "tier.Blocked.body": "Na-block namin ang email na ito dahil malamang na phishing attempt o ibang banta. Huwag buksan ang mga attachment o i-click ang anumang link.",
+  "tier.HighRisk.title": "Mataas na panganib: Huwag kumilos ayon sa email na ito",
+  "tier.HighRisk.body": "Nagpapakita ang email na ito ng matinding mga senyales ng pagpapanggap, panloloko, o pagkakompromiso ng account. I-verify ang nagpadala sa ibang paraan bago gumawa ng anumang aksyon.",
+  "tier.Warning.title": "Babala: Mukhang kahina-hinala ang email na ito",
+  "tier.Warning.body": "May mga senyales sa email na ito na maaaring may nagtatangkang linlangin ka. Suriin mabuti ang nagpadala bago mag-click ng mga link o sumagot.",
+  "tier.Caution.title": "Pag-iingat: Hindi pangkaraniwang nagpadala o nilalaman",
+  "tier.Caution.body": "May kakaiba sa email na ito. Maging maingat sa anumang link, attachment, o kahilingan.",
+  "tier.Informational.title": "Unang beses na external na nagpadala",
+  "tier.Informational.body": "Ito ang unang email na natanggap namin mula sa nagpadalang ito. Kumpirmahin ang kanyang pagkakakilanlan bago kumilos ayon sa anumang kahilingan.",
+  "tier.Trusted.title": "Pinagkakatiwalaang nagpadala",
+  "tier.Trusted.body": "Ang mensaheng ito ay galing sa nagpadalang pinagkakatiwalaan na ng iyong organisasyon. Hindi na kailangang gumawa ng aksyon.",
+
+  "category.LIKELY_PHISHING": "Malamang na phishing",
+  "category.BEC_IMPERSONATION": "Posibleng pagpapanggap (BEC)",
+  "category.LOOKALIKE_DOMAIN": "Kahawig na domain",
+  "category.SUSPICIOUS_URL": "Kahina-hinalang link",
+  "category.SUSPICIOUS_ATTACHMENT": "Kahina-hinalang attachment",
+  "category.FIRST_CONTACT_EXTERNAL": "Unang kontak mula sa labas ng iyong organisasyon",
+  "category.ACCOUNT_TAKEOVER_SUSPECTED": "Posibleng pag-agaw ng account",
+  "category.VENDOR_COMPROMISE": "Posibleng nakompromiso ang vendor",
+  "category.CREDENTIAL_HARVESTING": "Pagnanakaw ng kredensyal",
+  "category.INVOICE_FRAUD": "Pandaraya sa invoice",
+  "category.QR_PHISHING": "Phishing gamit ang QR code",
+  "category.SCAM_FRAUD": "Scam / pandaraya",
+  "category.AUTH_FAILED": "Nabigo ang pag-authenticate ng nagpadala",
+  "category.INTERNAL_TRUSTED": "Internal na nagpadala",
+  "category.VENDOR_TRUSTED": "Pinagkakatiwalaang vendor",
+  "category.NEWSLETTER": "Newsletter",
+
+  "auth.verified": "Na-verify ang nagpadala",
+  "auth.unverified": "Hindi na-verify ang nagpadala",
+  "auth.failed": "Nabigo ang pag-authenticate ng nagpadala",
+  "auth.unknown": "Hindi alam ang estado ng authentication",
+
+  "action.report": "I-report ang phishing",
+  "action.mark_safe": "Markahan bilang ligtas",
+  "action.trust_sender": "Pagkatiwalaan ang nagpadala",
+  "action.learn_more": "Matuto pa",
+
+  "banner.degraded": "Ang ilang serbisyo ng pagtuklas ay hindi available sa panahon ng pagsusuri."
+}

@@ -132,7 +132,8 @@ func TestNewOnboardingAgent_AppliesDefaults(t *testing.T) {
 	if a.cfg.MinVendorConfidence != 0.6 {
 		t.Fatalf("MinVendorConfidence default: %v", a.cfg.MinVendorConfidence)
 	}
-	if a.cfg.DefaultWeights.AI != 0.8 || a.cfg.DefaultWeights.Rspamd != 0.2 {
+	if a.cfg.DefaultWeights.AI != 0.60 || a.cfg.DefaultWeights.Rspamd != 0.10 ||
+		a.cfg.DefaultWeights.Attachments != 0.15 || a.cfg.DefaultWeights.Links != 0.15 {
 		t.Fatalf("DefaultWeights: %+v", a.cfg.DefaultWeights)
 	}
 	if a.cfg.DefaultThresholds.BannerBlocked != 85 {

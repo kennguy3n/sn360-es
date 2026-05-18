@@ -1,0 +1,42 @@
+{
+  "tier_explanations": {
+    "Blocked": "Ce message a été bloqué car nos systèmes de détection l'ont classé comme une menace probable.",
+    "HighRisk": "Ce message a été signalé comme à haut risque et transmis à votre équipe de sécurité.",
+    "Warning": "Ce message semble suspect — veuillez examiner attentivement avant d'agir.",
+    "Caution": "Ce message présente des caractéristiques inhabituelles à vérifier.",
+    "Informational": "Ceci est un message informatif — premier contact d'un expéditeur externe.",
+    "Trusted": "Ce message provient d'un expéditeur de confiance."
+  },
+  "tier_suggestions": {
+    "Blocked": "N'interagissez pas avec ce message. Signalez-le à votre équipe de sécurité si quelque chose semble légitime.",
+    "HighRisk": "N'interagissez pas avec ce message. Signalez-le à votre équipe de sécurité si quelque chose semble légitime.",
+    "Warning": "Vérifiez l'expéditeur par un autre canal avant de cliquer sur des liens ou de répondre.",
+    "Caution": "Traitez tout lien ou pièce jointe avec prudence.",
+    "Informational": "Premier expéditeur externe — confirmez avant de donner suite aux demandes.",
+    "Trusted": "Aucune action requise."
+  },
+  "category_names": {
+    "LIKELY_PHISHING": "hameçonnage probable",
+    "BEC_IMPERSONATION": "usurpation d'identité professionnelle (BEC)",
+    "LOOKALIKE_DOMAIN": "domaine similaire",
+    "SUSPICIOUS_URL": "URL suspecte",
+    "SUSPICIOUS_ATTACHMENT": "pièce jointe suspecte",
+    "FIRST_CONTACT_EXTERNAL": "premier contact extérieur",
+    "ACCOUNT_TAKEOVER_SUSPECTED": "indices de compromission de compte",
+    "VENDOR_COMPROMISE": "compromission possible du fournisseur",
+    "CREDENTIAL_HARVESTING": "collecte d'identifiants",
+    "INVOICE_FRAUD": "fraude à la facture",
+    "QR_PHISHING": "hameçonnage par QR code",
+    "SCAM_FRAUD": "arnaque / fraude",
+    "AUTH_FAILED": "authentification de l'expéditeur échouée",
+    "INTERNAL_TRUSTED": "expéditeur interne de confiance",
+    "VENDOR_TRUSTED": "fournisseur de confiance",
+    "NEWSLETTER": "lettre d'information"
+  },
+  "primary_signal": "Signal principal : ",
+  "contributing_factors": "Facteurs contributifs : ",
+  "degraded_notice": "Remarque : un ou plusieurs services de détection n'étaient pas disponibles lors de cette évaluation.",
+  "verdict_pending": "Verdict en attente.",
+  "escalated_suggestion": "Escaladé à votre équipe de sécurité pour examen.",
+  "release_suggestion": "Votre demande de libération a été mise en file d'attente et sera traitée dans quelques minutes."
+}

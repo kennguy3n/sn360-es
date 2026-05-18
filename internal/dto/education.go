@@ -68,6 +68,7 @@ type SimulationTemplate struct {
 	TemplateID              string          `json:"template_id"`
 	AttackType              AttackType      `json:"attack_type"`
 	Difficulty              DifficultyLevel `json:"difficulty"`
+	Locale                  string          `json:"locale,omitempty"`
 	SubjectTemplate         string          `json:"subject_template"`
 	BodyTemplate            string          `json:"body_template"`
 	SenderDisplayTemplate   string          `json:"sender_display_template"`

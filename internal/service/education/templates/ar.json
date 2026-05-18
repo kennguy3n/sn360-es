@@ -1,0 +1,47 @@
+[
+  {
+    "template_id": "bec.easy.government_payment.ar",
+    "attack_type": "bec",
+    "difficulty": "easy",
+    "locale": "ar",
+    "subject_template": "تحويل عاجل – يرجى المعالجة فوراً",
+    "body_template": "<p>مرحباً {{.target_name}}،</p><p>أحتاج إلى تحويل مصرفي عاجل لمورّد جديد. هل يمكنك تحويل 165,000 درهم إلى الحساب التالي؟ الأمر عاجل جداً.</p><p>IBAN: AE07 0331 2345 6789 0123 456<br/>البنك: بنك أبوظبي الأول</p><p>شكراً،<br/>{{.ceo_name}}</p>",
+    "sender_display_template": "{{.ceo_name}}",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "wire-transfer urgency",
+      "government-themed"
+    ]
+  },
+  {
+    "template_id": "credential_phishing.medium.gov_portal.ar",
+    "attack_type": "credential_phishing",
+    "difficulty": "medium",
+    "locale": "ar",
+    "subject_template": "إشعار أمني: تحديث بيانات الحساب مطلوب",
+    "body_template": "<p>عزيزي/عزيزتي {{.target_name}}،</p><p>تم رصد نشاط غير عادي في حسابك. يرجى تأكيد هويتك لتجنب تعليق الحساب:</p><p><a href=\"{{.landing_url}}\">تأكيد الهوية</a></p><p>إذا لم تتعرف على هذا النشاط، يرجى التواصل مع الدعم الفني فوراً.</p><p>فريق الأمان</p>",
+    "sender_display_template": "فريق الأمان",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": [
+      "credential-harvest",
+      "government-impersonation"
+    ]
+  },
+  {
+    "template_id": "invoice_fraud.hard.supplier_payment.ar",
+    "attack_type": "invoice_fraud",
+    "difficulty": "hard",
+    "locale": "ar",
+    "subject_template": "فاتورة #{{.invoice_number}} – تحديث بيانات الحساب البنكي",
+    "body_template": "<p>السيد/السيدة {{.target_name}}،</p><p>نود إبلاغكم بأن بياناتنا البنكية قد تغيرت. يرجى استخدام المعلومات التالية للدفعة القادمة:</p><p>IBAN: AE07 0331 2345 6789 0123 456<br/>البنك: بنك الإمارات دبي الوطني</p><p>الفاتورة مرفقة طي هذه الرسالة.</p><p>مع أطيب التحيات،<br/>{{.vendor_name}}<br/>قسم المحاسبة</p>",
+    "sender_display_template": "{{.vendor_name}} المحاسبة",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "bank-detail change",
+      "UAE payment pattern"
+    ]
+  }
+]

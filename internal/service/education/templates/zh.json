@@ -1,0 +1,47 @@
+[
+  {
+    "template_id": "credential_phishing.easy.account_security.zh",
+    "attack_type": "credential_phishing",
+    "difficulty": "easy",
+    "locale": "zh",
+    "subject_template": "【重要】账户安全验证通知",
+    "body_template": "<p>尊敬的 {{.target_name}}：</p><p>我们检测到您的账户存在异常登录活动。为保护您的账户安全，请通过以下链接验证身份：</p><p><a href=\"{{.landing_url}}\">立即验证</a></p><p>如果这不是您的操作，请立即联系IT部门。</p><p>安全团队</p>",
+    "sender_display_template": "安全团队",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": [
+      "credential-harvest",
+      "CJK lookalike domain"
+    ]
+  },
+  {
+    "template_id": "bec.medium.ceo_wire.zh",
+    "attack_type": "bec",
+    "difficulty": "medium",
+    "locale": "zh",
+    "subject_template": "紧急请求 – {{.target_name}}",
+    "body_template": "<p>{{.target_name}}，你好：</p><p>有一笔紧急付款需要处理。请将50万元人民币转账至以下新供应商账户：</p><p>银行：中国工商银行<br/>账号：6222 0200 1234 5678 901</p><p>请今天内完成，谢谢。</p><p>{{.ceo_name}}</p>",
+    "sender_display_template": "{{.ceo_name}}",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "wire-transfer urgency",
+      "CEO impersonation"
+    ]
+  },
+  {
+    "template_id": "lookalike_domain.hard.vendor_invoice.zh",
+    "attack_type": "lookalike_domain",
+    "difficulty": "hard",
+    "locale": "zh",
+    "subject_template": "发票 #{{.invoice_number}} – 请确认",
+    "body_template": "<p>尊敬的 {{.target_name}}：</p><p>请查收附件中的发票，并在到期日前完成付款。请注意，我们的收款账户信息已更新。</p><p>新账户信息详见附件发票。</p><p>此致敬礼，<br/>{{.vendor_name}}<br/>财务部</p>",
+    "sender_display_template": "{{.vendor_name}} 财务部",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "bank-detail change",
+      "CJK invoice fraud"
+    ]
+  }
+]

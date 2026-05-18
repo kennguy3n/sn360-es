@@ -1,0 +1,114 @@
+{
+  "LIKELY_PHISHING": {
+    "lesson_id": "lesson.phishing.ar",
+    "category": "LIKELY_PHISHING",
+    "title": "كيفية التعرف على بريد التصيّد",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">كيفية التعرف على بريد التصيّد</h3><p>رسائل التصيّد تحاول خداعك للنقر على روابط ضارة أو فتح مرفقات أو الكشف عن كلمات المرور. قبل التصرف، اسأل نفسك: هل أعرف المرسل؟ هل الطلب عاجل أو غير عادي؟ هل الرابط يؤدي إلى المكان المعلن؟ عند الشك، أبلغ عن الرسالة وتحقق عبر قناة أخرى.</p></section>",
+    "estimated_seconds": 25
+  },
+  "BEC_IMPERSONATION": {
+    "lesson_id": "lesson.bec.ar",
+    "category": "BEC_IMPERSONATION",
+    "title": "احتيال البريد الإلكتروني التجاري (BEC)",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">احتيال البريد الإلكتروني التجاري (BEC)</h3><p>يتظاهر مهاجمو BEC بأنهم مسؤولون تنفيذيون أو موردون لتحويل المدفوعات أو سرقة البيانات. علامات التحذير: إلحاح حول تغيير الدفع، عنوان الرد مختلف عن المرسل، معلومات بنكية جديدة. أكّد تغييرات الدفع هاتفياً باستخدام رقم تعرفه بالفعل.</p></section>",
+    "estimated_seconds": 30
+  },
+  "LOOKALIKE_DOMAIN": {
+    "lesson_id": "lesson.lookalike.ar",
+    "category": "LOOKALIKE_DOMAIN",
+    "title": "نطاق مشابه",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">نطاق مشابه</h3><p>يسجّل المهاجمون نطاقات شبه متطابقة مثل <strong>example-corp.com</strong> بدلاً من <strong>example.com</strong>. مرّر الماوس فوق المرسل للتحقق من العنوان الكامل قبل الرد.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_URL": {
+    "lesson_id": "lesson.url.ar",
+    "category": "SUSPICIOUS_URL",
+    "title": "رابط مشبوه",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">رابط مشبوه</h3><p>مرّر الماوس قبل النقر. احذر من عناوين URL المختصرة والنص المعروض غير المتطابق والنطاقات التي لا تعرفها. يحيل SN360 الروابط المحفوفة بالمخاطر إلى فحص أمني.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_ATTACHMENT": {
+    "lesson_id": "lesson.attachment.ar",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "title": "مرفق مشبوه",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">مرفق مشبوه</h3><p>لا تفتح المرفقات التي لم تكن تتوقعها — خاصة مستندات Office التي تطلب تفعيل وحدات الماكرو، أو ملفات .iso/.html. تحقق من المرسل أولاً.</p></section>",
+    "estimated_seconds": 25
+  },
+  "FIRST_CONTACT_EXTERNAL": {
+    "lesson_id": "lesson.first_contact.ar",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "title": "مرسل خارجي لأول مرة",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">مرسل خارجي لأول مرة</h3><p>لم تتلقَ بريداً من هذا العنوان من قبل. أكّد هوية المرسل قبل اتخاذ أي إجراء أو مشاركة أي معلومات.</p></section>",
+    "estimated_seconds": 15
+  },
+  "ACCOUNT_TAKEOVER_SUSPECTED": {
+    "lesson_id": "lesson.ato.ar",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "title": "اشتباه في اختراق الحساب",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">اشتباه في اختراق الحساب</h3><p>سلوك هذا المرسل مختلف عن المعتاد. قد يكون حسابه قد تعرض للاختراق. تجنب الرد ببيانات حساسة وتأكد عبر قناة أخرى.</p></section>",
+    "estimated_seconds": 25
+  },
+  "VENDOR_COMPROMISE": {
+    "lesson_id": "lesson.vendor.ar",
+    "category": "VENDOR_COMPROMISE",
+    "title": "اختراق المورّد",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">اختراق المورّد</h3><p>قد يكون حساب مورّد معروف مُنتحَلاً. أعد التحقق من أي تعليمات دفع أو طلبات حساسة عبر رقم هاتف من سجلاتك الموثوقة السابقة.</p></section>",
+    "estimated_seconds": 25
+  },
+  "CREDENTIAL_HARVESTING": {
+    "lesson_id": "lesson.credential.ar",
+    "category": "CREDENTIAL_HARVESTING",
+    "title": "سرقة بيانات الاعتماد",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">سرقة بيانات الاعتماد</h3><p>الخدمات الحقيقية لا تطلب منك أبداً تأكيد كلمة المرور بالنقر على رابط. إذا لم تكن متأكداً، انتقل مباشرة إلى الخدمة في المتصفح.</p></section>",
+    "estimated_seconds": 20
+  },
+  "INVOICE_FRAUD": {
+    "lesson_id": "lesson.invoice.ar",
+    "category": "INVOICE_FRAUD",
+    "title": "احتيال الفواتير",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">احتيال الفواتير</h3><p>احذر من تغييرات المعلومات البنكية في اللحظة الأخيرة، وأرقام أوامر الشراء غير المألوفة، أو طلبات الدفع العاجلة. تحقق عن طريق الاتصال بجهة التواصل المالية المعروفة لديك.</p></section>",
+    "estimated_seconds": 25
+  },
+  "QR_PHISHING": {
+    "lesson_id": "lesson.qr.ar",
+    "category": "QR_PHISHING",
+    "title": "تصيّد عبر رمز QR",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">تصيّد عبر رمز QR</h3><p>يضمّن المهاجمون عناوين URL ضارة في رموز QR لتجاوز فحص الروابط. لا تمسح رموز QR من رسائل البريد غير المتحقق منها — افتح الخدمة المرتبطة مباشرة.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SCAM_FRAUD": {
+    "lesson_id": "lesson.scam.ar",
+    "category": "SCAM_FRAUD",
+    "title": "احتيال ونصب",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">احتيال ونصب</h3><p>وعود المال والجوائز والرومانسية أو التهديدات التي تطلب الدفع هي أنماط احتيال كلاسيكية. إذا بدا الأمر جيداً أو مخيفاً أكثر من اللازم، فعادة لا يكون حقيقياً.</p></section>",
+    "estimated_seconds": 25
+  },
+  "AUTH_FAILED": {
+    "lesson_id": "lesson.auth.ar",
+    "category": "AUTH_FAILED",
+    "title": "فشل مصادقة المرسل",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">فشل مصادقة المرسل</h3><p>فشل نطاق المرسل في اجتياز فحوصات SPF/DKIM/DMARC. قد تكون الرسالة مزورة. كن حذراً بشكل خاص مع أي روابط أو طلبات.</p></section>",
+    "estimated_seconds": 20
+  },
+  "INTERNAL_TRUSTED": {
+    "lesson_id": "lesson.internal.ar",
+    "category": "INTERNAL_TRUSTED",
+    "title": "بريد داخلي",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">بريد داخلي</h3><p>هذه الرسالة واردة من داخل مؤسستك. ومع ذلك، يمكن اختراق الحسابات — تعامل مع الطلبات غير المعتادة بنفس الحذر الذي تتعامل به مع البريد الخارجي.</p></section>",
+    "estimated_seconds": 15
+  },
+  "VENDOR_TRUSTED": {
+    "lesson_id": "lesson.vendor_trusted.ar",
+    "category": "VENDOR_TRUSTED",
+    "title": "مورّد موثوق",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">مورّد موثوق</h3><p>هذا المرسل مدرج في قائمة الموردين المعتمدين لمؤسستك. يواصل SN360 مراقبة أنماط اختراق الموردين — أبلغ عن أي شيء يبدو غير طبيعي.</p></section>",
+    "estimated_seconds": 15
+  },
+  "NEWSLETTER": {
+    "lesson_id": "lesson.newsletter.ar",
+    "category": "NEWSLETTER",
+    "title": "نشرة إخبارية / بريد جماعي",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">نشرة إخبارية / بريد جماعي</h3><p>النشرات الإخبارية آمنة للقراءة عادةً لكنها نادراً ما تتطلب إجراءً عاجلاً. استخدم رابط إلغاء الاشتراك بدلاً من الإبلاغ عن المرسلين الجماعيين كتصيّد.</p></section>",
+    "estimated_seconds": 15
+  }
+}
