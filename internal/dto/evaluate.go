@@ -92,6 +92,47 @@ type EvaluateResult struct {
 	Recipient string `json:"recipient,omitempty"`
 }
 
+// BackfillRoutingFields propagates the routing/identity fields the
+// request carries into the result so downstream consumers on
+// `es.evaluate.result` see the same envelope regardless of which
+// producer emitted the verdict (per-message handleEvaluateRequest in
+// cmd/sn360-es/main.go vs. BatchOrchestrator.processOnce in
+// internal/service/evaluate/batch.go).
+//
+// The two producers ran independent inline copies of the same
+// conditional-on-empty backfill until the helper was unified here.
+// Without the Recipient backfill in particular,
+// handleIngestionAction populates `"email": ""` in every es.action.*
+// signal and each action handler (handleActionLabel,
+// handleActionBanner, handleActionURLRewrite,
+// handleActionQuarantine) silently returns nil on the empty-email
+// guard, disabling all provider-side actions for the producer that
+// forgot the backfill. MessageID / TenantID / CorrelationID /
+// EvaluatedAt cover the same defensive territory.
+//
+// Backfill is conditional on "field empty" so a downstream
+// evaluator that intentionally rewrites these fields (e.g. an
+// Evaluator that re-stamps EvaluatedAt at fallback exit, or that
+// produces a routing recipient distinct from the request for
+// forwarded mail) is not clobbered.
+func BackfillRoutingFields(res *EvaluateResult, req EvaluateRequest) {
+	if res.MessageID == "" {
+		res.MessageID = req.MessageID
+	}
+	if res.TenantID == "" {
+		res.TenantID = req.TenantID
+	}
+	if res.CorrelationID == "" {
+		res.CorrelationID = req.CorrelationID
+	}
+	if res.EvaluatedAt.IsZero() {
+		res.EvaluatedAt = time.Now().UTC()
+	}
+	if res.Recipient == "" {
+		res.Recipient = req.Recipient
+	}
+}
+
 // Tier0Outcome captures the result of the Tier 0 classification gate.
 type Tier0Outcome struct {
 	// Bypass reports whether the message bypassed all ML stages.

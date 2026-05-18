@@ -98,6 +98,15 @@ func (p *QuarantineProvider) EnsureQuarantineLabel(ctx context.Context, email st
 // retention policies. stubBody is ignored at this layer — body
 // rewriting is handled by the BannerInjector through a separate code
 // path.
+//
+// The folder-id lookup is cache-backed (see ensureQuarantineFolder)
+// so the steady-state hot path is a single Graph round-trip. If an
+// admin manually deletes the SN360 quarantine folder out of band,
+// the cached id will be stale and Graph returns 404 on /move; we
+// invalidate the cache and re-run ensureQuarantineFolder once,
+// which transparently recreates the folder. Bounded to a single
+// retry to avoid masking a genuine "message-not-found" 404 (which
+// would still surface after the second failed attempt).
 func (p *QuarantineProvider) MoveToQuarantine(ctx context.Context, email, messageID, quarantineLabelID, _ string) error {
 	if err := p.labels.ApplyLabel(ctx, email, messageID, quarantineLabelID); err != nil {
 		return fmt.Errorf("apply quarantine category: %w", err)
@@ -106,10 +115,44 @@ func (p *QuarantineProvider) MoveToQuarantine(ctx context.Context, email, messag
 	if err != nil {
 		return fmt.Errorf("ensure quarantine folder: %w", err)
 	}
-	if err := p.moveTo(ctx, email, messageID, folderID); err != nil {
+	err = p.moveTo(ctx, email, messageID, folderID)
+	if err == nil {
+		return nil
+	}
+	// Stale-cache recovery: a 404 on /move with a folder id we
+	// just looked up is almost always the folder having been
+	// admin-deleted between cache fill and call. Re-create and
+	// retry once. Any other error — including a 404 on the
+	// retry — surfaces normally.
+	if !is404(err) {
 		return fmt.Errorf("move to quarantine folder: %w", err)
 	}
+	p.invalidateFolderID(email)
+	folderID, err = p.ensureQuarantineFolder(ctx, email)
+	if err != nil {
+		return fmt.Errorf("recreate quarantine folder after stale-cache 404: %w", err)
+	}
+	if err := p.moveTo(ctx, email, messageID, folderID); err != nil {
+		return fmt.Errorf("move to quarantine folder (retry after stale-cache 404): %w", err)
+	}
 	return nil
+}
+
+// is404 reports whether the error is an *APIError carrying a 404
+// status. Used by MoveToQuarantine to distinguish the
+// folder-deleted recovery path from genuine errors.
+func is404(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
+}
+
+// invalidateFolderID drops the cached folder id for `email` so the
+// next ensureQuarantineFolder call re-runs the create-then-list
+// recovery flow. Safe to call when the entry is already absent.
+func (p *QuarantineProvider) invalidateFolderID(email string) {
+	p.folderMu.Lock()
+	defer p.folderMu.Unlock()
+	delete(p.folderIDCache, email)
 }
 
 // RestoreFromQuarantine removes the quarantine category and moves the

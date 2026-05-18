@@ -608,6 +608,52 @@ SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(
 	return out, nil
 }
 
+// UpdateCountsIfFresh applies the relationship-worker's recomputed
+// Count7d + Relationship to the row IFF its updated_at still matches
+// `readAt`. The WHERE-clause acts as an optimistic-concurrency guard
+// against ingestion-time Upsert racing with the worker's stale
+// snapshot (loaded by ListByTenant N seconds earlier). Returns
+// (true, nil) when one row was updated and (false, nil) when the
+// guard rejected the write because ingestion produced a fresher
+// snapshot in the meantime — see the interface docstring on
+// CommunicationHistoryRepository.UpdateCountsIfFresh for why the
+// (false, nil) case is treated as success by the worker.
+//
+// Only the worker-mutated columns (count_7d, relationship,
+// updated_at) are touched. The ingestion-bumped columns (count_30d,
+// last_seen_at, sender_domain, sender_domain_hash) stay at whatever
+// value the latest writer produced, so a worker that missed a
+// concurrent ingestion-time Upsert still does not regress those
+// fields. The id column is used as the WHERE key so a row whose
+// (sender_hash, recipient_hash) somehow got remapped between the
+// list and the update doesn't get cross-updated.
+func (p *pgCommHistory) UpdateCountsIfFresh(ctx context.Context, h *CommunicationHistory, readAt time.Time) (bool, error) {
+	if h == nil || h.ID == "" {
+		return false, errors.New("repository: UpdateCountsIfFresh requires a row id")
+	}
+	if readAt.IsZero() {
+		// A zero readAt would match every row whose updated_at is
+		// also zero — a class of bug we'd rather surface than
+		// silently overwrite the wrong row.
+		return false, errors.New("repository: UpdateCountsIfFresh requires a non-zero readAt")
+	}
+	res, err := p.db.ExecContext(ctx, `
+UPDATE communication_histories
+   SET count_7d = $1,
+       relationship = $2,
+       updated_at = NOW()
+ WHERE id = $3 AND updated_at = $4
+`, h.Count7d, h.Relationship, h.ID, readAt)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 func (p *pgCommHistory) Get(ctx context.Context, tenantID string, senderHash, recipientHash []byte) (*CommunicationHistory, error) {
 	row := p.db.QueryRowContext(ctx, `
 SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(sender_domain, ''),

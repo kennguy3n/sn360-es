@@ -42,20 +42,28 @@ func (f *fakeCommunicationStore) ListByTenant(_ context.Context, tenantID string
 	return append([]repository.CommunicationHistory(nil), f.rowsByTenant[tenantID]...), nil
 }
 
+// fakeCommUpserter captures the CAS writes issued by
+// RelationshipJob.Run. The `accept` field controls whether the
+// fake returns (true, nil) — simulating a CAS that landed — or
+// (false, nil) — simulating ingestion winning the race between
+// ListByTenant and the worker's UpdateCountsIfFresh call.
 type fakeCommUpserter struct {
 	mu      sync.Mutex
 	upserts []repository.CommunicationHistory
+	readAts []time.Time
 	err     error
+	accept  bool
 }
 
-func (f *fakeCommUpserter) Upsert(_ context.Context, h *repository.CommunicationHistory) error {
+func (f *fakeCommUpserter) UpdateCountsIfFresh(_ context.Context, h *repository.CommunicationHistory, readAt time.Time) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
-		return f.err
+		return false, f.err
 	}
 	f.upserts = append(f.upserts, *h)
-	return nil
+	f.readAts = append(f.readAts, readAt)
+	return f.accept, nil
 }
 
 type fakeVendorRepo struct {
@@ -105,19 +113,20 @@ func TestNewRelationshipJob_Validates(t *testing.T) {
 
 func TestRelationshipJob_Run_UpsertsEveryRow(t *testing.T) {
 	now := time.Now().UTC()
+	readAt := now.Add(-time.Minute)
 	tl := &fakeTenantLister{tenants: []repository.Tenant{{ID: "t-1"}, {ID: "t-2"}}}
 	cs := &fakeCommunicationStore{
 		rowsByTenant: map[string][]repository.CommunicationHistory{
 			"t-1": {
-				{TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"), Count30d: 3, LastSeenAt: now},
-				{TenantID: "t-1", SenderHash: []byte("c"), RecipientHash: []byte("d"), Count30d: 1, LastSeenAt: now},
+				{ID: "row-1", TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"), Count30d: 3, LastSeenAt: now, UpdatedAt: readAt},
+				{ID: "row-2", TenantID: "t-1", SenderHash: []byte("c"), RecipientHash: []byte("d"), Count30d: 1, LastSeenAt: now, UpdatedAt: readAt},
 			},
 			"t-2": {
-				{TenantID: "t-2", SenderHash: []byte("e"), RecipientHash: []byte("f"), Count30d: 5, LastSeenAt: now},
+				{ID: "row-3", TenantID: "t-2", SenderHash: []byte("e"), RecipientHash: []byte("f"), Count30d: 5, LastSeenAt: now, UpdatedAt: readAt},
 			},
 		},
 	}
-	up := &fakeCommUpserter{}
+	up := &fakeCommUpserter{accept: true}
 	job, err := NewRelationshipJob(RelationshipJobConfig{
 		Interval: time.Hour, Tenants: tl, Communications: cs, Upserter: up,
 		Logger: discardLogger(),
@@ -129,12 +138,72 @@ func TestRelationshipJob_Run_UpsertsEveryRow(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 	if len(up.upserts) != 3 {
-		t.Errorf("expected 3 upserts, got %d", len(up.upserts))
+		t.Errorf("expected 3 CAS writes, got %d", len(up.upserts))
 	}
-	for _, u := range up.upserts {
-		if u.UpdatedAt.IsZero() {
-			t.Error("UpdatedAt should be refreshed")
+	for i, r := range up.readAts {
+		if !r.Equal(readAt) {
+			t.Errorf("upsert %d readAt = %v, want %v (the snapshot UpdatedAt)", i, r, readAt)
 		}
+	}
+}
+
+// TestRelationshipJob_Run_CASRejection_TreatedAsSuccess verifies the
+// optimistic-concurrency contract: when UpdateCountsIfFresh returns
+// (false, nil) — the row was modified between ListByTenant and the
+// worker's write — the worker treats the row as quietly skipped
+// instead of erroring out. The ingestion-time write is canonical,
+// so re-running decay against ingestion's fresher counts would
+// just resurrect the same race on the next cycle.
+func TestRelationshipJob_Run_CASRejection_TreatedAsSuccess(t *testing.T) {
+	now := time.Now().UTC()
+	readAt := now.Add(-time.Minute)
+	tl := &fakeTenantLister{tenants: []repository.Tenant{{ID: "t-1"}}}
+	cs := &fakeCommunicationStore{
+		rowsByTenant: map[string][]repository.CommunicationHistory{
+			"t-1": {
+				{ID: "row-1", TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"), Count30d: 3, LastSeenAt: now, UpdatedAt: readAt},
+			},
+		},
+	}
+	up := &fakeCommUpserter{accept: false} // simulate ingestion winning the race
+	job, _ := NewRelationshipJob(RelationshipJobConfig{
+		Interval: time.Hour, Tenants: tl, Communications: cs, Upserter: up,
+		Logger: discardLogger(),
+	})
+	if err := job.Run(context.Background()); err != nil {
+		t.Fatalf("CAS rejection should not be returned as an error: %v", err)
+	}
+	if len(up.upserts) != 1 {
+		t.Errorf("expected the CAS write attempt to still be issued, got %d", len(up.upserts))
+	}
+}
+
+// TestRelationshipJob_Run_ZeroUpdatedAt_Skipped verifies the
+// invariant-violation guard: rows loaded from the store with a
+// zero UpdatedAt would cause the Postgres CAS to either match
+// arbitrary zero-updated_at rows or surface a validation error, so
+// the worker proactively skips them and logs the corruption.
+func TestRelationshipJob_Run_ZeroUpdatedAt_Skipped(t *testing.T) {
+	now := time.Now().UTC()
+	tl := &fakeTenantLister{tenants: []repository.Tenant{{ID: "t-1"}}}
+	cs := &fakeCommunicationStore{
+		rowsByTenant: map[string][]repository.CommunicationHistory{
+			"t-1": {
+				// UpdatedAt deliberately zero — should be skipped.
+				{ID: "row-zero", TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"), Count30d: 3, LastSeenAt: now},
+			},
+		},
+	}
+	up := &fakeCommUpserter{accept: true}
+	job, _ := NewRelationshipJob(RelationshipJobConfig{
+		Interval: time.Hour, Tenants: tl, Communications: cs, Upserter: up,
+		Logger: discardLogger(),
+	})
+	if err := job.Run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(up.upserts) != 0 {
+		t.Errorf("expected zero-UpdatedAt row to be skipped without a CAS attempt, got %d", len(up.upserts))
 	}
 }
 

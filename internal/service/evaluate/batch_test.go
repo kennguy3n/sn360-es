@@ -14,6 +14,10 @@ import (
 // including Recipient. Without the Recipient backfill, every action
 // signal fanned out by handleIngestionAction lands with "email": ""
 // and every action handler silently no-ops on the empty-email guard.
+// The helper itself lives in `internal/dto` so both the per-message
+// handleEvaluateRequest path and BatchOrchestrator.processOnce share
+// a single implementation — this test guards the orchestrator's use
+// of that shared helper.
 func TestBackfillRoutingFields_PopulatesEmpty(t *testing.T) {
 	t.Parallel()
 	req := dto.EvaluateRequest{
@@ -25,7 +29,7 @@ func TestBackfillRoutingFields_PopulatesEmpty(t *testing.T) {
 	res := dto.EvaluateResult{}
 
 	before := time.Now().UTC()
-	backfillRoutingFields(&res, req)
+	dto.BackfillRoutingFields(&res, req)
 	after := time.Now().UTC()
 
 	if res.MessageID != "msg-1" {
@@ -69,7 +73,7 @@ func TestBackfillRoutingFields_DoesNotOverwriteSet(t *testing.T) {
 		EvaluatedAt:   evaluatedAt,
 	}
 
-	backfillRoutingFields(&res, req)
+	dto.BackfillRoutingFields(&res, req)
 
 	if res.MessageID != "msg-pre" {
 		t.Errorf("MessageID overwritten: got %q, want msg-pre", res.MessageID)
@@ -102,7 +106,7 @@ func TestBackfillRoutingFields_EmptyRequestRecipient(t *testing.T) {
 	}
 	res := dto.EvaluateResult{}
 
-	backfillRoutingFields(&res, req)
+	dto.BackfillRoutingFields(&res, req)
 
 	if res.Recipient != "" {
 		t.Errorf("Recipient = %q, want empty (request had no Recipient)", res.Recipient)

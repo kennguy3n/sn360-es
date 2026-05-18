@@ -280,6 +280,29 @@ type CommunicationHistoryRepository interface {
 	Upsert(ctx context.Context, h *CommunicationHistory) error
 	Get(ctx context.Context, tenantID string, senderHash, recipientHash []byte) (*CommunicationHistory, error)
 	ListByTenant(ctx context.Context, tenantID string, since time.Time, limit int) ([]CommunicationHistory, error)
+
+	// UpdateCountsIfFresh applies the relationship-worker's
+	// recomputed Count7d + Relationship to the (tenant, sender,
+	// recipient) row IFF the row's UpdatedAt still matches `readAt`
+	// — i.e. ingestion has not written to it since the worker
+	// loaded the snapshot via ListByTenant. This is an optimistic-
+	// concurrency guard, NOT a long-running lock; the row remains
+	// available for ingestion-time Upsert at all times.
+	//
+	// Returns (true, nil) when the row was updated and (false, nil)
+	// when the guard rejected the write because ingestion already
+	// produced a fresher snapshot. The worker treats the second
+	// case as success because the ingestion-time write is canonical
+	// — re-running the decay/reclassify against ingestion's fresher
+	// counts would just resurrect the same race on the next cycle.
+	//
+	// The full-replacement Upsert remains the ingestion-time path
+	// because ingestion always writes a freshly-computed row;
+	// switching ingestion to CAS would defeat its monotonic
+	// increment-and-stamp model. The worker is the only caller
+	// that needs the CAS semantics because it carries a stale
+	// snapshot across a list/decide/write boundary.
+	UpdateCountsIfFresh(ctx context.Context, h *CommunicationHistory, readAt time.Time) (bool, error)
 }
 
 // FeedbackEventRepository persists FeedbackEvent rows and exposes the

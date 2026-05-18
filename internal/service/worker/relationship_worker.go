@@ -25,10 +25,17 @@ type TenantLister interface {
 }
 
 // CommunicationUpserter is the small write surface the relationship
-// worker needs to persist refreshed counts. repository.CommunicationHistoryRepository
-// already satisfies it.
+// worker needs to persist refreshed counts. It is the
+// optimistic-concurrency CAS view of
+// repository.CommunicationHistoryRepository, NOT the full Upsert
+// surface — the worker carries a stale snapshot across the
+// list/decide/write boundary, so the only safe write is one that
+// gates on the snapshot's UpdatedAt matching the row's current
+// UpdatedAt. repository.CommunicationHistoryRepository satisfies
+// this interface; the full-replacement Upsert stays the
+// ingestion-time path.
 type CommunicationUpserter interface {
-	Upsert(ctx context.Context, h *repository.CommunicationHistory) error
+	UpdateCountsIfFresh(ctx context.Context, h *repository.CommunicationHistory, readAt time.Time) (bool, error)
 }
 
 // RelationshipJobConfig wires the relationship-aggregation worker.
@@ -70,13 +77,29 @@ type RelationshipJobConfig struct {
 //     Partner / Customer / RecurringService / FirstTimeExternal /
 //     LapsedContact taxonomy and produces the same value the
 //     ingestion poller would compute for a fresh message.
-//   - Persists the refreshed row via Upserter, bumping UpdatedAt so
-//     downstream consumers can detect freshness.
+//   - Persists the refreshed row via the Upserter's optimistic-
+//     concurrency CAS write. The CAS guard prevents the worker's
+//     stale-snapshot write from overwriting a fresher ingestion-time
+//     Upsert that landed between ListByTenant and this point. When
+//     the guard rejects the write (ingestion produced a fresher
+//     snapshot in the meantime) the worker treats it as success and
+//     leaves the ingestion value in place — re-running the decay
+//     against ingestion's fresher counts would just resurrect the
+//     same race on the next cycle.
 //
 // Rows missing the plaintext SenderDomain (legacy rows that
-// pre-date migration 0004) are still touched so UpdatedAt
-// advances, but skip reclassification — the Classifier rejects an
-// empty domain.
+// pre-date migration 0004) still flow through the CAS path so
+// UpdatedAt advances, but skip reclassification — the Classifier
+// rejects an empty domain.
+//
+// Rows missing an UpdatedAt stamp are skipped entirely — the CAS
+// guard requires a non-zero readAt to disambiguate "matches every
+// row whose updated_at is also zero" from "matches the snapshot we
+// loaded". Such rows are a database invariant violation in
+// production (every Postgres Upsert path stamps updated_at), so
+// skipping them surfaces the corruption via the
+// `worker.relationship: skipped row with zero updated_at` log line
+// rather than silently doing the wrong thing.
 type RelationshipJob struct {
 	cfg          RelationshipJobConfig
 	interval     time.Duration
@@ -141,6 +164,8 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 	processed := 0
 	decayed7d := 0
 	reclassified := 0
+	raceSkipped := 0
+	corruptSkipped := 0
 	for _, t := range tenants {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -201,13 +226,34 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 				}
 			}
 
-			h.UpdatedAt = now
-			if err := j.cfg.Upserter.Upsert(ctx, &h); err != nil {
-				j.logger.Warn("worker.relationship: upsert failed",
+			// Capture the snapshot's UpdatedAt as the CAS guard so
+			// the write only lands if ingestion has not produced a
+			// fresher version of this row between ListByTenant
+			// (above) and now. A zero UpdatedAt means the row never
+			// went through the canonical Postgres Upsert path, so
+			// the CAS would either match every zero-updated_at row
+			// (Postgres) or hit an error (the validation guard in
+			// UpdateCountsIfFresh) — either way the safe action is
+			// to skip rather than overwrite arbitrary state.
+			readAt := h.UpdatedAt
+			if readAt.IsZero() {
+				j.logger.Warn("worker.relationship: skipped row with zero updated_at",
+					slog.String("tenant_id", t.ID),
+					slog.String("row_id", h.ID))
+				corruptSkipped++
+				continue
+			}
+			updated, err := j.cfg.Upserter.UpdateCountsIfFresh(ctx, &h, readAt)
+			if err != nil {
+				j.logger.Warn("worker.relationship: update-if-fresh failed",
 					slog.String("tenant_id", t.ID), slog.Any("error", err))
 				if firstErr == nil {
 					firstErr = err
 				}
+				continue
+			}
+			if !updated {
+				raceSkipped++
 				continue
 			}
 			processed++
@@ -217,7 +263,9 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 		slog.Int("tenants", len(tenants)),
 		slog.Int("rows", processed),
 		slog.Int("decayed_count_7d", decayed7d),
-		slog.Int("reclassified", reclassified))
+		slog.Int("reclassified", reclassified),
+		slog.Int("race_skipped", raceSkipped),
+		slog.Int("corrupt_skipped", corruptSkipped))
 	return firstErr
 }
 

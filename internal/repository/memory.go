@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -498,6 +499,39 @@ func (m *memoryCommHistory) ListByTenant(_ context.Context, tenantID string, sin
 		rows = rows[:limit]
 	}
 	return rows, nil
+}
+
+// UpdateCountsIfFresh is the optimistic-concurrency CAS write the
+// relationship worker uses to avoid clobbering ingestion-time
+// increments with a stale snapshot. See the docstring on
+// CommunicationHistoryRepository.UpdateCountsIfFresh for the
+// semantic contract; this implementation mirrors the Postgres
+// version by gating the in-memory write on `UpdatedAt == readAt`.
+func (m *memoryCommHistory) UpdateCountsIfFresh(_ context.Context, h *CommunicationHistory, readAt time.Time) (bool, error) {
+	if h == nil || h.ID == "" {
+		return false, errors.New("repository: UpdateCountsIfFresh requires a row id")
+	}
+	if readAt.IsZero() {
+		return false, errors.New("repository: UpdateCountsIfFresh requires a non-zero readAt")
+	}
+	key := commKey(h.TenantID, h.SenderHash, h.RecipientHash)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.rows[key]
+	if !ok {
+		return false, ErrNotFound
+	}
+	if !cur.UpdatedAt.Equal(readAt) {
+		return false, nil
+	}
+	cur.Count7d = h.Count7d
+	cur.Relationship = h.Relationship
+	cur.UpdatedAt = time.Now().UTC()
+	m.rows[key] = cur
+	// Reflect the write back to the caller so callers that inspect
+	// `h.UpdatedAt` after the CAS see the fresh stamp.
+	h.UpdatedAt = cur.UpdatedAt
+	return true, nil
 }
 
 // --- feedback events ----------------------------------------------------

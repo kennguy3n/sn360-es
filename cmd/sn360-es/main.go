@@ -1292,26 +1292,16 @@ func (a *application) handleEvaluateRequest(ctx context.Context, msg events.Mess
 	if err != nil {
 		return fmt.Errorf("evaluate: %w", err)
 	}
-	if result.MessageID == "" {
-		result.MessageID = req.MessageID
-	}
-	if result.TenantID == "" {
-		result.TenantID = req.TenantID
-	}
-	if result.CorrelationID == "" {
-		result.CorrelationID = req.CorrelationID
-	}
-	if result.EvaluatedAt.IsZero() {
-		result.EvaluatedAt = time.Now().UTC()
-	}
-	if result.Recipient == "" {
-		// Propagate the request recipient so the downstream action
-		// consumers can address the mailbox without re-fetching the
-		// original request. The evaluator does not need it, but the
-		// action layer does — and the result is the only payload that
-		// flows out on `es.evaluate.result`.
-		result.Recipient = req.Recipient
-	}
+	// Backfill the routing / identity envelope fields the request
+	// carries so downstream consumers on `es.evaluate.result` see
+	// the same envelope regardless of which producer (per-message
+	// here, or BatchOrchestrator.processOnce) emitted the verdict.
+	// In particular, the Recipient backfill keeps the downstream
+	// action consumers (label / banner / url_rewrite / quarantine)
+	// from silently no-op'ing on the empty-email guard. The shared
+	// helper lives in `internal/dto` so the two producers cannot
+	// drift apart.
+	dto.BackfillRoutingFields(&result, req)
 	payload, err := json.Marshal(result)
 	if err != nil {
 		a.logger.WarnContext(ctx, "sn360-es: evaluate.result marshal failed",

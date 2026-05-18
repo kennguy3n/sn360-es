@@ -375,7 +375,7 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 			// evaluator.Evaluate (evaluator.go:278-288).
 			o.aggregateLightweight(&res, pendings[idx].sig)
 		}
-		backfillRoutingFields(&res, pendings[idx].req)
+		dto.BackfillRoutingFields(&res, pendings[idx].req)
 		if err := o.publishResult(ctx, res); err != nil {
 			o.log.Error("evaluate: publish result failed", slog.String("err", err.Error()))
 			_ = pendings[idx].msg.Nak(5 * time.Second)
@@ -390,7 +390,7 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 			continue
 		}
 		t0 := p.tier0
-		backfillRoutingFields(&t0, p.req)
+		dto.BackfillRoutingFields(&t0, p.req)
 		if err := o.publishResult(ctx, t0); err != nil {
 			o.log.Error("evaluate: publish tier0 result failed", slog.String("err", err.Error()))
 			_ = p.msg.Nak(5 * time.Second)
@@ -399,43 +399,6 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 		_ = p.msg.Ack()
 	}
 	return nil
-}
-
-// backfillRoutingFields propagates the routing/identity fields the
-// request carries into the result so downstream consumers on
-// `es.evaluate.result` see the same envelope per-message and batch
-// verdicts produce. This mirrors handleEvaluateRequest in
-// cmd/sn360-es/main.go (lines 1295-1314): without the Recipient
-// backfill in particular, handleIngestionAction populates
-// "email": "" in every es.action.* signal and each action handler
-// (handleActionLabel, handleActionBanner, handleActionURLRewrite,
-// handleActionQuarantine) silently returns nil on the empty-email
-// guard, disabling all provider-side actions for batch-processed
-// messages. The MessageID / TenantID / CorrelationID / EvaluatedAt
-// backfills cover the same defensive territory the per-message
-// path already covers, so the two emit identical envelopes for an
-// identical (request, verdict) input regardless of which gate
-// produced the result (Tier 0 short-circuit, Tier 1 only, Tier 1
-// with Fallback). Backfill is conditional on "field empty" so a
-// downstream evaluator that intentionally rewrites these fields
-// (e.g. an Evaluator that re-stamps EvaluatedAt at fallback exit)
-// is not clobbered.
-func backfillRoutingFields(res *dto.EvaluateResult, req dto.EvaluateRequest) {
-	if res.MessageID == "" {
-		res.MessageID = req.MessageID
-	}
-	if res.TenantID == "" {
-		res.TenantID = req.TenantID
-	}
-	if res.CorrelationID == "" {
-		res.CorrelationID = req.CorrelationID
-	}
-	if res.EvaluatedAt.IsZero() {
-		res.EvaluatedAt = time.Now().UTC()
-	}
-	if res.Recipient == "" {
-		res.Recipient = req.Recipient
-	}
 }
 
 // aggregateLightweight populates res.Score, res.Primary, res.Secondary,
