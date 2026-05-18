@@ -302,18 +302,34 @@ func (p *Poller) pollMailbox(ctx context.Context, j job) {
 	//
 	// When the provider hands us a zero ReceivedAt (e.g. a Gmail
 	// message with a malformed internalDate, or an Outlook message
-	// missing receivedDateTime), we substitute the current wall
-	// clock. Leaving the zero value would make `failBarrier.IsZero()`
-	// stay true downstream, which causes the barrier to be ignored
-	// when computing `newest` — the failed message would never be
-	// re-fetched. Choosing time.Now().UTC() instead is conservative:
-	// it forces the checkpoint to stay <= now, so the next cycle
-	// will re-poll the affected window.
+	// missing receivedDateTime), `safeTimestamp` substitutes the
+	// current wall clock. Leaving the zero value through on the
+	// failure path would make `failBarrier.IsZero()` stay true
+	// downstream, which causes the barrier to be ignored when
+	// computing `newest` — the failed message would never be
+	// re-fetched. Symmetrically, leaving the zero value through on
+	// the success path would make `time.Time{}.After(since)` stay
+	// false at the checkpoint-compute loop below, so a batch where
+	// every message was published successfully but every
+	// `ReceivedAt` was zero would never advance the checkpoint and
+	// the same batch would be re-polled forever — burning provider
+	// API quota and flooding the bus.
+	//
+	// Both substitutions are conservative: forcing the checkpoint
+	// to stay <= time.Now().UTC() guarantees the next cycle will
+	// re-poll any window we cannot precisely bound. The Gmail and
+	// Outlook providers also filter zero-ReceivedAt messages
+	// client-side, but the MailboxProvider interface does not
+	// require that — so this is the authoritative defence.
+	safeTimestamp := func(t time.Time) time.Time {
+		if t.IsZero() {
+			return time.Now().UTC()
+		}
+		return t
+	}
 	var failBarrier time.Time
 	recordFailure := func(t time.Time) {
-		if t.IsZero() {
-			t = time.Now().UTC()
-		}
+		t = safeTimestamp(t)
 		if failBarrier.IsZero() || t.Before(failBarrier) {
 			failBarrier = t
 		}
@@ -348,7 +364,7 @@ func (p *Poller) pollMailbox(ctx context.Context, j job) {
 			recordFailure(raw.ReceivedAt)
 			continue
 		}
-		successes = append(successes, raw.ReceivedAt)
+		successes = append(successes, safeTimestamp(raw.ReceivedAt))
 	}
 	// Compute the highest successfully-published timestamp that is
 	// strictly less than the earliest failure (if any). This is the

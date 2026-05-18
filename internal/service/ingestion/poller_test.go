@@ -313,6 +313,121 @@ func TestPoller_RunOnce_PropagatesListErrors(t *testing.T) {
 	}
 }
 
+func TestPoller_RunOnce_ZeroReceivedAt_StillAdvancesCheckpoint(t *testing.T) {
+	// Regression for the success-path asymmetry: when a provider
+	// hands us a batch where every message was published
+	// successfully but every ReceivedAt was zero (e.g. Gmail
+	// malformed internalDate, Outlook missing receivedDateTime),
+	// the previous implementation appended the zero value into
+	// `successes` and `time.Time{}.After(since)` evaluated to false
+	// for the checkpoint-compute loop. The checkpoint never advanced
+	// and the same batch would be re-polled forever — burning
+	// provider quota and flooding the bus. The current poller
+	// substitutes time.Now().UTC() symmetrically on both the
+	// success and failure paths via `safeTimestamp`, so the
+	// checkpoint must advance to something strictly later than the
+	// initial `since` even when every message has a zero ReceivedAt.
+	prov := &fakeMailboxProvider{
+		kind:   "gmail",
+		mboxes: []Mailbox{{Address: "alice@corp.example"}},
+		emails: []RawEmail{
+			{
+				ProviderMessageID: "z1",
+				Mailbox:           "alice@corp.example",
+				Sender:            "ext@dom.com",
+				Subject:           "Hi",
+				Body:              "hello",
+				// ReceivedAt deliberately zero.
+			},
+			{
+				ProviderMessageID: "z2",
+				Mailbox:           "alice@corp.example",
+				Sender:            "ext@dom.com",
+				Subject:           "Hi again",
+				Body:              "hello again",
+				// ReceivedAt deliberately zero.
+			},
+		},
+	}
+	bus := &capturingBus{}
+	ck := newMemoryCheckpoint()
+	p, err := New(PollerConfig{
+		Providers:          []MailboxProvider{prov},
+		Publisher:          bus,
+		Logger:             discardLogger(),
+		Checkpoint:         ck,
+		TenantIDs:          []string{"t-1"},
+		LookbackOnFirstRun: 24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	before := time.Now().UTC()
+	if err := p.RunOnce(context.Background()); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	after := time.Now().UTC()
+	if len(bus.publishes) != 2 {
+		t.Fatalf("publish count: got %d want 2", len(bus.publishes))
+	}
+	got, ok, _ := ck.Get(context.Background(), "t-1", "alice@corp.example")
+	if !ok {
+		t.Fatal("checkpoint not set; success path with zero ReceivedAt would infinite-re-poll")
+	}
+	// The checkpoint must be strictly after the initial `since`
+	// (now - LookbackOnFirstRun) and bracketed by the wall clock
+	// observed around the call. Concretely it must lie in [before, after].
+	if got.Before(before) {
+		t.Errorf("checkpoint = %s precedes wall clock at call start (%s); time.Now() substitution did not apply", got, before)
+	}
+	if got.After(after) {
+		t.Errorf("checkpoint = %s is after wall clock at call end (%s); should be clamped to current wall clock", got, after)
+	}
+}
+
+func TestPoller_RunOnce_ZeroReceivedAtFailureMix_KeepsBarrier(t *testing.T) {
+	// Companion to the previous regression: when one message
+	// succeeds and another fails to publish, both with zero
+	// ReceivedAt, the failure barrier must still engage and prevent
+	// the checkpoint from advancing past the failure. With both
+	// substitutions on the same wall clock the success and failure
+	// timestamps will be within microseconds of each other, but
+	// `failBarrier.IsZero()` must be false so the
+	// "ts.Before(failBarrier)" guard runs and excludes the success.
+	prov := &fakeMailboxProvider{
+		kind:   "gmail",
+		mboxes: []Mailbox{{Address: "alice@corp.example"}},
+		emails: []RawEmail{
+			{
+				ProviderMessageID: "ok1",
+				Mailbox:           "alice@corp.example",
+				Sender:            "ext@dom.com",
+				Subject:           "Hi",
+				Body:              "hello",
+			},
+		},
+	}
+	bus := &capturingBus{publishEr: errors.New("transient publish failure")}
+	ck := newMemoryCheckpoint()
+	p, err := New(PollerConfig{
+		Providers:          []MailboxProvider{prov},
+		Publisher:          bus,
+		Logger:             discardLogger(),
+		Checkpoint:         ck,
+		TenantIDs:          []string{"t-1"},
+		LookbackOnFirstRun: 24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if err := p.RunOnce(context.Background()); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if _, ok, _ := ck.Get(context.Background(), "t-1", "alice@corp.example"); ok {
+		t.Error("checkpoint advanced past a failed message with zero ReceivedAt; failure barrier did not engage")
+	}
+}
+
 func TestPoller_LockKey_StableAcrossProviders(t *testing.T) {
 	a := lockKey("gmail", Mailbox{TenantID: "t-1", Address: "u@x.com"})
 	b := lockKey("gmail", Mailbox{TenantID: "t-1", Address: "u@x.com"})
