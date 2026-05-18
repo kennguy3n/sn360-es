@@ -265,7 +265,7 @@ func TestPoller_LockHeldByAnotherReplica_SkipsCycle(t *testing.T) {
 	denying := &memoryLock{deny: true}
 	p, _ := New(PollerConfig{
 		Providers: []MailboxProvider{prov}, Publisher: bus, Logger: discardLogger(),
-		Locks: func(string) DistributedLock { return denying },
+		Locks:     func(string) DistributedLock { return denying },
 		TenantIDs: []string{"t-1"},
 	})
 	if err := p.RunOnce(context.Background()); err != nil {

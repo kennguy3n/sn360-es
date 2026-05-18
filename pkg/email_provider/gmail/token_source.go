@@ -80,11 +80,11 @@ type JWTBearerSource struct {
 // delegated admin / mailbox owner the service account acts as; for
 // Gmail this is typically the mailbox owner's address.
 type JWTBearerConfig struct {
-	ServiceAccount    *ServiceAccount
-	ImpersonatedUser  string
-	Scopes            []string
-	HTTPClient        *http.Client
-	OverrideTokenURI  string // tests inject httptest URL here
+	ServiceAccount   *ServiceAccount
+	ImpersonatedUser string
+	Scopes           []string
+	HTTPClient       *http.Client
+	OverrideTokenURI string // tests inject httptest URL here
 }
 
 // NewJWTBearerSource constructs a JWTBearerSource and parses the

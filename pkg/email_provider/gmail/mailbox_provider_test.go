@@ -17,9 +17,9 @@ import (
 // the Gmail REST API. The test selects which surface to exercise via
 // the request method + path.
 type gmailMboxFake struct {
-	srv       *httptest.Server
-	users     []adminUser
-	listMsgs  []struct {
+	srv      *httptest.Server
+	users    []adminUser
+	listMsgs []struct {
 		ID         string
 		Sender     string
 		Subject    string

@@ -199,9 +199,9 @@ type gmailMessageList struct {
 
 // gmailMessage is the subset of users.messages.get we consume.
 type gmailMessage struct {
-	ID           string             `json:"id"`
-	ThreadID     string             `json:"threadId,omitempty"`
-	InternalDate string             `json:"internalDate,omitempty"`
+	ID           string              `json:"id"`
+	ThreadID     string              `json:"threadId,omitempty"`
+	InternalDate string              `json:"internalDate,omitempty"`
 	Payload      gmailMessagePayload `json:"payload"`
 }
 

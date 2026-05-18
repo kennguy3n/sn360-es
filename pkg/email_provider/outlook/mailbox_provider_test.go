@@ -13,10 +13,10 @@ import (
 )
 
 type outlookMboxFake struct {
-	srv    *httptest.Server
-	users  []graphUser
-	msgs   []graphMessage
-	calls  int
+	srv   *httptest.Server
+	users []graphUser
+	msgs  []graphMessage
+	calls int
 }
 
 func newOutlookMboxFake(t *testing.T) *outlookMboxFake {
@@ -107,12 +107,12 @@ func TestFetchNew_PopulatesEverything(t *testing.T) {
 	rcv := time.Date(2026, 5, 17, 12, 0, 0, 0, time.UTC)
 	fake.msgs = []graphMessage{{
 		ID: "m-1", Subject: "Hello",
-		Body: graphItemBody{ContentType: "html", Content: "<p>hi</p>"},
-		BodyPreview: "hi",
+		Body:             graphItemBody{ContentType: "html", Content: "<p>hi</p>"},
+		BodyPreview:      "hi",
 		ReceivedDateTime: rcv,
-		From: graphRecipient{EmailAddress: graphEmailAddress{Address: "alice@x.com"}},
-		ToRecipients:   []graphRecipient{{EmailAddress: graphEmailAddress{Address: "bob@corp.example"}}},
-		CcRecipients:   []graphRecipient{{EmailAddress: graphEmailAddress{Address: "carol@corp.example"}}},
+		From:             graphRecipient{EmailAddress: graphEmailAddress{Address: "alice@x.com"}},
+		ToRecipients:     []graphRecipient{{EmailAddress: graphEmailAddress{Address: "bob@corp.example"}}},
+		CcRecipients:     []graphRecipient{{EmailAddress: graphEmailAddress{Address: "carol@corp.example"}}},
 		InternetMessageHeaders: []graphHeader{
 			{Name: "Authentication-Results", Value: "spf=pass dkim=pass dmarc=pass"},
 		},

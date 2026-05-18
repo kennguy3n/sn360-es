@@ -39,12 +39,12 @@ type MailboxProviderConfig struct {
 // MailboxProvider implements ingestion.MailboxProvider on top of the
 // Microsoft Graph API.
 type MailboxProvider struct {
-	baseURL    string
-	http       *http.Client
-	tokens     TokenSource
-	tenantID   string
-	manual     []string
-	enumerate  bool
+	baseURL   string
+	http      *http.Client
+	tokens    TokenSource
+	tenantID  string
+	manual    []string
+	enumerate bool
 }
 
 // NewMailboxProvider validates the config and returns a ready-to-use
@@ -157,16 +157,16 @@ type graphMessageList struct {
 // graphMessage is the subset of the Graph message resource we
 // consume. The fields mirror https://learn.microsoft.com/graph/api/resources/message.
 type graphMessage struct {
-	ID                  string         `json:"id"`
-	Subject             string         `json:"subject,omitempty"`
-	Body                graphItemBody  `json:"body"`
-	BodyPreview         string         `json:"bodyPreview,omitempty"`
-	ReceivedDateTime    time.Time      `json:"receivedDateTime"`
-	From                graphRecipient `json:"from"`
-	ToRecipients        []graphRecipient `json:"toRecipients,omitempty"`
-	CcRecipients        []graphRecipient `json:"ccRecipients,omitempty"`
-	InternetMessageHeaders []graphHeader `json:"internetMessageHeaders,omitempty"`
-	HasAttachments      bool           `json:"hasAttachments,omitempty"`
+	ID                     string           `json:"id"`
+	Subject                string           `json:"subject,omitempty"`
+	Body                   graphItemBody    `json:"body"`
+	BodyPreview            string           `json:"bodyPreview,omitempty"`
+	ReceivedDateTime       time.Time        `json:"receivedDateTime"`
+	From                   graphRecipient   `json:"from"`
+	ToRecipients           []graphRecipient `json:"toRecipients,omitempty"`
+	CcRecipients           []graphRecipient `json:"ccRecipients,omitempty"`
+	InternetMessageHeaders []graphHeader    `json:"internetMessageHeaders,omitempty"`
+	HasAttachments         bool             `json:"hasAttachments,omitempty"`
 }
 
 type graphItemBody struct {

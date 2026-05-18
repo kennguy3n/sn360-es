@@ -19,8 +19,8 @@ type fakeJob struct {
 	onRun    func(ctx context.Context)
 }
 
-func (j *fakeJob) Name() string             { return j.name }
-func (j *fakeJob) Interval() time.Duration  { return j.interval }
+func (j *fakeJob) Name() string            { return j.name }
+func (j *fakeJob) Interval() time.Duration { return j.interval }
 func (j *fakeJob) Run(ctx context.Context) error {
 	atomic.AddInt32(&j.runs, 1)
 	if j.onRun != nil {

@@ -154,8 +154,8 @@ func TestRelationshipJob_TenantListError_PropagatesAndStops(t *testing.T) {
 func TestRelationshipJob_ListByTenantError_ContinuesOtherTenants(t *testing.T) {
 	cs := &fakeCommunicationStore{err: errors.New("transient")}
 	job, _ := NewRelationshipJob(RelationshipJobConfig{
-		Interval: time.Hour,
-		Tenants:  &fakeTenantLister{tenants: []repository.Tenant{{ID: "a"}, {ID: "b"}}},
+		Interval:       time.Hour,
+		Tenants:        &fakeTenantLister{tenants: []repository.Tenant{{ID: "a"}, {ID: "b"}}},
 		Communications: cs, Upserter: &fakeCommUpserter{}, Logger: discardLogger(),
 	})
 	err := job.Run(context.Background())
