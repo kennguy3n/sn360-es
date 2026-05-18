@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 
 	"github.com/kennguy3n/sn360-es/internal/config"
@@ -238,34 +237,22 @@ func buildProviderRegistry(ctx context.Context, cfg *config.Config, logger *slog
 // is the only caller-side gate for invoking this helper and it
 // requires Domain to be non-empty, so we can return it verbatim
 // without a fallback — if Domain were empty, the buildGmailEntry
-// branch in buildProviderRegistry would never run.
+// branch in buildProviderRegistry would never run. Whitespace
+// normalisation lives in config.Load, so this helper is a direct
+// passthrough — keeping it as a named function makes the registry
+// key vs. MailboxProvider TenantID invariant grep-able from a
+// single site.
 func gmailProviderTenant(cfg *config.Config) string {
-	return strings.TrimSpace(cfg.GWS.Domain)
+	return cfg.GWS.Domain
 }
 
 // outlookProviderTenant returns the registry key for the Outlook
-// entry. It must match the TenantID that buildMailboxProviders gives
-// to the Outlook MailboxProvider (today: cfg.O365.TenantID).
+// entry. Same invariant as gmailProviderTenant: cfg.O365.HasOutlook
+// requires TenantID to be non-empty and config.Load trims it, so
+// the helper is a direct passthrough — no fallback needed because
+// the caller-side HasOutlook() gate guarantees a non-empty value.
 func outlookProviderTenant(cfg *config.Config) string {
-	if t := strings.TrimSpace(cfg.O365.TenantID); t != "" {
-		return t
-	}
-	return "default"
-}
-
-// defaultProviderTenant is retained for callers (e.g. tests and the
-// /readyz handler) that need *some* representative tenant key — it
-// prefers the Gmail key and falls back to the Outlook key. New code
-// inside the registry construction path uses the per-provider
-// helpers above instead.
-func defaultProviderTenant(cfg *config.Config) string {
-	if d := strings.TrimSpace(cfg.GWS.Domain); d != "" {
-		return d
-	}
-	if t := strings.TrimSpace(cfg.O365.TenantID); t != "" {
-		return t
-	}
-	return "default"
+	return cfg.O365.TenantID
 }
 
 // buildGmailEntry constructs the Gmail label provider + banner

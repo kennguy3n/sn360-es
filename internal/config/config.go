@@ -515,17 +515,27 @@ func Load() (Config, error) {
 		},
 		GWS: GWS{
 			ServiceAccountJSON: getStr("GWS_SERVICE_ACCOUNT_JSON", ""),
-			DelegatedAdmin:     getStr("GWS_DELEGATED_ADMIN", ""),
-			Domain:             getStr("GWS_DOMAIN", ""),
-			BaseURL:            getStr("GWS_GMAIL_BASE_URL", ""),
-			AdminBaseURL:       getStr("GWS_ADMIN_BASE_URL", ""),
+			DelegatedAdmin:     strings.TrimSpace(getStr("GWS_DELEGATED_ADMIN", "")),
+			// Domain is the registry key the provider lookup
+			// matches against the MailboxProvider's emitted
+			// TenantID. Both flow from this single field, so we
+			// trim once at the source — otherwise a stray space
+			// in GWS_DOMAIN silently desyncs the registry key
+			// (which used to be trimmed in providers.go) from
+			// the TenantID (which is not), and action consumers
+			// drop every event for the tenant.
+			Domain:       strings.TrimSpace(getStr("GWS_DOMAIN", "")),
+			BaseURL:      getStr("GWS_GMAIL_BASE_URL", ""),
+			AdminBaseURL: getStr("GWS_ADMIN_BASE_URL", ""),
 		},
 		O365: O365{
-			ClientID:     getStr("O365_CLIENT_ID", ""),
+			ClientID:     strings.TrimSpace(getStr("O365_CLIENT_ID", "")),
 			ClientSecret: getStr("O365_CLIENT_SECRET", ""),
-			TenantID:     getStr("O365_TENANT_ID", ""),
-			BaseURL:      getStr("O365_BASE_URL", ""),
-			TokenURL:     getStr("O365_TOKEN_URL", ""),
+			// TenantID has the same registry-key invariant as
+			// GWS.Domain above — trim at the source.
+			TenantID: strings.TrimSpace(getStr("O365_TENANT_ID", "")),
+			BaseURL:  getStr("O365_BASE_URL", ""),
+			TokenURL: getStr("O365_TOKEN_URL", ""),
 		},
 		Ingestion: Ingestion{
 			Enabled:         getBool("INGESTION_ENABLED", false),
