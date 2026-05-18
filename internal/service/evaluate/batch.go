@@ -327,8 +327,19 @@ func (o *BatchOrchestrator) publishResult(ctx context.Context, res dto.EvaluateR
 	if err != nil {
 		return fmt.Errorf("marshal result: %w", err)
 	}
+	// Use the canonical tenant/correlation helpers (not raw
+	// WithHeader("tenant_id", …)) so batch verdicts carry the same
+	// well-known header keys as the per-message handleEvaluateRequest
+	// path — `tenant-id` / `correlation-id` (RFC-style hyphenation),
+	// not the underscore form. Downstream consumers
+	// (handleEvaluateResult, handleEducationTrigger, handleIngestionAction)
+	// read `events.HeaderTenantID` / `events.HeaderCorrelationID`, so a
+	// mismatched key would silently fall through to the JSON body
+	// lookup and break any bus middleware that operates on canonical
+	// headers (e.g. tenant rewriting, tracing exporters, audit logging).
 	return o.cfg.Sink.Publish(ctx, o.cfg.ResultSubject, blob,
 		events.WithMessageID(res.MessageID),
-		events.WithHeader("tenant_id", res.TenantID),
+		events.WithTenantID(res.TenantID),
+		events.WithCorrelationID(res.CorrelationID),
 	)
 }
