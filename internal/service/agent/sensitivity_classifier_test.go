@@ -26,7 +26,7 @@ func TestTieredSensitivityClassifier_EncoderOnly(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	encoder := NewEncoderSensitivityClassifier(srv.URL+"/classify/roles", nil, 5*time.Second, nil)
+	encoder := NewEncoderSensitivityClassifier(srv.URL, nil, 5*time.Second, nil)
 	classifier := NewTieredSensitivityClassifier(TieredClassifierConfig{
 		Encoder: encoder,
 	})
@@ -136,7 +136,7 @@ func TestTieredSensitivityClassifier_BonsaiEscalation(t *testing.T) {
 	}))
 	defer bonsaiSrv.Close()
 
-	encoder := NewEncoderSensitivityClassifier(encoderSrv.URL+"/classify/roles", nil, 5*time.Second, nil)
+	encoder := NewEncoderSensitivityClassifier(encoderSrv.URL, nil, 5*time.Second, nil)
 	bonsai := NewBonsaiSensitivityClassifier(bonsaiSrv.URL, nil, 30*time.Second, nil)
 	classifier := NewTieredSensitivityClassifier(TieredClassifierConfig{
 		Encoder: encoder,
@@ -187,7 +187,7 @@ func TestEncoderSensitivityClassifier_MultilingualTitles(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			encoder := NewEncoderSensitivityClassifier(srv.URL+"/classify/roles", nil, 5*time.Second, nil)
+			encoder := NewEncoderSensitivityClassifier(srv.URL, nil, 5*time.Second, nil)
 			results, err := encoder.ClassifyBatch(context.Background(), []UserClassifyInput{
 				{JobTitle: tt.title, Department: "Finance"},
 			})

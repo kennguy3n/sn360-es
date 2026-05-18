@@ -81,5 +81,5 @@ func isLegalDepartment(s string) bool {
 }
 
 func isHRDepartment(s string) bool {
-	return strings.Contains(s, "hr") || strings.Contains(s, "human resource") || strings.Contains(s, "people")
+	return s == "hr" || strings.Contains(s, "human resource") || strings.Contains(s, "people ops") || strings.Contains(s, "people operations")
 }

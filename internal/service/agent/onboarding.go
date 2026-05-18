@@ -219,11 +219,13 @@ func (a *OnboardingAgent) publishUserEvent(ctx context.Context, tctx TenantConte
 
 	// Pseudonymize PII before publishing — never emit raw email or
 	// display name to the event bus.
-	emailHash := u.Email
-	displayHash := u.DisplayName
+	var emailHash, displayHash string
 	if a.cfg.Hasher != nil {
 		emailHash = a.cfg.Hasher.HashPII(tctx.TenantID, u.Email)
 		displayHash = a.cfg.Hasher.HashPII(tctx.TenantID, u.DisplayName)
+	} else {
+		emailHash = "<redacted>"
+		displayHash = "<redacted>"
 	}
 
 	payload := map[string]any{

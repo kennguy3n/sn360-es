@@ -3,10 +3,17 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 )
+
+// ErrRetryNotReady is returned by ProcessRetry when the event's
+// NextRetryAt has not yet passed. Consumers should NAK the message
+// with a delay (e.g. NakWithDelay on NATS JetStream) rather than
+// immediately redelivering.
+var ErrRetryNotReady = errors.New("label retry: not ready for retry yet")
 
 // LabelRetryEvent is the event shape published when label creation
 // fails for a mailbox. A consumer retries with exponential backoff.
@@ -82,12 +89,10 @@ func (q *LabelRetryQueue) ProcessRetry(ctx context.Context, data []byte) error {
 	}
 	now := time.Now().UTC()
 	if now.Before(evt.NextRetryAt) {
-		// Re-enqueue for later without incrementing the attempt counter.
-		reData, mErr := json.Marshal(evt)
-		if mErr != nil {
-			return fmt.Errorf("label retry: marshal: %w", mErr)
-		}
-		return q.publisher.Publish(ctx, "es.onboarding.label.retry", reData)
+		// Return ErrRetryNotReady so the consumer can NAK with delay.
+		// This avoids a busy-wait hot loop of re-publishing to the
+		// same topic at message-bus speed.
+		return ErrRetryNotReady
 	}
 	err := q.applier.EnsureTierLabels(ctx, evt.TenantID, evt.Mailbox)
 	if err != nil {

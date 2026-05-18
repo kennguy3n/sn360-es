@@ -48,6 +48,9 @@ func NewDirectorySyncJob(cfg DirectorySyncJobConfig) (*DirectorySyncJob, error) 
 	if cfg.Groups == nil {
 		return nil, fmt.Errorf("worker: directory sync requires GroupRepository")
 	}
+	if cfg.Hasher == nil {
+		return nil, fmt.Errorf("worker: directory sync requires Hasher")
+	}
 	if cfg.Interval <= 0 {
 		cfg.Interval = 6 * time.Hour
 	}

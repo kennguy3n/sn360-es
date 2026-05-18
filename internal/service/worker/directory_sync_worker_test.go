@@ -128,12 +128,23 @@ func TestNewDirectorySyncJob_Validation(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "nil hasher",
+			cfg: DirectorySyncJobConfig{
+				Tenants:   &fakeDirSyncTenantLister{},
+				Directory: &fakeDirSyncDirectoryClient{},
+				Users:     newFakeUserRepo(),
+				Groups:    newFakeGroupRepo(),
+			},
+			wantErr: true,
+		},
+		{
 			name: "valid",
 			cfg: DirectorySyncJobConfig{
 				Tenants:   &fakeDirSyncTenantLister{},
 				Directory: &fakeDirSyncDirectoryClient{},
 				Users:     newFakeUserRepo(),
 				Groups:    newFakeGroupRepo(),
+				Hasher:    func(_, input string) ([]byte, error) { return []byte(input), nil },
 			},
 			wantErr: false,
 		},
@@ -156,6 +167,7 @@ func TestDirectorySyncJob_NameAndInterval(t *testing.T) {
 		Directory: &fakeDirSyncDirectoryClient{},
 		Users:     newFakeUserRepo(),
 		Groups:    newFakeGroupRepo(),
+		Hasher:    func(_, input string) ([]byte, error) { return []byte(input), nil },
 	})
 	if err != nil {
 		t.Fatalf("NewDirectorySyncJob: %v", err)
@@ -221,6 +233,7 @@ func TestDirectorySyncJob_Run_NoTenants(t *testing.T) {
 		Directory: &fakeDirSyncDirectoryClient{},
 		Users:     newFakeUserRepo(),
 		Groups:    newFakeGroupRepo(),
+		Hasher:    func(_, input string) ([]byte, error) { return []byte(input), nil },
 		Logger:    slog.Default(),
 	})
 	if err != nil {
