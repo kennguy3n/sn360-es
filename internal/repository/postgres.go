@@ -574,22 +574,21 @@ ON CONFLICT (tenant_id, sender_hash, recipient_hash) DO UPDATE SET
 // ListByTenant returns every CommunicationHistory row for `tenantID`
 // whose last_seen_at is at or after `since`, ordered by last_seen_at
 // descending so the relationship worker re-processes the freshest
-// rows first. A non-positive `limit` is treated as "no cap"; in that
-// case we pass NULL to the SQL LIMIT placeholder which Postgres
-// interprets as unlimited.
+// rows first. A non-positive `limit` is treated as "no cap" by way
+// of `LIMIT NULLIF($3,0)` — Postgres interprets `LIMIT NULL` as
+// unlimited, which matches the established pattern used by every
+// other LIMIT-driven query in this file (e.g. tenants.List at
+// `LIMIT NULLIF($1,0)`, users.List at `LIMIT NULLIF($2,0)`,
+// evaluation_results.ListRecent at `LIMIT NULLIF($2,0)`).
 func (p *pgCommHistory) ListByTenant(ctx context.Context, tenantID string, since time.Time, limit int) ([]CommunicationHistory, error) {
-	var limitArg interface{}
-	if limit > 0 {
-		limitArg = limit
-	}
 	rows, err := p.db.QueryContext(ctx, `
 SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(sender_domain, ''),
        count_7d, count_30d, first_seen_at, last_seen_at, relationship, updated_at
   FROM communication_histories
  WHERE tenant_id=$1 AND last_seen_at >= $2
  ORDER BY last_seen_at DESC
- LIMIT $3`,
-		tenantID, since, limitArg)
+ LIMIT NULLIF($3,0)`,
+		tenantID, since, limit)
 	if err != nil {
 		return nil, err
 	}
