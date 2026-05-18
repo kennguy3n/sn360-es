@@ -70,17 +70,19 @@ func VersionCheckMiddleware(next events.MessageHandler, log *slog.Logger) events
 		versionStr, ok := headers[WireVersionHeader]
 		if ok {
 			var version int
-			if _, err := fmt.Sscanf(versionStr, "%d", &version); err == nil {
-				if version != CurrentWireVersion {
-					log.WarnContext(ctx, "wire_version: rejecting message with mismatched version",
-						slog.Int("expected", CurrentWireVersion),
-						slog.Int("got", version),
-						slog.String("subject", msg.Subject()))
-					// Ack instead of nak to prevent infinite redelivery of
-					// permanently incompatible messages.
-					_ = msg.Ack()
-					return nil
-				}
+			if _, err := fmt.Sscanf(versionStr, "%d", &version); err != nil {
+				log.WarnContext(ctx, "wire_version: unparseable version header, passing through",
+					slog.String("header_value", versionStr),
+					slog.String("subject", msg.Subject()))
+			} else if version != CurrentWireVersion {
+				log.WarnContext(ctx, "wire_version: rejecting message with mismatched version",
+					slog.Int("expected", CurrentWireVersion),
+					slog.Int("got", version),
+					slog.String("subject", msg.Subject()))
+				// Ack instead of nak to prevent infinite redelivery of
+				// permanently incompatible messages.
+				_ = msg.Ack()
+				return nil
 			}
 		}
 		return next(ctx, msg)

@@ -62,7 +62,7 @@ func (c *recordingConfig2) UpdateThresholds(_ context.Context, _ string, t Thres
 }
 
 func balancedWeights() ScoreWeights {
-	return ScoreWeights{AI: 0.8, Rspamd: 0.2}
+	return ScoreWeights{AI: 0.60, Rspamd: 0.10, Attachments: 0.15, Links: 0.15}
 }
 
 func defaultThresholds() Thresholds {
@@ -145,10 +145,10 @@ func TestTuningAgent_Decide_FPHigh_ShiftsWeightsAndRaisesThresholds(t *testing.T
 	if d.NewWeights == nil {
 		t.Fatal("expected NewWeights set")
 	}
-	if d.NewWeights.AI >= 0.8 {
+	if d.NewWeights.AI >= 0.60 {
 		t.Fatalf("AI should decrease, got %v", d.NewWeights.AI)
 	}
-	if d.NewWeights.Rspamd <= 0.2 {
+	if d.NewWeights.Rspamd <= 0.10 {
 		t.Fatalf("Rspamd should increase, got %v", d.NewWeights.Rspamd)
 	}
 	if d.NewThresholds == nil {
@@ -173,7 +173,7 @@ func TestTuningAgent_Decide_FNHigh_ShiftsWeightsAndLowersThresholds(t *testing.T
 		CurrentThresholds: defaultThresholds(),
 	}
 	d := a.Decide(snap)
-	if d.NewWeights == nil || d.NewWeights.AI <= 0.8 {
+	if d.NewWeights == nil || d.NewWeights.AI <= 0.60 {
 		t.Fatalf("AI weight should increase: %+v", d.NewWeights)
 	}
 	if d.NewThresholds == nil {
@@ -227,7 +227,8 @@ func TestTuningAgent_Decide_WeightShiftCappedByMax(t *testing.T) {
 	}
 	// Weights are normalised; we test the AI delta indirectly via the ratio.
 	// The shift before clamp should be ≤ MaxWeightShiftPerRun.
-	if (0.8 - d.NewWeights.AI*(d.NewWeights.AI+d.NewWeights.Rspamd)) > 0.05 {
+	// With MaxWeightShiftPerRun=0.03, AI should not drop below 0.60-0.03=0.57.
+	if d.NewWeights.AI < 0.60-0.03-0.001 {
 		t.Fatalf("weight shift exceeded cap: %+v", d.NewWeights)
 	}
 }
