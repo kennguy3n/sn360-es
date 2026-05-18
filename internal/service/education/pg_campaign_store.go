@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/dto"
 	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
@@ -184,6 +183,3 @@ func (s *PostgresCampaignStore) CountByStatus(ctx context.Context, tenantID stri
 
 // compile-time assertion
 var _ CampaignStore = (*PostgresCampaignStore)(nil)
-
-// suppress unused import
-var _ = time.Now

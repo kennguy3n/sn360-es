@@ -2,6 +2,7 @@ package evaluate
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -139,9 +140,10 @@ func (c *Tier2FallbackClient) Evaluate(ctx context.Context, req dto.EvaluateRequ
 		}
 		c.fallbackCalls.Add(1)
 		return c.fallback.Evaluate(ctx, req, hint)
-	}
 
-	return c.primary.Evaluate(ctx, req, hint)
+	default:
+		panic(fmt.Sprintf("tier2_fallback: unexpected circuit state %d", state))
+	}
 }
 
 func (c *Tier2FallbackClient) currentState() circuitState {
