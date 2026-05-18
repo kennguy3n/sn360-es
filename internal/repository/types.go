@@ -257,12 +257,25 @@ type EvaluationResultRepository interface {
 // CommunicationHistoryRepository persists CommunicationHistory rows.
 //
 // ListByTenant returns rows whose LastSeenAt is at or after `since`,
-// capped at `limit` entries (limit <= 0 disables the cap). The
+// capped at `limit` entries. Both bounds carry zero-value semantics
+// every implementation MUST honour identically — otherwise the
 // relationship-aggregation and vendor-discovery periodic workers
-// drive their per-tenant scans through this method, so every
-// implementation MUST honour both the time filter and the limit —
-// otherwise the workers degrade silently when wired in
-// `cmd/sn360-es/main.go`.
+// degrade silently when wired in `cmd/sn360-es/main.go`:
+//
+//   - `since == time.Time{}` (Go zero) ⇒ no time filter; the call
+//     returns every row for the tenant. The in-memory backend
+//     short-circuits the filter via `since.IsZero()`; the Postgres
+//     backend relies on `last_seen_at >= 0001-01-01T00:00:00Z`
+//     matching every persisted row (the column is NOT NULL).
+//   - `limit <= 0` ⇒ no row cap. The in-memory backend skips the
+//     truncation step; the Postgres backend uses `LIMIT NULLIF($N,0)`
+//     so the planner sees `LIMIT NULL` (= unbounded).
+//
+// Callers that want the documented worker behaviour pass a non-zero
+// `since` (the rolling-window cutoff) and a positive `limit` (the
+// per-tenant scan cap). The zero-value semantics exist so ad-hoc
+// callers (tests, admin tools) can request an unfiltered tenant
+// scan without a sentinel API.
 type CommunicationHistoryRepository interface {
 	Upsert(ctx context.Context, h *CommunicationHistory) error
 	Get(ctx context.Context, tenantID string, senderHash, recipientHash []byte) (*CommunicationHistory, error)
