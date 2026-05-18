@@ -118,14 +118,21 @@ type graphChangeNotification struct {
 }
 
 // HandleNotification processes a Graph Change Notification payload.
+// It validates the clientState on each notification entry to ensure
+// the callback genuinely originated from a subscription we created.
 func (o *OutlookPushReceiver) HandleNotification(ctx context.Context, tenantID string, payload json.RawMessage) ([]RawEmail, error) {
 	var notif graphChangeNotification
 	if err := json.Unmarshal(payload, &notif); err != nil {
 		return nil, fmt.Errorf("outlook push: unmarshal: %w", err)
 	}
 
+	expectedState := "sn360-es-" + tenantID
+
 	var emails []RawEmail
 	for _, v := range notif.Value {
+		if v.ClientState != expectedState {
+			return nil, fmt.Errorf("outlook push: clientState mismatch: got %q, want %q", v.ClientState, expectedState)
+		}
 		if v.ChangeType != "created" {
 			continue
 		}
