@@ -309,18 +309,16 @@ func firstOf(values []string) string {
 // bus. It lives next to the normalizer because the request shape is
 // owned here.
 func marshalRequest(r dto.EvaluateRequest) ([]byte, error) {
+	// Defensive: empty received_at would round-trip as
+	// "0001-01-01T00:00:00Z"; backfill with the current timestamp
+	// so the audit log always has a sensible value. We mutate
+	// before marshalling so we only ever produce one JSON blob.
+	if r.ReceivedAt.IsZero() {
+		r.ReceivedAt = time.Now().UTC()
+	}
 	b, err := json.Marshal(r)
 	if err != nil {
 		return nil, fmt.Errorf("ingestion: marshal evaluate request: %w", err)
-	}
-	// Defensive: empty received_at would round-trip as
-	// "0001-01-01T00:00:00Z"; force a current timestamp so the
-	// audit log always has a sensible value.
-	if r.ReceivedAt.IsZero() {
-		// Re-marshal with ReceivedAt = now to keep the payload
-		// honest.
-		r.ReceivedAt = time.Now().UTC()
-		return json.Marshal(r)
 	}
 	return b, nil
 }

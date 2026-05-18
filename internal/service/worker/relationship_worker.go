@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/repository"
@@ -270,9 +271,12 @@ func (j *VendorJob) Run(ctx context.Context) error {
 }
 
 // buildSenderObservations turns CommunicationHistory rows into the
-// SenderObservation shape the VendorDiscovery service expects. We
-// approximate distinct-recipients by counting distinct
-// RecipientHash values per SenderDomainHash.
+// SenderObservation shape the VendorDiscovery service expects.
+// Observations are grouped by the plaintext SenderDomain — converting
+// SenderDomainHash bytes to a string produces binary gibberish that
+// can never match against real domains in VendorRepository.GetByDomain.
+// Rows missing a plaintext SenderDomain are skipped so the discovery
+// service never receives a junk-keyed observation.
 func buildSenderObservations(rows []repository.CommunicationHistory) []relationship.SenderObservation {
 	type acc struct {
 		inbound      int
@@ -283,14 +287,14 @@ func buildSenderObservations(rows []repository.CommunicationHistory) []relations
 	}
 	by := make(map[string]*acc)
 	for _, r := range rows {
-		key := string(r.SenderDomainHash)
-		if key == "" {
+		domain := strings.ToLower(strings.TrimSpace(r.SenderDomain))
+		if domain == "" {
 			continue
 		}
-		a, ok := by[key]
+		a, ok := by[domain]
 		if !ok {
-			a = &acc{distinctRecs: map[string]struct{}{}, domain: key}
-			by[key] = a
+			a = &acc{distinctRecs: map[string]struct{}{}, domain: domain}
+			by[domain] = a
 		}
 		a.inbound += r.Count30d
 		a.distinctRecs[string(r.RecipientHash)] = struct{}{}

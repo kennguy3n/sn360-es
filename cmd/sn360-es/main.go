@@ -122,6 +122,13 @@ func run() error {
 	// messages can ack cleanly.
 	app.StopConsumers(logger)
 
+	// Drain background goroutines (poller, periodic workers, label
+	// cache janitor) BEFORE we tear down the HTTP server and the
+	// bus / database connections in app.Close. Without this, a
+	// poll cycle in flight at SIGTERM would publish to a closed
+	// bus or write to a torn-down *sql.DB.
+	app.WaitBackground()
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -209,11 +216,24 @@ type application struct {
 	tuningAgent  *agent.TuningAgent
 	supportAgent *agent.SupportAgent
 
+	// In-process caches that own a janitor goroutine. We keep a
+	// typed reference (separate from the action.LabelCache interface
+	// stored on labelApplier) so StartBackground can run the janitor
+	// and tests can stop it deterministically.
+	memLabelCache *memoryLabelCache
+
 	// Lifecycle.
 	subs    []events.Subscription
 	subsMu  sync.Mutex
 	closers []func() error
 	dlqProc *service.DLQProcessor
+
+	// bgWG tracks every goroutine started by StartBackground so the
+	// shutdown sequence can wait for them to drain before the
+	// process exits. Each goroutine MUST `defer a.bgWG.Done()` and
+	// the matching `a.bgWG.Add(1)` MUST run on the calling
+	// goroutine (not inside the spawned one) to avoid a Wait race.
+	bgWG sync.WaitGroup
 }
 
 // newApplication wires every component the binary needs. Required
@@ -735,7 +755,11 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	// across runs; we use Redis when available and an in-memory
 	// fallback otherwise so tests + dev still work.
 	if app.providers != nil && app.providers.hasAny() {
-		labelCache := newLabelCache(app.redis)
+		labelCache, memCache := newLabelCache(app.redis)
+		// memCache is non-nil only on the in-process path; stash it
+		// so StartBackground can run its janitor goroutine and stop
+		// the map from growing without bound.
+		app.memLabelCache = memCache
 		app.labelApplier = action.NewLabelApplier(logger, labelCache, app.providers.labelProviders()...)
 	}
 
@@ -2223,6 +2247,12 @@ func (c redisLabelCache) Set(ctx context.Context, key, value string, ttl time.Du
 
 // memoryLabelCache is the in-process fallback when Redis is not
 // configured. Goroutine-safe; respects the supplied TTL.
+//
+// Expired entries are evicted lazily on Get and proactively by the
+// janitor goroutine started via runJanitor(ctx). Without the
+// janitor, keys that are written once and never read again would
+// linger forever — Set overwrites the slot but does not sweep peers,
+// so a long-running process can accumulate unbounded entries.
 type memoryLabelCache struct {
 	mu      sync.Mutex
 	entries map[string]memoryLabelEntry
@@ -2232,6 +2262,11 @@ type memoryLabelEntry struct {
 	value     string
 	expiresAt time.Time
 }
+
+// memoryLabelCacheJanitorInterval is how often the janitor sweeps
+// expired entries. Five minutes balances "bound memory growth" with
+// "do not wake up frequently on idle deployments".
+const memoryLabelCacheJanitorInterval = 5 * time.Minute
 
 func newMemoryLabelCache() *memoryLabelCache {
 	return &memoryLabelCache{entries: make(map[string]memoryLabelEntry)}
@@ -2262,14 +2297,61 @@ func (c *memoryLabelCache) Set(_ context.Context, key, value string, ttl time.Du
 	return nil
 }
 
+// sweepExpired removes every entry whose TTL has passed. Returns the
+// number of entries evicted so the caller can log it.
+func (c *memoryLabelCache) sweepExpired(now time.Time) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	removed := 0
+	for k, e := range c.entries {
+		if e.expiresAt.IsZero() {
+			continue
+		}
+		if now.After(e.expiresAt) {
+			delete(c.entries, k)
+			removed++
+		}
+	}
+	return removed
+}
+
+// runJanitor evicts expired entries on a fixed cadence until ctx is
+// cancelled. It is intentionally blocking so callers can wrap it in
+// a tracked goroutine (see application.StartBackground).
+func (c *memoryLabelCache) runJanitor(ctx context.Context, interval time.Duration, logger *slog.Logger) {
+	if interval <= 0 {
+		interval = memoryLabelCacheJanitorInterval
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			if n := c.sweepExpired(now); n > 0 && logger != nil {
+				logger.Debug("sn360-es: memoryLabelCache janitor swept entries",
+					slog.Int("evicted", n))
+			}
+		}
+	}
+}
+
 // newLabelCache picks the redis-backed adapter when redis is wired,
 // otherwise it falls back to the in-memory implementation. Both
 // satisfy action.LabelCache so the applier wiring is identical.
-func newLabelCache(r *redis.Client) action.LabelCache {
+//
+// When the in-memory cache is selected the returned *memoryLabelCache
+// is also returned so the caller can wire its janitor goroutine —
+// this avoids unbounded growth in long-running deployments that have
+// not configured Redis. The second return value is nil for the redis
+// path because the redis server enforces TTL eviction itself.
+func newLabelCache(r *redis.Client) (action.LabelCache, *memoryLabelCache) {
 	if r != nil {
-		return redisLabelCache{client: r}
+		return redisLabelCache{client: r}, nil
 	}
-	return newMemoryLabelCache()
+	mem := newMemoryLabelCache()
+	return mem, mem
 }
 
 // redisURLStore adapts our redis.Client to the action.URLStore
@@ -2817,6 +2899,14 @@ func buildMailboxProviders(ctx context.Context, cfg *config.Config, logger *slog
 				TokenSource: tokens,
 				BaseURL:     cfg.O365.BaseURL,
 				TenantID:    cfg.O365.TenantID,
+				// Default to admin-level user enumeration so the
+				// poller actually discovers tenant mailboxes. When
+				// false, ListMailboxes returns only the manually
+				// configured ManualMailboxes list — empty by default
+				// in this wiring — and the poller silently observes
+				// zero mailboxes. The client-credentials token
+				// source has User.Read.All by definition.
+				EnumerateUsers: true,
 			})
 			if merr != nil {
 				logger.Warn("sn360-es: outlook mailbox provider init failed",
@@ -3054,11 +3144,34 @@ func (a workerMetricsAdapter) ObserveCycle(name string, duration time.Duration, 
 	a.m.ObserveWorkerCycle(name, duration, err)
 }
 
+// prunableTables is the exhaustive allow-list of table names that
+// newPgPruner may interpolate into a DELETE statement. Because Go's
+// database/sql does not support parameterised table identifiers, the
+// table name is injected via fmt.Sprintf — restricting the set to a
+// compile-time constant prevents accidental SQL injection if a
+// caller ever passes unsanitised input.
+var prunableTables = map[string]struct{}{
+	"evaluation_results":      {},
+	"feedback_events":         {},
+	"communication_histories": {},
+	"quarantine_references":   {},
+	"education_lesson_events": {},
+	"simulation_send_events":  {},
+}
+
 // newPgPruner returns a Postgres-backed pruner for the named table.
 // The implementation issues a parameterised DELETE on the
 // "created_at" column. Tables that use a different column override
 // this via newPgPrunerWithColumn (see cleanup_worker.go).
+//
+// The table name MUST appear in prunableTables. A panic on
+// construction is intentional — it catches programming errors at
+// startup rather than silently ignoring a typo at the first
+// cleanup tick (which might be hours later).
 func newPgPruner(db *postgres.DB, table string, logger *slog.Logger) worker.Pruner {
+	if _, ok := prunableTables[table]; !ok {
+		panic(fmt.Sprintf("newPgPruner: table %q is not in the allow-list", table))
+	}
 	return worker.NewPruner(table, func(ctx context.Context, before time.Time) (int64, error) {
 		if db == nil {
 			return 0, nil
@@ -3422,41 +3535,70 @@ func (s *memoryConfigStore) UpdateThresholds(_ context.Context, tenantID string,
 // Errors from the long-running goroutines are logged but never
 // surfaced to the caller because a missed cycle on a recurring
 // worker is recoverable on the next tick.
+//
+// Every goroutine launched here is tracked on a.bgWG so the shutdown
+// sequence in run() can call WaitBackground() and drain them before
+// the bus and database connections close. Without that wait, an
+// in-flight poller cycle could publish to a closed bus or write to a
+// closed *sql.DB after the parent context fires.
 func (a *application) StartBackground(ctx context.Context) {
-	if a.poller != nil {
-		go func() {
-			if err := a.poller.Run(ctx); err != nil {
-				a.logger.Warn("sn360-es: ingestion poller terminated",
-					slog.Any("error", err))
-			}
-		}()
-		a.logger.Info("sn360-es: ingestion poller started")
-	}
-	if a.relationshipRunner != nil {
-		go func() {
-			if err := a.relationshipRunner.Run(ctx); err != nil {
-				a.logger.Warn("sn360-es: relationship worker terminated",
-					slog.Any("error", err))
-			}
-		}()
-		a.logger.Info("sn360-es: relationship worker started")
-	}
-	if a.vendorRunner != nil {
-		go func() {
-			if err := a.vendorRunner.Run(ctx); err != nil {
-				a.logger.Warn("sn360-es: vendor worker terminated",
-					slog.Any("error", err))
-			}
-		}()
-		a.logger.Info("sn360-es: vendor worker started")
-	}
-	if a.cleanupRunner != nil {
-		go func() {
-			if err := a.cleanupRunner.Run(ctx); err != nil {
-				a.logger.Warn("sn360-es: cleanup worker terminated",
-					slog.Any("error", err))
-			}
-		}()
-		a.logger.Info("sn360-es: cleanup worker started")
-	}
+	a.spawn(ctx, "ingestion poller", func(ctx context.Context) error {
+		if a.poller == nil {
+			return nil
+		}
+		return a.poller.Run(ctx)
+	})
+	a.spawn(ctx, "relationship worker", func(ctx context.Context) error {
+		if a.relationshipRunner == nil {
+			return nil
+		}
+		return a.relationshipRunner.Run(ctx)
+	})
+	a.spawn(ctx, "vendor worker", func(ctx context.Context) error {
+		if a.vendorRunner == nil {
+			return nil
+		}
+		return a.vendorRunner.Run(ctx)
+	})
+	a.spawn(ctx, "cleanup worker", func(ctx context.Context) error {
+		if a.cleanupRunner == nil {
+			return nil
+		}
+		return a.cleanupRunner.Run(ctx)
+	})
+	a.spawn(ctx, "memoryLabelCache janitor", func(ctx context.Context) error {
+		if a.memLabelCache == nil {
+			return nil
+		}
+		a.memLabelCache.runJanitor(ctx, memoryLabelCacheJanitorInterval, a.logger)
+		return nil
+	})
+}
+
+// spawn launches a tracked background goroutine. The Add(1) executes
+// on the calling goroutine BEFORE the spawned function runs so a
+// concurrent WaitBackground call cannot race past the counter.
+// Components whose handle is nil short-circuit inside fn; we still
+// spawn a goroutine that immediately returns because the alternative
+// (skipping spawn() when nil) bakes a sequencing dependency between
+// newApplication and StartBackground that is easy to break later.
+func (a *application) spawn(ctx context.Context, name string, fn func(ctx context.Context) error) {
+	a.bgWG.Add(1)
+	go func() {
+		defer a.bgWG.Done()
+		if err := fn(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			a.logger.Warn("sn360-es: background goroutine terminated",
+				slog.String("component", name),
+				slog.Any("error", err))
+		}
+	}()
+}
+
+// WaitBackground blocks until every goroutine launched by
+// StartBackground has returned. Callers must cancel the context they
+// passed to StartBackground first — otherwise the long-running
+// runners (poller, periodic workers) will not exit and Wait blocks
+// forever.
+func (a *application) WaitBackground() {
+	a.bgWG.Wait()
 }

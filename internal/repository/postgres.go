@@ -554,10 +554,11 @@ func (p *pgCommHistory) Upsert(ctx context.Context, h *CommunicationHistory) err
 	}
 	_, err := p.db.ExecContext(ctx, `
 INSERT INTO communication_histories (id, tenant_id, sender_hash, recipient_hash, sender_domain_hash,
-                                     count_7d, count_30d, first_seen_at, last_seen_at, relationship)
-VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8,NOW()),COALESCE($9,NOW()),$10)
+                                     sender_domain, count_7d, count_30d, first_seen_at, last_seen_at, relationship)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,NOW()),COALESCE($10,NOW()),$11)
 ON CONFLICT (tenant_id, sender_hash, recipient_hash) DO UPDATE SET
     sender_domain_hash=EXCLUDED.sender_domain_hash,
+    sender_domain=EXCLUDED.sender_domain,
     count_7d=EXCLUDED.count_7d,
     count_30d=EXCLUDED.count_30d,
     last_seen_at=EXCLUDED.last_seen_at,
@@ -565,19 +566,19 @@ ON CONFLICT (tenant_id, sender_hash, recipient_hash) DO UPDATE SET
     updated_at=NOW()
 `,
 		h.ID, h.TenantID, h.SenderHash, h.RecipientHash, h.SenderDomainHash,
-		h.Count7d, h.Count30d, nullableTime(h.FirstSeenAt), nullableTime(h.LastSeenAt), h.Relationship,
+		h.SenderDomain, h.Count7d, h.Count30d, nullableTime(h.FirstSeenAt), nullableTime(h.LastSeenAt), h.Relationship,
 	)
 	return err
 }
 
 func (p *pgCommHistory) Get(ctx context.Context, tenantID string, senderHash, recipientHash []byte) (*CommunicationHistory, error) {
 	row := p.db.QueryRowContext(ctx, `
-SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, count_7d, count_30d,
-       first_seen_at, last_seen_at, relationship, updated_at
+SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(sender_domain, ''),
+       count_7d, count_30d, first_seen_at, last_seen_at, relationship, updated_at
   FROM communication_histories WHERE tenant_id=$1 AND sender_hash=$2 AND recipient_hash=$3`,
 		tenantID, senderHash, recipientHash)
 	var h CommunicationHistory
-	err := row.Scan(&h.ID, &h.TenantID, &h.SenderHash, &h.RecipientHash, &h.SenderDomainHash,
+	err := row.Scan(&h.ID, &h.TenantID, &h.SenderHash, &h.RecipientHash, &h.SenderDomainHash, &h.SenderDomain,
 		&h.Count7d, &h.Count30d, &h.FirstSeenAt, &h.LastSeenAt, &h.Relationship, &h.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound

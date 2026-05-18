@@ -174,12 +174,19 @@ type FeedbackCounts struct {
 
 // CommunicationHistory is a relationship aggregate keyed by sender +
 // recipient hash.
+//
+// SenderDomain holds the plaintext sender domain so downstream
+// services (vendor discovery, dashboard aggregations) can match on
+// the actual domain string. SenderDomainHash is kept for the legacy
+// hash-only index but should not be used as a domain identifier —
+// converting the raw bytes to a string produces binary gibberish.
 type CommunicationHistory struct {
 	ID               string
 	TenantID         string
 	SenderHash       []byte
 	RecipientHash    []byte
 	SenderDomainHash []byte
+	SenderDomain     string
 	Count7d          int
 	Count30d         int
 	FirstSeenAt      time.Time

@@ -362,25 +362,32 @@ func splitAddresses(value string) []string {
 	return out
 }
 
-// doToken is the variant of `do` that lets us swap the token source
-// (Admin SDK vs Gmail API).
+// doToken issues a request against `endpoint` using the supplied
+// token source. The source is passed in explicitly (rather than
+// mutated on the receiver) so concurrent FetchNew / ListMailboxes
+// goroutines cannot race on shared state.
 func (p *MailboxProvider) doToken(ctx context.Context, method, endpoint string, in, out any, source TokenSource) error {
 	if source == nil {
 		return errors.New("gmail: token source not configured")
 	}
-	old := p.tokens
-	p.tokens = source
-	defer func() { p.tokens = old }()
-	return p.do(ctx, method, endpoint, in, out)
+	return p.doWith(ctx, method, endpoint, in, out, source)
 }
 
-// do reuses the same minimal HTTP plumbing as the LabelProvider so
-// MailboxProvider stays self-contained.
+// do issues a request authenticated with the Gmail API token source.
+// MailboxProvider used to mutate `p.tokens` inside doToken; we now
+// thread the source through doWith to avoid that data race.
 func (p *MailboxProvider) do(ctx context.Context, method, endpoint string, in, out any) error {
+	return p.doWith(ctx, method, endpoint, in, out, p.tokens)
+}
+
+// doWith is the lock-free request primitive that lets callers pick
+// the token source per-call. It reuses the minimal HTTP plumbing on
+// LabelProvider so MailboxProvider stays self-contained.
+func (p *MailboxProvider) doWith(ctx context.Context, method, endpoint string, in, out any, source TokenSource) error {
 	lp := &LabelProvider{
 		baseURL: p.baseURL,
 		http:    p.http,
-		tokens:  p.tokens,
+		tokens:  source,
 	}
 	return lp.do(ctx, method, endpoint, in, out)
 }

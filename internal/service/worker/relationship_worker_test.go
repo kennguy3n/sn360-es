@@ -222,10 +222,13 @@ func TestVendorJob_Run_PersistsProposals(t *testing.T) {
 func TestBuildSenderObservations_Aggregates(t *testing.T) {
 	now := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	rows := []repository.CommunicationHistory{
-		{SenderDomainHash: []byte("d1"), RecipientHash: []byte("r1"), Count30d: 4, FirstSeenAt: now, LastSeenAt: now.Add(time.Hour)},
-		{SenderDomainHash: []byte("d1"), RecipientHash: []byte("r2"), Count30d: 1, FirstSeenAt: now.Add(-time.Hour), LastSeenAt: now},
-		{SenderDomainHash: []byte("d2"), RecipientHash: []byte("r3"), Count30d: 2, FirstSeenAt: now, LastSeenAt: now},
-		{SenderDomainHash: nil, RecipientHash: []byte("r4"), Count30d: 99, FirstSeenAt: now, LastSeenAt: now},
+		{SenderDomain: "d1.example", RecipientHash: []byte("r1"), Count30d: 4, FirstSeenAt: now, LastSeenAt: now.Add(time.Hour)},
+		{SenderDomain: "d1.example", RecipientHash: []byte("r2"), Count30d: 1, FirstSeenAt: now.Add(-time.Hour), LastSeenAt: now},
+		{SenderDomain: "d2.example", RecipientHash: []byte("r3"), Count30d: 2, FirstSeenAt: now, LastSeenAt: now},
+		// Rows missing the plaintext SenderDomain must be skipped:
+		// the legacy SenderDomainHash is binary and cannot be
+		// turned into a meaningful domain identifier.
+		{SenderDomainHash: []byte("\x01\x02\xff"), RecipientHash: []byte("r4"), Count30d: 99, FirstSeenAt: now, LastSeenAt: now},
 	}
 	obs := buildSenderObservations(rows)
 	if len(obs) != 2 {
@@ -233,7 +236,7 @@ func TestBuildSenderObservations_Aggregates(t *testing.T) {
 	}
 	var d1 relationship.SenderObservation
 	for _, o := range obs {
-		if o.Domain == "d1" {
+		if o.Domain == "d1.example" {
 			d1 = o
 		}
 	}
@@ -262,6 +265,7 @@ func makeCommRows(domain string, total, distinct int, now time.Time) []repositor
 	}
 	for i := 0; i < distinct; i++ {
 		rows = append(rows, repository.CommunicationHistory{
+			SenderDomain:     domain,
 			SenderDomainHash: []byte(domain),
 			SenderHash:       []byte(domain),
 			RecipientHash:    []byte{byte(i / 256), byte(i % 256)},

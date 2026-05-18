@@ -22,9 +22,12 @@ package ingestion
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -291,15 +294,25 @@ func (p *Poller) pollMailbox(ctx context.Context, j job) {
 		logger.Debug("ingestion: no new messages")
 		return
 	}
-	// Newest timestamp seen — used to advance the checkpoint at
-	// the end of the cycle.
-	newest := since
+	// Track the earliest failure timestamp so we never advance the
+	// checkpoint past a message that failed to publish. Without
+	// this barrier, a later message in the same batch succeeding
+	// would silently mask the failure on the next poll cycle (the
+	// failed message would never be re-fetched).
+	var failBarrier time.Time
+	recordFailure := func(t time.Time) {
+		if failBarrier.IsZero() || t.Before(failBarrier) {
+			failBarrier = t
+		}
+	}
+	successes := make([]time.Time, 0, len(emails))
 	for _, raw := range emails {
 		req, nerr := p.cfg.Normalizer.Normalize(ctx, raw)
 		if nerr != nil {
 			logger.Warn("ingestion: normalize failed",
 				slog.String("provider_message_id", raw.ProviderMessageID),
 				slog.Any("error", nerr))
+			recordFailure(raw.ReceivedAt)
 			continue
 		}
 		payload, merr := marshalRequest(req)
@@ -307,6 +320,7 @@ func (p *Poller) pollMailbox(ctx context.Context, j job) {
 			logger.Warn("ingestion: marshal failed",
 				slog.String("provider_message_id", raw.ProviderMessageID),
 				slog.Any("error", merr))
+			recordFailure(raw.ReceivedAt)
 			continue
 		}
 		if perr := p.cfg.Publisher.Publish(ctx, p.cfg.Subject, payload,
@@ -318,14 +332,24 @@ func (p *Poller) pollMailbox(ctx context.Context, j job) {
 			logger.Warn("ingestion: publish failed",
 				slog.String("provider_message_id", raw.ProviderMessageID),
 				slog.Any("error", perr))
+			recordFailure(raw.ReceivedAt)
 			continue
 		}
-		if raw.ReceivedAt.After(newest) {
-			newest = raw.ReceivedAt
+		successes = append(successes, raw.ReceivedAt)
+	}
+	// Compute the highest successfully-published timestamp that is
+	// strictly less than the earliest failure (if any). This is the
+	// safe checkpoint: the next cycle resumes from this point and
+	// re-fetches every message at or after the failure barrier.
+	newest := since
+	for _, ts := range successes {
+		if !failBarrier.IsZero() && !ts.Before(failBarrier) {
+			continue
+		}
+		if ts.After(newest) {
+			newest = ts
 		}
 	}
-	// Advance the checkpoint to the newest received_at we
-	// successfully published.
 	if p.cfg.Checkpoint != nil && newest.After(since) {
 		if err := p.cfg.Checkpoint.Set(ctx, j.mailbox.TenantID, j.mailbox.Address, newest); err != nil {
 			logger.Warn("ingestion: checkpoint set failed", slog.Any("error", err))
@@ -333,12 +357,16 @@ func (p *Poller) pollMailbox(ctx context.Context, j job) {
 	}
 	logger.Info("ingestion: polled mailbox",
 		slog.Int("messages", len(emails)),
+		slog.Int("succeeded", len(successes)),
 		slog.Time("checkpoint", newest))
 }
 
 // lockKey is the canonical Redis lock key for a (provider, mailbox)
-// pair. We include the provider kind in the prefix so a tenant
-// connected via both Gmail and Outlook can poll both concurrently.
+// pair. The mailbox address is hashed (SHA-256, lower-cased, trimmed)
+// so the raw email address never leaks into Redis keys — matching the
+// privacy guarantee that the CheckpointStore already provides for
+// poll checkpoints.
 func lockKey(provider string, m Mailbox) string {
-	return "ingestion:lock:" + provider + ":" + m.TenantID + ":" + m.Address
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(m.Address))))
+	return "ingestion:lock:" + provider + ":" + m.TenantID + ":" + hex.EncodeToString(sum[:])
 }
