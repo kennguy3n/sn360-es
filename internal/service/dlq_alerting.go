@@ -89,13 +89,14 @@ func (s *DLQAlertService) RecordDLQ(ctx context.Context, tenantID string) {
 	now := s.now()
 	counter, ok := s.counts[tenantID]
 	if !ok || now.After(counter.windowEnd) {
-		s.counts[tenantID] = &tenantDLQCounter{
+		counter = &tenantDLQCounter{
 			count:     1,
 			windowEnd: now.Add(time.Hour),
 		}
-		return
+		s.counts[tenantID] = counter
+	} else {
+		counter.count++
 	}
-	counter.count++
 
 	if counter.count >= s.cfg.Threshold {
 		last, alertedRecently := s.lastAlert[tenantID]

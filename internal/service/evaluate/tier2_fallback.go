@@ -118,9 +118,9 @@ func (c *Tier2FallbackClient) Evaluate(ctx context.Context, req dto.EvaluateRequ
 
 	switch state {
 	case circuitClosed, circuitHalfOpen:
+		c.primaryCalls.Add(1)
 		result, err := c.primary.Evaluate(ctx, req, hint)
 		if err == nil {
-			c.primaryCalls.Add(1)
 			c.recordSuccess()
 			return result, nil
 		}

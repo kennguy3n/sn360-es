@@ -129,12 +129,14 @@ func (s *ClawbackService) HandleScoreUpgrade(ctx context.Context, req ScoreUpgra
 	}
 
 	quarantined := 0
+	var lastErr error
 	for _, r := range recipients {
 		if err := s.quar.Quarantine(ctx, req.TenantID, req.PseudonymizedMessage, r, ""); err != nil {
 			s.log.WarnContext(ctx, "clawback: quarantine failed",
 				slog.String("tenant_id", req.TenantID),
 				slog.String("recipient", r),
 				slog.Any("error", err))
+			lastErr = err
 			continue
 		}
 		quarantined++
@@ -168,8 +170,13 @@ func (s *ClawbackService) HandleScoreUpgrade(ctx context.Context, req ScoreUpgra
 		slog.String("message_id", req.PseudonymizedMessage),
 		slog.String("old_tier", string(req.OldTier)),
 		slog.String("new_tier", string(req.NewTier)),
-		slog.Int("quarantined", quarantined))
+		slog.Int("quarantined", quarantined),
+		slog.Int("total_recipients", len(recipients)))
 
+	if quarantined == 0 && len(recipients) > 0 {
+		return fmt.Errorf("clawback: all %d quarantine attempts failed for tenant %s: %w",
+			len(recipients), req.TenantID, lastErr)
+	}
 	return nil
 }
 
@@ -189,7 +196,12 @@ func (s *ClawbackService) HandleReportConfirmed(ctx context.Context, msg events.
 	}
 
 	newTier := constant.TierBlocked
-	oldTier := constant.TierWarning
+	// When tier is unknown (legacy producers), default to Informational
+	// so shouldClawback always fires. Defaulting to Warning would skip
+	// clawback for Warning→Blocked, and defaulting to Trusted would be
+	// correct but overly aggressive for messages that may already be
+	// at HighRisk/Blocked (quarantine is idempotent but wastes API calls).
+	oldTier := constant.TierInformational
 	if evt.Tier != "" {
 		oldTier = constant.Tier(evt.Tier)
 	}

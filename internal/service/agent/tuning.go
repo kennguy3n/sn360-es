@@ -78,27 +78,25 @@ func NewTuningAgent(cfg TuningConfig) (*TuningAgent, error) {
 // Name implements Agent.
 func (a *TuningAgent) Name() string { return "tuning" }
 
-// Tune runs a single tuning pass for tenantID. It returns a TuningDecision
-// that summarises the action taken (may be a no-op).
-func (a *TuningAgent) Tune(ctx context.Context, tenantID string) (TuningDecision, error) {
-	if tenantID == "" {
-		return TuningDecision{}, errors.New("agent: tuning tenantID required")
-	}
+// BuildSnapshot fetches current state for tenantID and builds a
+// TuningSnapshot. This is the single source of truth for snapshot
+// construction — both Tune and ApprovalGatedTuningAgent.Tune use it.
+func (a *TuningAgent) BuildSnapshot(ctx context.Context, tenantID string) (TuningSnapshot, error) {
 	now := time.Now().UTC()
 	windowStart := now.Add(-a.cfg.Window)
 
 	feedback, err := a.cfg.Results.RecentFeedback(ctx, tenantID, windowStart)
 	if err != nil {
-		return TuningDecision{}, fmt.Errorf("tuning: recent feedback: %w", err)
+		return TuningSnapshot{}, fmt.Errorf("tuning: recent feedback: %w", err)
 	}
 
 	weights, err := a.cfg.Results.CurrentWeights(ctx, tenantID)
 	if err != nil {
-		return TuningDecision{}, fmt.Errorf("tuning: current weights: %w", err)
+		return TuningSnapshot{}, fmt.Errorf("tuning: current weights: %w", err)
 	}
 	thresholds, err := a.cfg.Results.CurrentThresholds(ctx, tenantID)
 	if err != nil {
-		return TuningDecision{}, fmt.Errorf("tuning: current thresholds: %w", err)
+		return TuningSnapshot{}, fmt.Errorf("tuning: current thresholds: %w", err)
 	}
 
 	snap := TuningSnapshot{
@@ -117,10 +115,24 @@ func (a *TuningAgent) Tune(ctx context.Context, tenantID string) (TuningDecision
 			snap.FalseNegatives++
 		}
 	}
+	return snap, nil
+}
+
+// Tune runs a single tuning pass for tenantID. It returns a TuningDecision
+// that summarises the action taken (may be a no-op).
+func (a *TuningAgent) Tune(ctx context.Context, tenantID string) (TuningDecision, error) {
+	if tenantID == "" {
+		return TuningDecision{}, errors.New("agent: tuning tenantID required")
+	}
+
+	snap, err := a.BuildSnapshot(ctx, tenantID)
+	if err != nil {
+		return TuningDecision{}, err
+	}
 
 	decision := a.Decide(snap)
 	decision.TenantID = tenantID
-	decision.DecidedAt = now
+	decision.DecidedAt = time.Now().UTC()
 
 	if err := a.ApplyDecision(ctx, snap, decision); err != nil {
 		return decision, err

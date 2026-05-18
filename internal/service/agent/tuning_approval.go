@@ -158,7 +158,7 @@ func NewApprovalGatedTuningAgent(cfg ApprovalGatedTuningConfig) (*ApprovalGatedT
 // for approval based on configuration and delta magnitude.
 func (a *ApprovalGatedTuningAgent) Tune(ctx context.Context, tenantID string) (TuningDecision, error) {
 	// Get the snapshot to compute the decision WITHOUT applying.
-	snap, err := a.buildSnapshot(ctx, tenantID)
+	snap, err := a.inner.BuildSnapshot(ctx, tenantID)
 	if err != nil {
 		return TuningDecision{}, err
 	}
@@ -182,42 +182,6 @@ func (a *ApprovalGatedTuningAgent) Tune(ctx context.Context, tenantID string) (T
 		return decision, err
 	}
 	return decision, nil
-}
-
-func (a *ApprovalGatedTuningAgent) buildSnapshot(ctx context.Context, tenantID string) (TuningSnapshot, error) {
-	now := time.Now().UTC()
-	windowStart := now.Add(-a.cfg.TuningConfig.Window)
-
-	feedback, err := a.cfg.TuningConfig.Results.RecentFeedback(ctx, tenantID, windowStart)
-	if err != nil {
-		return TuningSnapshot{}, fmt.Errorf("tuning: recent feedback: %w", err)
-	}
-	weights, err := a.cfg.TuningConfig.Results.CurrentWeights(ctx, tenantID)
-	if err != nil {
-		return TuningSnapshot{}, fmt.Errorf("tuning: current weights: %w", err)
-	}
-	thresholds, err := a.cfg.TuningConfig.Results.CurrentThresholds(ctx, tenantID)
-	if err != nil {
-		return TuningSnapshot{}, fmt.Errorf("tuning: current thresholds: %w", err)
-	}
-
-	snap := TuningSnapshot{
-		TenantID:          tenantID,
-		WindowStart:       windowStart,
-		WindowEnd:         now,
-		TotalEvaluations:  len(feedback),
-		CurrentWeights:    weights,
-		CurrentThresholds: thresholds,
-	}
-	for _, f := range feedback {
-		switch f.Action {
-		case FeedbackMarkSafe, FeedbackTrustSender:
-			snap.FalsePositives++
-		case FeedbackReportPhishing:
-			snap.FalseNegatives++
-		}
-	}
-	return snap, nil
 }
 
 func (a *ApprovalGatedTuningAgent) exceedsForceDelta(snap TuningSnapshot, decision TuningDecision) bool {
