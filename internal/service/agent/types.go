@@ -273,3 +273,11 @@ type ConfigStore interface {
 type EvaluationLookup interface {
 	FindResult(ctx context.Context, tenantID, messageID string) (dto.EvaluateResult, error)
 }
+
+// PIIHasher produces stable, opaque pseudonyms for PII values using a
+// per-tenant key. Wraps pkg/privacy.Pseudonymizer so the agent package
+// does not import the privacy package directly (avoiding potential
+// circular deps in larger builds).
+type PIIHasher interface {
+	HashPII(tenantID string, input string) string
+}

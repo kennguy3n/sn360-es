@@ -18,6 +18,12 @@ type OnboardingConfig struct {
 	Events        EventPublisher
 	Audit         AuditLog
 	Config        ConfigStore
+	Hasher        PIIHasher
+
+	// Persister stores discovered users/groups to Postgres after onboarding.
+	Persister UserPersister
+	// SensitivityClassifier is the tiered ML classifier (encoder+bonsai+fallback).
+	SensitivityClassifier SensitivityClassifier
 
 	// VendorScanWindow controls how far back the vendor scan looks
 	// (default 30 days).
@@ -33,6 +39,12 @@ type OnboardingConfig struct {
 	DefaultThresholds Thresholds
 
 	Logger *slog.Logger
+}
+
+// UserPersister stores discovered users and groups to persistent storage
+// after the onboarding flow completes.
+type UserPersister interface {
+	PersistDiscoveredUsers(ctx context.Context, tenantID string, users []DiscoveredUser, groups []DiscoveredGroup) error
 }
 
 // OnboardingAgent runs once per new tenant, performing the
@@ -204,15 +216,25 @@ func (a *OnboardingAgent) publishUserEvent(ctx context.Context, tctx TenantConte
 	if a.cfg.Events == nil {
 		return nil
 	}
+
+	// Pseudonymize PII before publishing — never emit raw email or
+	// display name to the event bus.
+	emailHash := u.Email
+	displayHash := u.DisplayName
+	if a.cfg.Hasher != nil {
+		emailHash = a.cfg.Hasher.HashPII(tctx.TenantID, u.Email)
+		displayHash = a.cfg.Hasher.HashPII(tctx.TenantID, u.DisplayName)
+	}
+
 	payload := map[string]any{
 		"tenant_id":    tctx.TenantID,
 		"provider":     string(tctx.Provider),
 		"user_id":      u.ID,
-		"email":        u.Email,
-		"display_name": u.DisplayName,
+		"email_hash":   emailHash,
+		"display_hash": displayHash,
 		"department":   u.Department,
-		"job_title":    u.JobTitle,
 		"sensitivity":  u.SensitivityHint.String(),
+		"confidence":   u.SensitivityConfidence,
 		"occurred_at":  time.Now().UTC(),
 	}
 	blob, err := json.Marshal(payload)

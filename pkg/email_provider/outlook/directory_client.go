@@ -71,11 +71,26 @@ type graphDirectoryUser struct {
 	Department        string `json:"department"`
 	JobTitle          string `json:"jobTitle"`
 	AccountEnabled    bool   `json:"accountEnabled"`
+	UserType          string `json:"userType"`
+	MailboxSettings   *struct {
+		MailboxType string `json:"mailboxType"`
+	} `json:"mailboxSettings,omitempty"`
+	MemberOf []struct {
+		ODataType   string `json:"@odata.type"`
+		ID          string `json:"id"`
+		DisplayName string `json:"displayName"`
+	} `json:"memberOf,omitempty"`
+	ProxyAddresses []string `json:"proxyAddresses"`
 }
 
 type graphDirectoryUserList struct {
 	Value    []graphDirectoryUser `json:"value"`
 	NextLink string               `json:"@odata.nextLink,omitempty"`
+}
+
+// graphManager is the subset of the Graph manager response.
+type graphManager struct {
+	ID string `json:"id"`
 }
 
 // graphGroup is the subset of the Graph group object.
@@ -97,8 +112,9 @@ type graphGroupList struct {
 func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]agent.DiscoveredUser, error) {
 	_ = tenantID
 	endpoint := c.baseURL + "/users?" + url.Values{
-		"$select": []string{"id,displayName,userPrincipalName,mail,department,jobTitle,accountEnabled"},
-		"$top":    []string{"200"},
+		"$select":  []string{"id,displayName,userPrincipalName,mail,department,jobTitle,accountEnabled,userType,proxyAddresses"},
+		"$expand":  []string{"memberOf($select=id,displayName,@odata.type)"},
+		"$top":     []string{"200"},
 	}.Encode()
 	var out []agent.DiscoveredUser
 	for endpoint != "" {
@@ -114,18 +130,73 @@ func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]age
 			if email == "" {
 				continue
 			}
+
+			// Extract group IDs and detect admin roles from memberOf.
+			var groupIDs []string
+			isAdmin := false
+			for _, m := range u.MemberOf {
+				switch {
+				case m.ODataType == "#microsoft.graph.group":
+					groupIDs = append(groupIDs, m.ID)
+				case m.ODataType == "#microsoft.graph.directoryRole":
+					if strings.Contains(m.DisplayName, "Global Administrator") ||
+						strings.Contains(m.DisplayName, "Exchange Administrator") {
+						isAdmin = true
+					}
+				}
+			}
+
+			// Detect shared mailbox.
+			isShared := false
+			if u.MailboxSettings != nil && u.MailboxSettings.MailboxType == "shared" {
+				isShared = true
+			}
+			if u.UserType == "Guest" {
+				isShared = true
+			}
+
+			// Extract aliases from proxyAddresses (smtp: prefixed).
+			var aliases []string
+			for _, addr := range u.ProxyAddresses {
+				if strings.HasPrefix(strings.ToLower(addr), "smtp:") {
+					alias := strings.TrimPrefix(strings.ToLower(addr), "smtp:")
+					if alias != strings.ToLower(email) {
+						aliases = append(aliases, alias)
+					}
+				}
+			}
+
+			// Resolve ManagerID via separate call.
+			managerID := c.fetchManagerID(ctx, u.ID)
+
 			out = append(out, agent.DiscoveredUser{
-				ID:          u.ID,
-				Email:       strings.ToLower(email),
-				DisplayName: u.DisplayName,
-				Department:  u.Department,
-				JobTitle:    u.JobTitle,
-				IsSuspended: !u.AccountEnabled,
+				ID:              u.ID,
+				Email:           strings.ToLower(email),
+				DisplayName:     u.DisplayName,
+				Department:      u.Department,
+				JobTitle:        u.JobTitle,
+				IsAdmin:         isAdmin,
+				IsSuspended:     !u.AccountEnabled,
+				GroupIDs:        groupIDs,
+				ManagerID:       managerID,
+				Aliases:         aliases,
+				IsSharedMailbox: isShared,
 			})
 		}
 		endpoint = list.NextLink
 	}
 	return out, nil
+}
+
+// fetchManagerID resolves the manager for a user. Returns empty string
+// on any error (non-critical for directory enumeration).
+func (c *DirectoryClient) fetchManagerID(ctx context.Context, userID string) string {
+	endpoint := fmt.Sprintf("%s/users/%s/manager?$select=id", c.baseURL, url.PathEscape(userID))
+	var mgr graphManager
+	if err := c.do(ctx, http.MethodGet, endpoint, &mgr); err != nil {
+		return ""
+	}
+	return mgr.ID
 }
 
 // ListGroups enumerates the directory groups.

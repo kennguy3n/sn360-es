@@ -98,6 +98,14 @@ type PostConsentTrigger interface {
 	StartOnboarding(ctx context.Context, tenantID string, provider ProviderType) error
 }
 
+// ProviderRegistrar registers a new provider entry in the runtime
+// registry from a freshly acquired OAuth token. Called after token
+// persistence but before triggering onboarding, so that the tenant's
+// providers are available for label application immediately.
+type ProviderRegistrar interface {
+	RegisterFromToken(ctx context.Context, tenantID string, provider ProviderType, token Token) error
+}
+
 // StateSigner is the small HMAC helper used to bind tenant_id +
 // provider + nonce into the OAuth `state` parameter so the callback
 // can verify the consent originated from us.
@@ -181,26 +189,28 @@ func (s *StateSigner) Verify(token string) (StatePayload, error) {
 // callbacks, exchanges codes, persists tokens, and kicks off the
 // onboarding agent.
 type Service struct {
-	providers map[ProviderType]ProviderConfig
-	store     TokenStore
-	exch      TokenExchanger
-	state     *StateSigner
-	trigger   PostConsentTrigger
-	nonces    NonceStore
-	validator PostConsentValidator
-	log       *slog.Logger
+	providers  map[ProviderType]ProviderConfig
+	store      TokenStore
+	exch       TokenExchanger
+	state      *StateSigner
+	trigger    PostConsentTrigger
+	registrar  ProviderRegistrar
+	nonces     NonceStore
+	validator  PostConsentValidator
+	log        *slog.Logger
 }
 
 // ServiceConfig bundles the inputs to NewService.
 type ServiceConfig struct {
-	Providers map[ProviderType]ProviderConfig
-	Store     TokenStore
-	Exch      TokenExchanger
-	State     *StateSigner
-	Trigger   PostConsentTrigger
-	Nonces    NonceStore
-	Validator PostConsentValidator
-	Logger    *slog.Logger
+	Providers  map[ProviderType]ProviderConfig
+	Store      TokenStore
+	Exch       TokenExchanger
+	State      *StateSigner
+	Trigger    PostConsentTrigger
+	Registrar  ProviderRegistrar
+	Nonces     NonceStore
+	Validator  PostConsentValidator
+	Logger     *slog.Logger
 }
 
 // NewService validates cfg and returns a Service.
@@ -226,14 +236,15 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 		cfg.Logger = slog.Default()
 	}
 	return &Service{
-		providers: cfg.Providers,
-		store:     cfg.Store,
-		exch:      cfg.Exch,
-		state:     cfg.State,
-		trigger:   cfg.Trigger,
-		nonces:    cfg.Nonces,
-		validator: cfg.Validator,
-		log:       cfg.Logger,
+		providers:  cfg.Providers,
+		store:      cfg.Store,
+		exch:       cfg.Exch,
+		state:      cfg.State,
+		trigger:    cfg.Trigger,
+		registrar:  cfg.Registrar,
+		nonces:     cfg.Nonces,
+		validator:  cfg.Validator,
+		log:        cfg.Logger,
 	}, nil
 }
 
@@ -304,6 +315,15 @@ func (s *Service) HandleCallback(ctx context.Context, stateTok, code string) (st
 	}
 	if err := s.store.Save(ctx, payload.TenantID, payload.Provider, tok); err != nil {
 		return "", "", fmt.Errorf("onboarding: persist token: %w", err)
+	}
+	// Register the provider in the runtime registry so it is
+	// immediately available for label application and banner injection.
+	if s.registrar != nil {
+		if regErr := s.registrar.RegisterFromToken(ctx, payload.TenantID, payload.Provider, tok); regErr != nil {
+			s.log.Warn("onboarding: provider registration failed (non-fatal)",
+				slog.String("tenant_id", payload.TenantID),
+				slog.String("err", regErr.Error()))
+		}
 	}
 	if s.trigger != nil {
 		if err := s.trigger.StartOnboarding(ctx, payload.TenantID, payload.Provider); err != nil {

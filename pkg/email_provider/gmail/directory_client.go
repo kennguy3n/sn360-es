@@ -84,6 +84,12 @@ type directoryUser struct {
 		Department string `json:"department"`
 		Title      string `json:"title"`
 	} `json:"organizations"`
+	Relations []struct {
+		Value string `json:"value"`
+		Type  string `json:"type"`
+	} `json:"relations"`
+	Aliases []string `json:"aliases"`
+	OrgUnitPath string `json:"orgUnitPath"`
 }
 
 type directoryUserList struct {
@@ -105,6 +111,19 @@ type directoryGroupList struct {
 	NextPageToken string           `json:"nextPageToken,omitempty"`
 }
 
+// groupMember represents a single member in an Admin SDK group.
+type groupMember struct {
+	Email string `json:"email"`
+	ID    string `json:"id"`
+	Role  string `json:"role"`
+	Type  string `json:"type"`
+}
+
+type groupMemberList struct {
+	Members       []groupMember `json:"members"`
+	NextPageToken string        `json:"nextPageToken,omitempty"`
+}
+
 // ListUsers enumerates the workspace users and returns them as
 // agent.DiscoveredUser. Suspended and archived users are *included*
 // in the result with the IsSuspended flag set so the onboarding
@@ -113,7 +132,9 @@ type directoryGroupList struct {
 // at the MailboxProvider layer — see mailbox_provider.go).
 func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]agent.DiscoveredUser, error) {
 	_ = tenantID
-	var out []agent.DiscoveredUser
+
+	// Step 1: Enumerate all users.
+	var rawUsers []directoryUser
 	page := ""
 	for {
 		q := url.Values{}
@@ -131,32 +152,109 @@ func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]age
 		if err := c.do(ctx, http.MethodGet, endpoint, &list); err != nil {
 			return nil, fmt.Errorf("gmail: list users: %w", err)
 		}
-		for _, u := range list.Users {
-			if u.PrimaryEmail == "" {
-				continue
+		rawUsers = append(rawUsers, list.Users...)
+		if list.NextPageToken == "" {
+			break
+		}
+		page = list.NextPageToken
+	}
+
+	// Step 2: Build email→ID lookup for manager resolution.
+	emailToID := make(map[string]string, len(rawUsers))
+	for _, u := range rawUsers {
+		if u.PrimaryEmail != "" {
+			emailToID[strings.ToLower(u.PrimaryEmail)] = u.ID
+		}
+	}
+
+	// Step 3: Enumerate groups and build user→groupIDs mapping.
+	groups, _ := c.ListGroups(ctx, tenantID)
+	userGroupIDs := make(map[string][]string) // email → []groupID
+	for _, g := range groups {
+		members, err := c.ListGroupMembers(ctx, g.ID)
+		if err != nil {
+			continue
+		}
+		for _, email := range members {
+			userGroupIDs[strings.ToLower(email)] = append(userGroupIDs[strings.ToLower(email)], g.ID)
+		}
+	}
+
+	// Step 4: Map raw users to DiscoveredUser.
+	var out []agent.DiscoveredUser
+	for _, u := range rawUsers {
+		if u.PrimaryEmail == "" {
+			continue
+		}
+		dept := ""
+		title := ""
+		if len(u.OrganizationsRaw) > 0 {
+			dept = u.OrganizationsRaw[0].Department
+			title = u.OrganizationsRaw[0].Title
+		}
+
+		// Resolve ManagerID from relations.
+		var managerID string
+		for _, rel := range u.Relations {
+			if strings.EqualFold(rel.Type, "manager") && rel.Value != "" {
+				if id, ok := emailToID[strings.ToLower(rel.Value)]; ok {
+					managerID = id
+				}
+				break
 			}
-			dept := ""
-			title := ""
-			if len(u.OrganizationsRaw) > 0 {
-				dept = u.OrganizationsRaw[0].Department
-				title = u.OrganizationsRaw[0].Title
+		}
+
+		// Detect service accounts by org unit path heuristic.
+		isServiceAccount := strings.Contains(strings.ToLower(u.OrgUnitPath), "service") ||
+			strings.HasPrefix(strings.ToLower(u.PrimaryEmail), "noreply@") ||
+			strings.HasPrefix(strings.ToLower(u.PrimaryEmail), "no-reply@")
+
+		email := strings.ToLower(u.PrimaryEmail)
+		out = append(out, agent.DiscoveredUser{
+			ID:               u.ID,
+			Email:            email,
+			DisplayName:      u.Name.FullName,
+			Department:       dept,
+			JobTitle:         title,
+			IsAdmin:          u.IsAdmin,
+			IsSuspended:      u.Suspended || u.Archived,
+			GroupIDs:         userGroupIDs[email],
+			ManagerID:        managerID,
+			Aliases:          u.Aliases,
+			IsServiceAccount: isServiceAccount,
+		})
+	}
+	return out, nil
+}
+
+// ListGroupMembers returns the email addresses of members in a group.
+// Paginates the Admin SDK Members endpoint.
+func (c *DirectoryClient) ListGroupMembers(ctx context.Context, groupID string) ([]string, error) {
+	var emails []string
+	page := ""
+	for {
+		q := url.Values{}
+		q.Set("maxResults", "200")
+		q.Set("roles", "MEMBER,OWNER,MANAGER")
+		if page != "" {
+			q.Set("pageToken", page)
+		}
+		endpoint := fmt.Sprintf("%s/admin/directory/v1/groups/%s/members?%s", c.adminBase, url.PathEscape(groupID), q.Encode())
+		var list groupMemberList
+		if err := c.do(ctx, http.MethodGet, endpoint, &list); err != nil {
+			return nil, fmt.Errorf("gmail: list group members: %w", err)
+		}
+		for _, m := range list.Members {
+			if m.Email != "" {
+				emails = append(emails, strings.ToLower(m.Email))
 			}
-			out = append(out, agent.DiscoveredUser{
-				ID:          u.ID,
-				Email:       strings.ToLower(u.PrimaryEmail),
-				DisplayName: u.Name.FullName,
-				Department:  dept,
-				JobTitle:    title,
-				IsAdmin:     u.IsAdmin,
-				IsSuspended: u.Suspended || u.Archived,
-			})
 		}
 		if list.NextPageToken == "" {
 			break
 		}
 		page = list.NextPageToken
 	}
-	return out, nil
+	return emails, nil
 }
 
 // ListGroups enumerates the workspace groups.
