@@ -611,14 +611,27 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 						FlagAbove: cfg.Tier1.FlagThreshold,
 					},
 					Fallback: fallbackEvaluatorAdapter{eval: app.evaluator},
-					Sink:     app.eventBus,
+					// Pass Categorizer + TierDecider so the batch path can
+					// populate Primary + Tier on the pass / flag verdicts
+					// that skip Fallback. Without these the verdicts would
+					// publish to es.evaluate.result with an empty Tier,
+					// and handleIngestionAction (Tier.Valid() guard, see
+					// cmd/sn360-es/main.go around the banner step in
+					// handleIngestionAction) would silently drop every
+					// banner / label / URL-rewrite / quarantine signal
+					// for batch-emitted threats. Reuses the same
+					// instances passed to the per-message evaluator so
+					// both paths produce identical categorisations.
+					Categorizer: evaluate.NewRuleCategorizer(),
+					TierDecider: tierDeciderAdapter{decider: tierDecider},
+					Sink:        app.eventBus,
 					// Match the per-message handler's output subject so the
 					// management-persist / education-trigger / ingestion-action
 					// consumers receive batch-produced verdicts the same way
 					// they receive single-message ones. The package default
-					// (es.action.banner) is intended for setups where the batch
-					// path is the only one running; we always have the
-					// downstream consumers on es.evaluate.result.
+					// is now also "es.evaluate.result"; setting it
+					// explicitly here makes the intent obvious at the wiring
+					// site even though it duplicates the default.
 					ResultSubject: "es.evaluate.result",
 					Logger:        logger,
 				})
@@ -1077,7 +1090,14 @@ func (a *application) handleEvaluateRequest(ctx context.Context, msg events.Mess
 			slog.Any("error", err))
 		return nil
 	}
+	// Carry the canonical message-id header in addition to tenant /
+	// correlation / event-type so per-message and batch verdicts
+	// (BatchOrchestrator.publishResult) share an identical header
+	// envelope on `es.evaluate.result`. Any bus middleware that keys
+	// off `message-id` (tracing, replay tooling) would otherwise see
+	// the header only on batch-emitted verdicts.
 	if err := a.eventBus.Publish(ctx, "es.evaluate.result", payload,
+		events.WithMessageID(result.MessageID),
 		events.WithCorrelationID(req.CorrelationID),
 		events.WithTenantID(req.TenantID),
 		events.WithEventType("evaluate.result"),
