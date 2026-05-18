@@ -138,7 +138,7 @@ func (a *SupportAgent) explain(q SupportQuery, v dto.EvaluateResult) SupportRepl
 		cat = getDefaultExplanations()
 	}
 	exp := ExplainVerdictWith(cat, v, q.Locale)
-	suggest := DefaultSuggestionLocale(v.Tier, q.Locale)
+	suggest := cat.TierSuggestion(v.Tier, q.Locale)
 	return SupportReply{
 		Explanation: exp,
 		Confidence:  conf,
