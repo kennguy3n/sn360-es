@@ -183,16 +183,18 @@ func (r *providerRegistry) snapshot() []string {
 // when neither provider is configured so callers can use it
 // unconditionally.
 //
-// The tenant binding is taken from cfg.Banner.DefaultTenant — the
-// same value the rest of the binary uses as the "single-tenant" key
-// when not running in multi-tenant mode. In a future iteration this
-// will be supplanted by the onboarding pipeline registering tenants
-// dynamically.
+// Each provider entry is keyed under the tenant identifier that the
+// matching MailboxProvider will emit on every polled message:
+// `cfg.GWS.Domain` for Gmail, `cfg.O365.TenantID` for Outlook. This
+// matters when both stacks are configured simultaneously — using a
+// single "default" key for both would cause the action consumers'
+// `resolveKind(env.TenantID)` lookup to miss for whichever provider
+// was registered second.
 func buildProviderRegistry(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*providerRegistry, error) {
 	reg := newProviderRegistry(logger)
-	tenant := defaultProviderTenant(cfg)
 
 	if cfg.GWS.HasGmail() {
+		tenant := gmailProviderTenant(cfg)
 		entry, err := buildGmailEntry(ctx, cfg, logger)
 		if err != nil {
 			logger.Warn("sn360-es: gmail provider init failed", slog.Any("error", err))
@@ -205,6 +207,7 @@ func buildProviderRegistry(ctx context.Context, cfg *config.Config, logger *slog
 	}
 
 	if cfg.O365.HasOutlook() {
+		tenant := outlookProviderTenant(cfg)
 		entry, err := buildOutlookEntry(ctx, cfg, logger)
 		if err != nil {
 			logger.Warn("sn360-es: outlook provider init failed", slog.Any("error", err))
@@ -222,13 +225,33 @@ func buildProviderRegistry(ctx context.Context, cfg *config.Config, logger *slog
 	return reg, nil
 }
 
-// defaultProviderTenant returns the tenant ID to bind provider
-// credentials to at boot. The single-tenant deployments key by the
-// configured GWS domain (when Gmail is wired) or the O365 tenant ID
-// (when Outlook is wired); when neither is present we fall back to
-// "default" so the registry has *some* key. Multi-tenant deployments
-// will plug a real tenant resolver in via the onboarding agent in a
-// later PR.
+// gmailProviderTenant returns the registry key for the Gmail entry.
+// It must match the TenantID that buildMailboxProviders gives to the
+// Gmail MailboxProvider (today: cfg.GWS.Domain). Falls back to
+// "default" when no domain is configured — this only happens in
+// tests, since cfg.GWS.HasGmail() requires the domain.
+func gmailProviderTenant(cfg *config.Config) string {
+	if d := strings.TrimSpace(cfg.GWS.Domain); d != "" {
+		return d
+	}
+	return "default"
+}
+
+// outlookProviderTenant returns the registry key for the Outlook
+// entry. It must match the TenantID that buildMailboxProviders gives
+// to the Outlook MailboxProvider (today: cfg.O365.TenantID).
+func outlookProviderTenant(cfg *config.Config) string {
+	if t := strings.TrimSpace(cfg.O365.TenantID); t != "" {
+		return t
+	}
+	return "default"
+}
+
+// defaultProviderTenant is retained for callers (e.g. tests and the
+// /readyz handler) that need *some* representative tenant key — it
+// prefers the Gmail key and falls back to the Outlook key. New code
+// inside the registry construction path uses the per-provider
+// helpers above instead.
 func defaultProviderTenant(cfg *config.Config) string {
 	if d := strings.TrimSpace(cfg.GWS.Domain); d != "" {
 		return d

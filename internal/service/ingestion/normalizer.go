@@ -195,6 +195,14 @@ func (n *DefaultNormalizer) buildSignals(raw RawEmail) dto.RiskSignals {
 
 // stripHTML returns the visible text of an HTML fragment using the
 // golang.org/x/net/html tokenizer. Scripts and styles are dropped.
+//
+// Only StartTagToken increments the `skip` counter: SelfClosingTagToken
+// represents a tag like `<script/>` that has no body and therefore no
+// content to suppress. Treating it as a "start" would have left the
+// counter incremented with no matching EndTagToken, leaking the
+// suppression into the rest of the document. In HTML5 self-closing
+// script/style/head are not legal anyway, but a defensive tokeniser
+// must not assume malformed input is impossible.
 func stripHTML(body string) string {
 	z := html.NewTokenizer(strings.NewReader(body))
 	var out strings.Builder
@@ -204,12 +212,15 @@ func stripHTML(body string) string {
 		switch tt {
 		case html.ErrorToken:
 			return out.String()
-		case html.StartTagToken, html.SelfClosingTagToken:
+		case html.StartTagToken:
 			name, _ := z.TagName()
 			tag := string(name)
 			if tag == "script" || tag == "style" || tag == "head" {
 				skip++
 			}
+		case html.SelfClosingTagToken:
+			// Self-closing tag has no body; skip counter is
+			// left alone so subsequent text is rendered.
 		case html.EndTagToken:
 			name, _ := z.TagName()
 			tag := string(name)

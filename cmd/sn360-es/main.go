@@ -2867,11 +2867,21 @@ func buildMailboxProviders(ctx context.Context, cfg *config.Config, logger *slog
 					slog.Any("error", terr))
 			} else {
 				mbp, merr := gmail.NewMailboxProvider(gmail.MailboxProviderConfig{
-					TokenSource:  tokens,
-					Domain:       cfg.GWS.Domain,
-					AdminBaseURL: cfg.GWS.AdminBaseURL,
-					BaseURL:      cfg.GWS.BaseURL,
-					TenantID:     cfg.GWS.Domain,
+					TokenSource: tokens,
+					// AdminTokenSource is required for the Admin SDK
+					// /admin/directory/v1/users call inside
+					// ListMailboxes. Without it the provider falls
+					// back to ManualMailboxes (empty in this wiring)
+					// and the poller silently observes zero
+					// mailboxes. The JWT bearer source above is
+					// already constructed with the
+					// admin.directory.user.readonly scope, so the
+					// same source is valid for the Admin SDK call.
+					AdminTokenSource: tokens,
+					Domain:           cfg.GWS.Domain,
+					AdminBaseURL:     cfg.GWS.AdminBaseURL,
+					BaseURL:          cfg.GWS.BaseURL,
+					TenantID:         cfg.GWS.Domain,
 				})
 				if merr != nil {
 					logger.Warn("sn360-es: gmail mailbox provider init failed",
