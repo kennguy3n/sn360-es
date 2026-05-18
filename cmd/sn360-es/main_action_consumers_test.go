@@ -186,18 +186,30 @@ func (s *fakeQuarantineStore) Del(_ context.Context, keys ...string) error {
 }
 
 // fakeQuarantineEncryptor is a passthrough encryptor — the consumer
-// tests don't exercise the cryptographic ladder.
+// tests don't exercise the cryptographic ladder. Encrypt prepends a
+// fixed "enc:" prefix; Decrypt strips it. The roundtrip is symmetric
+// for any plaintext (including the empty []byte), which matters when
+// a future test asserts that an empty stub body survives the
+// encrypt/decrypt cycle.
 type fakeQuarantineEncryptor struct{}
 
+var fakeQuarantineEncryptorPrefix = []byte("enc:")
+
 func (fakeQuarantineEncryptor) Encrypt(_ context.Context, _ string, p []byte) ([]byte, error) {
-	return append([]byte("enc:"), p...), nil
+	return append(append([]byte(nil), fakeQuarantineEncryptorPrefix...), p...), nil
 }
 
 func (fakeQuarantineEncryptor) Decrypt(_ context.Context, _ string, c []byte) ([]byte, error) {
-	if len(c) <= 4 {
-		return c, nil
+	// Strip the fixed prefix when present so Decrypt(Encrypt(x)) == x
+	// for every x (including the empty slice). Inputs that were not
+	// produced by this fake's Encrypt are returned verbatim — the
+	// tests never construct such inputs, but the fall-through keeps
+	// the fake total.
+	if len(c) >= len(fakeQuarantineEncryptorPrefix) &&
+		string(c[:len(fakeQuarantineEncryptorPrefix)]) == string(fakeQuarantineEncryptorPrefix) {
+		return c[len(fakeQuarantineEncryptorPrefix):], nil
 	}
-	return c[4:], nil
+	return c, nil
 }
 
 // memoryLabelCacheAdapter satisfies action.LabelCache against a
