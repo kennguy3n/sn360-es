@@ -73,9 +73,14 @@ type DiscoveredUser struct {
 	IsSuspended bool
 	GroupIDs    []string
 	ManagerID   string
+	Aliases          []string // email aliases
+	IsSharedMailbox  bool     // shared/resource mailbox (O365 mailboxType)
+	IsServiceAccount bool     // service account / app user
 	// SensitivityHint is the per-role sensitivity boost applied during
 	// onboarding (e.g. C-suite / Finance / HR get higher sensitivity).
-	SensitivityHint Sensitivity
+	SensitivityHint       Sensitivity
+	SensitivityConfidence float64 // 0.0-1.0
+	NeedsAdminReview      bool    // true when confidence < 0.5
 }
 
 // DiscoveredGroup is the canonical group/distribution-list shape.

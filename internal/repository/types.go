@@ -218,6 +218,7 @@ type UserRepository interface {
 // GroupRepository persists Group rows.
 type GroupRepository interface {
 	Create(ctx context.Context, g *Group) error
+	Upsert(ctx context.Context, g *Group) error
 	GetByName(ctx context.Context, tenantID, name string) (*Group, error)
 	List(ctx context.Context, tenantID string) ([]Group, error)
 }
@@ -312,11 +313,28 @@ type FeedbackEventRepository interface {
 	Counts(ctx context.Context, tenantID string, start, end time.Time) (FeedbackCounts, error)
 }
 
+// GroupMembership is a join-table row linking a user to a group.
+type GroupMembership struct {
+	GroupID   string
+	UserID    string
+	CreatedAt time.Time
+}
+
+// GroupMembershipRepository persists group membership rows.
+type GroupMembershipRepository interface {
+	Upsert(ctx context.Context, gm *GroupMembership) error
+	ListByGroup(ctx context.Context, groupID string) ([]GroupMembership, error)
+	ListByUser(ctx context.Context, userID string) ([]GroupMembership, error)
+	DeleteByGroup(ctx context.Context, groupID string) error
+	ReplaceForGroup(ctx context.Context, groupID string, userIDs []string) error
+}
+
 // Registry bundles all repositories for convenient wiring.
 type Registry struct {
 	Tenants                TenantRepository
 	Users                  UserRepository
 	Groups                 GroupRepository
+	GroupMemberships       GroupMembershipRepository
 	Labels                 LabelRepository
 	ScoreEngines           ScoreEngineRepository
 	EmailClassifications   EmailClassificationRepository
@@ -324,4 +342,5 @@ type Registry struct {
 	EvaluationResults      EvaluationResultRepository
 	CommunicationHistories CommunicationHistoryRepository
 	FeedbackEvents         FeedbackEventRepository
+	AuditLogs              AuditLogRepository
 }

@@ -84,6 +84,7 @@ type Config struct {
 	O365       O365
 	Ingestion  Ingestion
 	Worker     Worker
+	Onboarding Onboarding
 }
 
 // Log carries structured-logging configuration.
@@ -355,6 +356,17 @@ type Worker struct {
 	// LockTTL is the Redis-lock TTL for leader election. Should be
 	// at least 1.5x the cycle duration the workers expect.
 	LockTTL time.Duration
+	// DirectorySyncInterval is the gap between directory sync cycles.
+	// Default 6h.
+	DirectorySyncInterval time.Duration
+}
+
+// Onboarding holds the OAuth onboarding flow configuration.
+type Onboarding struct {
+	// StateSecret is the HMAC key for signing OAuth state tokens.
+	StateSecret string
+	// CallbackURL is the redirect URI registered with providers.
+	CallbackURL string
 }
 
 // CORS configures the cross-origin policy applied to every HTTP route.
@@ -553,13 +565,18 @@ func Load() (Config, error) {
 			LockTTL:         getDuration("INGESTION_LOCK_TTL", 45*time.Second),
 			InitialBackfill: getDuration("INGESTION_INITIAL_BACKFILL", time.Hour),
 		},
-		Worker: Worker{
-			RelationshipInterval:    getDuration("WORKER_RELATIONSHIP_INTERVAL", 4*time.Hour),
-			VendorDiscoveryInterval: getDuration("WORKER_VENDOR_DISCOVERY_INTERVAL", 7*24*time.Hour),
-			CleanupInterval:         getDuration("WORKER_CLEANUP_INTERVAL", 24*time.Hour),
-			RetentionDays:           getInt("WORKER_RETENTION_DAYS", 90),
-			LockTTL:                 getDuration("WORKER_LOCK_TTL", 5*time.Minute),
-		},
+			Worker: Worker{
+				RelationshipInterval:    getDuration("WORKER_RELATIONSHIP_INTERVAL", 4*time.Hour),
+				VendorDiscoveryInterval: getDuration("WORKER_VENDOR_DISCOVERY_INTERVAL", 7*24*time.Hour),
+				CleanupInterval:         getDuration("WORKER_CLEANUP_INTERVAL", 24*time.Hour),
+				RetentionDays:           getInt("WORKER_RETENTION_DAYS", 90),
+				LockTTL:                 getDuration("WORKER_LOCK_TTL", 5*time.Minute),
+				DirectorySyncInterval:   getDuration("WORKER_DIRECTORY_SYNC_INTERVAL", 6*time.Hour),
+			},
+			Onboarding: Onboarding{
+				StateSecret: getStr("ONBOARDING_STATE_SECRET", ""),
+				CallbackURL: getStr("ONBOARDING_CALLBACK_URL", ""),
+			},
 	}
 
 	if err := cfg.validate(); err != nil {

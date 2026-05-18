@@ -186,6 +186,8 @@ type Service struct {
 	exch      TokenExchanger
 	state     *StateSigner
 	trigger   PostConsentTrigger
+	nonces    NonceStore
+	validator PostConsentValidator
 	log       *slog.Logger
 }
 
@@ -196,6 +198,8 @@ type ServiceConfig struct {
 	Exch      TokenExchanger
 	State     *StateSigner
 	Trigger   PostConsentTrigger
+	Nonces    NonceStore
+	Validator PostConsentValidator
 	Logger    *slog.Logger
 }
 
@@ -227,12 +231,15 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 		exch:      cfg.Exch,
 		state:     cfg.State,
 		trigger:   cfg.Trigger,
+		nonces:    cfg.Nonces,
+		validator: cfg.Validator,
 		log:       cfg.Logger,
 	}, nil
 }
 
 // AuthURL returns the consent URL the user should visit. Includes a
-// signed state binding tenantID + provider.
+// signed state binding tenantID + provider. Parameters are
+// provider-aware: Google gets access_type=offline; Microsoft does not.
 func (s *Service) AuthURL(provider ProviderType, tenantID string) (string, error) {
 	p, ok := s.providers[provider]
 	if !ok {
@@ -246,20 +253,39 @@ func (s *Service) AuthURL(provider ProviderType, tenantID string) (string, error
 	q.Set("client_id", p.ClientID)
 	q.Set("redirect_uri", p.RedirectURL)
 	q.Set("response_type", "code")
-	q.Set("access_type", "offline")
-	q.Set("prompt", "consent")
 	q.Set("scope", strings.Join(p.Scopes, " "))
 	q.Set("state", stateTok)
+	// Provider-specific parameters.
+	switch provider {
+	case ProviderGoogle:
+		q.Set("access_type", "offline")
+		q.Set("prompt", "consent")
+	case ProviderMicrosoft:
+		q.Set("prompt", "consent")
+	default:
+		q.Set("prompt", "consent")
+	}
 	return p.AuthURL + "?" + q.Encode(), nil
 }
 
-// HandleCallback validates the state, exchanges the code, persists the
-// token, and triggers onboarding. It returns the tenant ID extracted
-// from the state on success.
+// HandleCallback validates the state, checks nonce replay, exchanges
+// the code, validates tenant access, persists the token, and triggers
+// onboarding. It returns the tenant ID extracted from the state on
+// success.
 func (s *Service) HandleCallback(ctx context.Context, stateTok, code string) (string, ProviderType, error) {
 	payload, err := s.state.Verify(stateTok)
 	if err != nil {
 		return "", "", err
+	}
+	// Nonce replay prevention.
+	if s.nonces != nil {
+		alreadyUsed, nonceErr := s.nonces.MarkUsed(ctx, payload.Nonce, 10*time.Minute)
+		if nonceErr != nil {
+			s.log.Warn("onboarding: nonce store error (proceeding)",
+				slog.String("err", nonceErr.Error()))
+		} else if alreadyUsed {
+			return "", "", errors.New("onboarding: nonce already used (replay detected)")
+		}
 	}
 	p, ok := s.providers[payload.Provider]
 	if !ok {
@@ -268,6 +294,13 @@ func (s *Service) HandleCallback(ctx context.Context, stateTok, code string) (st
 	tok, err := s.exch.ExchangeCode(ctx, p, code)
 	if err != nil {
 		return "", "", fmt.Errorf("onboarding: exchange code: %w", err)
+	}
+	// Post-consent domain/tenant verification.
+	if s.validator != nil {
+		if valErr := s.validator.ValidateTenantAccess(ctx, tok, payload.TenantID, payload.Provider); valErr != nil {
+			_ = s.store.Delete(ctx, payload.TenantID, payload.Provider)
+			return "", "", fmt.Errorf("onboarding: tenant validation failed: %w", valErr)
+		}
 	}
 	if err := s.store.Save(ctx, payload.TenantID, payload.Provider, tok); err != nil {
 		return "", "", fmt.Errorf("onboarding: persist token: %w", err)
