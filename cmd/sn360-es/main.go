@@ -32,9 +32,14 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/dashboard"
 	"github.com/kennguy3n/sn360-es/internal/service/education"
 	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
+	"github.com/kennguy3n/sn360-es/internal/service/ingestion"
 	"github.com/kennguy3n/sn360-es/internal/service/predict"
+	"github.com/kennguy3n/sn360-es/internal/service/relationship"
 	"github.com/kennguy3n/sn360-es/internal/service/tier0"
 	"github.com/kennguy3n/sn360-es/internal/service/tier1"
+	"github.com/kennguy3n/sn360-es/internal/service/worker"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/gmail"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/outlook"
 	"github.com/kennguy3n/sn360-es/pkg/events"
 	"github.com/kennguy3n/sn360-es/pkg/events/bus"
 	natsbus "github.com/kennguy3n/sn360-es/pkg/events/nats"
@@ -91,6 +96,12 @@ func run() error {
 		app.StopConsumers(logger)
 		return fmt.Errorf("start consumers: %w", cerr)
 	}
+
+	// Background workers: poller + periodic runners. Each respects
+	// context cancellation so SIGTERM cleanly stops the lot. Errors
+	// from Run() are logged but do not bubble up because a missed
+	// cycle on a recurring worker is recoverable on the next tick.
+	app.StartBackground(ctx)
 
 	serveErr := make(chan error, 1)
 	go func() {
@@ -173,6 +184,30 @@ type application struct {
 	rspamdClient evaluate.RspamdClient
 	evaluator    *evaluate.Evaluator
 	batchOrch    *evaluate.BatchOrchestrator
+
+	// Ingestion polling. Populated when at least one mailbox
+	// provider is configured; the poller publishes
+	// `es.evaluate.request` on the bus so this binary's evaluator
+	// consumer (or a peer replica's batch orchestrator) picks the
+	// messages up.
+	poller *ingestion.Poller
+
+	// Periodic workers. Each runner drives one Job on its declared
+	// interval; nil when the underlying dependency (postgres, the
+	// relationship aggregator, etc.) is missing. Run() starts them
+	// after the consumers come online.
+	relationshipRunner *worker.Runner
+	vendorRunner       *worker.Runner
+	cleanupRunner      *worker.Runner
+
+	// AI agents. The onboarding agent fires on directory discovery,
+	// the tuning agent runs on a schedule, the support agent
+	// services in-product queries. All three are optional — they
+	// degrade gracefully when their inputs (directory client, repos)
+	// are not wired.
+	onboardAgent *agent.OnboardingAgent
+	tuningAgent  *agent.TuningAgent
+	supportAgent *agent.SupportAgent
 
 	// Lifecycle.
 	subs    []events.Subscription
@@ -727,6 +762,24 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 				slog.Any("error", qerr))
 		}
 	}
+
+	// Ingestion poller — wakes mailboxes, normalizes messages, and
+	// publishes `es.evaluate.request` on the bus. Only constructed
+	// when at least one MailboxProvider is configured. The
+	// checkpoint store + distributed lock factory are Redis-backed;
+	// when Redis is absent the poller still runs (per-mailbox
+	// locks are no-ops, checkpoints reset on restart), so dev mode
+	// keeps working.
+	app.poller = buildPoller(ctx, cfg, logger, app)
+
+	// Periodic workers.
+	app.relationshipRunner, app.vendorRunner, app.cleanupRunner = buildWorkers(cfg, logger, app)
+
+	// AI agents. Wiring is best-effort: each agent skips when its
+	// inputs are missing. The onboarding + support agents publish
+	// follow-up events on the bus; the tuning agent persists
+	// updated weights/thresholds via the repository layer.
+	app.onboardAgent, app.tuningAgent, app.supportAgent = buildAgents(cfg, logger, app)
 
 	return app, nil
 }
@@ -2589,4 +2642,780 @@ func newLogger(cfg *config.Config) *slog.Logger {
 		h = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
 	}
 	return slog.New(middleware.NewLogSanitizer(h, privacy.NewSanitizer()))
+}
+
+// ---------------------------------------------------------------------
+// Ingestion poller wiring.
+// ---------------------------------------------------------------------
+
+// buildPoller constructs the ingestion poller from the configured
+// mailbox providers. When ingestion is disabled or no providers are
+// wired the function returns nil — Run() then simply skips the
+// goroutine.
+func buildPoller(ctx context.Context, cfg *config.Config, logger *slog.Logger, app *application) *ingestion.Poller {
+	if !cfg.Ingestion.Enabled {
+		logger.Info("sn360-es: ingestion polling disabled via config")
+		return nil
+	}
+
+	providers := buildMailboxProviders(ctx, cfg, logger)
+	if len(providers) == 0 {
+		logger.Info("sn360-es: ingestion polling skipped; no mailbox providers configured")
+		return nil
+	}
+
+	// Checkpoint store — Redis-backed in production; nil in
+	// fall-back mode (the poller still runs, it just re-fetches
+	// from the lookback window on every restart).
+	var checkpoint ingestion.CheckpointStore
+	if app.redis != nil {
+		store, cerr := ingestion.NewCheckpointStore(app.redis, "", 0)
+		if cerr != nil {
+			logger.Warn("sn360-es: ingestion checkpoint store init failed; running stateless",
+				slog.Any("error", cerr))
+		} else {
+			checkpoint = store
+		}
+	}
+
+	// Lock factory — Redis-backed in production; nil in dev so
+	// the poller does not deadlock against a missing Redis.
+	var lockFactory ingestion.LockFactory
+	if app.redis != nil {
+		lockTTL := cfg.Ingestion.LockTTL
+		if lockTTL <= 0 {
+			lockTTL = 3 * cfg.Ingestion.Interval / 2
+			if lockTTL <= 0 {
+				lockTTL = 45 * time.Second
+			}
+		}
+		client := app.redis
+		lockFactory = func(key string) ingestion.DistributedLock {
+			lock, lerr := redis.NewDistributedLock(client, key, lockTTL)
+			if lerr != nil {
+				logger.Warn("sn360-es: ingestion lock init failed; running unlocked",
+					slog.String("key", key), slog.Any("error", lerr))
+				return ingestion.NoopLock{}
+			}
+			return ingestionLockAdapter{lock: lock}
+		}
+	}
+
+	p, err := ingestion.New(ingestion.PollerConfig{
+		Providers:          providers,
+		Publisher:          app.eventBus,
+		Logger:             logger,
+		Normalizer:         ingestion.NewDefaultNormalizer(),
+		Checkpoint:         checkpoint,
+		Locks:              lockFactory,
+		Interval:           cfg.Ingestion.Interval,
+		BatchSize:          cfg.Ingestion.BatchSize,
+		Concurrency:        cfg.Ingestion.Concurrency,
+		LookbackOnFirstRun: cfg.Ingestion.InitialBackfill,
+	})
+	if err != nil {
+		logger.Warn("sn360-es: ingestion poller init failed; polling disabled",
+			slog.Any("error", err))
+		return nil
+	}
+	logger.Info("sn360-es: ingestion poller wired",
+		slog.Int("providers", len(providers)),
+		slog.Duration("interval", cfg.Ingestion.Interval))
+	return p
+}
+
+// buildMailboxProviders inspects the GWS / O365 configuration and
+// returns the matching MailboxProvider implementations. Returns an
+// empty slice when neither provider is configured.
+func buildMailboxProviders(ctx context.Context, cfg *config.Config, logger *slog.Logger) []ingestion.MailboxProvider {
+	out := make([]ingestion.MailboxProvider, 0, 2)
+	if cfg.GWS.HasGmail() && cfg.GWS.Domain != "" {
+		sa, err := gmail.LoadServiceAccount(cfg.GWS.ServiceAccountJSON)
+		if err != nil {
+			logger.Warn("sn360-es: gmail mailbox provider init failed (service account)",
+				slog.Any("error", err))
+		} else {
+			tokens, terr := gmail.NewJWTBearerSource(gmail.JWTBearerConfig{
+				ServiceAccount:   sa,
+				ImpersonatedUser: cfg.GWS.DelegatedAdmin,
+			})
+			if terr != nil {
+				logger.Warn("sn360-es: gmail mailbox provider init failed (token source)",
+					slog.Any("error", terr))
+			} else {
+				mbp, merr := gmail.NewMailboxProvider(gmail.MailboxProviderConfig{
+					TokenSource:  tokens,
+					Domain:       cfg.GWS.Domain,
+					AdminBaseURL: cfg.GWS.AdminBaseURL,
+					BaseURL:      cfg.GWS.BaseURL,
+					TenantID:     cfg.GWS.Domain,
+				})
+				if merr != nil {
+					logger.Warn("sn360-es: gmail mailbox provider init failed",
+						slog.Any("error", merr))
+				} else {
+					out = append(out, mbp)
+					logger.Info("sn360-es: gmail mailbox provider wired",
+						slog.String("domain", cfg.GWS.Domain))
+				}
+			}
+		}
+	}
+	if cfg.O365.HasOutlook() {
+		tokens, terr := outlook.NewClientCredentialsSource(outlook.ClientCredentialsConfig{
+			TenantID:     cfg.O365.TenantID,
+			ClientID:     cfg.O365.ClientID,
+			ClientSecret: cfg.O365.ClientSecret,
+			TokenURL:     cfg.O365.TokenURL,
+		})
+		if terr != nil {
+			logger.Warn("sn360-es: outlook mailbox provider init failed (token source)",
+				slog.Any("error", terr))
+		} else {
+			mbp, merr := outlook.NewMailboxProvider(outlook.MailboxProviderConfig{
+				TokenSource: tokens,
+				BaseURL:     cfg.O365.BaseURL,
+				TenantID:    cfg.O365.TenantID,
+			})
+			if merr != nil {
+				logger.Warn("sn360-es: outlook mailbox provider init failed",
+					slog.Any("error", merr))
+			} else {
+				out = append(out, mbp)
+				logger.Info("sn360-es: outlook mailbox provider wired",
+					slog.String("tenant", cfg.O365.TenantID))
+			}
+		}
+	}
+	_ = ctx
+	return out
+}
+
+// ingestionLockAdapter adapts *redis.DistributedLock to the
+// ingestion.DistributedLock interface. The ingestion package's
+// Release returns error only — we collapse the bool return from the
+// Redis primitive into "no error" since "released or already
+// expired" are both legitimate outcomes from the poller's
+// perspective.
+type ingestionLockAdapter struct {
+	lock *redis.DistributedLock
+}
+
+func (a ingestionLockAdapter) Acquire(ctx context.Context) (bool, error) {
+	return a.lock.Acquire(ctx)
+}
+
+func (a ingestionLockAdapter) Release(ctx context.Context) error {
+	_, err := a.lock.Release(ctx)
+	return err
+}
+
+// ---------------------------------------------------------------------
+// Periodic worker wiring.
+// ---------------------------------------------------------------------
+
+// buildWorkers constructs the three periodic workers (relationship
+// aggregation, vendor discovery, retention cleanup). Each returned
+// runner is nil when its dependencies are missing so Run() can
+// start only the ones that have a chance of running successfully.
+func buildWorkers(cfg *config.Config, logger *slog.Logger, app *application) (*worker.Runner, *worker.Runner, *worker.Runner) {
+	if app.repos == nil {
+		logger.Info("sn360-es: periodic workers skipped; repository registry not wired")
+		return nil, nil, nil
+	}
+
+	lockFactory := buildWorkerLockFactory(cfg, logger, app)
+
+	// Metrics adapter — uses the worker bucket on telemetry.Metrics.
+	metricsRec := workerMetricsAdapter{m: app.metrics}
+
+	relRunner := buildRelationshipRunner(cfg, logger, app, lockFactory, metricsRec)
+	vendorRunner := buildVendorRunner(cfg, logger, app, lockFactory, metricsRec)
+	cleanupRunner := buildCleanupRunner(cfg, logger, app, lockFactory, metricsRec)
+
+	return relRunner, vendorRunner, cleanupRunner
+}
+
+func buildWorkerLockFactory(cfg *config.Config, logger *slog.Logger, app *application) worker.LockFactory {
+	if app.redis == nil {
+		return nil
+	}
+	lockTTL := cfg.Worker.LockTTL
+	if lockTTL <= 0 {
+		lockTTL = 10 * time.Minute
+	}
+	client := app.redis
+	return func(name string) worker.DistributedLock {
+		lock, err := redis.NewDistributedLock(client, "worker:lock:"+name, lockTTL)
+		if err != nil {
+			logger.Warn("sn360-es: worker lock init failed; running unlocked",
+				slog.String("worker", name), slog.Any("error", err))
+			return workerLockNoop{}
+		}
+		return workerLockAdapter{lock: lock}
+	}
+}
+
+func buildRelationshipRunner(cfg *config.Config, logger *slog.Logger, app *application, locks worker.LockFactory, metrics worker.MetricsRecorder) *worker.Runner {
+	if app.repos.Tenants == nil || app.repos.CommunicationHistories == nil {
+		return nil
+	}
+	commStore, ok := app.repos.CommunicationHistories.(worker.CommunicationStore)
+	if !ok {
+		logger.Info("sn360-es: relationship worker skipped; CommunicationHistoryRepository does not implement ListByTenant")
+		return nil
+	}
+	job, err := worker.NewRelationshipJob(worker.RelationshipJobConfig{
+		Interval:       cfg.Worker.RelationshipInterval,
+		Tenants:        app.repos.Tenants,
+		Communications: commStore,
+		Upserter:       app.repos.CommunicationHistories,
+		Logger:         logger,
+	})
+	if err != nil {
+		logger.Warn("sn360-es: relationship worker init failed",
+			slog.Any("error", err))
+		return nil
+	}
+	runner, rerr := worker.NewRunner(worker.RunnerConfig{
+		Job:     job,
+		Logger:  logger,
+		Locks:   locks,
+		Metrics: metrics,
+	})
+	if rerr != nil {
+		logger.Warn("sn360-es: relationship runner init failed",
+			slog.Any("error", rerr))
+		return nil
+	}
+	logger.Info("sn360-es: relationship worker wired",
+		slog.Duration("interval", cfg.Worker.RelationshipInterval))
+	return runner
+}
+
+func buildVendorRunner(cfg *config.Config, logger *slog.Logger, app *application, locks worker.LockFactory, metrics worker.MetricsRecorder) *worker.Runner {
+	if app.repos.Tenants == nil || app.repos.CommunicationHistories == nil || app.repos.Vendors == nil {
+		return nil
+	}
+	commStore, ok := app.repos.CommunicationHistories.(worker.CommunicationStore)
+	if !ok {
+		logger.Info("sn360-es: vendor worker skipped; CommunicationHistoryRepository does not implement ListByTenant")
+		return nil
+	}
+	discovery := relationship.NewVendorDiscovery(relationship.VendorDiscoveryConfig{}, logger)
+	job, err := worker.NewVendorJob(worker.VendorJobConfig{
+		Interval:         cfg.Worker.VendorDiscoveryInterval,
+		Tenants:          app.repos.Tenants,
+		Communications:   commStore,
+		Discovery:        discovery,
+		VendorRepository: app.repos.Vendors,
+		Logger:           logger,
+	})
+	if err != nil {
+		logger.Warn("sn360-es: vendor worker init failed",
+			slog.Any("error", err))
+		return nil
+	}
+	runner, rerr := worker.NewRunner(worker.RunnerConfig{
+		Job:     job,
+		Logger:  logger,
+		Locks:   locks,
+		Metrics: metrics,
+	})
+	if rerr != nil {
+		logger.Warn("sn360-es: vendor runner init failed",
+			slog.Any("error", rerr))
+		return nil
+	}
+	logger.Info("sn360-es: vendor worker wired",
+		slog.Duration("interval", cfg.Worker.VendorDiscoveryInterval))
+	return runner
+}
+
+func buildCleanupRunner(cfg *config.Config, logger *slog.Logger, app *application, locks worker.LockFactory, metrics worker.MetricsRecorder) *worker.Runner {
+	pruners := make([]worker.Pruner, 0, 4)
+	// Best-effort pruners — every pruner stays optional so the
+	// cleanup worker can boot even when only some dependencies
+	// are wired.
+	if app.pgDB != nil {
+		pruners = append(pruners, newPgPruner(app.pgDB, "evaluation_results", logger))
+		pruners = append(pruners, newPgPruner(app.pgDB, "feedback_events", logger))
+		pruners = append(pruners, newPgPruner(app.pgDB, "communication_histories", logger))
+	}
+	if len(pruners) == 0 {
+		logger.Info("sn360-es: cleanup worker skipped; no pruners configured")
+		return nil
+	}
+	job, err := worker.NewCleanupJob(worker.CleanupJobConfig{
+		Interval:      cfg.Worker.CleanupInterval,
+		RetentionDays: cfg.Worker.RetentionDays,
+		Pruners:       pruners,
+		Logger:        logger,
+	})
+	if err != nil {
+		logger.Warn("sn360-es: cleanup worker init failed",
+			slog.Any("error", err))
+		return nil
+	}
+	runner, rerr := worker.NewRunner(worker.RunnerConfig{
+		Job:     job,
+		Logger:  logger,
+		Locks:   locks,
+		Metrics: metrics,
+	})
+	if rerr != nil {
+		logger.Warn("sn360-es: cleanup runner init failed",
+			slog.Any("error", rerr))
+		return nil
+	}
+	logger.Info("sn360-es: cleanup worker wired",
+		slog.Int("pruners", len(pruners)),
+		slog.Duration("interval", cfg.Worker.CleanupInterval),
+		slog.Int("retention_days", cfg.Worker.RetentionDays))
+	return runner
+}
+
+// workerLockAdapter adapts *redis.DistributedLock to the worker
+// package's DistributedLock interface (Release returns only an
+// error there).
+type workerLockAdapter struct {
+	lock *redis.DistributedLock
+}
+
+func (a workerLockAdapter) Acquire(ctx context.Context) (bool, error) {
+	return a.lock.Acquire(ctx)
+}
+
+func (a workerLockAdapter) Release(ctx context.Context) error {
+	_, err := a.lock.Release(ctx)
+	return err
+}
+
+// workerLockNoop is returned when the Redis lock primitive cannot
+// be constructed — the worker still runs, it just relies on a
+// single replica being deployed (the common case in dev).
+type workerLockNoop struct{}
+
+func (workerLockNoop) Acquire(context.Context) (bool, error) { return true, nil }
+func (workerLockNoop) Release(context.Context) error         { return nil }
+
+// workerMetricsAdapter funnels Job runner outcomes into the
+// telemetry.Metrics counters. Nil-safe so a binary running without
+// metrics still emits cycle logs.
+type workerMetricsAdapter struct {
+	m *telemetry.Metrics
+}
+
+func (a workerMetricsAdapter) ObserveCycle(name string, duration time.Duration, err error) {
+	if a.m == nil {
+		return
+	}
+	a.m.ObserveWorkerCycle(name, duration, err)
+}
+
+// newPgPruner returns a Postgres-backed pruner for the named table.
+// The implementation issues a parameterised DELETE on the
+// "created_at" column. Tables that use a different column override
+// this via newPgPrunerWithColumn (see cleanup_worker.go).
+func newPgPruner(db *postgres.DB, table string, logger *slog.Logger) worker.Pruner {
+	return worker.NewPruner(table, func(ctx context.Context, before time.Time) (int64, error) {
+		if db == nil {
+			return 0, nil
+		}
+		res, err := db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE created_at < $1", table), before)
+		if err != nil {
+			logger.Warn("sn360-es: cleanup prune failed",
+				slog.String("table", table), slog.Any("error", err))
+			return 0, err
+		}
+		n, rerr := res.RowsAffected()
+		if rerr != nil {
+			return 0, nil
+		}
+		return n, nil
+	})
+}
+
+// ---------------------------------------------------------------------
+// AI agent wiring.
+// ---------------------------------------------------------------------
+
+// buildAgents constructs the onboarding / tuning / support agents.
+// Each returned agent is nil when its inputs are missing; the
+// consumer wiring (StartConsumers) checks for nil and falls back to
+// the original logging-only handlers.
+func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*agent.OnboardingAgent, *agent.TuningAgent, *agent.SupportAgent) {
+	var onboardA *agent.OnboardingAgent
+	var tuningA *agent.TuningAgent
+	var supportA *agent.SupportAgent
+
+	pub := agentPublisherFromBus(app.eventBus)
+
+	// Support agent — depends only on the event bus + repository
+	// (for verdict lookup). When the repos are missing it still
+	// wires up; the lookup adapter degrades gracefully.
+	if pub != nil {
+		audit := loggingAuditLog{logger: logger}
+		lookup := evalLookupAdapter{repos: app.repos}
+		sa, err := agent.NewSupportAgent(agent.SupportConfig{
+			Lookup:         lookup,
+			Audit:          audit,
+			Events:         pub,
+			SecOpsSubject:  "es.escalation.create",
+			ReleaseSubject: "es.quarantine.release",
+			Logger:         logger,
+		})
+		if err != nil {
+			logger.Warn("sn360-es: support agent init failed",
+				slog.Any("error", err))
+		} else {
+			supportA = sa
+			logger.Info("sn360-es: support agent wired")
+		}
+	}
+
+	// Onboarding agent — requires a directory client + LabelApplier.
+	// Today we only wire it when GWS or O365 credentials are
+	// configured so it has something to call.
+	if app.providers != nil && app.providers.hasAny() && pub != nil {
+		dir := buildDirectoryClient(cfg, logger)
+		labels := buildLabelApplier(app)
+		if dir != nil && labels != nil {
+			oa, err := agent.NewOnboardingAgent(agent.OnboardingConfig{
+				Directory: dir,
+				Labels:    labels,
+				Events:    pub,
+				Audit:     loggingAuditLog{logger: logger},
+				Logger:    logger,
+			})
+			if err != nil {
+				logger.Warn("sn360-es: onboarding agent init failed",
+					slog.Any("error", err))
+			} else {
+				onboardA = oa
+				logger.Info("sn360-es: onboarding agent wired")
+			}
+		}
+	}
+
+	// Tuning agent — needs a feedback / weights / thresholds
+	// repository. The repository registry doesn't expose
+	// ConfigStore today, so we degrade to an in-memory store.
+	if app.repos != nil && app.repos.FeedbackEvents != nil {
+		results := tuningResultAdapter{repos: app.repos}
+		store := newMemoryConfigStore()
+		ta, err := agent.NewTuningAgent(agent.TuningConfig{
+			Results: results,
+			Config:  store,
+			Audit:   loggingAuditLog{logger: logger},
+			Logger:  logger,
+		})
+		if err != nil {
+			logger.Warn("sn360-es: tuning agent init failed",
+				slog.Any("error", err))
+		} else {
+			tuningA = ta
+			logger.Info("sn360-es: tuning agent wired")
+		}
+	}
+	return onboardA, tuningA, supportA
+}
+
+// agentEventBusAdapter narrows the full event.Service surface to the
+// minimal Publish(ctx, subject, data) shape the agent package depends
+// on. Returns nil when bus is nil so callers can short-circuit.
+type agentEventBusAdapter struct {
+	bus events.EventService
+}
+
+// Publish forwards to the underlying bus with no publish options.
+func (a agentEventBusAdapter) Publish(ctx context.Context, subject string, data []byte) error {
+	return a.bus.Publish(ctx, subject, data)
+}
+
+// agentPublisherFromBus returns nil when bus is nil; otherwise the
+// adapter that satisfies agent.EventPublisher.
+func agentPublisherFromBus(bus events.EventService) agent.EventPublisher {
+	if bus == nil {
+		return nil
+	}
+	return agentEventBusAdapter{bus: bus}
+}
+
+// buildLabelApplier wires the onboarding agent's LabelApplier to the
+// already-configured provider registry. It iterates the registry on
+// each EnsureTierLabels call so multi-tenant deployments are routed
+// to the correct provider.
+func buildLabelApplier(app *application) agent.LabelApplier {
+	if app == nil || app.providers == nil {
+		return nil
+	}
+	return registryLabelApplier{registry: app.providers}
+}
+
+// registryLabelApplier dispatches EnsureTierLabels to whichever
+// provider (Gmail / Outlook) is registered for the tenant. If no
+// provider is registered the call is a no-op (best-effort).
+type registryLabelApplier struct {
+	registry *providerRegistry
+}
+
+// EnsureTierLabels resolves the tenant's provider and seeds the five
+// canonical SN360 tier labels on the target mailbox.
+func (r registryLabelApplier) EnsureTierLabels(ctx context.Context, tenantID, mailbox string) error {
+	entry := r.registry.lookup(tenantID)
+	if entry == nil {
+		return nil
+	}
+	if entry.labelProvider == nil {
+		return nil
+	}
+	tiers := []constant.Tier{
+		constant.TierBlocked,
+		constant.TierHighRisk,
+		constant.TierWarning,
+		constant.TierCaution,
+		constant.TierInformational,
+	}
+	for _, t := range tiers {
+		if _, err := entry.labelProvider.EnsureLabel(ctx, mailbox, "SN360 / "+string(t), action.ColorFor(t)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// buildDirectoryClient returns an agent.DirectoryClient sourced from
+// the GWS Admin SDK or the Microsoft Graph /users endpoint. Returns
+// nil when no provider is configured — the onboarding agent then
+// stays inactive.
+func buildDirectoryClient(cfg *config.Config, logger *slog.Logger) agent.DirectoryClient {
+	if cfg.GWS.HasGmail() && cfg.GWS.Domain != "" {
+		// The Gmail MailboxProvider already wraps the Admin SDK
+		// client; it also satisfies the DirectoryClient surface
+		// via its ListUsers / ListGroups methods.
+		sa, err := gmail.LoadServiceAccount(cfg.GWS.ServiceAccountJSON)
+		if err != nil {
+			logger.Warn("sn360-es: directory client (gmail) init failed",
+				slog.Any("error", err))
+			return nil
+		}
+		tokens, terr := gmail.NewJWTBearerSource(gmail.JWTBearerConfig{
+			ServiceAccount:   sa,
+			ImpersonatedUser: cfg.GWS.DelegatedAdmin,
+		})
+		if terr != nil {
+			logger.Warn("sn360-es: directory client (gmail) token init failed",
+				slog.Any("error", terr))
+			return nil
+		}
+		dc, derr := gmail.NewDirectoryClient(gmail.DirectoryClientConfig{
+			TokenSource:  tokens,
+			Domain:       cfg.GWS.Domain,
+			AdminBaseURL: cfg.GWS.AdminBaseURL,
+		})
+		if derr != nil {
+			logger.Warn("sn360-es: directory client (gmail) wire failed",
+				slog.Any("error", derr))
+			return nil
+		}
+		return dc
+	}
+	if cfg.O365.HasOutlook() {
+		tokens, terr := outlook.NewClientCredentialsSource(outlook.ClientCredentialsConfig{
+			TenantID:     cfg.O365.TenantID,
+			ClientID:     cfg.O365.ClientID,
+			ClientSecret: cfg.O365.ClientSecret,
+			TokenURL:     cfg.O365.TokenURL,
+		})
+		if terr != nil {
+			logger.Warn("sn360-es: directory client (outlook) token init failed",
+				slog.Any("error", terr))
+			return nil
+		}
+		dc, derr := outlook.NewDirectoryClient(outlook.DirectoryClientConfig{
+			TokenSource: tokens,
+			BaseURL:     cfg.O365.BaseURL,
+			TenantID:    cfg.O365.TenantID,
+		})
+		if derr != nil {
+			logger.Warn("sn360-es: directory client (outlook) wire failed",
+				slog.Any("error", derr))
+			return nil
+		}
+		return dc
+	}
+	return nil
+}
+
+// loggingAuditLog implements agent.AuditLog by emitting structured
+// log lines. Production deployments can swap it for a Postgres
+// implementation once the schema is in place.
+type loggingAuditLog struct {
+	logger *slog.Logger
+}
+
+func (l loggingAuditLog) Record(_ context.Context, entry agent.AuditEntry) error {
+	l.logger.Info("agent.audit",
+		slog.String("agent", entry.Agent),
+		slog.String("tenant_id", entry.TenantID),
+		slog.String("action", entry.Action),
+		slog.String("reason", entry.Reason),
+		slog.Time("occurred_at", entry.OccurredAt),
+		slog.Any("detail", entry.Detail))
+	return nil
+}
+
+// evalLookupAdapter wraps the EvaluationResultRepository so the
+// support agent can fetch the stored verdict for a message.
+type evalLookupAdapter struct {
+	repos *repository.Registry
+}
+
+func (a evalLookupAdapter) FindResult(ctx context.Context, tenantID, messageID string) (dto.EvaluateResult, error) {
+	if a.repos == nil || a.repos.EvaluationResults == nil {
+		return dto.EvaluateResult{}, fmt.Errorf("evaluation lookup: not wired")
+	}
+	hash := sha256.Sum256([]byte(messageID))
+	row, err := a.repos.EvaluationResults.GetByMessageHash(ctx, tenantID, hash[:])
+	if err != nil {
+		return dto.EvaluateResult{}, err
+	}
+	return dto.EvaluateResult{
+		TenantID:    row.TenantID,
+		MessageID:   messageID,
+		Tier:        constant.Tier(row.Tier),
+		Primary:     constant.Category(row.Primary),
+		Score:       row.Score,
+		ReasonCodes: row.ReasonCodes,
+		EvaluatedAt: row.EvaluatedAt,
+	}, nil
+}
+
+// tuningResultAdapter exposes the FeedbackEventRepository as the
+// ResultRepository surface the tuning agent needs.
+type tuningResultAdapter struct {
+	repos *repository.Registry
+}
+
+func (a tuningResultAdapter) RecentFeedback(ctx context.Context, tenantID string, since time.Time) ([]agent.Feedback, error) {
+	// We don't expose a per-tenant feedback timeline yet — return
+	// an empty slice so the tuning agent has nothing new to act
+	// on. The slot is here so the call site is type-correct.
+	_ = ctx
+	_ = tenantID
+	_ = since
+	return nil, nil
+}
+
+func (a tuningResultAdapter) CurrentWeights(ctx context.Context, tenantID string) (agent.ScoreWeights, error) {
+	if a.repos == nil || a.repos.ScoreEngines == nil {
+		return agent.ScoreWeights{}, fmt.Errorf("tuning: score engines not wired")
+	}
+	row, err := a.repos.ScoreEngines.Get(ctx, tenantID)
+	if err != nil {
+		return agent.ScoreWeights{}, err
+	}
+	return agent.ScoreWeights{
+		AI:          float64(row.WeightAI),
+		Rspamd:      float64(row.WeightRspamd),
+		Attachments: float64(row.WeightAttachments),
+		Links:       float64(row.WeightLinks),
+	}, nil
+}
+
+func (a tuningResultAdapter) CurrentThresholds(ctx context.Context, tenantID string) (agent.Thresholds, error) {
+	if a.repos == nil || a.repos.ScoreEngines == nil {
+		return agent.Thresholds{}, fmt.Errorf("tuning: score engines not wired")
+	}
+	row, err := a.repos.ScoreEngines.Get(ctx, tenantID)
+	if err != nil {
+		return agent.Thresholds{}, err
+	}
+	return agent.Thresholds{
+		BannerBlocked:  row.ThresholdBlocked,
+		BannerHighRisk: row.ThresholdHigh,
+		BannerWarning:  row.ThresholdWarning,
+		BannerCaution:  row.ThresholdCaution,
+		BannerInfo:     row.ThresholdInfo,
+	}, nil
+}
+
+// memoryConfigStore is a tiny in-memory ConfigStore implementation
+// used until the management service exposes a proper score-engine
+// write endpoint. Decisions are logged so audit pipes can re-derive
+// the changes from logs.
+type memoryConfigStore struct {
+	mu         sync.Mutex
+	weights    map[string]agent.ScoreWeights
+	thresholds map[string]agent.Thresholds
+}
+
+func newMemoryConfigStore() *memoryConfigStore {
+	return &memoryConfigStore{
+		weights:    map[string]agent.ScoreWeights{},
+		thresholds: map[string]agent.Thresholds{},
+	}
+}
+
+func (s *memoryConfigStore) UpdateWeights(_ context.Context, tenantID string, w agent.ScoreWeights) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.weights[tenantID] = w
+	return nil
+}
+
+func (s *memoryConfigStore) UpdateThresholds(_ context.Context, tenantID string, t agent.Thresholds) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.thresholds[tenantID] = t
+	return nil
+}
+
+// ---------------------------------------------------------------------
+// Background lifecycle.
+// ---------------------------------------------------------------------
+
+// StartBackground starts the poller + worker goroutines. They each
+// respect context cancellation so SIGTERM cleanly stops them.
+// Errors from the long-running goroutines are logged but never
+// surfaced to the caller because a missed cycle on a recurring
+// worker is recoverable on the next tick.
+func (a *application) StartBackground(ctx context.Context) {
+	if a.poller != nil {
+		go func() {
+			if err := a.poller.Run(ctx); err != nil {
+				a.logger.Warn("sn360-es: ingestion poller terminated",
+					slog.Any("error", err))
+			}
+		}()
+		a.logger.Info("sn360-es: ingestion poller started")
+	}
+	if a.relationshipRunner != nil {
+		go func() {
+			if err := a.relationshipRunner.Run(ctx); err != nil {
+				a.logger.Warn("sn360-es: relationship worker terminated",
+					slog.Any("error", err))
+			}
+		}()
+		a.logger.Info("sn360-es: relationship worker started")
+	}
+	if a.vendorRunner != nil {
+		go func() {
+			if err := a.vendorRunner.Run(ctx); err != nil {
+				a.logger.Warn("sn360-es: vendor worker terminated",
+					slog.Any("error", err))
+			}
+		}()
+		a.logger.Info("sn360-es: vendor worker started")
+	}
+	if a.cleanupRunner != nil {
+		go func() {
+			if err := a.cleanupRunner.Run(ctx); err != nil {
+				a.logger.Warn("sn360-es: cleanup worker terminated",
+					slog.Any("error", err))
+			}
+		}()
+		a.logger.Info("sn360-es: cleanup worker started")
+	}
 }

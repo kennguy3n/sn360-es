@@ -88,6 +88,18 @@ type DistributedLock interface {
 // poller calls Acquire / Release exactly once per fetch.
 type LockFactory func(key string) DistributedLock
 
+// NoopLock is a DistributedLock that always succeeds. It is returned
+// by the LockFactory when the underlying Redis client is unavailable
+// — the poller still runs (best-effort, no cross-replica
+// coordination) instead of being blocked.
+type NoopLock struct{}
+
+// Acquire always succeeds.
+func (NoopLock) Acquire(context.Context) (bool, error) { return true, nil }
+
+// Release is a no-op.
+func (NoopLock) Release(context.Context) error { return nil }
+
 // Normalizer turns a RawEmail into a dto.EvaluateRequest ready for
 // the evaluator. The default implementation lives in normalizer.go.
 type Normalizer interface {

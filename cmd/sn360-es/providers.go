@@ -149,6 +149,22 @@ func (r *providerRegistry) hasAny() bool {
 	return len(r.entries) > 0
 }
 
+// lookup returns the entry registered for the given tenant. Prefers
+// Gmail when both kinds are registered (mirrors resolveKind). Returns
+// nil when no entry matches — callers should treat this as a
+// best-effort skip.
+func (r *providerRegistry) lookup(tenant string) *providerEntry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if e, ok := r.entries[providerKey{tenant: tenant, kind: action.LabelProviderGmail}]; ok {
+		return e
+	}
+	if e, ok := r.entries[providerKey{tenant: tenant, kind: action.LabelProviderOutlook}]; ok {
+		return e
+	}
+	return nil
+}
+
 // snapshot returns a copy of the registry contents for observability.
 // Keys are flattened into "tenant:kind" strings so the result is
 // trivially loggable.
