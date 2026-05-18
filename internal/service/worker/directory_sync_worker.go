@@ -93,14 +93,15 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 		return fmt.Errorf("list groups: %w", err)
 	}
 
-	// Fetch existing users for diff.
+	// Fetch existing users for diff. Key by hex-encoded email hash
+	// because that is the stable UPSERT conflict key (not the generated ID).
 	existingUsers, err := j.cfg.Users.List(ctx, tenantID, 0)
 	if err != nil {
 		return fmt.Errorf("list existing users: %w", err)
 	}
-	existingMap := make(map[string]repository.User, len(existingUsers))
+	existingByHash := make(map[string]repository.User, len(existingUsers))
 	for _, u := range existingUsers {
-		existingMap[u.ID] = u
+		existingByHash[fmt.Sprintf("%x", u.EmailHash)] = u
 	}
 
 	// Classify sensitivity for all discovered users if classifier available.
@@ -148,7 +149,7 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 			emailHash, err = j.cfg.Hasher(tenantID, u.Email)
 			if err != nil {
 				j.cfg.Logger.Warn("directory sync: hash failed",
-					slog.String("email", u.Email),
+					slog.String("user_id", u.ID),
 					slog.String("err", err.Error()))
 				continue
 			}
@@ -171,8 +172,9 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 				slog.String("err", err.Error()))
 		}
 
-		// Emit event for new users.
-		if _, exists := existingMap[repoUser.ID]; !exists && j.cfg.Events != nil {
+		// Emit event for new users (compare by email hash — the stable conflict key).
+		hashHex := fmt.Sprintf("%x", emailHash)
+		if _, exists := existingByHash[hashHex]; !exists && j.cfg.Events != nil {
 			evt := map[string]any{
 				"tenant_id":   tenantID,
 				"user_id":     repoUser.ID,

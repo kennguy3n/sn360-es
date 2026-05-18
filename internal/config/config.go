@@ -565,18 +565,18 @@ func Load() (Config, error) {
 			LockTTL:         getDuration("INGESTION_LOCK_TTL", 45*time.Second),
 			InitialBackfill: getDuration("INGESTION_INITIAL_BACKFILL", time.Hour),
 		},
-			Worker: Worker{
-				RelationshipInterval:    getDuration("WORKER_RELATIONSHIP_INTERVAL", 4*time.Hour),
-				VendorDiscoveryInterval: getDuration("WORKER_VENDOR_DISCOVERY_INTERVAL", 7*24*time.Hour),
-				CleanupInterval:         getDuration("WORKER_CLEANUP_INTERVAL", 24*time.Hour),
-				RetentionDays:           getInt("WORKER_RETENTION_DAYS", 90),
-				LockTTL:                 getDuration("WORKER_LOCK_TTL", 5*time.Minute),
-				DirectorySyncInterval:   getDuration("WORKER_DIRECTORY_SYNC_INTERVAL", 6*time.Hour),
-			},
-			Onboarding: Onboarding{
-				StateSecret: getStr("ONBOARDING_STATE_SECRET", ""),
-				CallbackURL: getStr("ONBOARDING_CALLBACK_URL", ""),
-			},
+		Worker: Worker{
+			RelationshipInterval:    getDuration("WORKER_RELATIONSHIP_INTERVAL", 4*time.Hour),
+			VendorDiscoveryInterval: getDuration("WORKER_VENDOR_DISCOVERY_INTERVAL", 7*24*time.Hour),
+			CleanupInterval:         getDuration("WORKER_CLEANUP_INTERVAL", 24*time.Hour),
+			RetentionDays:           getInt("WORKER_RETENTION_DAYS", 90),
+			LockTTL:                 getDuration("WORKER_LOCK_TTL", 5*time.Minute),
+			DirectorySyncInterval:   getDuration("WORKER_DIRECTORY_SYNC_INTERVAL", 6*time.Hour),
+		},
+		Onboarding: Onboarding{
+			StateSecret: getStr("ONBOARDING_STATE_SECRET", ""),
+			CallbackURL: getStr("ONBOARDING_CALLBACK_URL", ""),
+		},
 	}
 
 	if err := cfg.validate(); err != nil {

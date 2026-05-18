@@ -80,6 +80,9 @@ type graphDirectoryUser struct {
 		ID          string `json:"id"`
 		DisplayName string `json:"displayName"`
 	} `json:"memberOf,omitempty"`
+	Manager *struct {
+		ID string `json:"id"`
+	} `json:"manager,omitempty"`
 	ProxyAddresses []string `json:"proxyAddresses"`
 }
 
@@ -88,10 +91,6 @@ type graphDirectoryUserList struct {
 	NextLink string               `json:"@odata.nextLink,omitempty"`
 }
 
-// graphManager is the subset of the Graph manager response.
-type graphManager struct {
-	ID string `json:"id"`
-}
 
 // graphGroup is the subset of the Graph group object.
 type graphGroup struct {
@@ -112,9 +111,9 @@ type graphGroupList struct {
 func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]agent.DiscoveredUser, error) {
 	_ = tenantID
 	endpoint := c.baseURL + "/users?" + url.Values{
-		"$select":  []string{"id,displayName,userPrincipalName,mail,department,jobTitle,accountEnabled,userType,proxyAddresses"},
-		"$expand":  []string{"memberOf($select=id,displayName,@odata.type)"},
-		"$top":     []string{"200"},
+		"$select": []string{"id,displayName,userPrincipalName,mail,department,jobTitle,accountEnabled,userType,proxyAddresses"},
+		"$expand": []string{"memberOf($select=id,displayName,@odata.type),manager($select=id)"},
+		"$top":    []string{"200"},
 	}.Encode()
 	var out []agent.DiscoveredUser
 	for endpoint != "" {
@@ -166,8 +165,11 @@ func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]age
 				}
 			}
 
-			// Resolve ManagerID via separate call.
-			managerID := c.fetchManagerID(ctx, u.ID)
+			// ManagerID resolved via $expand=manager in the initial query.
+			var managerID string
+			if u.Manager != nil {
+				managerID = u.Manager.ID
+			}
 
 			out = append(out, agent.DiscoveredUser{
 				ID:              u.ID,
@@ -188,16 +190,6 @@ func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]age
 	return out, nil
 }
 
-// fetchManagerID resolves the manager for a user. Returns empty string
-// on any error (non-critical for directory enumeration).
-func (c *DirectoryClient) fetchManagerID(ctx context.Context, userID string) string {
-	endpoint := fmt.Sprintf("%s/users/%s/manager?$select=id", c.baseURL, url.PathEscape(userID))
-	var mgr graphManager
-	if err := c.do(ctx, http.MethodGet, endpoint, &mgr); err != nil {
-		return ""
-	}
-	return mgr.ID
-}
 
 // ListGroups enumerates the directory groups.
 func (c *DirectoryClient) ListGroups(ctx context.Context, tenantID string) ([]agent.DiscoveredGroup, error) {

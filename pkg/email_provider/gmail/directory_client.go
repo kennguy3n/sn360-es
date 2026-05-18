@@ -168,7 +168,11 @@ func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]age
 	}
 
 	// Step 3: Enumerate groups and build user→groupIDs mapping.
-	groups, _ := c.ListGroups(ctx, tenantID)
+	groups, grpErr := c.ListGroups(ctx, tenantID)
+	if grpErr != nil {
+		// Non-fatal: proceed without group enrichment.
+		groups = nil
+	}
 	userGroupIDs := make(map[string][]string) // email → []groupID
 	for _, g := range groups {
 		members, err := c.ListGroupMembers(ctx, g.ID)

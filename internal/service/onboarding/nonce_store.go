@@ -3,6 +3,7 @@ package onboarding
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -49,8 +50,10 @@ func (s *RedisNonceStore) MarkUsed(ctx context.Context, nonce string, ttl time.D
 	return !set, nil
 }
 
-// InMemoryNonceStore is a test/fallback implementation.
+// InMemoryNonceStore is a test/fallback implementation. It is safe for
+// concurrent use.
 type InMemoryNonceStore struct {
+	mu   sync.Mutex
 	seen map[string]time.Time
 }
 
@@ -64,6 +67,8 @@ func (s *InMemoryNonceStore) MarkUsed(_ context.Context, nonce string, ttl time.
 	if nonce == "" {
 		return false, fmt.Errorf("onboarding: empty nonce")
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	now := time.Now()
 	if exp, ok := s.seen[nonce]; ok {
 		if now.Before(exp) {

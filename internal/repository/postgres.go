@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -779,13 +780,19 @@ func (p *pgGroupMemberships) DeleteByGroup(ctx context.Context, groupID string) 
 }
 
 func (p *pgGroupMemberships) ReplaceForGroup(ctx context.Context, groupID string, userIDs []string) error {
-	_, err := p.db.ExecContext(ctx, `DELETE FROM group_memberships WHERE group_id=$1`, groupID)
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("replace group memberships: begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	_, err = tx.ExecContext(ctx, `DELETE FROM group_memberships WHERE group_id=$1`, groupID)
 	if err != nil {
 		return err
 	}
 	now := time.Now().UTC()
 	for _, uid := range userIDs {
-		_, err = p.db.ExecContext(ctx, `
+		_, err = tx.ExecContext(ctx, `
 INSERT INTO group_memberships (group_id, user_id, created_at)
 VALUES ($1,$2,$3)
 ON CONFLICT (group_id, user_id) DO NOTHING`, groupID, uid, now)
@@ -793,7 +800,7 @@ ON CONFLICT (group_id, user_id) DO NOTHING`, groupID, uid, now)
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // --- helpers ------------------------------------------------------------

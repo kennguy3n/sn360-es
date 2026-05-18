@@ -49,11 +49,11 @@ type EncoderSensitivityClassifier struct {
 
 // NewEncoderSensitivityClassifier constructs an encoder classifier.
 func NewEncoderSensitivityClassifier(url string, client *http.Client, timeout time.Duration, logger *slog.Logger) *EncoderSensitivityClassifier {
-	if client == nil {
-		client = &http.Client{Timeout: timeout}
-	}
 	if timeout == 0 {
 		timeout = 5 * time.Second
+	}
+	if client == nil {
+		client = &http.Client{Timeout: timeout}
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -132,11 +132,11 @@ type BonsaiSensitivityClassifier struct {
 
 // NewBonsaiSensitivityClassifier constructs a Bonsai classifier.
 func NewBonsaiSensitivityClassifier(url string, client *http.Client, timeout time.Duration, logger *slog.Logger) *BonsaiSensitivityClassifier {
-	if client == nil {
-		client = &http.Client{Timeout: timeout}
-	}
 	if timeout == 0 {
 		timeout = 30 * time.Second
+	}
+	if client == nil {
+		client = &http.Client{Timeout: timeout}
 	}
 	if logger == nil {
 		logger = slog.Default()
