@@ -13,8 +13,9 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/action"
 )
 
-// Ensure GmailBodyRewriter satisfies the interface at compile time.
+// Ensure GmailBodyRewriter satisfies the interfaces at compile time.
 var _ action.BodyRewriter = (*BodyRewriter)(nil)
+var _ action.BodyRewriterCacheCleaner = (*BodyRewriter)(nil)
 
 // BodyRewriter implements action.BodyRewriter for Gmail using the
 // shadow-copy approach: fetch the raw RFC-2822, extract the HTML

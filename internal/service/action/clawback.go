@@ -127,6 +127,12 @@ func (s *ClawbackService) HandleScoreUpgrade(ctx context.Context, req ScoreUpgra
 	if err != nil {
 		return fmt.Errorf("clawback: recipients lookup: %w", err)
 	}
+	if len(recipients) == 0 {
+		s.log.DebugContext(ctx, "clawback: no recipients found, nothing to do",
+			slog.String("tenant_id", req.TenantID),
+			slog.String("message_id", req.PseudonymizedMessage))
+		return nil
+	}
 
 	quarantined := 0
 	var lastErr error

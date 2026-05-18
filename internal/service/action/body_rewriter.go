@@ -23,6 +23,17 @@ type BodyRewriter interface {
 	WriteBody(ctx context.Context, email, messageID, htmlBody string) error
 }
 
+// BodyRewriterCacheCleaner is an optional interface that BodyRewriter
+// implementations can satisfy to release cached state when WriteBody
+// will not be called (e.g., empty body, zero rewritable URLs). The
+// Gmail shadow-copy implementation caches raw RFC-2822 bytes between
+// FetchBody and WriteBody; this interface lets URLRewriteService
+// release that memory on early-return paths without leaking
+// provider-specific details into the core interface.
+type BodyRewriterCacheCleaner interface {
+	EvictCache(email, messageID string)
+}
+
 // BodyRewriteRequest carries the inputs for a URL-rewrite operation
 // on a message body.
 type BodyRewriteRequest struct {
@@ -118,6 +129,7 @@ func (s *URLRewriteService) RewriteBody(ctx context.Context, bw BodyRewriter, re
 		return fmt.Errorf("url_rewrite_service: fetch body: %w", err)
 	}
 	if htmlBody == "" {
+		evictBodyRewriterCache(bw, req.Email, req.MessageID)
 		s.Logger.DebugContext(ctx, "url_rewrite_service: empty body, skipping",
 			slog.String("tenant_id", req.Tenant),
 			slog.String("provider", string(req.Provider)),
@@ -133,9 +145,11 @@ func (s *URLRewriteService) RewriteBody(ctx context.Context, bw BodyRewriter, re
 		HTMLBody:             htmlBody,
 	})
 	if err != nil {
+		evictBodyRewriterCache(bw, req.Email, req.MessageID)
 		return fmt.Errorf("url_rewrite_service: rewrite: %w", err)
 	}
 	if result.RewriteCount == 0 {
+		evictBodyRewriterCache(bw, req.Email, req.MessageID)
 		s.Logger.DebugContext(ctx, "url_rewrite_service: no URLs rewritten",
 			slog.String("message_id", req.MessageID))
 		return nil
@@ -150,6 +164,15 @@ func (s *URLRewriteService) RewriteBody(ctx context.Context, bw BodyRewriter, re
 		slog.String("message_id", req.MessageID),
 		slog.Int("urls_rewritten", result.RewriteCount))
 	return nil
+}
+
+// evictBodyRewriterCache releases cached state when WriteBody will not
+// be called. Only effective for BodyRewriter implementations that also
+// satisfy BodyRewriterCacheCleaner (e.g., Gmail's shadow-copy).
+func evictBodyRewriterCache(bw BodyRewriter, email, messageID string) {
+	if cc, ok := bw.(BodyRewriterCacheCleaner); ok {
+		cc.EvictCache(email, messageID)
+	}
 }
 
 func parseTier(s string) constant.Tier {
