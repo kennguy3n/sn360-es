@@ -3146,41 +3146,57 @@ func (a workerMetricsAdapter) ObserveCycle(name string, duration time.Duration, 
 }
 
 // prunableTables is the exhaustive allow-list of table names that
-// newPgPruner may interpolate into a DELETE statement. Because Go's
-// database/sql does not support parameterised table identifiers, the
-// table name is injected via fmt.Sprintf — restricting the set to a
-// compile-time constant prevents accidental SQL injection if a
-// caller ever passes unsanitised input.
-var prunableTables = map[string]struct{}{
-	"evaluation_results":      {},
-	"feedback_events":         {},
-	"communication_histories": {},
-	"quarantine_references":   {},
-	"education_lesson_events": {},
-	"simulation_send_events":  {},
+// newPgPruner may interpolate into a DELETE statement plus the
+// per-table "prune by this column" choice. Because Go's database/sql
+// does not support parameterised table or column identifiers, both
+// names are injected via fmt.Sprintf — restricting the table set AND
+// the column set to a compile-time map prevents accidental SQL
+// injection if a caller ever passes unsanitised input.
+//
+// The column choice matters: most append-only tables track a
+// `created_at` stamp, but the aggregation tables (e.g.
+// communication_histories) carry a `last_seen_at` instead. Pruning
+// communication_histories on `created_at` would fail with "column
+// does not exist" because the migration in
+// migrations/0001_init.up.sql:215-218 only declares
+// first_seen_at / last_seen_at / updated_at. Tying the column to the
+// table at registration time makes that class of bug impossible to
+// reproduce at runtime.
+var prunableTables = map[string]string{
+	"evaluation_results":      "created_at",
+	"feedback_events":         "created_at",
+	"communication_histories": "last_seen_at",
+	"quarantine_references":   "created_at",
+	"education_lesson_events": "created_at",
+	"simulation_send_events":  "created_at",
 }
 
 // newPgPruner returns a Postgres-backed pruner for the named table.
-// The implementation issues a parameterised DELETE on the
-// "created_at" column. Tables that use a different column override
-// this via newPgPrunerWithColumn (see cleanup_worker.go).
+// The DELETE statement uses the prune-column registered for the
+// table in prunableTables, so each table is pruned on its canonical
+// age column ("created_at" for append-only tables, "last_seen_at"
+// for aggregation tables like communication_histories).
 //
 // The table name MUST appear in prunableTables. A panic on
 // construction is intentional — it catches programming errors at
 // startup rather than silently ignoring a typo at the first
 // cleanup tick (which might be hours later).
 func newPgPruner(db *postgres.DB, table string, logger *slog.Logger) worker.Pruner {
-	if _, ok := prunableTables[table]; !ok {
+	column, ok := prunableTables[table]
+	if !ok {
 		panic(fmt.Sprintf("newPgPruner: table %q is not in the allow-list", table))
 	}
+	query := fmt.Sprintf("DELETE FROM %s WHERE %s < $1", table, column)
 	return worker.NewPruner(table, func(ctx context.Context, before time.Time) (int64, error) {
 		if db == nil {
 			return 0, nil
 		}
-		res, err := db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE created_at < $1", table), before)
+		res, err := db.ExecContext(ctx, query, before)
 		if err != nil {
 			logger.Warn("sn360-es: cleanup prune failed",
-				slog.String("table", table), slog.Any("error", err))
+				slog.String("table", table),
+				slog.String("column", column),
+				slog.Any("error", err))
 			return 0, err
 		}
 		n, rerr := res.RowsAffected()
