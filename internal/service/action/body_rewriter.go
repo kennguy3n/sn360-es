@@ -119,6 +119,8 @@ func (s *URLRewriteService) RewriteBody(ctx context.Context, bw BodyRewriter, re
 	}
 	if htmlBody == "" {
 		s.Logger.DebugContext(ctx, "url_rewrite_service: empty body, skipping",
+			slog.String("tenant_id", req.Tenant),
+			slog.String("provider", string(req.Provider)),
 			slog.String("message_id", req.MessageID))
 		return nil
 	}
@@ -143,6 +145,8 @@ func (s *URLRewriteService) RewriteBody(ctx context.Context, bw BodyRewriter, re
 		return fmt.Errorf("url_rewrite_service: write body: %w", err)
 	}
 	s.Logger.InfoContext(ctx, "url_rewrite_service: rewritten",
+		slog.String("tenant_id", req.Tenant),
+		slog.String("provider", string(req.Provider)),
 		slog.String("message_id", req.MessageID),
 		slog.Int("urls_rewritten", result.RewriteCount))
 	return nil

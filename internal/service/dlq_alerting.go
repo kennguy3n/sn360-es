@@ -94,6 +94,9 @@ func (s *DLQAlertService) RecordDLQ(ctx context.Context, tenantID string) {
 			windowEnd: now.Add(time.Hour),
 		}
 		s.counts[tenantID] = counter
+		// Periodically evict stale entries from both maps to prevent
+		// unbounded growth across many tenants over long runtimes.
+		s.evictStaleLocked(now)
 	} else {
 		counter.count++
 	}
@@ -121,6 +124,22 @@ func (s *DLQAlertService) RecordDLQ(ctx context.Context, tenantID string) {
 					slog.String("tenant", alert.TenantID))
 			}
 		}()
+	}
+}
+
+// evictStaleLocked removes expired counter windows and cooldown entries.
+// Must be called with s.mu held.
+func (s *DLQAlertService) evictStaleLocked(now time.Time) {
+	for tid, c := range s.counts {
+		if now.After(c.windowEnd) {
+			delete(s.counts, tid)
+		}
+	}
+	cooldownCutoff := now.Add(-s.cfg.AlertCooldown)
+	for tid, at := range s.lastAlert {
+		if at.Before(cooldownCutoff) {
+			delete(s.lastAlert, tid)
+		}
 	}
 }
 
