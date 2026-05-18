@@ -196,7 +196,16 @@ func (r *providerRegistry) snapshot() []string {
 // MailboxProvider will publish. Without that invariant the registry
 // could register an entry under "default" that no flow ever reaches.
 // See config.GWS.HasGmail for the supporting predicate.
-func buildProviderRegistry(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*providerRegistry, error) {
+//
+// Per-entry construction failures are recoverable: we log a warning
+// and leave that entry unregistered so the binary still boots with
+// the other provider (or empty registry → logging-only consumers).
+// The function therefore intentionally returns no error — there is
+// no aggregate failure mode that should fail the whole boot. An
+// earlier signature returned (reg, error) with a dead caller branch;
+// dropped to match the actual behaviour and avoid the misleading
+// "may fail" reading at the call site.
+func buildProviderRegistry(ctx context.Context, cfg *config.Config, logger *slog.Logger) *providerRegistry {
 	reg := newProviderRegistry(logger)
 
 	if cfg.GWS.HasGmail() {
@@ -228,7 +237,7 @@ func buildProviderRegistry(ctx context.Context, cfg *config.Config, logger *slog
 	if !reg.hasAny() {
 		logger.Info("sn360-es: no email providers configured; action consumers will run in degraded mode")
 	}
-	return reg, nil
+	return reg
 }
 
 // gmailProviderTenant returns the registry key for the Gmail entry.

@@ -741,13 +741,11 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	// configured the registry is non-nil but empty; the action
 	// consumers below skip when no provider is registered. We build
 	// the registry before the label applier and quarantine service
-	// so they can pick up its providers.
-	if reg, rerr := buildProviderRegistry(ctx, cfg, logger); rerr != nil {
-		logger.Warn("sn360-es: provider registry init failed; action consumers disabled",
-			slog.Any("error", rerr))
-	} else {
-		app.providers = reg
-	}
+	// so they can pick up its providers. Per-entry construction
+	// failures are recovered inside buildProviderRegistry (logged
+	// and skipped) so this call cannot return an error — see the
+	// docstring there for the rationale.
+	app.providers = buildProviderRegistry(ctx, cfg, logger)
 
 	// Label applier — picks up every LabelProvider in the registry
 	// and applies tier / category labels to messages. The applier

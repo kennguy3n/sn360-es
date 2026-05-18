@@ -249,11 +249,18 @@ type job struct {
 // pollMailbox runs the lock-fetch-publish-checkpoint flow for one
 // mailbox. Every step is logged and continued on failure so that one
 // failing mailbox does not poison the cycle.
+//
+// The bound logger uses `mailbox_fp` (a SHA-256 fingerprint of the
+// address) rather than the raw email — matching the privacy guarantee
+// the lock keys (lockKey, below) and the CheckpointStore already
+// enforce for at-rest data. The raw address is still required inside
+// the function (provider API calls, checkpoint lookups) but does not
+// reach structured logs.
 func (p *Poller) pollMailbox(ctx context.Context, j job) {
 	logger := p.cfg.Logger.With(
 		slog.String("provider", j.provider.Kind()),
 		slog.String("tenant_id", j.mailbox.TenantID),
-		slog.String("mailbox", j.mailbox.Address))
+		slog.String("mailbox_fp", mailboxFingerprint(j.mailbox.Address)))
 	// Acquire the per-mailbox lock so replicas do not double-poll.
 	var lock DistributedLock
 	if p.cfg.Locks != nil {
@@ -396,6 +403,28 @@ func (p *Poller) pollMailbox(ctx context.Context, j job) {
 // privacy guarantee that the CheckpointStore already provides for
 // poll checkpoints.
 func lockKey(provider string, m Mailbox) string {
-	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(m.Address))))
-	return "ingestion:lock:" + provider + ":" + m.TenantID + ":" + hex.EncodeToString(sum[:])
+	return "ingestion:lock:" + provider + ":" + m.TenantID + ":" + mailboxFingerprintFull(m.Address)
+}
+
+// mailboxFingerprint returns a short SHA-256 fingerprint of the
+// canonicalised mailbox address suitable for structured-log labels.
+// The same canonicalisation as lockKey (lower-cased + trimmed) is
+// applied so the log fingerprint and Redis lock key for one address
+// are trivially correlatable — crucial when debugging a single-mailbox
+// poll failure across two systems without ever materialising the raw
+// email in either. The first 16 hex chars (8 bytes / 64 bits of
+// entropy) are sufficient to disambiguate any realistic tenant's
+// mailbox set without bloating log lines; the full 64-char digest is
+// reserved for the at-rest lock key where collision resistance is the
+// load-bearing property.
+func mailboxFingerprint(address string) string {
+	return mailboxFingerprintFull(address)[:16]
+}
+
+// mailboxFingerprintFull is the full SHA-256 hex digest of the
+// canonicalised mailbox address. Used by lockKey where the full
+// 256-bit digest is desired for Redis lock-key collision resistance.
+func mailboxFingerprintFull(address string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(address))))
+	return hex.EncodeToString(sum[:])
 }
