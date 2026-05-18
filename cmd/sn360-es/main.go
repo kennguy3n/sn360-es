@@ -152,6 +152,14 @@ type application struct {
 	openSvc           *predict.OpenService
 	escalationSvc     *agent.EscalationService
 
+	// Provider-side action machinery. Populated from GWS / O365
+	// credentials in newApplication. When no credentials are
+	// configured the registry is non-nil but empty and the action
+	// consumers below degrade to logging fallbacks.
+	providers     *providerRegistry
+	labelApplier  *action.LabelApplier
+	quarantineSvc *action.QuarantineService
+
 	// Evaluation pipeline. Tier 0 is always wireable (pure CPU); the
 	// other clients are optional and stay nil when their endpoints are
 	// unconfigured or unreachable. The evaluator itself is constructed
@@ -673,6 +681,53 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		}
 	}
 
+	// Provider registry — looks up authenticated Gmail / Outlook
+	// clients per tenant. When neither GWS nor O365 credentials are
+	// configured the registry is non-nil but empty; the action
+	// consumers below skip when no provider is registered. We build
+	// the registry before the label applier and quarantine service
+	// so they can pick up its providers.
+	if reg, rerr := buildProviderRegistry(ctx, cfg, logger); rerr != nil {
+		logger.Warn("sn360-es: provider registry init failed; action consumers disabled",
+			slog.Any("error", rerr))
+	} else {
+		app.providers = reg
+	}
+
+	// Label applier — picks up every LabelProvider in the registry
+	// and applies tier / category labels to messages. The applier
+	// requires a label cache to remember provider-side label IDs
+	// across runs; we use Redis when available and an in-memory
+	// fallback otherwise so tests + dev still work.
+	if app.providers != nil && app.providers.hasAny() {
+		labelCache := newLabelCache(app.redis)
+		app.labelApplier = action.NewLabelApplier(logger, labelCache, app.providers.labelProviders()...)
+	}
+
+	// Provider-aware quarantine service. The HTTP release path
+	// builds its own QuarantineService without provider clients (so
+	// /v1/quarantine/release works in dev). Here we construct a
+	// second instance wired to real Gmail / Outlook quarantine
+	// providers so the es.action.quarantine consumer can actually
+	// move Blocked-tier messages out of the inbox. Only constructed
+	// when at least one provider is registered.
+	if qencryptor, eerr := buildURLEncryptor(cfg, logger); eerr == nil && app.providers != nil && app.providers.hasAny() {
+		qstore := newQuarantineStore(app.redis)
+		qsvc, qerr := action.NewQuarantineService(action.QuarantineConfig{
+			Logger:    logger,
+			Providers: app.providers.quarantineProviders(),
+			Store:     qstore,
+			Encryptor: qencryptor,
+			Publisher: eventBus,
+		})
+		if qerr == nil {
+			app.quarantineSvc = qsvc
+		} else {
+			logger.Warn("sn360-es: provider-aware quarantine service init failed",
+				slog.Any("error", qerr))
+		}
+	}
+
 	return app, nil
 }
 
@@ -801,6 +856,68 @@ func (a *application) StartConsumers(ctx context.Context) error {
 			a.logger.Error("sn360-es: subscribe evaluate.result (ingestion-action) failed",
 				slog.Any("error", err))
 			critErrs = append(critErrs, fmt.Errorf("ingestion-action: %w", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
+	// es.action.label → apply tier + category native labels via the
+	// provider-aware LabelApplier. Critical only when a label
+	// applier is wired; without one the consumer would no-op so we
+	// keep the subscription itself best-effort.
+	if a.labelApplier != nil {
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.label", a.handleActionLabel,
+			events.WithDurable("action-label"),
+			events.WithMaxDeliver(3))
+		if err != nil {
+			a.logger.Warn("sn360-es: subscribe action.label (action-label) failed",
+				slog.Any("error", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
+	// es.action.banner → inject pre-rendered banner HTML into the
+	// recipient's mailbox via Gmail's shadow-copy or Outlook's
+	// PATCH.
+	if a.providers != nil && a.providers.hasAny() {
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.banner", a.handleActionBanner,
+			events.WithDurable("action-banner"),
+			events.WithMaxDeliver(3))
+		if err != nil {
+			a.logger.Warn("sn360-es: subscribe action.banner (action-banner) failed",
+				slog.Any("error", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
+	// es.action.url_rewrite → log + observe for now. Full
+	// body-rewrite implementation is deferred until the provider
+	// body abstraction generalises across Gmail's shadow-copy and
+	// Outlook's PATCH paths (see handleActionURLRewrite docstring).
+	if a.urlRewriter != nil {
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.url_rewrite", a.handleActionURLRewrite,
+			events.WithDurable("action-url-rewrite"),
+			events.WithMaxDeliver(3))
+		if err != nil {
+			a.logger.Warn("sn360-es: subscribe action.url_rewrite (action-url-rewrite) failed",
+				slog.Any("error", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
+	// es.action.quarantine → move Blocked-tier messages into the
+	// hidden quarantine label / folder via the provider-aware
+	// QuarantineService.
+	if a.quarantineSvc != nil {
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.quarantine", a.handleActionQuarantine,
+			events.WithDurable("action-quarantine"),
+			events.WithMaxDeliver(3))
+		if err != nil {
+			a.logger.Warn("sn360-es: subscribe action.quarantine (action-quarantine) failed",
+				slog.Any("error", err))
 		} else {
 			a.trackSub(sub)
 		}
@@ -1110,6 +1227,14 @@ func (a *application) handleEvaluateRequest(ctx context.Context, msg events.Mess
 	if result.EvaluatedAt.IsZero() {
 		result.EvaluatedAt = time.Now().UTC()
 	}
+	if result.Recipient == "" {
+		// Propagate the request recipient so the downstream action
+		// consumers can address the mailbox without re-fetching the
+		// original request. The evaluator does not need it, but the
+		// action layer does — and the result is the only payload that
+		// flows out on `es.evaluate.result`.
+		result.Recipient = req.Recipient
+	}
 	payload, err := json.Marshal(result)
 	if err != nil {
 		a.logger.WarnContext(ctx, "sn360-es: evaluate.result marshal failed",
@@ -1130,6 +1255,227 @@ func (a *application) handleEvaluateRequest(ctx context.Context, msg events.Mess
 	); err != nil {
 		return fmt.Errorf("publish evaluate.result: %w", err)
 	}
+	return nil
+}
+
+// actionLabelEnvelope is the wire format published by
+// handleIngestionAction on `es.action.label`. The fields are kept
+// in sync with the map[string]any literal that publishes the
+// signal so any future addition there must be reflected here.
+type actionLabelEnvelope struct {
+	TenantID      string            `json:"tenant_id"`
+	MessageID     string            `json:"message_id"`
+	CorrelationID string            `json:"correlation_id"`
+	Tier          constant.Tier     `json:"tier"`
+	Primary       constant.Category `json:"primary"`
+	Email         string            `json:"email"`
+}
+
+// actionBannerEnvelope is the wire format published by
+// handleIngestionAction on `es.action.banner`. HTML is the
+// pre-rendered banner ready to be spliced into the body.
+type actionBannerEnvelope struct {
+	TenantID      string        `json:"tenant_id"`
+	MessageID     string        `json:"message_id"`
+	CorrelationID string        `json:"correlation_id"`
+	Tier          constant.Tier `json:"tier"`
+	HTML          string        `json:"html"`
+	Email         string        `json:"email"`
+}
+
+// actionURLRewriteEnvelope is the wire format published by
+// handleIngestionAction on `es.action.url_rewrite`. The consumer
+// owns the per-URL fan-out.
+type actionURLRewriteEnvelope struct {
+	TenantID      string        `json:"tenant_id"`
+	MessageID     string        `json:"message_id"`
+	CorrelationID string        `json:"correlation_id"`
+	Tier          constant.Tier `json:"tier"`
+	Email         string        `json:"email"`
+}
+
+// actionQuarantineEnvelope is the wire format published by
+// handleIngestionAction on `es.action.quarantine`. Carries the
+// score and primary category so the consumer can persist them
+// alongside the encrypted reference.
+type actionQuarantineEnvelope struct {
+	TenantID      string            `json:"tenant_id"`
+	MessageID     string            `json:"message_id"`
+	CorrelationID string            `json:"correlation_id"`
+	Tier          constant.Tier     `json:"tier"`
+	Primary       constant.Category `json:"primary"`
+	Score         int               `json:"score"`
+	Email         string            `json:"email"`
+}
+
+// handleActionLabel applies the tier (and optional category) native
+// label via the provider-aware LabelApplier. Best-effort: a missing
+// provider or label-applier means we log and skip; the message is
+// not re-delivered.
+func (a *application) handleActionLabel(ctx context.Context, msg events.Message) error {
+	if a.labelApplier == nil || a.providers == nil {
+		return nil
+	}
+	var env actionLabelEnvelope
+	if err := json.Unmarshal(msg.Data(), &env); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: action.label unmarshal failed",
+			slog.Any("error", err))
+		return nil
+	}
+	if env.TenantID == "" || env.MessageID == "" || env.Email == "" {
+		a.logger.DebugContext(ctx, "sn360-es: action.label missing identifiers",
+			slog.String("tenant_id", env.TenantID),
+			slog.String("message_id", env.MessageID),
+			slog.Bool("has_email", env.Email != ""))
+		return nil
+	}
+	kind := a.providers.resolveKind(env.TenantID)
+	if kind == "" {
+		a.logger.DebugContext(ctx, "sn360-es: action.label: no provider registered",
+			slog.String("tenant_id", env.TenantID))
+		return nil
+	}
+	res, err := a.labelApplier.Apply(ctx, action.LabelApplyRequest{
+		Tenant:          env.TenantID,
+		Provider:        kind,
+		Email:           env.Email,
+		MessageID:       env.MessageID,
+		NewTier:         env.Tier,
+		PrimaryCategory: env.Primary,
+	})
+	if err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: action.label: applier failed",
+			slog.String("tenant_id", env.TenantID),
+			slog.String("provider", string(kind)),
+			slog.Any("error", err))
+		return nil
+	}
+	a.logger.DebugContext(ctx, "sn360-es: action.label applied",
+		slog.String("tenant_id", env.TenantID),
+		slog.String("provider", string(kind)),
+		slog.String("tier", string(env.Tier)),
+		slog.Bool("category_applied", res.SubCategoryID != ""))
+	return nil
+}
+
+// handleActionBanner splices the pre-rendered banner HTML into the
+// recipient's mailbox via the provider-specific injector (Gmail's
+// shadow-copy, Outlook's PATCH).
+func (a *application) handleActionBanner(ctx context.Context, msg events.Message) error {
+	if a.providers == nil {
+		return nil
+	}
+	var env actionBannerEnvelope
+	if err := json.Unmarshal(msg.Data(), &env); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: action.banner unmarshal failed",
+			slog.Any("error", err))
+		return nil
+	}
+	if env.TenantID == "" || env.MessageID == "" || env.HTML == "" || env.Email == "" {
+		return nil
+	}
+	kind := a.providers.resolveKind(env.TenantID)
+	if kind == "" {
+		return nil
+	}
+	inj := a.providers.bannerInjectorFor(env.TenantID, kind)
+	if inj == nil {
+		return nil
+	}
+	if err := inj.InjectBanner(ctx, action.BannerInjectRequest{
+		Tenant:    env.TenantID,
+		Provider:  kind,
+		Email:     env.Email,
+		MessageID: env.MessageID,
+		HTML:      []byte(env.HTML),
+	}); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: action.banner: inject failed",
+			slog.String("tenant_id", env.TenantID),
+			slog.String("provider", string(kind)),
+			slog.Any("error", err))
+		return nil
+	}
+	a.logger.DebugContext(ctx, "sn360-es: action.banner injected",
+		slog.String("tenant_id", env.TenantID),
+		slog.String("provider", string(kind)),
+		slog.Int("html_bytes", len(env.HTML)))
+	return nil
+}
+
+// handleActionURLRewrite acknowledges the rewrite signal. Real URL
+// rewriting requires reading the message body, walking the HTML
+// tokens, and writing back via the provider's body API — work that
+// is owned by the BannerInjector's body splice path. Today we log
+// the signal so the operator can correlate it against the verdict;
+// the full body-rewrite implementation lands in a follow-up task
+// once the provider body abstraction is generalised across Gmail's
+// shadow-copy and Outlook's PATCH paths.
+func (a *application) handleActionURLRewrite(ctx context.Context, msg events.Message) error {
+	if a.urlRewriter == nil {
+		return nil
+	}
+	var env actionURLRewriteEnvelope
+	if err := json.Unmarshal(msg.Data(), &env); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: action.url_rewrite unmarshal failed",
+			slog.Any("error", err))
+		return nil
+	}
+	if env.TenantID == "" || env.MessageID == "" {
+		return nil
+	}
+	a.logger.DebugContext(ctx, "sn360-es: action.url_rewrite observed",
+		slog.String("tenant_id", env.TenantID),
+		slog.String("tier", string(env.Tier)))
+	return nil
+}
+
+// handleActionQuarantine moves a Blocked-tier message into the
+// hidden quarantine label and persists an encrypted reference. The
+// caller's signal must include the recipient email so the provider
+// can address the mailbox; everything else is sourced from the
+// signal payload.
+func (a *application) handleActionQuarantine(ctx context.Context, msg events.Message) error {
+	if a.quarantineSvc == nil || a.providers == nil {
+		return nil
+	}
+	var env actionQuarantineEnvelope
+	if err := json.Unmarshal(msg.Data(), &env); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: action.quarantine unmarshal failed",
+			slog.Any("error", err))
+		return nil
+	}
+	if env.TenantID == "" || env.MessageID == "" || env.Email == "" {
+		return nil
+	}
+	if env.Tier != constant.TierBlocked {
+		// Skip non-Blocked signals — the publisher guards against
+		// this but a defensive check here keeps replays safe.
+		return nil
+	}
+	kind := a.providers.resolveKind(env.TenantID)
+	if kind == "" {
+		return nil
+	}
+	if _, err := a.quarantineSvc.Quarantine(ctx, action.QuarantineRequest{
+		Tenant:               env.TenantID,
+		PseudonymizedMessage: env.MessageID,
+		Provider:             kind,
+		Email:                env.Email,
+		MessageID:            env.MessageID,
+		Tier:                 env.Tier,
+		Primary:              env.Primary,
+	}); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: action.quarantine: quarantine failed",
+			slog.String("tenant_id", env.TenantID),
+			slog.String("provider", string(kind)),
+			slog.Any("error", err))
+		return nil
+	}
+	a.logger.InfoContext(ctx, "sn360-es: action.quarantine applied",
+		slog.String("tenant_id", env.TenantID),
+		slog.String("provider", string(kind)),
+		slog.String("primary", string(env.Primary)),
+		slog.Int("score", env.Score))
 	return nil
 }
 
@@ -1228,6 +1574,7 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 				"correlation_id": res.CorrelationID,
 				"tier":           res.Tier,
 				"html":           string(html),
+				"email":          res.Recipient,
 			}
 			if blob, merr := json.Marshal(bannerEvt); merr == nil {
 				if perr := a.eventBus.Publish(ctx, "es.action.banner", blob,
@@ -1254,6 +1601,7 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 			"message_id":     res.MessageID,
 			"correlation_id": res.CorrelationID,
 			"tier":           res.Tier,
+			"email":          res.Recipient,
 		}
 		if blob, merr := json.Marshal(signal); merr == nil {
 			if perr := a.eventBus.Publish(ctx, "es.action.url_rewrite", blob,
@@ -1280,6 +1628,7 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 			"tier":           res.Tier,
 			"primary":        res.Primary,
 			"score":          res.Score,
+			"email":          res.Recipient,
 		}
 		if blob, merr := json.Marshal(signal); merr == nil {
 			if perr := a.eventBus.Publish(ctx, "es.action.quarantine", blob,
@@ -1304,6 +1653,7 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 			"correlation_id": res.CorrelationID,
 			"tier":           res.Tier,
 			"primary":        res.Primary,
+			"email":          res.Recipient,
 		}
 		if blob, merr := json.Marshal(signal); merr == nil {
 			if perr := a.eventBus.Publish(ctx, "es.action.label", blob,
@@ -1760,6 +2110,72 @@ func evaluateResultRow(res dto.EvaluateResult, msg events.Message) *repository.E
 		Degraded:      res.Degraded,
 		EvaluatedAt:   evaluatedAt,
 	}
+}
+
+// redisLabelCache adapts redis.Client to action.LabelCache.
+type redisLabelCache struct{ client *redis.Client }
+
+func (c redisLabelCache) Get(ctx context.Context, key string) (string, error) {
+	v, ok, err := c.client.Get(ctx, key)
+	if err != nil || !ok {
+		return "", err
+	}
+	return v, nil
+}
+
+func (c redisLabelCache) Set(ctx context.Context, key, value string, ttl time.Duration) error {
+	return c.client.Set(ctx, key, value, ttl)
+}
+
+// memoryLabelCache is the in-process fallback when Redis is not
+// configured. Goroutine-safe; respects the supplied TTL.
+type memoryLabelCache struct {
+	mu      sync.Mutex
+	entries map[string]memoryLabelEntry
+}
+
+type memoryLabelEntry struct {
+	value     string
+	expiresAt time.Time
+}
+
+func newMemoryLabelCache() *memoryLabelCache {
+	return &memoryLabelCache{entries: make(map[string]memoryLabelEntry)}
+}
+
+func (c *memoryLabelCache) Get(_ context.Context, key string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[key]
+	if !ok {
+		return "", nil
+	}
+	if !e.expiresAt.IsZero() && time.Now().After(e.expiresAt) {
+		delete(c.entries, key)
+		return "", nil
+	}
+	return e.value, nil
+}
+
+func (c *memoryLabelCache) Set(_ context.Context, key, value string, ttl time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	exp := time.Time{}
+	if ttl > 0 {
+		exp = time.Now().Add(ttl)
+	}
+	c.entries[key] = memoryLabelEntry{value: value, expiresAt: exp}
+	return nil
+}
+
+// newLabelCache picks the redis-backed adapter when redis is wired,
+// otherwise it falls back to the in-memory implementation. Both
+// satisfy action.LabelCache so the applier wiring is identical.
+func newLabelCache(r *redis.Client) action.LabelCache {
+	if r != nil {
+		return redisLabelCache{client: r}
+	}
+	return newMemoryLabelCache()
 }
 
 // redisURLStore adapts our redis.Client to the action.URLStore

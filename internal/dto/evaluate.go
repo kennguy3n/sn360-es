@@ -82,6 +82,14 @@ type EvaluateResult struct {
 	// distinguish "clean" from "degraded clean" verdicts.
 	Degraded         bool     `json:"degraded,omitempty"`
 	DegradedServices []string `json:"degraded_services,omitempty"`
+
+	// Recipient is the recipient mailbox address. It is propagated
+	// from the originating EvaluateRequest so the downstream
+	// action consumers (label, banner, url_rewrite, quarantine) can
+	// address the correct mailbox without re-fetching the request.
+	// Treated as routing metadata only — never logged in clear text;
+	// callers should still pseudonymise before persistence.
+	Recipient string `json:"recipient,omitempty"`
 }
 
 // Tier0Outcome captures the result of the Tier 0 classification gate.
