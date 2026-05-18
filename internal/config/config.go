@@ -627,7 +627,7 @@ func (c Config) validate() error {
 	// B3 + B4: Production-only security validations (UAT + prod).
 	if c.Environment.IsProduction() {
 		if c.AWS.KMSUseMock {
-			return errors.New("KMS_USE_MOCK=true is not allowed in production environments (UAT/prod); current: " + string(c.Environment) + ")")
+			return errors.New("KMS_USE_MOCK=true is not allowed in production environments (UAT/prod); current: " + string(c.Environment))
 		}
 		secret := c.Banner.TokenSecret
 		if secret != "" && (len(secret) < 32 || secret == "replace-me-with-a-strong-secret") {

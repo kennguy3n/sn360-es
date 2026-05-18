@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 
@@ -169,5 +170,6 @@ func (c *ExplanationCatalog) Locales() []string {
 	for k := range c.locales {
 		out = append(out, k)
 	}
+	sort.Strings(out)
 	return out
 }
