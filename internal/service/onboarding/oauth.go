@@ -309,7 +309,6 @@ func (s *Service) HandleCallback(ctx context.Context, stateTok, code string) (st
 	// Post-consent domain/tenant verification.
 	if s.validator != nil {
 		if valErr := s.validator.ValidateTenantAccess(ctx, tok, payload.TenantID, payload.Provider); valErr != nil {
-			_ = s.store.Delete(ctx, payload.TenantID, payload.Provider)
 			return "", "", fmt.Errorf("onboarding: tenant validation failed: %w", valErr)
 		}
 	}

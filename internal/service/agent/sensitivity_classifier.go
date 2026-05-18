@@ -389,6 +389,12 @@ func classifyCacheKey(u UserClassifyInput) string {
 	h.Write([]byte(u.Department))
 	h.Write([]byte("|"))
 	h.Write([]byte(u.DisplayName))
+	h.Write([]byte("|"))
+	h.Write([]byte(strings.Join(u.GroupNames, ",")))
+	h.Write([]byte("|"))
+	if u.IsAdmin {
+		h.Write([]byte("admin"))
+	}
 	return "sensitivity:classify:" + fmt.Sprintf("%x", h.Sum(nil))
 }
 
