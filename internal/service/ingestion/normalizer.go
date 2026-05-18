@@ -228,7 +228,7 @@ func stripHTML(body string) string {
 }
 
 var (
-	whitespaceRE = regexp.MustCompile(`[\s\u00A0]+`)
+	whitespaceRE = regexp.MustCompile(`[\s\x{00A0}]+`)
 	authPairRE   = regexp.MustCompile(`(?i)\b(spf|dkim|dmarc)=([a-z]+)`)
 	htmlTagRE    = regexp.MustCompile(`<[a-zA-Z!/][^>]*>`)
 )
