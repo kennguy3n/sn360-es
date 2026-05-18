@@ -63,8 +63,15 @@ func defaultFreeDomains() FreeDomainSet {
 
 // DefaultNormalizer is the production Normalizer used by the
 // Poller. It is safe for concurrent use.
+//
+// Note: there is intentionally no recipient-pseudonymisation option
+// on this type. Downstream action consumers (banner, label,
+// quarantine) use dto.EvaluateRequest.Recipient as the literal
+// mailbox address for provider API routing, and a hashed value
+// would silently break delivery. Anonymisation of mailbox
+// identifiers is the persistence layer's responsibility (see
+// CommunicationHistory.RecipientHash), not the normaliser's.
 type DefaultNormalizer struct {
-	pseudonymizer Pseudonymizer
 	freeDomains   FreeDomainSet
 	defaultLocale string
 }
@@ -72,14 +79,6 @@ type DefaultNormalizer struct {
 // NormalizerOption configures the default normalizer at
 // construction time.
 type NormalizerOption func(*DefaultNormalizer)
-
-// WithPseudonymizer injects a pseudonymizer used to anonymise the
-// recipient field before persistence. The plaintext sender stays
-// intact so detection logic can still match against the original
-// address.
-func WithPseudonymizer(p Pseudonymizer) NormalizerOption {
-	return func(n *DefaultNormalizer) { n.pseudonymizer = p }
-}
 
 // WithFreeDomains injects the free-domain set used for the
 // IsFreeDomain risk signal.
@@ -112,7 +111,9 @@ func NewDefaultNormalizer(opts ...NormalizerOption) *DefaultNormalizer {
 //   - SHA-256 RawBodyHash + NormalisedHash for cache keys
 //   - RiskSignals derived from the Authentication-Results, From,
 //     and Content-Type headers
-//   - Recipient pseudonymised when a pseudonymizer is wired
+//   - Sender + Recipient as literal email addresses (never hashed);
+//     downstream action consumers route provider API calls off the
+//     Recipient field, so it must remain the real mailbox.
 func (n *DefaultNormalizer) Normalize(_ context.Context, raw RawEmail) (dto.EvaluateRequest, error) {
 	if raw.ProviderMessageID == "" {
 		return dto.EvaluateRequest{}, fmt.Errorf("ingestion: raw email is missing provider_message_id")
@@ -138,11 +139,6 @@ func (n *DefaultNormalizer) Normalize(_ context.Context, raw RawEmail) (dto.Eval
 	recipient := raw.Mailbox
 	if recipient == "" && len(raw.Recipients) > 0 {
 		recipient = raw.Recipients[0]
-	}
-	if n.pseudonymizer != nil && recipient != "" {
-		// Pseudonymise only the recipient header. The detection
-		// logic still needs the raw sender for matching.
-		recipient = n.pseudonymizer.Pseudonymise(recipient)
 	}
 
 	locale := headerLookup(raw.Headers, "Content-Language")

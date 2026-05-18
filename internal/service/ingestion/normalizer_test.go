@@ -7,10 +7,6 @@ import (
 	"time"
 )
 
-type fakePseudo struct{ prefix string }
-
-func (f *fakePseudo) Pseudonymise(v string) string { return f.prefix + ":" + v }
-
 type fakeFreeSet struct{ in map[string]struct{} }
 
 func (f *fakeFreeSet) Contains(d string) bool {
@@ -30,7 +26,6 @@ func TestNormalize_RejectsMissingProviderMessageID(t *testing.T) {
 
 func TestNormalize_PopulatesEssentials(t *testing.T) {
 	n := NewDefaultNormalizer(
-		WithPseudonymizer(&fakePseudo{prefix: "px"}),
 		WithFreeDomains(&fakeFreeSet{in: map[string]struct{}{"gmail.com": {}}}),
 		WithDefaultLocale("en"),
 	)
@@ -66,8 +61,8 @@ func TestNormalize_PopulatesEssentials(t *testing.T) {
 	if req.RawBodyHash == "" || req.NormalisedHash == "" {
 		t.Error("hashes must be populated")
 	}
-	if req.Recipient != "px:user@corp.example" {
-		t.Errorf("recipient not pseudonymised: %q", req.Recipient)
+	if req.Recipient != "user@corp.example" {
+		t.Errorf("recipient must be the literal mailbox (never hashed): %q", req.Recipient)
 	}
 	if !req.Signals.IsExternal {
 		t.Errorf("expected external, got %+v", req.Signals)

@@ -106,8 +106,11 @@ type directoryGroupList struct {
 }
 
 // ListUsers enumerates the workspace users and returns them as
-// agent.DiscoveredUser. Suspended and archived users are filtered
-// out — the onboarding agent only seeds active mailboxes.
+// agent.DiscoveredUser. Suspended and archived users are *included*
+// in the result with the IsSuspended flag set so the onboarding
+// agent can record the full directory and decide which mailboxes to
+// seed itself (mailbox polling, by contrast, skips suspended users
+// at the MailboxProvider layer — see mailbox_provider.go).
 func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]agent.DiscoveredUser, error) {
 	_ = tenantID
 	var out []agent.DiscoveredUser

@@ -54,16 +54,36 @@ type RelationshipJobConfig struct {
 
 // RelationshipJob refreshes the per-(tenant, sender, recipient)
 // relationship counts that the ingestion pipeline relies on for
-// Tier-0 routing. It walks every tenant, loads the recent
-// CommunicationHistory rows, and re-upserts each one with refreshed
-// 7-day / 30-day counts so the downstream classifier always sees
-// up-to-date totals.
+// Tier-0 routing. It walks every tenant and, for every recent
+// CommunicationHistory row:
+//
+//   - Time-decays Count7d to zero when LastSeenAt has aged past the
+//     rolling 7-day window. The ingestion-time upsert is monotonic
+//     (it only ever increments), so without a periodic reset the
+//     counter inflates indefinitely; this worker is the reset
+//     authority. Count30d does not need a parallel decay step
+//     because rows older than the 30-day window are excluded by the
+//     ListByTenant `since` filter and therefore aren't loaded.
+//   - Re-classifies the Relationship label by feeding the (possibly
+//     decayed) counts and plaintext SenderDomain into
+//     relationship.Classifier. The Classifier subsumes the
+//     Partner / Customer / RecurringService / FirstTimeExternal /
+//     LapsedContact taxonomy and produces the same value the
+//     ingestion poller would compute for a fresh message.
+//   - Persists the refreshed row via Upserter, bumping UpdatedAt so
+//     downstream consumers can detect freshness.
+//
+// Rows missing the plaintext SenderDomain (legacy rows that
+// pre-date migration 0004) are still touched so UpdatedAt
+// advances, but skip reclassification — the Classifier rejects an
+// empty domain.
 type RelationshipJob struct {
 	cfg          RelationshipJobConfig
 	interval     time.Duration
 	window       time.Duration
 	maxPerTenant int
 	logger       *slog.Logger
+	classifier   *relationship.Classifier
 }
 
 // NewRelationshipJob constructs the job and applies defaults.
@@ -98,6 +118,7 @@ func NewRelationshipJob(cfg RelationshipJobConfig) (*RelationshipJob, error) {
 		window:       window,
 		maxPerTenant: maxPerTenant,
 		logger:       logger,
+		classifier:   relationship.NewClassifier(relationship.ClassifyConfig{}),
 	}, nil
 }
 
@@ -113,9 +134,13 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	since := time.Now().UTC().Add(-j.window)
+	now := time.Now().UTC()
+	since := now.Add(-j.window)
+	recentCutoff := now.Add(-7 * 24 * time.Hour)
 	var firstErr error
 	processed := 0
+	decayed7d := 0
+	reclassified := 0
 	for _, t := range tenants {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -131,7 +156,41 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 		}
 		for i := range rows {
 			h := rows[i]
-			h.UpdatedAt = time.Now().UTC()
+
+			// Decay Count7d to zero when LastSeenAt has aged past
+			// the rolling 7-day window. The ingestion-time upsert
+			// is monotonic, so without a periodic reset the counter
+			// inflates forever; this worker is the reset authority.
+			if h.Count7d > 0 && h.LastSeenAt.Before(recentCutoff) {
+				h.Count7d = 0
+				decayed7d++
+			}
+
+			// Re-classify the relationship label using the
+			// (possibly decayed) counts plus the plaintext
+			// SenderDomain so downstream Tier-0 routing always
+			// sees an up-to-date taxonomy. Rows with non-positive
+			// Count30d are skipped because the Classifier treats
+			// zero-count summaries as FirstTimeExternal — a value
+			// that would be wrong for a row that necessarily had
+			// historical activity to exist.
+			domain := strings.ToLower(strings.TrimSpace(h.SenderDomain))
+			if domain != "" && h.Count30d > 0 {
+				sum := relationship.CommunicationSummary{
+					SenderDomain:     domain,
+					InboundCount:     h.Count30d,
+					FirstSeen:        h.FirstSeenAt,
+					LastSeen:         h.LastSeenAt,
+					UniqueRecipients: 1,
+				}
+				cat, cerr := j.classifier.Classify(ctx, "", sum)
+				if cerr == nil && string(cat) != h.Relationship {
+					h.Relationship = string(cat)
+					reclassified++
+				}
+			}
+
+			h.UpdatedAt = now
 			if err := j.cfg.Upserter.Upsert(ctx, &h); err != nil {
 				j.logger.Warn("worker.relationship: upsert failed",
 					slog.String("tenant_id", t.ID), slog.Any("error", err))
@@ -145,7 +204,9 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 	}
 	j.logger.Info("worker.relationship: cycle complete",
 		slog.Int("tenants", len(tenants)),
-		slog.Int("rows", processed))
+		slog.Int("rows", processed),
+		slog.Int("decayed_count_7d", decayed7d),
+		slog.Int("reclassified", reclassified))
 	return firstErr
 }
 
