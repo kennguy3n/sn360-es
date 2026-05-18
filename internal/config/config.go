@@ -514,7 +514,15 @@ func Load() (Config, error) {
 			SkipVerify: getBool("SMTP_SKIP_VERIFY", false),
 		},
 		GWS: GWS{
-			ServiceAccountJSON: getStr("GWS_SERVICE_ACCOUNT_JSON", ""),
+			// ServiceAccountJSON is either a file path or inline
+			// JSON. JSON tolerates surrounding whitespace, but a
+			// stray newline at the end of a file path (Helm `tpl`
+			// indirection, k8s ConfigMap rendering, `echo $path`
+			// piping) makes os.ReadFile fail with a "no such file"
+			// the operator then has to debug. Trim here so the same
+			// invariant the other four credential fields enforce
+			// — no leading/trailing whitespace — applies uniformly.
+			ServiceAccountJSON: strings.TrimSpace(getStr("GWS_SERVICE_ACCOUNT_JSON", "")),
 			DelegatedAdmin:     strings.TrimSpace(getStr("GWS_DELEGATED_ADMIN", "")),
 			// Domain is the registry key the provider lookup
 			// matches against the MailboxProvider's emitted
