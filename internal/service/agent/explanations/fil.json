@@ -1,0 +1,42 @@
+{
+  "tier_explanations": {
+    "Blocked": "Na-block ang mensaheng ito dahil na-classify ito ng aming detection system bilang posibleng banta.",
+    "HighRisk": "Na-flag ang mensaheng ito bilang high-risk at na-route sa iyong security team.",
+    "Warning": "Mukhang suspicious ang mensaheng ito — suriin muna nang mabuti bago kumilos.",
+    "Caution": "May ilang hindi pangkaraniwang katangian ang mensaheng ito na dapat suriin.",
+    "Informational": "Ito ay isang informational na mensahe — unang contact mula sa external sender.",
+    "Trusted": "Ang mensaheng ito ay mula sa trusted sender."
+  },
+  "tier_suggestions": {
+    "Blocked": "Huwag makipag-interact sa mensaheng ito. I-report sa security team kung may mukhang lehitimo.",
+    "HighRisk": "Huwag makipag-interact sa mensaheng ito. I-report sa security team kung may mukhang lehitimo.",
+    "Warning": "I-verify ang sender sa ibang channel bago mag-click ng links o mag-reply.",
+    "Caution": "Mag-ingat sa anumang link o attachment.",
+    "Informational": "Unang beses na external sender — kumpirmahin muna bago sumunod sa mga kahilingan.",
+    "Trusted": "Walang aksyon na kailangan."
+  },
+  "category_names": {
+    "LIKELY_PHISHING": "posibleng phishing",
+    "BEC_IMPERSONATION": "business email compromise (BEC)",
+    "LOOKALIKE_DOMAIN": "hawig na domain",
+    "SUSPICIOUS_URL": "kahina-hinalang URL",
+    "SUSPICIOUS_ATTACHMENT": "kahina-hinalang attachment",
+    "FIRST_CONTACT_EXTERNAL": "unang contact mula sa labas",
+    "ACCOUNT_TAKEOVER_SUSPECTED": "palatandaan ng account takeover",
+    "VENDOR_COMPROMISE": "posibleng vendor compromise",
+    "CREDENTIAL_HARVESTING": "pangangalap ng credentials",
+    "INVOICE_FRAUD": "invoice fraud",
+    "QR_PHISHING": "QR code phishing",
+    "SCAM_FRAUD": "scam / fraud",
+    "AUTH_FAILED": "nabigong sender authentication",
+    "INTERNAL_TRUSTED": "trusted internal sender",
+    "VENDOR_TRUSTED": "trusted vendor",
+    "NEWSLETTER": "newsletter"
+  },
+  "primary_signal": "Pangunahing signal: ",
+  "contributing_factors": "Mga kaugnay na salik: ",
+  "degraded_notice": "Paalala: hindi available ang ilang detection service habang sinusuri.",
+  "verdict_pending": "Naghihintay ng verdict.",
+  "escalated_suggestion": "Na-escalate sa iyong security team para sa pagsusuri.",
+  "release_suggestion": "Nasa queue na ang iyong release request at ipo-process sa loob ng ilang minuto."
+}

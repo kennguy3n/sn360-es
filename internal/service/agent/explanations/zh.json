@@ -1,0 +1,42 @@
+{
+  "tier_explanations": {
+    "Blocked": "此消息已被拦截，因为我们的检测系统将其归类为可能的威胁。",
+    "HighRisk": "此消息被标记为高风险，已转发给您的安全团队。",
+    "Warning": "此消息看起来可疑 — 请在采取行动前仔细审查。",
+    "Caution": "此消息有一些值得检查的异常特征。",
+    "Informational": "这是一条信息性消息 — 来自外部发件人的首次联系。",
+    "Trusted": "此消息来自受信任的发件人。"
+  },
+  "tier_suggestions": {
+    "Blocked": "请勿与此消息互动。如果看起来合法，请报告给您的安全团队。",
+    "HighRisk": "请勿与此消息互动。如果看起来合法，请报告给您的安全团队。",
+    "Warning": "在点击链接或回复之前，通过其他渠道验证发件人。",
+    "Caution": "对任何链接或附件保持谨慎。",
+    "Informational": "首次联系的外部发件人 — 在执行请求前请确认。",
+    "Trusted": "无需采取行动。"
+  },
+  "category_names": {
+    "LIKELY_PHISHING": "可能的钓鱼",
+    "BEC_IMPERSONATION": "商业邮件欺诈 (BEC)",
+    "LOOKALIKE_DOMAIN": "相似域名",
+    "SUSPICIOUS_URL": "可疑URL",
+    "SUSPICIOUS_ATTACHMENT": "可疑附件",
+    "FIRST_CONTACT_EXTERNAL": "外部首次联系",
+    "ACCOUNT_TAKEOVER_SUSPECTED": "账户接管迹象",
+    "VENDOR_COMPROMISE": "供应商可能被入侵",
+    "CREDENTIAL_HARVESTING": "凭证收集",
+    "INVOICE_FRAUD": "发票欺诈",
+    "QR_PHISHING": "二维码钓鱼",
+    "SCAM_FRAUD": "诈骗",
+    "AUTH_FAILED": "发件人认证失败",
+    "INTERNAL_TRUSTED": "受信任的内部发件人",
+    "VENDOR_TRUSTED": "受信任的供应商",
+    "NEWSLETTER": "通讯"
+  },
+  "primary_signal": "主要信号: ",
+  "contributing_factors": "相关因素: ",
+  "degraded_notice": "注意: 评估期间部分检测服务不可用。",
+  "verdict_pending": "判定待处理。",
+  "escalated_suggestion": "已升级至您的安全团队进行审查。",
+  "release_suggestion": "您的释放请求已排队，将在几分钟内处理。"
+}

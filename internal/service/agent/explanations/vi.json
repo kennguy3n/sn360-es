@@ -1,0 +1,42 @@
+{
+  "tier_explanations": {
+    "Blocked": "Tin nhắn này đã bị chặn vì hệ thống phát hiện phân loại nó là mối đe dọa.",
+    "HighRisk": "Tin nhắn này được đánh dấu là rủi ro cao và đã được chuyển đến đội bảo mật.",
+    "Warning": "Tin nhắn này trông đáng ngờ — hãy xem xét kỹ trước khi hành động.",
+    "Caution": "Tin nhắn này có một số đặc điểm bất thường cần kiểm tra.",
+    "Informational": "Đây là tin nhắn thông tin — liên hệ lần đầu từ người gửi bên ngoài.",
+    "Trusted": "Tin nhắn này đến từ người gửi đáng tin cậy."
+  },
+  "tier_suggestions": {
+    "Blocked": "Không tương tác với tin nhắn này. Báo cáo cho đội bảo mật nếu có gì đó hợp lệ.",
+    "HighRisk": "Không tương tác với tin nhắn này. Báo cáo cho đội bảo mật nếu có gì đó hợp lệ.",
+    "Warning": "Xác minh người gửi qua kênh khác trước khi nhấp liên kết hoặc trả lời.",
+    "Caution": "Cẩn thận với mọi liên kết hoặc tệp đính kèm.",
+    "Informational": "Người gửi bên ngoài lần đầu — xác nhận trước khi thực hiện yêu cầu.",
+    "Trusted": "Không cần hành động."
+  },
+  "category_names": {
+    "LIKELY_PHISHING": "có thể là lừa đảo",
+    "BEC_IMPERSONATION": "giả mạo email doanh nghiệp (BEC)",
+    "LOOKALIKE_DOMAIN": "tên miền giả mạo",
+    "SUSPICIOUS_URL": "URL đáng ngờ",
+    "SUSPICIOUS_ATTACHMENT": "tệp đính kèm đáng ngờ",
+    "FIRST_CONTACT_EXTERNAL": "liên hệ lần đầu từ bên ngoài",
+    "ACCOUNT_TAKEOVER_SUSPECTED": "dấu hiệu chiếm đoạt tài khoản",
+    "VENDOR_COMPROMISE": "khả năng xâm phạm nhà cung cấp",
+    "CREDENTIAL_HARVESTING": "thu thập thông tin đăng nhập",
+    "INVOICE_FRAUD": "gian lận hoá đơn",
+    "QR_PHISHING": "lừa đảo qua mã QR",
+    "SCAM_FRAUD": "lừa đảo",
+    "AUTH_FAILED": "xác thực người gửi thất bại",
+    "INTERNAL_TRUSTED": "nội bộ tin cậy",
+    "VENDOR_TRUSTED": "nhà cung cấp tin cậy",
+    "NEWSLETTER": "bản tin"
+  },
+  "primary_signal": "Tín hiệu chính: ",
+  "contributing_factors": "Yếu tố đóng góp: ",
+  "degraded_notice": "Lưu ý: một hoặc nhiều dịch vụ phát hiện không khả dụng trong quá trình đánh giá.",
+  "verdict_pending": "Đang chờ phán quyết.",
+  "escalated_suggestion": "Đã chuyển đến đội bảo mật để xem xét.",
+  "release_suggestion": "Yêu cầu giải phóng của bạn đã được xếp hàng và sẽ được xử lý trong vài phút."
+}

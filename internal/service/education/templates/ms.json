@@ -1,0 +1,47 @@
+[
+  {
+    "template_id": "bec.easy.remittance.ms",
+    "attack_type": "bec",
+    "difficulty": "easy",
+    "locale": "ms",
+    "subject_template": "Permintaan pindahan wang segera",
+    "body_template": "<p>Hi {{.target_name}},</p><p>Saya perlukan pemindahan bank segera kepada pembekal baharu. Bolehkah anda pindahkan MYR 150,000 ke akaun berikut?</p><p>Bank: Maybank<br/>Akaun: 1234-5678-9012</p><p>Sila proses hari ini. Terima kasih,<br/>{{.ceo_name}}</p>",
+    "sender_display_template": "{{.ceo_name}}",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "wire-transfer urgency",
+      "remittance fraud"
+    ]
+  },
+  {
+    "template_id": "credential_phishing.medium.ecommerce.ms",
+    "attack_type": "credential_phishing",
+    "difficulty": "medium",
+    "locale": "ms",
+    "subject_template": "Amaran Keselamatan: Aktiviti log masuk luar biasa",
+    "body_template": "<p>Salam {{.target_name}},</p><p>Kami mengesan log masuk mencurigakan pada akaun anda. Untuk melindungi akaun anda, sila sahkan identiti:</p><p><a href=\"{{.landing_url}}\">Sahkan Identiti</a></p><p>Jika anda tidak mengenali aktiviti ini, hubungi IT dengan segera.</p><p>Pasukan Keselamatan</p>",
+    "sender_display_template": "Pasukan Keselamatan",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": [
+      "credential-harvest",
+      "e-commerce themed"
+    ]
+  },
+  {
+    "template_id": "invoice_fraud.hard.bank_change.ms",
+    "attack_type": "invoice_fraud",
+    "difficulty": "hard",
+    "locale": "ms",
+    "subject_template": "Invois #{{.invoice_number}} – Maklumat bank dikemas kini",
+    "body_template": "<p>Tuan/Puan {{.target_name}},</p><p>Kami ingin memaklumkan bahawa maklumat bank kami telah berubah. Untuk pembayaran seterusnya, sila gunakan maklumat berikut:</p><p>Bank: CIMB Bank<br/>Akaun: 8012345678</p><p>Invois dilampirkan.</p><p>Terima kasih,<br/>{{.vendor_name}}<br/>Jabatan Perakaunan</p>",
+    "sender_display_template": "{{.vendor_name}} Perakaunan",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "bank-detail change",
+      "Malaysia payment pattern"
+    ]
+  }
+]

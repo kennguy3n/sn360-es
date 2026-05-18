@@ -1,0 +1,42 @@
+{
+  "tier_explanations": {
+    "Blocked": "Diese Nachricht wurde blockiert, da unsere Erkennungssysteme sie als wahrscheinliche Bedrohung eingestuft haben.",
+    "HighRisk": "Diese Nachricht wurde als hochriskant gekennzeichnet und an Ihr Sicherheitsteam weitergeleitet.",
+    "Warning": "Diese Nachricht sieht verdächtig aus — bitte prüfen Sie sorgfältig, bevor Sie handeln.",
+    "Caution": "Diese Nachricht weist einige ungewöhnliche Merkmale auf, die überprüft werden sollten.",
+    "Informational": "Dies ist eine informative Nachricht — Erstkontakt eines externen Absenders.",
+    "Trusted": "Diese Nachricht stammt von einem vertrauenswürdigen Absender."
+  },
+  "tier_suggestions": {
+    "Blocked": "Interagieren Sie nicht mit dieser Nachricht. Melden Sie sie Ihrem Sicherheitsteam, falls etwas legitim erscheint.",
+    "HighRisk": "Interagieren Sie nicht mit dieser Nachricht. Melden Sie sie Ihrem Sicherheitsteam, falls etwas legitim erscheint.",
+    "Warning": "Überprüfen Sie den Absender auf einem anderen Kanal, bevor Sie auf Links klicken oder antworten.",
+    "Caution": "Seien Sie vorsichtig mit Links oder Anhängen.",
+    "Informational": "Erstmaliger externer Absender — bestätigen Sie, bevor Sie Anfragen nachkommen.",
+    "Trusted": "Keine Aktion erforderlich."
+  },
+  "category_names": {
+    "LIKELY_PHISHING": "wahrscheinlich Phishing",
+    "BEC_IMPERSONATION": "Business-E-Mail-Betrug (BEC)",
+    "LOOKALIKE_DOMAIN": "ähnliche Domain",
+    "SUSPICIOUS_URL": "verdächtige URL",
+    "SUSPICIOUS_ATTACHMENT": "verdächtiger Anhang",
+    "FIRST_CONTACT_EXTERNAL": "Erstkontakt von außen",
+    "ACCOUNT_TAKEOVER_SUSPECTED": "Anzeichen für Kontoübernahme",
+    "VENDOR_COMPROMISE": "mögliche Lieferantenkompromittierung",
+    "CREDENTIAL_HARVESTING": "Zugangsdaten-Sammlung",
+    "INVOICE_FRAUD": "Rechnungsbetrug",
+    "QR_PHISHING": "QR-Code-Phishing",
+    "SCAM_FRAUD": "Betrug",
+    "AUTH_FAILED": "Absender-Authentifizierung fehlgeschlagen",
+    "INTERNAL_TRUSTED": "vertrauenswürdiger interner Absender",
+    "VENDOR_TRUSTED": "vertrauenswürdiger Lieferant",
+    "NEWSLETTER": "Newsletter"
+  },
+  "primary_signal": "Hauptsignal: ",
+  "contributing_factors": "Beitragende Faktoren: ",
+  "degraded_notice": "Hinweis: Einer oder mehrere Erkennungsdienste waren während der Bewertung nicht verfügbar.",
+  "verdict_pending": "Bewertung ausstehend.",
+  "escalated_suggestion": "An Ihr Sicherheitsteam eskaliert.",
+  "release_suggestion": "Ihre Freigabeanfrage wurde in die Warteschlange gestellt und wird in wenigen Minuten bearbeitet."
+}

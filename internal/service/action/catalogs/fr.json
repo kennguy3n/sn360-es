@@ -1,0 +1,43 @@
+{
+  "tier.Blocked.title": "Bloqué : ce message est dangereux",
+  "tier.Blocked.body": "Nous avons bloqué cet e-mail car il s'agit très probablement d'une tentative de hameçonnage ou d'une autre menace. N'ouvrez aucune pièce jointe et ne cliquez sur aucun lien.",
+  "tier.HighRisk.title": "Risque élevé : n'agissez pas sur cet e-mail",
+  "tier.HighRisk.body": "Cet e-mail présente de forts signes d'usurpation d'identité, de fraude ou de compromission de compte. Vérifiez l'expéditeur par un autre canal avant toute action.",
+  "tier.Warning.title": "Avertissement : cet e-mail semble suspect",
+  "tier.Warning.body": "Cet e-mail contient des signes indiquant qu'une personne pourrait essayer de vous tromper. Vérifiez soigneusement l'expéditeur avant de cliquer sur des liens ou de répondre.",
+  "tier.Caution.title": "Prudence : expéditeur ou contenu inhabituel",
+  "tier.Caution.body": "Quelque chose d'inhabituel a été détecté dans cet e-mail. Traitez tout lien, pièce jointe ou demande avec prudence.",
+  "tier.Informational.title": "Premier contact d'un expéditeur externe",
+  "tier.Informational.body": "C'est le premier e-mail que nous avons reçu de cet expéditeur. Confirmez son identité avant de donner suite à toute demande.",
+  "tier.Trusted.title": "Expéditeur de confiance",
+  "tier.Trusted.body": "Ce message provient d'un expéditeur en qui votre organisation a déjà confiance. Aucune action requise.",
+
+  "category.LIKELY_PHISHING": "Hameçonnage probable",
+  "category.BEC_IMPERSONATION": "Possible usurpation d'identité (BEC)",
+  "category.LOOKALIKE_DOMAIN": "Domaine similaire",
+  "category.SUSPICIOUS_URL": "Lien suspect",
+  "category.SUSPICIOUS_ATTACHMENT": "Pièce jointe suspecte",
+  "category.FIRST_CONTACT_EXTERNAL": "Premier contact extérieur à votre organisation",
+  "category.ACCOUNT_TAKEOVER_SUSPECTED": "Possible prise de contrôle de compte",
+  "category.VENDOR_COMPROMISE": "Possible compromission d'un fournisseur",
+  "category.CREDENTIAL_HARVESTING": "Vol d'identifiants",
+  "category.INVOICE_FRAUD": "Fraude à la facture",
+  "category.QR_PHISHING": "Hameçonnage par QR code",
+  "category.SCAM_FRAUD": "Arnaque / fraude",
+  "category.AUTH_FAILED": "Échec de l'authentification de l'expéditeur",
+  "category.INTERNAL_TRUSTED": "Expéditeur interne",
+  "category.VENDOR_TRUSTED": "Fournisseur de confiance",
+  "category.NEWSLETTER": "Newsletter",
+
+  "auth.verified": "Expéditeur vérifié",
+  "auth.unverified": "Expéditeur non vérifié",
+  "auth.failed": "Échec de l'authentification de l'expéditeur",
+  "auth.unknown": "Statut d'authentification inconnu",
+
+  "action.report": "Signaler un hameçonnage",
+  "action.mark_safe": "Marquer comme sûr",
+  "action.trust_sender": "Faire confiance à l'expéditeur",
+  "action.learn_more": "En savoir plus",
+
+  "banner.degraded": "Certains services de détection n'étaient pas disponibles lors de l'évaluation."
+}

@@ -1,0 +1,114 @@
+{
+  "LIKELY_PHISHING": {
+    "lesson_id": "lesson.phishing.th",
+    "category": "LIKELY_PHISHING",
+    "title": "วิธีสังเกตอีเมลฟิชชิ่ง",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">วิธีสังเกตอีเมลฟิชชิ่ง</h3><p>ข้อความฟิชชิ่งพยายามหลอกให้คุณคลิกลิงก์อันตราย เปิดไฟล์แนบ หรือเปิดเผยรหัสผ่าน ก่อนดำเนินการ ให้ถามตัวเอง:</p><ul style=\"margin:6px 0 0 18px;padding:0\"><li>ฉันรู้จักผู้ส่งหรือไม่?</li><li>คำขอนี้ดูเร่งด่วนหรือผิดปกติหรือไม่?</li><li>ลิงก์ไปยังที่ที่ระบุจริงหรือไม่?</li></ul><p style=\"margin-top:8px\">หากไม่แน่ใจ ให้รายงานข้อความและตรวจสอบผ่านช่องทางอื่น</p></section>",
+    "estimated_seconds": 25
+  },
+  "BEC_IMPERSONATION": {
+    "lesson_id": "lesson.bec.th",
+    "category": "BEC_IMPERSONATION",
+    "title": "การหลอกลวงทางอีเมลธุรกิจ (BEC)",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">การหลอกลวงทางอีเมลธุรกิจ</h3><p>ผู้โจมตี BEC แอบอ้างเป็นผู้บริหารหรือผู้ขายเพื่อเปลี่ยนเส้นทางการชำระเงินหรือขโมยข้อมูล สัญญาณเตือน:</p><ul style=\"margin:6px 0 0 18px;padding:0\"><li>ความเร่งด่วนเกี่ยวกับการเปลี่ยนแปลงการชำระเงิน</li><li>ที่อยู่ตอบกลับแตกต่างจากผู้ส่ง</li><li>คำแนะนำธนาคารใหม่</li></ul><p style=\"margin-top:8px\">ยืนยันการเปลี่ยนแปลงการชำระเงินทางโทรศัพท์โดยใช้หมายเลขที่คุณรู้จักอยู่แล้ว</p></section>",
+    "estimated_seconds": 30
+  },
+  "LOOKALIKE_DOMAIN": {
+    "lesson_id": "lesson.lookalike.th",
+    "category": "LOOKALIKE_DOMAIN",
+    "title": "โดเมนที่คล้ายกัน",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">โดเมนที่คล้ายกัน</h3><p>ผู้โจมตีลงทะเบียนโดเมนที่เกือบเหมือนกัน เช่น <strong>example-corp.com</strong> แทน <strong>example.com</strong> เลื่อนเมาส์ไปที่ผู้ส่งเพื่อตรวจสอบที่อยู่เต็มก่อนตอบกลับ</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_URL": {
+    "lesson_id": "lesson.url.th",
+    "category": "SUSPICIOUS_URL",
+    "title": "ลิงก์ที่น่าสงสัย",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">ลิงก์ที่น่าสงสัย</h3><p>เลื่อนเมาส์ก่อนคลิก ระวัง URL ที่ถูกย่อ ข้อความแสดงผลไม่ตรงกัน และโดเมนที่คุณไม่รู้จัก SN360 ส่งลิงก์ที่มีความเสี่ยงผ่านการตรวจสอบความปลอดภัย</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_ATTACHMENT": {
+    "lesson_id": "lesson.attachment.th",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "title": "ไฟล์แนบที่น่าสงสัย",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">ไฟล์แนบที่น่าสงสัย</h3><p>อย่าเปิดไฟล์แนบที่คุณไม่ได้คาดหวัง โดยเฉพาะเอกสาร Office ที่ขอให้เปิดใช้มาโคร หรือไฟล์ .iso/.html ตรวจสอบกับผู้ส่งก่อน</p></section>",
+    "estimated_seconds": 25
+  },
+  "FIRST_CONTACT_EXTERNAL": {
+    "lesson_id": "lesson.first_contact.th",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "title": "ผู้ส่งภายนอกครั้งแรก",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">ผู้ส่งภายนอกครั้งแรก</h3><p>คุณไม่เคยได้รับอีเมลจากที่อยู่นี้มาก่อน ใช้เวลาสักครู่เพื่อยืนยันตัวตนของผู้ส่งก่อนดำเนินการหรือแบ่งปันข้อมูล</p></section>",
+    "estimated_seconds": 15
+  },
+  "ACCOUNT_TAKEOVER_SUSPECTED": {
+    "lesson_id": "lesson.ato.th",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "title": "สงสัยว่าบัญชีถูกยึดครอง",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">สงสัยว่าบัญชีถูกยึดครอง</h3><p>พฤติกรรมของผู้ส่งรายนี้ดูแตกต่างจากปกติ บัญชีของพวกเขาอาจถูกบุกรุก หลีกเลี่ยงการตอบกลับด้วยข้อมูลสำคัญและยืนยันผ่านช่องทางอื่น</p></section>",
+    "estimated_seconds": 25
+  },
+  "VENDOR_COMPROMISE": {
+    "lesson_id": "lesson.vendor.th",
+    "category": "VENDOR_COMPROMISE",
+    "title": "การบุกรุกผู้ขาย",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">การบุกรุกผู้ขาย</h3><p>บัญชีของผู้ขายที่รู้จักอาจถูกแอบอ้าง ตรวจสอบคำแนะนำการชำระเงินหรือคำขอข้อมูลสำคัญใดๆ ผ่านหมายเลขโทรศัพท์จากบันทึกที่เชื่อถือได้ก่อนหน้า</p></section>",
+    "estimated_seconds": 25
+  },
+  "CREDENTIAL_HARVESTING": {
+    "lesson_id": "lesson.credential.th",
+    "category": "CREDENTIAL_HARVESTING",
+    "title": "การเก็บเกี่ยวข้อมูลรับรอง",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">การเก็บเกี่ยวข้อมูลรับรอง</h3><p>บริการจริงไม่เคยขอให้คุณยืนยันรหัสผ่านโดยการคลิกลิงก์ หากไม่แน่ใจ ให้ไปที่บริการโดยตรงในเบราว์เซอร์ — อย่าใช้ลิงก์จากอีเมล</p></section>",
+    "estimated_seconds": 20
+  },
+  "INVOICE_FRAUD": {
+    "lesson_id": "lesson.invoice.th",
+    "category": "INVOICE_FRAUD",
+    "title": "การฉ้อโกงใบแจ้งหนี้",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">การฉ้อโกงใบแจ้งหนี้</h3><p>ระวังการเปลี่ยนแปลงข้อมูลธนาคารในนาทีสุดท้าย หมายเลข PO ที่ไม่คุ้นเคย หรือคำขอชำระเงินเร่งด่วน ตรวจสอบโดยโทรหาผู้ติดต่อฝ่ายการเงินที่รู้จัก</p></section>",
+    "estimated_seconds": 25
+  },
+  "QR_PHISHING": {
+    "lesson_id": "lesson.qr.th",
+    "category": "QR_PHISHING",
+    "title": "ฟิชชิ่ง QR โค้ด",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">ฟิชชิ่ง QR โค้ด</h3><p>ผู้โจมตีฝัง URL อันตรายใน QR โค้ดเพื่อหลีกเลี่ยงการตรวจสอบลิงก์ อย่าสแกน QR โค้ดจากอีเมลที่ไม่ผ่านการตรวจสอบ — เปิดบริการที่เชื่อมโยงโดยตรงแทน</p></section>",
+    "estimated_seconds": 20
+  },
+  "SCAM_FRAUD": {
+    "lesson_id": "lesson.scam.th",
+    "category": "SCAM_FRAUD",
+    "title": "การหลอกลวงและฉ้อโกง",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">การหลอกลวงและฉ้อโกง</h3><p>คำสัญญาเรื่องเงิน รางวัล ความรัก หรือการข่มขู่เรียกเงิน เป็นรูปแบบการหลอกลวงแบบคลาสสิก หากรู้สึกว่าดีเกินไป — หรือน่ากลัวเกินไป — มักจะไม่ใช่เรื่องจริง</p></section>",
+    "estimated_seconds": 25
+  },
+  "AUTH_FAILED": {
+    "lesson_id": "lesson.auth.th",
+    "category": "AUTH_FAILED",
+    "title": "การรับรองผู้ส่งล้มเหลว",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">การรับรองผู้ส่งล้มเหลว</h3><p>โดเมนของผู้ส่งไม่ผ่านการตรวจสอบ SPF/DKIM/DMARC ข้อความอาจถูกปลอมแปลง ระมัดระวังลิงก์หรือคำขอเป็นพิเศษ</p></section>",
+    "estimated_seconds": 20
+  },
+  "INTERNAL_TRUSTED": {
+    "lesson_id": "lesson.internal.th",
+    "category": "INTERNAL_TRUSTED",
+    "title": "อีเมลภายใน",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">อีเมลภายใน</h3><p>ข้อความนี้มาจากภายในองค์กรของคุณ แม้เช่นนั้น บัญชีก็อาจถูกบุกรุกได้ — ปฏิบัติต่อคำขอที่ผิดปกติด้วยความระมัดระวังเช่นเดียวกับอีเมลจากภายนอก</p></section>",
+    "estimated_seconds": 15
+  },
+  "VENDOR_TRUSTED": {
+    "lesson_id": "lesson.vendor_trusted.th",
+    "category": "VENDOR_TRUSTED",
+    "title": "ผู้ขายที่เชื่อถือได้",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">ผู้ขายที่เชื่อถือได้</h3><p>ผู้ส่งรายนี้อยู่ในรายการอนุญาตของผู้ขายขององค์กรคุณ SN360 ยังคงเฝ้าระวังรูปแบบการบุกรุกผู้ขาย — รายงานสิ่งที่ดูผิดปกติ</p></section>",
+    "estimated_seconds": 15
+  },
+  "NEWSLETTER": {
+    "lesson_id": "lesson.newsletter.th",
+    "category": "NEWSLETTER",
+    "title": "จดหมายข่าว / อีเมลจำนวนมาก",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">จดหมายข่าว / อีเมลจำนวนมาก</h3><p>จดหมายข่าวมักจะปลอดภัยในการอ่านแต่ไม่ค่อยต้องดำเนินการเร่งด่วน ใช้ลิงก์ยกเลิกการสมัครแทนการรายงานผู้ส่งจำนวนมากว่าเป็นฟิชชิ่ง</p></section>",
+    "estimated_seconds": 15
+  }
+}

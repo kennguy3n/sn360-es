@@ -1,0 +1,114 @@
+{
+  "LIKELY_PHISHING": {
+    "lesson_id": "lesson.phishing.ko",
+    "category": "LIKELY_PHISHING",
+    "title": "피싱 이메일 식별하기",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">피싱 이메일 식별하기</h3><p>피싱 메시지는 악성 링크 클릭, 첨부 파일 열기, 비밀번호 유출을 유도합니다. 행동하기 전에 확인하세요: 발신자를 알고 있나요? 요청이 긴급하거나 비정상적인가요? 링크가 표시된 곳으로 이동하나요? 의심스러우면 메시지를 신고하고 다른 경로로 확인하세요.</p></section>",
+    "estimated_seconds": 25
+  },
+  "BEC_IMPERSONATION": {
+    "lesson_id": "lesson.bec.ko",
+    "category": "BEC_IMPERSONATION",
+    "title": "비즈니스 이메일 사기 (BEC)",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">비즈니스 이메일 사기 (BEC)</h3><p>BEC 공격자는 임원이나 공급업체를 사칭하여 결제를 돌리거나 데이터를 훔칩니다. 경고 신호: 결제 변경에 대한 긴급성, 발신자와 다른 회신 주소, 새로운 은행 정보. 결제 변경은 이미 알고 있는 전화번호로 확인하세요.</p></section>",
+    "estimated_seconds": 30
+  },
+  "LOOKALIKE_DOMAIN": {
+    "lesson_id": "lesson.lookalike.ko",
+    "category": "LOOKALIKE_DOMAIN",
+    "title": "유사 도메인",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">유사 도메인</h3><p>공격자는 <strong>example-corp.com</strong>과 같이 거의 동일한 도메인을 등록합니다. 답장하기 전에 발신자 위에 마우스를 올려 전체 주소를 확인하세요.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_URL": {
+    "lesson_id": "lesson.url.ko",
+    "category": "SUSPICIOUS_URL",
+    "title": "의심스러운 링크",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">의심스러운 링크</h3><p>클릭하기 전에 마우스를 올리세요. 단축 URL, 일치하지 않는 표시 텍스트, 모르는 도메인에 주의하세요. SN360은 위험한 링크를 안전 검사로 라우팅합니다.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_ATTACHMENT": {
+    "lesson_id": "lesson.attachment.ko",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "title": "의심스러운 첨부 파일",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">의심스러운 첨부 파일</h3><p>예상치 못한 첨부 파일을 열지 마세요. 특히 매크로 활성화를 요청하는 Office 문서나 .iso/.html 파일에 주의하세요. 먼저 발신자에게 확인하세요.</p></section>",
+    "estimated_seconds": 25
+  },
+  "FIRST_CONTACT_EXTERNAL": {
+    "lesson_id": "lesson.first_contact.ko",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "title": "처음 연락하는 외부 발신자",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">처음 연락하는 외부 발신자</h3><p>이 주소에서 이메일을 받은 적이 없습니다. 행동하거나 정보를 공유하기 전에 발신자의 신원을 확인하세요.</p></section>",
+    "estimated_seconds": 15
+  },
+  "ACCOUNT_TAKEOVER_SUSPECTED": {
+    "lesson_id": "lesson.ato.ko",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "title": "계정 탈취 의심",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">계정 탈취 의심</h3><p>이 발신자의 행동이 평소와 다릅니다. 계정이 손상되었을 수 있습니다. 민감한 데이터로 답장하지 말고 다른 채널로 확인하세요.</p></section>",
+    "estimated_seconds": 25
+  },
+  "VENDOR_COMPROMISE": {
+    "lesson_id": "lesson.vendor.ko",
+    "category": "VENDOR_COMPROMISE",
+    "title": "공급업체 침해",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">공급업체 침해</h3><p>알려진 공급업체의 계정이 사칭될 수 있습니다. 이전 신뢰 기록의 전화번호로 결제 지시나 민감한 요청을 재확인하세요.</p></section>",
+    "estimated_seconds": 25
+  },
+  "CREDENTIAL_HARVESTING": {
+    "lesson_id": "lesson.credential.ko",
+    "category": "CREDENTIAL_HARVESTING",
+    "title": "자격 증명 수집",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">자격 증명 수집</h3><p>실제 서비스는 링크를 클릭하여 비밀번호를 확인하도록 요청하지 않습니다. 확실하지 않으면 브라우저에서 직접 서비스에 접속하세요.</p></section>",
+    "estimated_seconds": 20
+  },
+  "INVOICE_FRAUD": {
+    "lesson_id": "lesson.invoice.ko",
+    "category": "INVOICE_FRAUD",
+    "title": "송장 사기",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">송장 사기</h3><p>마지막 순간의 은행 정보 변경, 낯선 PO 번호, 긴급한 결제 요청에 주의하세요. 알고 있는 재무 담당자에게 전화로 확인하세요.</p></section>",
+    "estimated_seconds": 25
+  },
+  "QR_PHISHING": {
+    "lesson_id": "lesson.qr.ko",
+    "category": "QR_PHISHING",
+    "title": "QR 코드 피싱",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">QR 코드 피싱</h3><p>공격자는 링크 검사를 우회하기 위해 QR 코드에 악성 URL을 삽입합니다. 확인되지 않은 이메일의 QR 코드를 스캔하지 마세요.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SCAM_FRAUD": {
+    "lesson_id": "lesson.scam.ko",
+    "category": "SCAM_FRAUD",
+    "title": "사기 및 부정",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">사기 및 부정</h3><p>돈, 상품, 로맨스의 약속이나 결제를 요구하는 위협은 전형적인 사기 패턴입니다. 너무 좋거나 너무 무서운 이야기는 보통 사실이 아닙니다.</p></section>",
+    "estimated_seconds": 25
+  },
+  "AUTH_FAILED": {
+    "lesson_id": "lesson.auth.ko",
+    "category": "AUTH_FAILED",
+    "title": "발신자 인증 실패",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">발신자 인증 실패</h3><p>발신자의 도메인이 SPF/DKIM/DMARC 검사에 실패했습니다. 메시지가 위조되었을 수 있습니다. 링크나 요청에 특히 주의하세요.</p></section>",
+    "estimated_seconds": 20
+  },
+  "INTERNAL_TRUSTED": {
+    "lesson_id": "lesson.internal.ko",
+    "category": "INTERNAL_TRUSTED",
+    "title": "내부 이메일",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">내부 이메일</h3><p>이 메시지는 조직 내부에서 보낸 것입니다. 그러나 계정이 손상될 수 있으므로 비정상적인 요청은 외부 이메일과 동일하게 주의하세요.</p></section>",
+    "estimated_seconds": 15
+  },
+  "VENDOR_TRUSTED": {
+    "lesson_id": "lesson.vendor_trusted.ko",
+    "category": "VENDOR_TRUSTED",
+    "title": "신뢰할 수 있는 공급업체",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">신뢰할 수 있는 공급업체</h3><p>이 발신자는 조직의 공급업체 허용 목록에 있습니다. SN360은 계속해서 공급업체 침해 패턴을 모니터링합니다. 이상한 점이 있으면 보고하세요.</p></section>",
+    "estimated_seconds": 15
+  },
+  "NEWSLETTER": {
+    "lesson_id": "lesson.newsletter.ko",
+    "category": "NEWSLETTER",
+    "title": "뉴스레터 / 대량 이메일",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">뉴스레터 / 대량 이메일</h3><p>뉴스레터는 일반적으로 읽어도 안전하지만 긴급한 조치가 필요한 경우는 드뭅니다. 대량 발신자를 피싱으로 신고하는 대신 구독 취소 링크를 사용하세요.</p></section>",
+    "estimated_seconds": 15
+  }
+}

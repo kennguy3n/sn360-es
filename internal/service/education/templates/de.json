@@ -1,0 +1,47 @@
+[
+  {
+    "template_id": "bec.easy.wire_transfer.de",
+    "attack_type": "bec",
+    "difficulty": "easy",
+    "locale": "de",
+    "subject_template": "Dringende Überweisung – bitte sofort bearbeiten",
+    "body_template": "<p>Hallo {{.target_name}},</p><p>ich benötige eine dringende SEPA-Überweisung an einen neuen Lieferanten. Können Sie bitte CHF 45.000 auf das folgende Konto überweisen? Es ist zeitkritisch.</p><p>IBAN: DE89 3704 0044 0532 0130 00<br/>BIC: COBADEFFXXX</p><p>Vielen Dank,<br/>{{.ceo_name}}</p>",
+    "sender_display_template": "{{.ceo_name}}",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "wire-transfer urgency",
+      "new-supplier IBAN"
+    ]
+  },
+  {
+    "template_id": "invoice_fraud.medium.eu_invoice.de",
+    "attack_type": "invoice_fraud",
+    "difficulty": "medium",
+    "locale": "de",
+    "subject_template": "Rechnung #{{.invoice_number}} – aktualisierte Bankverbindung",
+    "body_template": "<p>Sehr geehrte(r) {{.target_name}},</p><p>bitte beachten Sie, dass sich unsere Bankverbindung geändert hat. Verwenden Sie für die anstehende Zahlung bitte die folgenden Daten:</p><p>IBAN: CH93 0076 2011 6238 5295 7<br/>Bank: UBS AG, Zürich</p><p>Die aktuelle Rechnung finden Sie im Anhang.</p><p>Mit freundlichen Grüssen,<br/>{{.vendor_name}}<br/>Buchhaltung</p>",
+    "sender_display_template": "{{.vendor_name}} Buchhaltung",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "bank-detail change",
+      "EU invoice fraud pattern"
+    ]
+  },
+  {
+    "template_id": "credential_phishing.hard.microsoft365.de",
+    "attack_type": "credential_phishing",
+    "difficulty": "hard",
+    "locale": "de",
+    "subject_template": "Sicherheitswarnung: Ungewöhnliche Anmeldeaktivität",
+    "body_template": "<p>Sehr geehrte(r) {{.target_name}},</p><p>Wir haben eine verdächtige Anmeldung in Ihrem Microsoft 365-Konto festgestellt. Um Ihr Konto zu schützen, bestätigen Sie bitte Ihre Identität:</p><p><a href=\"{{.landing_url}}\">Identität bestätigen</a></p><p>Falls Sie diese Aktivität nicht erkennen, kontaktieren Sie umgehend die IT-Abteilung.</p><p>Microsoft Kontoschutz</p>",
+    "sender_display_template": "Microsoft Kontoschutz",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": [
+      "credential-harvest",
+      "lookalike-microsoft-domain"
+    ]
+  }
+]

@@ -1,0 +1,114 @@
+{
+  "LIKELY_PHISHING": {
+    "lesson_id": "lesson.phishing.zh",
+    "category": "LIKELY_PHISHING",
+    "title": "识别钓鱼邮件",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">识别钓鱼邮件</h3><p>钓鱼消息试图诱骗您点击恶意链接、打开附件或泄露密码。在采取行动之前，请问自己：我认识发件人吗？请求是否紧急或异常？链接是否指向它声称的地方？如果不确定，请举报该消息并通过其他渠道验证。</p></section>",
+    "estimated_seconds": 25
+  },
+  "BEC_IMPERSONATION": {
+    "lesson_id": "lesson.bec.zh",
+    "category": "BEC_IMPERSONATION",
+    "title": "商业邮件欺诈（BEC）",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">商业邮件欺诈（BEC）</h3><p>BEC攻击者冒充高管或供应商来转移付款或窃取数据。警告信号：围绕付款变更的紧迫性、回复地址与发件人不同、新的银行信息。通过您已知的电话号码确认付款变更。</p></section>",
+    "estimated_seconds": 30
+  },
+  "LOOKALIKE_DOMAIN": {
+    "lesson_id": "lesson.lookalike.zh",
+    "category": "LOOKALIKE_DOMAIN",
+    "title": "相似域名",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">相似域名</h3><p>攻击者注册几乎相同的域名，如<strong>example-corp.com</strong>代替<strong>example.com</strong>。回复前将鼠标悬停在发件人上查看完整地址。</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_URL": {
+    "lesson_id": "lesson.url.zh",
+    "category": "SUSPICIOUS_URL",
+    "title": "可疑链接",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">可疑链接</h3><p>点击前先悬停。注意短网址、不匹配的显示文本和您不认识的域名。SN360会将有风险的链接路由到安全检查。</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_ATTACHMENT": {
+    "lesson_id": "lesson.attachment.zh",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "title": "可疑附件",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">可疑附件</h3><p>不要打开您不期望收到的附件——尤其是要求启用宏的Office文档，或.iso/.html文件。先与发件人确认。</p></section>",
+    "estimated_seconds": 25
+  },
+  "FIRST_CONTACT_EXTERNAL": {
+    "lesson_id": "lesson.first_contact.zh",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "title": "首次外部发件人",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">首次外部发件人</h3><p>您从未收到过来自此地址的邮件。在采取任何行动或共享信息之前，请确认发件人的身份。</p></section>",
+    "estimated_seconds": 15
+  },
+  "ACCOUNT_TAKEOVER_SUSPECTED": {
+    "lesson_id": "lesson.ato.zh",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "title": "疑似账户被盗",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">疑似账户被盗</h3><p>此发件人的行为与平时不同。他们的账户可能已被入侵。避免用敏感数据回复，并通过其他渠道确认。</p></section>",
+    "estimated_seconds": 25
+  },
+  "VENDOR_COMPROMISE": {
+    "lesson_id": "lesson.vendor.zh",
+    "category": "VENDOR_COMPROMISE",
+    "title": "供应商被入侵",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">供应商被入侵</h3><p>已知供应商的账户可能被冒用。请通过以前可信记录中的电话号码重新验证任何付款指示或敏感请求。</p></section>",
+    "estimated_seconds": 25
+  },
+  "CREDENTIAL_HARVESTING": {
+    "lesson_id": "lesson.credential.zh",
+    "category": "CREDENTIAL_HARVESTING",
+    "title": "凭证窃取",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">凭证窃取</h3><p>真正的服务不会要求您通过点击链接来确认密码。如果不确定，请在浏览器中直接访问服务——不要使用邮件中的链接。</p></section>",
+    "estimated_seconds": 20
+  },
+  "INVOICE_FRAUD": {
+    "lesson_id": "lesson.invoice.zh",
+    "category": "INVOICE_FRAUD",
+    "title": "发票欺诈",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">发票欺诈</h3><p>注意最后一刻的银行信息变更、不熟悉的PO编号或紧急付款请求。请致电已知的财务联系人进行验证。</p></section>",
+    "estimated_seconds": 25
+  },
+  "QR_PHISHING": {
+    "lesson_id": "lesson.qr.zh",
+    "category": "QR_PHISHING",
+    "title": "二维码钓鱼",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">二维码钓鱼</h3><p>攻击者将恶意URL嵌入二维码以绕过链接检查。不要扫描未经验证的邮件中的二维码——直接打开链接的服务。</p></section>",
+    "estimated_seconds": 20
+  },
+  "SCAM_FRAUD": {
+    "lesson_id": "lesson.scam.zh",
+    "category": "SCAM_FRAUD",
+    "title": "诈骗与欺诈",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">诈骗与欺诈</h3><p>金钱、奖品、爱情的承诺或要求付款的威胁是典型的诈骗模式。如果听起来太好或太可怕，通常不是真的。</p></section>",
+    "estimated_seconds": 25
+  },
+  "AUTH_FAILED": {
+    "lesson_id": "lesson.auth.zh",
+    "category": "AUTH_FAILED",
+    "title": "发件人验证失败",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">发件人验证失败</h3><p>发件人的域名未通过SPF/DKIM/DMARC检查。消息可能是伪造的。对任何链接或请求要格外小心。</p></section>",
+    "estimated_seconds": 20
+  },
+  "INTERNAL_TRUSTED": {
+    "lesson_id": "lesson.internal.zh",
+    "category": "INTERNAL_TRUSTED",
+    "title": "内部邮件",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">内部邮件</h3><p>此消息来自您的组织内部。尽管如此，账户仍可能被入侵——对异常请求要像对待外部邮件一样谨慎。</p></section>",
+    "estimated_seconds": 15
+  },
+  "VENDOR_TRUSTED": {
+    "lesson_id": "lesson.vendor_trusted.zh",
+    "category": "VENDOR_TRUSTED",
+    "title": "受信供应商",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">受信供应商</h3><p>此发件人在您组织的供应商白名单中。SN360仍在持续监控供应商入侵模式——发现异常请举报。</p></section>",
+    "estimated_seconds": 15
+  },
+  "NEWSLETTER": {
+    "lesson_id": "lesson.newsletter.zh",
+    "category": "NEWSLETTER",
+    "title": "新闻通讯/群发邮件",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">新闻通讯/群发邮件</h3><p>新闻通讯通常可以安全阅读，但很少需要紧急行动。请使用取消订阅链接，而不是将群发发件人举报为钓鱼。</p></section>",
+    "estimated_seconds": 15
+  }
+}

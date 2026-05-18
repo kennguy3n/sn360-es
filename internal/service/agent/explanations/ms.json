@@ -1,0 +1,42 @@
+{
+  "tier_explanations": {
+    "Blocked": "Mesej ini telah disekat kerana sistem pengesanan kami mengklasifikasikannya sebagai ancaman.",
+    "HighRisk": "Mesej ini ditanda sebagai berisiko tinggi dan dihalakan ke pasukan keselamatan anda.",
+    "Warning": "Mesej ini kelihatan mencurigakan — sila semak dengan teliti sebelum bertindak.",
+    "Caution": "Mesej ini mempunyai beberapa ciri luar biasa yang perlu disemak.",
+    "Informational": "Ini adalah mesej bermaklumat — hubungan pertama dari pengirim luar.",
+    "Trusted": "Mesej ini dari pengirim yang dipercayai."
+  },
+  "tier_suggestions": {
+    "Blocked": "Jangan berinteraksi dengan mesej ini. Laporkan kepada pasukan keselamatan jika ada yang kelihatan sah.",
+    "HighRisk": "Jangan berinteraksi dengan mesej ini. Laporkan kepada pasukan keselamatan jika ada yang kelihatan sah.",
+    "Warning": "Sahkan pengirim melalui saluran lain sebelum mengklik pautan atau membalas.",
+    "Caution": "Berhati-hati dengan sebarang pautan atau lampiran.",
+    "Informational": "Pengirim luar kali pertama — sahkan sebelum bertindak atas permintaan.",
+    "Trusted": "Tiada tindakan diperlukan."
+  },
+  "category_names": {
+    "LIKELY_PHISHING": "kemungkinan phishing",
+    "BEC_IMPERSONATION": "penipuan e-mel perniagaan (BEC)",
+    "LOOKALIKE_DOMAIN": "domain serupa",
+    "SUSPICIOUS_URL": "URL mencurigakan",
+    "SUSPICIOUS_ATTACHMENT": "lampiran mencurigakan",
+    "FIRST_CONTACT_EXTERNAL": "hubungan pertama dari luar",
+    "ACCOUNT_TAKEOVER_SUSPECTED": "petunjuk pengambilalihan akaun",
+    "VENDOR_COMPROMISE": "kemungkinan kompromi pembekal",
+    "CREDENTIAL_HARVESTING": "pengumpulan kelayakan",
+    "INVOICE_FRAUD": "penipuan invois",
+    "QR_PHISHING": "phishing kod QR",
+    "SCAM_FRAUD": "penipuan",
+    "AUTH_FAILED": "pengesahan pengirim gagal",
+    "INTERNAL_TRUSTED": "pengirim dalaman dipercayai",
+    "VENDOR_TRUSTED": "pembekal dipercayai",
+    "NEWSLETTER": "surat berita"
+  },
+  "primary_signal": "Isyarat utama: ",
+  "contributing_factors": "Faktor penyumbang: ",
+  "degraded_notice": "Nota: satu atau lebih perkhidmatan pengesanan tidak tersedia semasa penilaian.",
+  "verdict_pending": "Keputusan belum diputuskan.",
+  "escalated_suggestion": "Telah dinaik taraf kepada pasukan keselamatan anda untuk semakan.",
+  "release_suggestion": "Permintaan pelepasan anda telah dimasukkan ke dalam barisan dan akan diproses dalam beberapa minit."
+}

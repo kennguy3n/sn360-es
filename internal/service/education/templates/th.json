@@ -1,0 +1,47 @@
+[
+  {
+    "template_id": "bec.easy.delivery_notice.th",
+    "attack_type": "bec",
+    "difficulty": "easy",
+    "locale": "th",
+    "subject_template": "แจ้งการจัดส่ง – ต้องการยืนยันด่วน",
+    "body_template": "<p>สวัสดีค่ะ/ครับ {{.target_name}},</p><p>พัสดุของคุณกำลังจัดส่ง กรุณายืนยันที่อยู่จัดส่งและชำระค่าขนส่งเพิ่มเติมผ่านลิงก์ด้านล่าง:</p><p><a href=\"{{.landing_url}}\">ยืนยันการจัดส่ง</a></p><p>ขอแสดงความนับถือ,<br/>{{.vendor_name}}</p>",
+    "sender_display_template": "{{.vendor_name}} การจัดส่ง",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": [
+      "shipping-delivery themed",
+      "credential-harvest"
+    ]
+  },
+  {
+    "template_id": "credential_phishing.medium.bank_alert.th",
+    "attack_type": "credential_phishing",
+    "difficulty": "medium",
+    "locale": "th",
+    "subject_template": "แจ้งเตือนความปลอดภัย: พบกิจกรรมการเข้าสู่ระบบที่ผิดปกติ",
+    "body_template": "<p>เรียน {{.target_name}},</p><p>ระบบตรวจพบกิจกรรมการเข้าสู่ระบบที่ผิดปกติในบัญชีของคุณ กรุณายืนยันตัวตนเพื่อปกป้องบัญชี:</p><p><a href=\"{{.landing_url}}\">ยืนยันตัวตน</a></p><p>หากคุณไม่รู้จักกิจกรรมนี้ กรุณาติดต่อแผนก IT ทันที</p><p>ทีมความปลอดภัยทางไซเบอร์</p>",
+    "sender_display_template": "ทีมความปลอดภัยทางไซเบอร์",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": [
+      "credential-harvest",
+      "local-bank-impersonation"
+    ]
+  },
+  {
+    "template_id": "invoice_fraud.hard.bank_update.th",
+    "attack_type": "invoice_fraud",
+    "difficulty": "hard",
+    "locale": "th",
+    "subject_template": "ใบแจ้งหนี้ #{{.invoice_number}} – อัปเดตข้อมูลธนาคาร",
+    "body_template": "<p>เรียน {{.target_name}},</p><p>ขอแจ้งให้ทราบว่าข้อมูลบัญชีธนาคารของเราได้เปลี่ยนแปลง กรุณาใช้ข้อมูลต่อไปนี้สำหรับการชำระเงินครั้งถัดไป:</p><p>เลขบัญชี: 123-4-56789-0<br/>ธนาคาร: ธนาคารกสิกรไทย</p><p>ใบแจ้งหนี้แนบมาด้วย</p><p>ขอแสดงความนับถือ,<br/>{{.vendor_name}}<br/>ฝ่ายบัญชี</p>",
+    "sender_display_template": "{{.vendor_name}} ฝ่ายบัญชี",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": [
+      "bank-detail change",
+      "thailand payment pattern"
+    ]
+  }
+]

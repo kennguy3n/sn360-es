@@ -1,0 +1,114 @@
+{
+  "LIKELY_PHISHING": {
+    "lesson_id": "lesson.phishing.vi",
+    "category": "LIKELY_PHISHING",
+    "title": "Nhận biết email lừa đảo",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Nhận biết email lừa đảo</h3><p>Tin nhắn lừa đảo cố gắng lừa bạn nhấp vào liên kết độc hại, mở tệp đính kèm hoặc tiết lộ mật khẩu. Trước khi hành động, hãy hỏi:</p><ul style=\"margin:6px 0 0 18px;padding:0\"><li>Tôi có nhận ra người gửi không?</li><li>Yêu cầu có cấp bách hoặc bất thường không?</li><li>Liên kết có đi đến nơi nó tuyên bố không?</li></ul><p style=\"margin-top:8px\">Khi nghi ngờ, hãy báo cáo tin nhắn và xác minh qua kênh khác.</p></section>",
+    "estimated_seconds": 25
+  },
+  "BEC_IMPERSONATION": {
+    "lesson_id": "lesson.bec.vi",
+    "category": "BEC_IMPERSONATION",
+    "title": "Tấn công giả mạo email doanh nghiệp (BEC)",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Tấn công giả mạo email doanh nghiệp</h3><p>Kẻ tấn công BEC mạo danh giám đốc hoặc nhà cung cấp để chuyển hướng thanh toán hoặc đánh cắp dữ liệu. Dấu hiệu cảnh báo:</p><ul style=\"margin:6px 0 0 18px;padding:0\"><li>Tính cấp bách xung quanh thay đổi thanh toán</li><li>Địa chỉ trả lời khác với người gửi</li><li>Hướng dẫn ngân hàng mới</li></ul><p style=\"margin-top:8px\">Xác nhận thay đổi thanh toán qua điện thoại bằng số bạn đã biết.</p></section>",
+    "estimated_seconds": 30
+  },
+  "LOOKALIKE_DOMAIN": {
+    "lesson_id": "lesson.lookalike.vi",
+    "category": "LOOKALIKE_DOMAIN",
+    "title": "Tên miền giả mạo",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Tên miền giả mạo</h3><p>Kẻ tấn công đăng ký tên miền gần giống như <strong>example-corp.com</strong> thay vì <strong>example.com</strong>. Di chuột qua tên người gửi để kiểm tra địa chỉ đầy đủ trước khi trả lời.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_URL": {
+    "lesson_id": "lesson.url.vi",
+    "category": "SUSPICIOUS_URL",
+    "title": "Liên kết đáng ngờ",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Liên kết đáng ngờ</h3><p>Di chuột trước khi nhấp. Cảnh giác với URL rút gọn, văn bản hiển thị không khớp và tên miền bạn không nhận ra. SN360 chuyển hướng các liên kết rủi ro qua kiểm tra an toàn.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_ATTACHMENT": {
+    "lesson_id": "lesson.attachment.vi",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "title": "Tệp đính kèm đáng ngờ",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Tệp đính kèm đáng ngờ</h3><p>Đừng mở tệp đính kèm bạn không mong đợi — đặc biệt là tài liệu Office yêu cầu bật macro, hoặc tệp .iso/.html. Xác minh với người gửi trước.</p></section>",
+    "estimated_seconds": 25
+  },
+  "FIRST_CONTACT_EXTERNAL": {
+    "lesson_id": "lesson.first_contact.vi",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "title": "Người gửi bên ngoài lần đầu",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">Người gửi bên ngoài lần đầu</h3><p>Bạn chưa từng nhận email từ địa chỉ này. Hãy dành thời gian xác nhận danh tính người gửi trước khi thực hiện bất kỳ hành động hoặc chia sẻ thông tin nào.</p></section>",
+    "estimated_seconds": 15
+  },
+  "ACCOUNT_TAKEOVER_SUSPECTED": {
+    "lesson_id": "lesson.ato.vi",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "title": "Nghi ngờ chiếm đoạt tài khoản",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Nghi ngờ chiếm đoạt tài khoản</h3><p>Hành vi của người gửi này khác thường so với bình thường. Tài khoản của họ có thể đã bị xâm phạm. Tránh trả lời với dữ liệu nhạy cảm và xác nhận qua kênh khác.</p></section>",
+    "estimated_seconds": 25
+  },
+  "VENDOR_COMPROMISE": {
+    "lesson_id": "lesson.vendor.vi",
+    "category": "VENDOR_COMPROMISE",
+    "title": "Xâm phạm nhà cung cấp",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Xâm phạm nhà cung cấp</h3><p>Tài khoản của nhà cung cấp đã biết có thể đang bị giả mạo. Xác minh lại mọi hướng dẫn thanh toán hoặc yêu cầu nhạy cảm qua số điện thoại từ hồ sơ tin cậy trước đó.</p></section>",
+    "estimated_seconds": 25
+  },
+  "CREDENTIAL_HARVESTING": {
+    "lesson_id": "lesson.credential.vi",
+    "category": "CREDENTIAL_HARVESTING",
+    "title": "Thu thập thông tin đăng nhập",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Thu thập thông tin đăng nhập</h3><p>Các dịch vụ thực sự không bao giờ yêu cầu bạn xác nhận mật khẩu bằng cách nhấp vào liên kết. Nếu không chắc chắn, hãy truy cập trực tiếp dịch vụ trong trình duyệt — đừng dùng liên kết từ email.</p></section>",
+    "estimated_seconds": 20
+  },
+  "INVOICE_FRAUD": {
+    "lesson_id": "lesson.invoice.vi",
+    "category": "INVOICE_FRAUD",
+    "title": "Gian lận hóa đơn",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Gian lận hóa đơn</h3><p>Cẩn thận với thay đổi chi tiết ngân hàng vào phút cuối, số PO không quen thuộc hoặc yêu cầu thanh toán khẩn cấp. Luôn xác minh bằng cách gọi cho liên hệ tài chính đã biết.</p></section>",
+    "estimated_seconds": 25
+  },
+  "QR_PHISHING": {
+    "lesson_id": "lesson.qr.vi",
+    "category": "QR_PHISHING",
+    "title": "Lừa đảo qua mã QR",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Lừa đảo qua mã QR</h3><p>Kẻ tấn công nhúng URL độc hại vào mã QR để vượt qua kiểm tra liên kết. Đừng quét mã QR từ email chưa xác minh — hãy mở dịch vụ được liên kết trực tiếp thay thế.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SCAM_FRAUD": {
+    "lesson_id": "lesson.scam.vi",
+    "category": "SCAM_FRAUD",
+    "title": "Lừa đảo và gian lận",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Lừa đảo và gian lận</h3><p>Lời hứa về tiền bạc, giải thưởng, tình cảm hoặc đe dọa đòi thanh toán là các mẫu lừa đảo cổ điển. Nếu nghe quá tốt — hoặc quá đáng sợ — thì thường là không thật.</p></section>",
+    "estimated_seconds": 25
+  },
+  "AUTH_FAILED": {
+    "lesson_id": "lesson.auth.vi",
+    "category": "AUTH_FAILED",
+    "title": "Xác thực người gửi thất bại",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Xác thực người gửi thất bại</h3><p>Tên miền của người gửi không vượt qua kiểm tra SPF/DKIM/DMARC. Tin nhắn có thể bị giả mạo. Hãy thận trọng hơn với mọi liên kết hoặc yêu cầu.</p></section>",
+    "estimated_seconds": 20
+  },
+  "INTERNAL_TRUSTED": {
+    "lesson_id": "lesson.internal.vi",
+    "category": "INTERNAL_TRUSTED",
+    "title": "Email nội bộ",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">Email nội bộ</h3><p>Tin nhắn này đến từ bên trong tổ chức của bạn. Dù vậy, tài khoản vẫn có thể bị xâm phạm — hãy cẩn trọng với các yêu cầu bất thường như email từ bên ngoài.</p></section>",
+    "estimated_seconds": 15
+  },
+  "VENDOR_TRUSTED": {
+    "lesson_id": "lesson.vendor_trusted.vi",
+    "category": "VENDOR_TRUSTED",
+    "title": "Nhà cung cấp tin cậy",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">Nhà cung cấp tin cậy</h3><p>Người gửi này nằm trong danh sách nhà cung cấp được phép của tổ chức bạn. SN360 vẫn theo dõi các mẫu xâm phạm nhà cung cấp — hãy gắn cờ bất kỳ điều gì có vẻ bất thường.</p></section>",
+    "estimated_seconds": 15
+  },
+  "NEWSLETTER": {
+    "lesson_id": "lesson.newsletter.vi",
+    "category": "NEWSLETTER",
+    "title": "Bản tin / email hàng loạt",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">Bản tin / email hàng loạt</h3><p>Bản tin thường an toàn để đọc nhưng hiếm khi cần hành động khẩn cấp. Sử dụng liên kết hủy đăng ký thay vì báo cáo người gửi hàng loạt là lừa đảo.</p></section>",
+    "estimated_seconds": 15
+  }
+}

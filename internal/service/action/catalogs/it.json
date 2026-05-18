@@ -1,0 +1,43 @@
+{
+  "tier.Blocked.title": "Bloccato: questo messaggio è pericoloso",
+  "tier.Blocked.body": "Abbiamo bloccato questa e-mail perché è molto probabilmente un tentativo di phishing o un'altra minaccia. Non aprire allegati e non cliccare su nessun link.",
+  "tier.HighRisk.title": "Alto rischio: non agire su questa e-mail",
+  "tier.HighRisk.body": "Questa e-mail mostra forti segnali di impersonificazione, frode o compromissione dell'account. Verifica il mittente attraverso un canale alternativo prima di intraprendere qualsiasi azione.",
+  "tier.Warning.title": "Avviso: questa e-mail sembra sospetta",
+  "tier.Warning.body": "Questa e-mail contiene segnali che indicano che qualcuno potrebbe tentare di ingannarti. Controlla attentamente il mittente prima di cliccare su link o rispondere.",
+  "tier.Caution.title": "Attenzione: mittente o contenuto insolito",
+  "tier.Caution.body": "Qualcosa di insolito è stato rilevato in questa e-mail. Tratta tutti i link, gli allegati o le richieste con cautela.",
+  "tier.Informational.title": "Primo contatto da mittente esterno",
+  "tier.Informational.body": "Questa è la prima e-mail che abbiamo ricevuto da questo mittente. Conferma la sua identità prima di agire su qualsiasi richiesta.",
+  "tier.Trusted.title": "Mittente affidabile",
+  "tier.Trusted.body": "Questo messaggio proviene da un mittente di cui la tua organizzazione si fida già. Nessuna azione richiesta.",
+
+  "category.LIKELY_PHISHING": "Probabile phishing",
+  "category.BEC_IMPERSONATION": "Possibile impersonificazione (BEC)",
+  "category.LOOKALIKE_DOMAIN": "Dominio similare",
+  "category.SUSPICIOUS_URL": "Link sospetto",
+  "category.SUSPICIOUS_ATTACHMENT": "Allegato sospetto",
+  "category.FIRST_CONTACT_EXTERNAL": "Primo contatto esterno alla tua organizzazione",
+  "category.ACCOUNT_TAKEOVER_SUSPECTED": "Possibile acquisizione account",
+  "category.VENDOR_COMPROMISE": "Possibile compromissione fornitore",
+  "category.CREDENTIAL_HARVESTING": "Raccolta credenziali",
+  "category.INVOICE_FRAUD": "Frode con fattura",
+  "category.QR_PHISHING": "Phishing tramite QR code",
+  "category.SCAM_FRAUD": "Truffa / frode",
+  "category.AUTH_FAILED": "Autenticazione mittente fallita",
+  "category.INTERNAL_TRUSTED": "Mittente interno",
+  "category.VENDOR_TRUSTED": "Fornitore affidabile",
+  "category.NEWSLETTER": "Newsletter",
+
+  "auth.verified": "Mittente verificato",
+  "auth.unverified": "Mittente non verificato",
+  "auth.failed": "Autenticazione mittente fallita",
+  "auth.unknown": "Stato autenticazione sconosciuto",
+
+  "action.report": "Segnala phishing",
+  "action.mark_safe": "Contrassegna come sicuro",
+  "action.trust_sender": "Fidati del mittente",
+  "action.learn_more": "Scopri di più",
+
+  "banner.degraded": "Alcuni servizi di rilevamento non erano disponibili durante la valutazione."
+}

@@ -1,0 +1,114 @@
+{
+  "LIKELY_PHISHING": {
+    "lesson_id": "lesson.phishing.fil",
+    "category": "LIKELY_PHISHING",
+    "title": "Paano makilala ang phishing email",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Paano makilala ang phishing email</h3><p>Ang mga phishing na mensahe ay nagtatangkang linlangin ka na mag-click sa mga mapanganib na link, magbukas ng mga attachment, o magbunyag ng mga password. Bago kumilos, itanong sa sarili: Kilala ko ba ang nagpadala? Ang kahilingan ba ay kagyat o hindi karaniwan? Ang link ba ay pumupunta kung saan sinasabi nito? Kapag nagdududa, i-report ang mensahe at i-verify sa ibang paraan.</p></section>",
+    "estimated_seconds": 25
+  },
+  "BEC_IMPERSONATION": {
+    "lesson_id": "lesson.bec.fil",
+    "category": "BEC_IMPERSONATION",
+    "title": "Pandaraya sa business email (BEC)",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Pandaraya sa business email (BEC)</h3><p>Ang mga BEC attacker ay nagpapanggap na mga executive o vendor para i-redirect ang mga bayad o magnakaw ng data. Mga babala: pagmamadali tungkol sa pagbabago ng bayad, reply address na iba sa nagpadala, bagong bank details. Kumpirmahin ang mga pagbabago ng bayad sa pamamagitan ng pagtawag sa numero na alam mo na.</p></section>",
+    "estimated_seconds": 30
+  },
+  "LOOKALIKE_DOMAIN": {
+    "lesson_id": "lesson.lookalike.fil",
+    "category": "LOOKALIKE_DOMAIN",
+    "title": "Kahawig na domain",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Kahawig na domain</h3><p>Nagrerehistro ang mga attacker ng halos magkaparehong domain tulad ng <strong>example-corp.com</strong> sa halip na <strong>example.com</strong>. Mag-hover sa nagpadala para i-check ang buong address bago tumugon.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_URL": {
+    "lesson_id": "lesson.url.fil",
+    "category": "SUSPICIOUS_URL",
+    "title": "Kahina-hinalang link",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Kahina-hinalang link</h3><p>Mag-hover bago mag-click. Mag-ingat sa mga pinaikling URL, hindi tumutugmang display text, at mga domain na hindi mo kilala. Dini-redirect ng SN360 ang mga mapanganib na link sa safety check.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_ATTACHMENT": {
+    "lesson_id": "lesson.attachment.fil",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "title": "Kahina-hinalang attachment",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Kahina-hinalang attachment</h3><p>Huwag buksan ang mga attachment na hindi mo inaasahan — lalo na ang mga Office document na humihiling ng macro, o .iso/.html files. Kumpirmahin muna sa nagpadala.</p></section>",
+    "estimated_seconds": 25
+  },
+  "FIRST_CONTACT_EXTERNAL": {
+    "lesson_id": "lesson.first_contact.fil",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "title": "Unang beses na external na nagpadala",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">Unang beses na external na nagpadala</h3><p>Hindi ka pa nakatanggap ng email mula sa address na ito. Kumpirmahin ang pagkakakilanlan ng nagpadala bago kumilos o magbahagi ng impormasyon.</p></section>",
+    "estimated_seconds": 15
+  },
+  "ACCOUNT_TAKEOVER_SUSPECTED": {
+    "lesson_id": "lesson.ato.fil",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "title": "Posibleng pag-agaw ng account",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Posibleng pag-agaw ng account</h3><p>Ang pag-uugali ng nagpadalang ito ay iba sa karaniwan. Maaaring nakompromiso na ang kanyang account. Iwasang tumugon gamit ang sensitibong data at kumpirmahin sa ibang paraan.</p></section>",
+    "estimated_seconds": 25
+  },
+  "VENDOR_COMPROMISE": {
+    "lesson_id": "lesson.vendor.fil",
+    "category": "VENDOR_COMPROMISE",
+    "title": "Nakompromisong vendor",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Nakompromisong vendor</h3><p>Ang account ng kilalang vendor ay maaaring na-impersonate. Muling i-verify ang anumang payment instruction o sensitibong kahilingan sa pamamagitan ng pagtawag sa numero mula sa iyong dating tala.</p></section>",
+    "estimated_seconds": 25
+  },
+  "CREDENTIAL_HARVESTING": {
+    "lesson_id": "lesson.credential.fil",
+    "category": "CREDENTIAL_HARVESTING",
+    "title": "Pagnanakaw ng kredensyal",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Pagnanakaw ng kredensyal</h3><p>Ang tunay na serbisyo ay hindi kailanman hihingi sa iyo na i-confirm ang password sa pamamagitan ng pag-click sa link. Kapag hindi sigurado, pumunta nang direkta sa serbisyo sa browser.</p></section>",
+    "estimated_seconds": 20
+  },
+  "INVOICE_FRAUD": {
+    "lesson_id": "lesson.invoice.fil",
+    "category": "INVOICE_FRAUD",
+    "title": "Pandaraya sa invoice",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Pandaraya sa invoice</h3><p>Mag-ingat sa huling minutong pagbabago ng bank details, hindi pamilyar na PO number, o kagyat na kahilingan sa pagbayad. I-verify sa pamamagitan ng pagtawag sa iyong kilalang finance contact.</p></section>",
+    "estimated_seconds": 25
+  },
+  "QR_PHISHING": {
+    "lesson_id": "lesson.qr.fil",
+    "category": "QR_PHISHING",
+    "title": "QR code phishing",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">QR code phishing</h3><p>Ini-embed ng mga attacker ang mga mapanganib na URL sa QR code para iwasan ang link inspection. Huwag mag-scan ng QR code mula sa mga hindi na-verify na email — buksan nang direkta ang naka-link na serbisyo.</p></section>",
+    "estimated_seconds": 20
+  },
+  "SCAM_FRAUD": {
+    "lesson_id": "lesson.scam.fil",
+    "category": "SCAM_FRAUD",
+    "title": "Scam at pandaraya",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Scam at pandaraya</h3><p>Ang mga pangako ng pera, premyo, romansa o mga banta na humihiling ng bayad ay mga klasikong scam pattern. Kung masyadong maganda o masyadong nakakatakot, kadalasan ay hindi totoo.</p></section>",
+    "estimated_seconds": 25
+  },
+  "AUTH_FAILED": {
+    "lesson_id": "lesson.auth.fil",
+    "category": "AUTH_FAILED",
+    "title": "Nabigo ang authentication ng nagpadala",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">Nabigo ang authentication ng nagpadala</h3><p>Ang domain ng nagpadala ay hindi pumasa sa SPF/DKIM/DMARC checks. Maaaring spoofed ang mensahe. Maging lalo pang maingat sa anumang link o kahilingan.</p></section>",
+    "estimated_seconds": 20
+  },
+  "INTERNAL_TRUSTED": {
+    "lesson_id": "lesson.internal.fil",
+    "category": "INTERNAL_TRUSTED",
+    "title": "Internal na email",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">Internal na email</h3><p>Ang mensaheng ito ay galing sa loob ng iyong organisasyon. Gayunpaman, ang mga account ay maaaring makompromiso — tratuhin ang mga hindi karaniwang kahilingan nang may parehong pag-iingat tulad ng external email.</p></section>",
+    "estimated_seconds": 15
+  },
+  "VENDOR_TRUSTED": {
+    "lesson_id": "lesson.vendor_trusted.fil",
+    "category": "VENDOR_TRUSTED",
+    "title": "Pinagkakatiwalaang vendor",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">Pinagkakatiwalaang vendor</h3><p>Ang nagpadalang ito ay nasa vendor allow-list ng iyong organisasyon. Patuloy na minomonitor ng SN360 ang mga pattern ng vendor compromise — i-flag ang anumang mukhang kakaiba.</p></section>",
+    "estimated_seconds": 15
+  },
+  "NEWSLETTER": {
+    "lesson_id": "lesson.newsletter.fil",
+    "category": "NEWSLETTER",
+    "title": "Newsletter / mass email",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">Newsletter / mass email</h3><p>Ang mga newsletter ay karaniwang ligtas basahin ngunit bihirang nangangailangan ng kagyat na aksyon. Gamitin ang unsubscribe link sa halip na i-report ang bulk sender bilang phishing.</p></section>",
+    "estimated_seconds": 15
+  }
+}

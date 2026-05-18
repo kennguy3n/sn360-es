@@ -1,0 +1,114 @@
+{
+  "LIKELY_PHISHING": {
+    "lesson_id": "lesson.phishing.ja",
+    "category": "LIKELY_PHISHING",
+    "title": "フィッシングメールの見分け方",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">フィッシングメールの見分け方</h3><p>フィッシングメッセージは、悪意のあるリンクのクリック、添付ファイルの開封、パスワードの漏洩を狙っています。行動する前に確認してください：</p><ul style=\"margin:6px 0 0 18px;padding:0\"><li>送信者を知っていますか？</li><li>要求は緊急または異常ではありませんか？</li><li>リンクは表示通りの場所に移動しますか？</li></ul><p style=\"margin-top:8px\">不安な場合は、メッセージを報告し、別の手段で確認してください。</p></section>",
+    "estimated_seconds": 25
+  },
+  "BEC_IMPERSONATION": {
+    "lesson_id": "lesson.bec.ja",
+    "category": "BEC_IMPERSONATION",
+    "title": "ビジネスメール詐欺（BEC）",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">ビジネスメール詐欺</h3><p>BEC攻撃者は経営者やベンダーになりすまし、支払いの転送やデータの窃取を行います。警告サイン：</p><ul style=\"margin:6px 0 0 18px;padding:0\"><li>支払い変更に関する緊急性</li><li>返信先アドレスが送信者と異なる</li><li>新しい銀行情報</li></ul><p style=\"margin-top:8px\">支払い変更は、既知の電話番号で電話確認してください。</p></section>",
+    "estimated_seconds": 30
+  },
+  "LOOKALIKE_DOMAIN": {
+    "lesson_id": "lesson.lookalike.ja",
+    "category": "LOOKALIKE_DOMAIN",
+    "title": "類似ドメイン",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">類似ドメイン</h3><p>攻撃者は<strong>example-corp.com</strong>のような正規に近いドメインを登録します。返信前に送信者にマウスを合わせ、完全なアドレスを確認してください。</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_URL": {
+    "lesson_id": "lesson.url.ja",
+    "category": "SUSPICIOUS_URL",
+    "title": "不審なリンク",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">不審なリンク</h3><p>クリック前にマウスを合わせてください。短縮URL、不一致な表示テキスト、知らないドメインに注意してください。SN360はリスクのあるリンクを安全チェックに転送します。</p></section>",
+    "estimated_seconds": 20
+  },
+  "SUSPICIOUS_ATTACHMENT": {
+    "lesson_id": "lesson.attachment.ja",
+    "category": "SUSPICIOUS_ATTACHMENT",
+    "title": "不審な添付ファイル",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">不審な添付ファイル</h3><p>予期しない添付ファイルを開かないでください。特にマクロの有効化を求めるOffice文書や.iso/.htmlファイルには注意してください。まず送信者に確認してください。</p></section>",
+    "estimated_seconds": 25
+  },
+  "FIRST_CONTACT_EXTERNAL": {
+    "lesson_id": "lesson.first_contact.ja",
+    "category": "FIRST_CONTACT_EXTERNAL",
+    "title": "初めての外部送信者",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">初めての外部送信者</h3><p>このアドレスからのメールは初めてです。行動や情報共有の前に、送信者の身元を確認してください。</p></section>",
+    "estimated_seconds": 15
+  },
+  "ACCOUNT_TAKEOVER_SUSPECTED": {
+    "lesson_id": "lesson.ato.ja",
+    "category": "ACCOUNT_TAKEOVER_SUSPECTED",
+    "title": "アカウント乗っ取りの疑い",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">アカウント乗っ取りの疑い</h3><p>この送信者の行動が通常と異なります。アカウントが侵害されている可能性があります。機密データでの返信を避け、別のチャネルで確認してください。</p></section>",
+    "estimated_seconds": 25
+  },
+  "VENDOR_COMPROMISE": {
+    "lesson_id": "lesson.vendor.ja",
+    "category": "VENDOR_COMPROMISE",
+    "title": "ベンダー侵害",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">ベンダー侵害</h3><p>既知のベンダーのアカウントがなりすまされている可能性があります。信頼できる過去の記録の電話番号で、支払い指示や機密リクエストを再確認してください。</p></section>",
+    "estimated_seconds": 25
+  },
+  "CREDENTIAL_HARVESTING": {
+    "lesson_id": "lesson.credential.ja",
+    "category": "CREDENTIAL_HARVESTING",
+    "title": "資格情報の窃取",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">資格情報の窃取</h3><p>本物のサービスがリンクをクリックしてパスワードを確認するよう求めることはありません。不安な場合は、ブラウザで直接サービスにアクセスしてください。メールのリンクは使わないでください。</p></section>",
+    "estimated_seconds": 20
+  },
+  "INVOICE_FRAUD": {
+    "lesson_id": "lesson.invoice.ja",
+    "category": "INVOICE_FRAUD",
+    "title": "請求書詐欺",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">請求書詐欺</h3><p>直前の銀行情報変更、見慣れないPO番号、緊急の支払い要求に注意してください。既知の財務担当者に電話で確認してください。</p></section>",
+    "estimated_seconds": 25
+  },
+  "QR_PHISHING": {
+    "lesson_id": "lesson.qr.ja",
+    "category": "QR_PHISHING",
+    "title": "QRコードフィッシング",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">QRコードフィッシング</h3><p>攻撃者はリンク検査を回避するためにQRコードに悪意のあるURLを埋め込みます。未確認のメールのQRコードをスキャンしないでください。リンク先のサービスに直接アクセスしてください。</p></section>",
+    "estimated_seconds": 20
+  },
+  "SCAM_FRAUD": {
+    "lesson_id": "lesson.scam.ja",
+    "category": "SCAM_FRAUD",
+    "title": "詐欺・不正",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">詐欺・不正</h3><p>金銭、賞品、恋愛の約束や支払いを要求する脅迫は、典型的な詐欺パターンです。あまりにも良い話や怖い話は、通常本当ではありません。</p></section>",
+    "estimated_seconds": 25
+  },
+  "AUTH_FAILED": {
+    "lesson_id": "lesson.auth.ja",
+    "category": "AUTH_FAILED",
+    "title": "送信者認証の失敗",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#a40000\">送信者認証の失敗</h3><p>送信者のドメインがSPF/DKIM/DMARCチェックに失敗しました。メッセージがなりすましの可能性があります。リンクやリクエストに特に注意してください。</p></section>",
+    "estimated_seconds": 20
+  },
+  "INTERNAL_TRUSTED": {
+    "lesson_id": "lesson.internal.ja",
+    "category": "INTERNAL_TRUSTED",
+    "title": "社内メール",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">社内メール</h3><p>このメッセージは組織内部からのものです。それでもアカウントが侵害される可能性があるため、異常なリクエストは外部メールと同様に注意してください。</p></section>",
+    "estimated_seconds": 15
+  },
+  "VENDOR_TRUSTED": {
+    "lesson_id": "lesson.vendor_trusted.ja",
+    "category": "VENDOR_TRUSTED",
+    "title": "信頼できるベンダー",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a6b1a\">信頼できるベンダー</h3><p>この送信者は組織のベンダー許可リストに登録されています。SN360はベンダー侵害パターンを引き続き監視しています。不自然に見えるものがあれば報告してください。</p></section>",
+    "estimated_seconds": 15
+  },
+  "NEWSLETTER": {
+    "lesson_id": "lesson.newsletter.ja",
+    "category": "NEWSLETTER",
+    "title": "ニュースレター・一斉送信メール",
+    "body_html": "<section style=\"font-family:system-ui;font-size:14px;color:#1a1a1a\"><h3 style=\"margin:0 0 8px;color:#1a1a1a\">ニュースレター・一斉送信メール</h3><p>ニュースレターは通常読んでも安全ですが、緊急の対応が必要なことはまれです。一斉送信者をフィッシングとして報告するのではなく、配信停止リンクを使用してください。</p></section>",
+    "estimated_seconds": 15
+  }
+}

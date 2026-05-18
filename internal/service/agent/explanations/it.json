@@ -1,0 +1,42 @@
+{
+  "tier_explanations": {
+    "Blocked": "Questo messaggio è stato bloccato perché i nostri sistemi di rilevamento lo hanno classificato come probabile minaccia.",
+    "HighRisk": "Questo messaggio è stato contrassegnato come ad alto rischio e inoltrato al team di sicurezza.",
+    "Warning": "Questo messaggio sembra sospetto — esamina attentamente prima di agire.",
+    "Caution": "Questo messaggio presenta alcune caratteristiche insolite che meritano verifica.",
+    "Informational": "Questo è un messaggio informativo — primo contatto da un mittente esterno.",
+    "Trusted": "Questo messaggio proviene da un mittente affidabile."
+  },
+  "tier_suggestions": {
+    "Blocked": "Non interagire con questo messaggio. Segnalalo al team di sicurezza se qualcosa sembra legittimo.",
+    "HighRisk": "Non interagire con questo messaggio. Segnalalo al team di sicurezza se qualcosa sembra legittimo.",
+    "Warning": "Verifica il mittente tramite un altro canale prima di cliccare su link o rispondere.",
+    "Caution": "Tratta qualsiasi link o allegato con cautela.",
+    "Informational": "Mittente esterno al primo contatto — conferma prima di dare seguito alle richieste.",
+    "Trusted": "Nessuna azione richiesta."
+  },
+  "category_names": {
+    "LIKELY_PHISHING": "probabile phishing",
+    "BEC_IMPERSONATION": "compromissione email aziendale (BEC)",
+    "LOOKALIKE_DOMAIN": "dominio similare",
+    "SUSPICIOUS_URL": "URL sospetto",
+    "SUSPICIOUS_ATTACHMENT": "allegato sospetto",
+    "FIRST_CONTACT_EXTERNAL": "primo contatto esterno",
+    "ACCOUNT_TAKEOVER_SUSPECTED": "indicatori di compromissione account",
+    "VENDOR_COMPROMISE": "possibile compromissione del fornitore",
+    "CREDENTIAL_HARVESTING": "raccolta credenziali",
+    "INVOICE_FRAUD": "frode sulle fatture",
+    "QR_PHISHING": "phishing tramite QR",
+    "SCAM_FRAUD": "truffa / frode",
+    "AUTH_FAILED": "autenticazione mittente fallita",
+    "INTERNAL_TRUSTED": "mittente interno affidabile",
+    "VENDOR_TRUSTED": "fornitore affidabile",
+    "NEWSLETTER": "newsletter"
+  },
+  "primary_signal": "Segnale principale: ",
+  "contributing_factors": "Fattori contribuenti: ",
+  "degraded_notice": "Nota: uno o più servizi di rilevamento non erano disponibili durante la valutazione.",
+  "verdict_pending": "Verdetto in attesa.",
+  "escalated_suggestion": "Escalato al team di sicurezza per la revisione.",
+  "release_suggestion": "La richiesta di rilascio è stata accodata e verrà elaborata entro pochi minuti."
+}
