@@ -88,6 +88,17 @@ type BatchOrchestratorConfig struct {
 	// action layer does not consume (e.g. an out-of-process action
 	// service that re-derives tier itself).
 	TierDecider TierDecider
+	// Weights mirrors evaluator.Config.Weights and is applied in
+	// aggregateLightweight so a batch-emitted verdict's res.Score is
+	// the same weighted aggregate the per-message path would have
+	// produced for an identical Tier 1 outcome. Without it, the
+	// batch path published `res.Score = tier1Score`, while the
+	// per-message path published `res.Score = tier1Score *
+	// AI_weight / total_weight` (typically 0.8x), causing the same
+	// message to land in a different TierDecider band depending on
+	// which consumer happened to handle it. Defaults to
+	// DefaultWeights() when zero.
+	Weights Weights
 	// Sink is where verdicts are emitted. The default ResultSubject
 	// is `es.evaluate.result` (mirroring the per-message
 	// handleEvaluateRequest path), so the sink only needs to support
@@ -314,25 +325,36 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 				Escalate:   verdict == tier1.VerdictEscalate,
 			},
 		}
+		// fallbackRan tracks whether the slow-path evaluator actually
+		// replaced `res`. The previous structure used a plain
+		// else-branch for the "no Fallback" path, which silently
+		// skipped aggregateLightweight when Fallback was wired but
+		// returned an error — the exact degraded-mode scenario where
+		// downstream consumers still need a fully-formed verdict.
+		fallbackRan := false
 		if verdict == tier1.VerdictEscalate && o.cfg.Fallback != nil {
 			full, err := o.cfg.Fallback.Evaluate(ctx, pendings[idx].req, pendings[idx].sig)
 			if err == nil {
 				res = full
+				fallbackRan = true
 			} else {
 				o.log.Warn("evaluate: fallback failed",
 					slog.String("err", err.Error()),
 					slog.String("message_id", pendings[idx].req.MessageID))
 			}
-		} else {
+		}
+		if !fallbackRan {
 			// Pass + flag verdicts (and any escalate verdict whose
 			// Fallback returned an error or was nil) skip the full
-			// evaluator, so we have to populate Primary + Tier
-			// ourselves. Without this, downstream consumers like
-			// handleIngestionAction reject the result because
+			// evaluator, so we have to populate Score + Primary +
+			// Tier ourselves. Without this, downstream consumers
+			// like handleIngestionAction reject the result because
 			// res.Tier.Valid() is false (zero value) and silently
 			// drop every banner / label / URL-rewrite / quarantine
-			// action. Mirrors the aggregation step in
-			// evaluator.Evaluate (evaluator.go:280-288).
+			// action — including the failed-fallback case which is
+			// exactly the degraded-mode scenario where the safety
+			// net matters most. Mirrors the aggregation step in
+			// evaluator.Evaluate (evaluator.go:278-288).
 			o.aggregateLightweight(&res, pendings[idx].sig)
 		}
 		if err := o.publishResult(ctx, res); err != nil {
@@ -358,12 +380,13 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 	return nil
 }
 
-// aggregateLightweight populates res.Primary, res.Secondary,
-// res.ReasonCodes, and res.Tier from the Categorizer and TierDecider
-// when the slow-path Fallback evaluator did not run. It is the
-// minimal subset of evaluator.Evaluate's aggregation step
-// (evaluator.go:280-288) that batch-only pass / flag verdicts need so
-// downstream `es.evaluate.result` consumers see a fully-formed result.
+// aggregateLightweight populates res.Score, res.Primary, res.Secondary,
+// res.ReasonCodes, and res.Tier from the Weights, Categorizer, and
+// TierDecider when the slow-path Fallback evaluator did not run. It is
+// the minimal subset of evaluator.Evaluate's aggregation step
+// (evaluator.go:278-288) that batch-only pass / flag verdicts need so
+// downstream `es.evaluate.result` consumers see a fully-formed result
+// scored on the same scale as per-message verdicts.
 //
 // Both Categorizer and TierDecider are optional: a nil Categorizer
 // leaves Primary empty (downstream gracefully handles the empty
@@ -371,6 +394,15 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 // is the behaviour callers using a non-`es.evaluate.result` sink may
 // deliberately want.
 func (o *BatchOrchestrator) aggregateLightweight(res *dto.EvaluateResult, sig dto.RiskSignals) {
+	// Recompute the aggregate score with the configured weights so
+	// the batch path and per-message path agree on res.Score for an
+	// identical Tier 1 outcome. Without this, batch verdicts would
+	// publish the raw Tier 1 score (~0-100) while per-message
+	// verdicts published the weighted score (~0-80 for Tier 1-only
+	// outcomes under DefaultWeights), and any TierDecider band
+	// straddling that ratio would classify the same message
+	// differently depending on which consumer handled it.
+	res.Score = Score(FromResult(res), o.cfg.Weights)
 	if o.cfg.Categorizer != nil {
 		primary, secondary, reasons := o.cfg.Categorizer.Categorise(*res, sig)
 		res.Primary = primary

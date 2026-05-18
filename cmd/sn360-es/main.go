@@ -567,14 +567,25 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		return nil, fmt.Errorf("tier decider: %w", derr)
 	}
 
+	// Share a single Categorizer + the shared TierDecider adapter
+	// between the per-message evaluator and the optional batch
+	// orchestrator so both paths produce byte-identical
+	// categorisation output for the same Tier 1 input. The rule
+	// categorizer is stateless today, but sharing the instance keeps
+	// the wiring honest if a future implementation gains tenant-
+	// scoped caches or metrics that should not be duplicated.
+	categorizer := evaluate.NewRuleCategorizer()
+	tierDeciderAdapt := tierDeciderAdapter{decider: tierDecider}
+	weights := evaluate.DefaultWeights()
+
 	app.evaluator = evaluate.NewEvaluator(evaluate.Config{
 		Tier0:              app.tier0Gate,
 		Tier1:              app.tier1Client,
 		Tier2:              app.tier2Client,
 		Rspamd:             app.rspamdClient,
-		Categorizer:        evaluate.NewRuleCategorizer(),
-		TierDecider:        tierDeciderAdapter{decider: tierDecider},
-		Weights:            evaluate.DefaultWeights(),
+		Categorizer:        categorizer,
+		TierDecider:        tierDeciderAdapt,
+		Weights:            weights,
 		Tier1PassThreshold: cfg.Tier1.PassThreshold,
 		Tier1FlagThreshold: cfg.Tier1.FlagThreshold,
 		Tier1Timeout:       cfg.Tier1.Timeout,
@@ -611,19 +622,22 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 						FlagAbove: cfg.Tier1.FlagThreshold,
 					},
 					Fallback: fallbackEvaluatorAdapter{eval: app.evaluator},
-					// Pass Categorizer + TierDecider so the batch path can
-					// populate Primary + Tier on the pass / flag verdicts
-					// that skip Fallback. Without these the verdicts would
-					// publish to es.evaluate.result with an empty Tier,
-					// and handleIngestionAction (Tier.Valid() guard, see
-					// cmd/sn360-es/main.go around the banner step in
-					// handleIngestionAction) would silently drop every
+					// Pass Categorizer + TierDecider + Weights so the
+					// batch path can populate Primary + Tier + a weighted
+					// Score on the pass / flag verdicts that skip
+					// Fallback. Without these the verdicts would publish
+					// to es.evaluate.result with an empty Tier (and the
+					// raw Tier 1 score), and handleIngestionAction
+					// (Tier.Valid() guard) would silently drop every
 					// banner / label / URL-rewrite / quarantine signal
-					// for batch-emitted threats. Reuses the same
-					// instances passed to the per-message evaluator so
-					// both paths produce identical categorisations.
-					Categorizer: evaluate.NewRuleCategorizer(),
-					TierDecider: tierDeciderAdapter{decider: tierDecider},
+					// for batch-emitted threats. We pass the *same*
+					// Categorizer / TierDecider / Weights instances
+					// constructed above for the per-message evaluator so
+					// both paths produce byte-identical categorisation
+					// output for the same Tier 1 input.
+					Categorizer: categorizer,
+					TierDecider: tierDeciderAdapt,
+					Weights:     weights,
 					Sink:        app.eventBus,
 					// Match the per-message handler's output subject so the
 					// management-persist / education-trigger / ingestion-action
