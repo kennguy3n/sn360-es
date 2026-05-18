@@ -138,8 +138,47 @@ func (a *OnboardingAgent) Onboard(ctx context.Context, tctx TenantContext) (Onbo
 
 	groupIndex := indexGroups(groups)
 
-	for i := range users {
-		users[i].SensitivityHint = ClassifyUserSensitivity(users[i], groupIndex)
+	// Classify sensitivity using tiered ML classifier if available,
+	// otherwise fall back to keyword-based classification.
+	if a.cfg.SensitivityClassifier != nil && len(users) > 0 {
+		inputs := make([]UserClassifyInput, len(users))
+		for i, u := range users {
+			var groupNames []string
+			for _, gid := range u.GroupIDs {
+				if g, ok := groupIndex[gid]; ok {
+					groupNames = append(groupNames, g.Name)
+				}
+			}
+			inputs[i] = UserClassifyInput{
+				JobTitle:    u.JobTitle,
+				Department:  u.Department,
+				DisplayName: u.DisplayName,
+				GroupNames:  groupNames,
+				IsAdmin:     u.IsAdmin,
+			}
+		}
+		results, classErr := a.cfg.SensitivityClassifier.ClassifyBatch(ctx, inputs)
+		if classErr != nil {
+			log.Warn("agent.onboarding: ML classification failed, falling back to keywords",
+				slog.String("err", classErr.Error()))
+			for i := range users {
+				users[i].SensitivityHint = ClassifyUserSensitivity(users[i], groupIndex)
+				users[i].SensitivityConfidence = 1.0
+			}
+		} else {
+			for i := range users {
+				if i < len(results) {
+					users[i].SensitivityHint = results[i].Sensitivity
+					users[i].SensitivityConfidence = results[i].Confidence
+					users[i].NeedsAdminReview = results[i].NeedsReview
+				}
+			}
+		}
+	} else {
+		for i := range users {
+			users[i].SensitivityHint = ClassifyUserSensitivity(users[i], groupIndex)
+			users[i].SensitivityConfidence = 1.0
+		}
 	}
 
 	for _, u := range users {

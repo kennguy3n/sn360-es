@@ -91,7 +91,6 @@ type graphDirectoryUserList struct {
 	NextLink string               `json:"@odata.nextLink,omitempty"`
 }
 
-
 // graphGroup is the subset of the Graph group object.
 type graphGroup struct {
 	ID          string `json:"id"`
@@ -111,7 +110,7 @@ type graphGroupList struct {
 func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]agent.DiscoveredUser, error) {
 	_ = tenantID
 	endpoint := c.baseURL + "/users?" + url.Values{
-		"$select": []string{"id,displayName,userPrincipalName,mail,department,jobTitle,accountEnabled,userType,proxyAddresses"},
+		"$select": []string{"id,displayName,userPrincipalName,mail,department,jobTitle,accountEnabled,userType,proxyAddresses,mailboxSettings"},
 		"$expand": []string{"memberOf($select=id,displayName,@odata.type),manager($select=id)"},
 		"$top":    []string{"200"},
 	}.Encode()
@@ -171,26 +170,25 @@ func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]age
 				managerID = u.Manager.ID
 			}
 
-				out = append(out, agent.DiscoveredUser{
-					ID:               u.ID,
-					Email:            strings.ToLower(email),
-					DisplayName:      u.DisplayName,
-					Department:       u.Department,
-					JobTitle:         u.JobTitle,
-					IsAdmin:          isAdmin,
-					IsSuspended:      !u.AccountEnabled,
-					GroupIDs:         groupIDs,
-					ManagerID:        managerID,
-					Aliases:          aliases,
-					IsSharedMailbox:  isShared,
-					IsServiceAccount: isServiceAccount,
-				})
+			out = append(out, agent.DiscoveredUser{
+				ID:               u.ID,
+				Email:            strings.ToLower(email),
+				DisplayName:      u.DisplayName,
+				Department:       u.Department,
+				JobTitle:         u.JobTitle,
+				IsAdmin:          isAdmin,
+				IsSuspended:      !u.AccountEnabled,
+				GroupIDs:         groupIDs,
+				ManagerID:        managerID,
+				Aliases:          aliases,
+				IsSharedMailbox:  isShared,
+				IsServiceAccount: isServiceAccount,
+			})
 		}
 		endpoint = list.NextLink
 	}
 	return out, nil
 }
-
 
 // ListGroups enumerates the directory groups.
 func (c *DirectoryClient) ListGroups(ctx context.Context, tenantID string) ([]agent.DiscoveredGroup, error) {
