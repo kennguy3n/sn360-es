@@ -64,11 +64,23 @@ func (a *Tier1Adapter) Evaluate(ctx context.Context, req dto.EvaluateRequest) (d
 	if score > 100 {
 		score = 100
 	}
+	// Defensive copy of ReasonCodes so a downstream mutation of
+	// res.Tier1.ReasonCodes cannot reach back into the HTTP-decoded
+	// slice the encoder client owns. The batch path takes a similar
+	// copy at batch.go:327 — the per-message path now matches so an
+	// identical Tier 1 response produces identical reason codes on
+	// both subjects, instead of the per-message path silently
+	// dropping them as it did pre-fix.
+	var reasonCodes []string
+	if len(resp.ReasonCodes) > 0 {
+		reasonCodes = append([]string(nil), resp.ReasonCodes...)
+	}
 	return dto.Tier1Outcome{
-		Score:      score,
-		Confidence: resp.Confidence,
-		Language:   resp.Language,
-		ModelName:  resp.ModelTag,
-		LatencyMs:  time.Since(start).Milliseconds(),
+		Score:       score,
+		Confidence:  resp.Confidence,
+		Language:    resp.Language,
+		ModelName:   resp.ModelTag,
+		LatencyMs:   time.Since(start).Milliseconds(),
+		ReasonCodes: reasonCodes,
 	}, nil
 }

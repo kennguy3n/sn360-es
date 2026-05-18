@@ -567,13 +567,25 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		return nil, fmt.Errorf("tier decider: %w", derr)
 	}
 
-	// Share a single Categorizer + the shared TierDecider adapter
-	// between the per-message evaluator and the optional batch
-	// orchestrator so both paths produce byte-identical
-	// categorisation output for the same Tier 1 input. The rule
-	// categorizer is stateless today, but sharing the instance keeps
-	// the wiring honest if a future implementation gains tenant-
-	// scoped caches or metrics that should not be duplicated.
+	// Share a single Categorizer + the shared TierDecider adapter +
+	// the same Weights value between the per-message evaluator and
+	// the optional batch orchestrator so both paths produce
+	// byte-identical categorisation, tiering, and score scale for
+	// the same Tier 1 input. The rule categorizer is stateless today,
+	// but sharing the instance keeps the wiring honest if a future
+	// implementation gains tenant-scoped caches or metrics that
+	// should not be duplicated.
+	//
+	// Sharing invariant: the variables below MUST be passed
+	// unchanged to *both* evaluate.NewEvaluator and
+	// evaluate.NewBatchOrchestrator. Score() applies the weights
+	// before the categoriser / tier decider see it, so any
+	// divergence (e.g. one path constructing its own
+	// DefaultWeights() instance, the other reading the config
+	// override) would silently send the same message into different
+	// TierDecider bands depending on which consumer happened to
+	// handle it. The batch and per-message paths regression-test
+	// the shared-score contract — keep them in lockstep.
 	categorizer := evaluate.NewRuleCategorizer()
 	tierDeciderAdapt := tierDeciderAdapter{decider: tierDecider}
 	weights := evaluate.DefaultWeights()
@@ -1340,6 +1352,19 @@ func (a *application) handleSimulationSend(ctx context.Context, msg events.Messa
 		a.logger.WarnContext(ctx, "sn360-es: education.simulation.send missing campaign_id")
 		return nil
 	}
+	// Empty target list at the wire boundary is treated as a malformed
+	// publish and dropped here rather than handed to SendSimulation.
+	// The engine's contract on zero-target campaigns is not part of
+	// the bus envelope schema (it varies by provider), so we surface
+	// the issue at the consumer where the operator can correlate it
+	// with the publishing service. Returning nil acks the message so
+	// the bus does not redeliver a payload the upstream will not
+	// have re-populated.
+	if len(env.Targets) == 0 {
+		a.logger.WarnContext(ctx, "sn360-es: education.simulation.send dropped: empty targets",
+			slog.String("campaign_id", env.CampaignID))
+		return nil
+	}
 	targets := make([]education.SimulationTarget, 0, len(env.Targets))
 	for _, t := range env.Targets {
 		if t.UserHash == "" || t.MailboxAlias == "" {
@@ -1424,6 +1449,11 @@ type quarantineReleaseEnvelope struct {
 	PseudonymizedMessage string `json:"pseudonymized_message_id"`
 	RequestedBy          string `json:"requested_by,omitempty"`
 	RestoredBody         string `json:"restored_body,omitempty"`
+	// CorrelationID propagates upstream tracing through the release
+	// flow. ReleaseService.publishOutcome forwards it onto the
+	// `es.action.quarantine.release` event so an operator can join
+	// the original evaluation to the eventual release outcome.
+	CorrelationID string `json:"correlation_id,omitempty"`
 }
 
 // handleQuarantineRelease calls ReleaseService.Release; the service
@@ -1448,6 +1478,7 @@ func (a *application) handleQuarantineRelease(ctx context.Context, msg events.Me
 		PseudonymizedMessage: env.PseudonymizedMessage,
 		RequestedBy:          env.RequestedBy,
 		RestoredBody:         env.RestoredBody,
+		CorrelationID:        env.CorrelationID,
 	}); err != nil {
 		return fmt.Errorf("quarantine.release: %w", err)
 	}

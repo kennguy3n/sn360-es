@@ -245,6 +245,20 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 				verdict = "flag"
 			}
 			e.cfg.Observer.ObserveTier1(verdict, time.Since(start))
+			// Surface the encoder's reason codes on the top-level
+			// result so the Categorizer can rule on them (its
+			// keyword weights look at res.ReasonCodes) and so audit
+			// / banner / dashboard consumers see the full set, not
+			// just the categoriser-derived ones. The batch path
+			// does the equivalent at batch.go:327; without this
+			// copy the per-message path produced verdicts with
+			// strictly fewer reason codes than the batch path for
+			// the same encoder response. Guarded by the goroutine's
+			// own mutex implicitly via the wg.Wait below: nothing
+			// else reads res.ReasonCodes until step 4.
+			if len(outcome.ReasonCodes) > 0 {
+				res.ReasonCodes = append(res.ReasonCodes, outcome.ReasonCodes...)
+			}
 			res.Tier1 = &outcome
 		}()
 	}

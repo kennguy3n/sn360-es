@@ -149,6 +149,14 @@ func NewBatchOrchestrator(cfg BatchOrchestratorConfig) (*BatchOrchestrator, erro
 	if cfg.Tier1 == nil {
 		return nil, errors.New("evaluate: BatchOrchestrator Tier1 is required")
 	}
+	if cfg.Sink == nil {
+		// Without a Sink the orchestrator would ack messages and
+		// silently drop every verdict — a quiet outage that
+		// dashboards / consumers cannot distinguish from "no
+		// traffic". Make it a wiring error so the misconfiguration
+		// surfaces at startup rather than at the first batch.
+		return nil, errors.New("evaluate: BatchOrchestrator Sink is required")
+	}
 	if cfg.Stream == "" {
 		cfg.Stream = "ES_EVALUATE"
 	}
@@ -427,9 +435,11 @@ func (o *BatchOrchestrator) aggregateLightweight(res *dto.EvaluateResult, sig dt
 }
 
 func (o *BatchOrchestrator) publishResult(ctx context.Context, res dto.EvaluateResult) error {
-	if o.cfg.Sink == nil {
-		return nil
-	}
+	// Sink is guaranteed non-nil by NewBatchOrchestrator; the early
+	// return that used to live here turned a wiring bug (forgetting
+	// to set Sink) into a silent verdict drop. The constructor now
+	// rejects that case so the runtime path can dereference Sink
+	// directly.
 	blob, err := json.Marshal(res)
 	if err != nil {
 		return fmt.Errorf("marshal result: %w", err)

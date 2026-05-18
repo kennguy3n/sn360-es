@@ -63,6 +63,12 @@ type ReleaseRequest struct {
 	// Support Agent) owns the copy; the release service treats it as
 	// opaque.
 	RestoredBody string
+	// CorrelationID propagates upstream tracing through the release
+	// flow. It is forwarded onto the published outcome event so the
+	// release can be joined back to the original evaluation (or the
+	// HTTP request / bus message that started the release) without
+	// needing to round-trip through the quarantine store.
+	CorrelationID string
 }
 
 // ReleaseConfig wires the release service's dependencies. The
@@ -274,6 +280,7 @@ func (s *ReleaseService) publishOutcome(ctx context.Context, req ReleaseRequest,
 		TenantID             string        `json:"tenant_id"`
 		PseudonymizedMessage string        `json:"pseudonymized_message_id"`
 		RequestedBy          string        `json:"requested_by,omitempty"`
+		CorrelationID        string        `json:"correlation_id,omitempty"`
 		Reason               ReleaseReason `json:"reason"`
 		Restored             bool          `json:"restored"`
 		Original             constant.Tier `json:"original_tier,omitempty"`
@@ -284,6 +291,7 @@ func (s *ReleaseService) publishOutcome(ctx context.Context, req ReleaseRequest,
 		TenantID:             req.TenantID,
 		PseudonymizedMessage: req.PseudonymizedMessage,
 		RequestedBy:          req.RequestedBy,
+		CorrelationID:        req.CorrelationID,
 		Reason:               outcome.Reason,
 		Restored:             outcome.Restored,
 		Original:             outcome.Original,
@@ -296,10 +304,16 @@ func (s *ReleaseService) publishOutcome(ctx context.Context, req ReleaseRequest,
 		s.logger.WarnContext(ctx, "release: marshal event", slog.Any("error", err))
 		return
 	}
+	// Surface the caller-provided CorrelationID as a canonical bus
+	// header so middleware (tracing, replay tooling) can join the
+	// release outcome back to the originating evaluation without
+	// having to parse the JSON body. Mirrors handleEvaluateRequest's
+	// publish at cmd/sn360-es/main.go.
 	if err := s.publisher.Publish(ctx, s.subject, payload,
 		events.WithEventType("action.quarantine.release"),
 		events.WithTenantID(req.TenantID),
 		events.WithMessageID(req.PseudonymizedMessage),
+		events.WithCorrelationID(req.CorrelationID),
 	); err != nil {
 		s.logger.WarnContext(ctx, "release: publish", slog.Any("error", err))
 	}
