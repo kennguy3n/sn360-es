@@ -302,9 +302,14 @@ type O365 struct {
 }
 
 // HasGmail reports whether enough fields are set to build a Gmail
-// provider.
+// provider. Domain is required because the mailbox poller's Admin
+// SDK list-users call needs it; without it the poller silently
+// observes zero mailboxes and the provider registry would hold an
+// unreachable entry. Keeping Domain in the predicate ensures the
+// provider registry, mailbox poller, and directory client all agree
+// on a single "Gmail is wired" gate.
 func (g GWS) HasGmail() bool {
-	return g.ServiceAccountJSON != "" && g.DelegatedAdmin != ""
+	return g.ServiceAccountJSON != "" && g.DelegatedAdmin != "" && g.Domain != ""
 }
 
 // HasOutlook reports whether enough fields are set to build an

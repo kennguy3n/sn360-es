@@ -2852,7 +2852,7 @@ func buildPoller(ctx context.Context, cfg *config.Config, logger *slog.Logger, a
 // empty slice when neither provider is configured.
 func buildMailboxProviders(ctx context.Context, cfg *config.Config, logger *slog.Logger) []ingestion.MailboxProvider {
 	out := make([]ingestion.MailboxProvider, 0, 2)
-	if cfg.GWS.HasGmail() && cfg.GWS.Domain != "" {
+	if cfg.GWS.HasGmail() {
 		sa, err := gmail.LoadServiceAccount(cfg.GWS.ServiceAccountJSON)
 		if err != nil {
 			logger.Warn("sn360-es: gmail mailbox provider init failed (service account)",
@@ -3355,7 +3355,7 @@ func (r registryLabelApplier) EnsureTierLabels(ctx context.Context, tenantID, ma
 // nil when no provider is configured — the onboarding agent then
 // stays inactive.
 func buildDirectoryClient(cfg *config.Config, logger *slog.Logger) agent.DirectoryClient {
-	if cfg.GWS.HasGmail() && cfg.GWS.Domain != "" {
+	if cfg.GWS.HasGmail() {
 		// The Gmail MailboxProvider already wraps the Admin SDK
 		// client; it also satisfies the DirectoryClient surface
 		// via its ListUsers / ListGroups methods.

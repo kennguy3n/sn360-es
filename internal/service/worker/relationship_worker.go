@@ -176,6 +176,17 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 			// historical activity to exist.
 			domain := strings.ToLower(strings.TrimSpace(h.SenderDomain))
 			if domain != "" && h.Count30d > 0 {
+				// UniqueRecipients is 1 by construction: each
+				// CommunicationHistory row represents a single
+				// (sender, recipient) pair (the table's primary key
+				// is the (tenant, sender_hash, recipient_hash)
+				// triple), so a single row is one unique recipient
+				// by definition. The Classifier only consumes this
+				// field to gate Partner promotion, which is a
+				// per-domain-aggregate concern handled separately by
+				// VendorJob.buildSenderObservations below; passing 1
+				// here keeps Relationship reclassification a
+				// per-pair operation and avoids cross-row coupling.
 				sum := relationship.CommunicationSummary{
 					SenderDomain:     domain,
 					InboundCount:     h.Count30d,

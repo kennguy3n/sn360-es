@@ -190,6 +190,13 @@ func (r *providerRegistry) snapshot() []string {
 // single "default" key for both would cause the action consumers'
 // `resolveKind(env.TenantID)` lookup to miss for whichever provider
 // was registered second.
+//
+// The HasGmail / HasOutlook predicates already require Domain /
+// TenantID respectively, so by the time we reach the registration
+// step the tenant key is guaranteed to be the same value the matching
+// MailboxProvider will publish. Without that invariant the registry
+// could register an entry under "default" that no flow ever reaches.
+// See config.GWS.HasGmail for the supporting predicate.
 func buildProviderRegistry(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*providerRegistry, error) {
 	reg := newProviderRegistry(logger)
 
@@ -227,14 +234,13 @@ func buildProviderRegistry(ctx context.Context, cfg *config.Config, logger *slog
 
 // gmailProviderTenant returns the registry key for the Gmail entry.
 // It must match the TenantID that buildMailboxProviders gives to the
-// Gmail MailboxProvider (today: cfg.GWS.Domain). Falls back to
-// "default" when no domain is configured — this only happens in
-// tests, since cfg.GWS.HasGmail() requires the domain.
+// Gmail MailboxProvider (today: cfg.GWS.Domain). cfg.GWS.HasGmail()
+// is the only caller-side gate for invoking this helper and it
+// requires Domain to be non-empty, so we can return it verbatim
+// without a fallback — if Domain were empty, the buildGmailEntry
+// branch in buildProviderRegistry would never run.
 func gmailProviderTenant(cfg *config.Config) string {
-	if d := strings.TrimSpace(cfg.GWS.Domain); d != "" {
-		return d
-	}
-	return "default"
+	return strings.TrimSpace(cfg.GWS.Domain)
 }
 
 // outlookProviderTenant returns the registry key for the Outlook
