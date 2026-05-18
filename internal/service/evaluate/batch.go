@@ -375,6 +375,7 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 			// evaluator.Evaluate (evaluator.go:278-288).
 			o.aggregateLightweight(&res, pendings[idx].sig)
 		}
+		dto.BackfillRoutingFields(&res, pendings[idx].req)
 		if err := o.publishResult(ctx, res); err != nil {
 			o.log.Error("evaluate: publish result failed", slog.String("err", err.Error()))
 			_ = pendings[idx].msg.Nak(5 * time.Second)
@@ -388,7 +389,9 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 		if !p.hit0 {
 			continue
 		}
-		if err := o.publishResult(ctx, p.tier0); err != nil {
+		t0 := p.tier0
+		dto.BackfillRoutingFields(&t0, p.req)
+		if err := o.publishResult(ctx, t0); err != nil {
 			o.log.Error("evaluate: publish tier0 result failed", slog.String("err", err.Error()))
 			_ = p.msg.Nak(5 * time.Second)
 			continue

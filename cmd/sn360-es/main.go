@@ -32,9 +32,14 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/dashboard"
 	"github.com/kennguy3n/sn360-es/internal/service/education"
 	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
+	"github.com/kennguy3n/sn360-es/internal/service/ingestion"
 	"github.com/kennguy3n/sn360-es/internal/service/predict"
+	"github.com/kennguy3n/sn360-es/internal/service/relationship"
 	"github.com/kennguy3n/sn360-es/internal/service/tier0"
 	"github.com/kennguy3n/sn360-es/internal/service/tier1"
+	"github.com/kennguy3n/sn360-es/internal/service/worker"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/gmail"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/outlook"
 	"github.com/kennguy3n/sn360-es/pkg/events"
 	"github.com/kennguy3n/sn360-es/pkg/events/bus"
 	natsbus "github.com/kennguy3n/sn360-es/pkg/events/nats"
@@ -92,6 +97,12 @@ func run() error {
 		return fmt.Errorf("start consumers: %w", cerr)
 	}
 
+	// Background workers: poller + periodic runners. Each respects
+	// context cancellation so SIGTERM cleanly stops the lot. Errors
+	// from Run() are logged but do not bubble up because a missed
+	// cycle on a recurring worker is recoverable on the next tick.
+	app.StartBackground(ctx)
+
 	serveErr := make(chan error, 1)
 	go func() {
 		logger.Info("sn360-es: http server listening", slog.Int("port", cfg.HTTP.Port))
@@ -110,6 +121,13 @@ func run() error {
 	// Close subscriptions before shutting down the bus so in-flight
 	// messages can ack cleanly.
 	app.StopConsumers(logger)
+
+	// Drain background goroutines (poller, periodic workers, label
+	// cache janitor) BEFORE we tear down the HTTP server and the
+	// bus / database connections in app.Close. Without this, a
+	// poll cycle in flight at SIGTERM would publish to a closed
+	// bus or write to a torn-down *sql.DB.
+	app.WaitBackground()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -152,6 +170,14 @@ type application struct {
 	openSvc           *predict.OpenService
 	escalationSvc     *agent.EscalationService
 
+	// Provider-side action machinery. Populated from GWS / O365
+	// credentials in newApplication. When no credentials are
+	// configured the registry is non-nil but empty and the action
+	// consumers below degrade to logging fallbacks.
+	providers     *providerRegistry
+	labelApplier  *action.LabelApplier
+	quarantineSvc *action.QuarantineService
+
 	// Evaluation pipeline. Tier 0 is always wireable (pure CPU); the
 	// other clients are optional and stay nil when their endpoints are
 	// unconfigured or unreachable. The evaluator itself is constructed
@@ -166,11 +192,48 @@ type application struct {
 	evaluator    *evaluate.Evaluator
 	batchOrch    *evaluate.BatchOrchestrator
 
+	// Ingestion polling. Populated when at least one mailbox
+	// provider is configured; the poller publishes
+	// `es.evaluate.request` on the bus so this binary's evaluator
+	// consumer (or a peer replica's batch orchestrator) picks the
+	// messages up.
+	poller *ingestion.Poller
+
+	// Periodic workers. Each runner drives one Job on its declared
+	// interval; nil when the underlying dependency (postgres, the
+	// relationship aggregator, etc.) is missing. Run() starts them
+	// after the consumers come online.
+	relationshipRunner *worker.Runner
+	vendorRunner       *worker.Runner
+	cleanupRunner      *worker.Runner
+
+	// AI agents. The onboarding agent fires on directory discovery,
+	// the tuning agent runs on a schedule, the support agent
+	// services in-product queries. All three are optional — they
+	// degrade gracefully when their inputs (directory client, repos)
+	// are not wired.
+	onboardAgent *agent.OnboardingAgent
+	tuningAgent  *agent.TuningAgent
+	supportAgent *agent.SupportAgent
+
+	// In-process caches that own a janitor goroutine. We keep a
+	// typed reference (separate from the action.LabelCache interface
+	// stored on labelApplier) so StartBackground can run the janitor
+	// and tests can stop it deterministically.
+	memLabelCache *memoryLabelCache
+
 	// Lifecycle.
 	subs    []events.Subscription
 	subsMu  sync.Mutex
 	closers []func() error
 	dlqProc *service.DLQProcessor
+
+	// bgWG tracks every goroutine started by StartBackground so the
+	// shutdown sequence can wait for them to drain before the
+	// process exits. Each goroutine MUST `defer a.bgWG.Done()` and
+	// the matching `a.bgWG.Add(1)` MUST run on the calling
+	// goroutine (not inside the spawned one) to avoid a Wait race.
+	bgWG sync.WaitGroup
 }
 
 // newApplication wires every component the binary needs. Required
@@ -673,6 +736,73 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		}
 	}
 
+	// Provider registry — looks up authenticated Gmail / Outlook
+	// clients per tenant. When neither GWS nor O365 credentials are
+	// configured the registry is non-nil but empty; the action
+	// consumers below skip when no provider is registered. We build
+	// the registry before the label applier and quarantine service
+	// so they can pick up its providers. Per-entry construction
+	// failures are recovered inside buildProviderRegistry (logged
+	// and skipped) so this call cannot return an error — see the
+	// docstring there for the rationale.
+	app.providers = buildProviderRegistry(ctx, cfg, logger)
+
+	// Label applier — picks up every LabelProvider in the registry
+	// and applies tier / category labels to messages. The applier
+	// requires a label cache to remember provider-side label IDs
+	// across runs; we use Redis when available and an in-memory
+	// fallback otherwise so tests + dev still work.
+	if app.providers != nil && app.providers.hasAny() {
+		labelCache, memCache := newLabelCache(app.redis)
+		// memCache is non-nil only on the in-process path; stash it
+		// so StartBackground can run its janitor goroutine and stop
+		// the map from growing without bound.
+		app.memLabelCache = memCache
+		app.labelApplier = action.NewLabelApplier(logger, labelCache, app.providers.labelProviders()...)
+	}
+
+	// Provider-aware quarantine service. The HTTP release path
+	// builds its own QuarantineService without provider clients (so
+	// /v1/quarantine/release works in dev). Here we construct a
+	// second instance wired to real Gmail / Outlook quarantine
+	// providers so the es.action.quarantine consumer can actually
+	// move Blocked-tier messages out of the inbox. Only constructed
+	// when at least one provider is registered.
+	if qencryptor, eerr := buildURLEncryptor(cfg, logger); eerr == nil && app.providers != nil && app.providers.hasAny() {
+		qstore := newQuarantineStore(app.redis)
+		qsvc, qerr := action.NewQuarantineService(action.QuarantineConfig{
+			Logger:    logger,
+			Providers: app.providers.quarantineProviders(),
+			Store:     qstore,
+			Encryptor: qencryptor,
+			Publisher: eventBus,
+		})
+		if qerr == nil {
+			app.quarantineSvc = qsvc
+		} else {
+			logger.Warn("sn360-es: provider-aware quarantine service init failed",
+				slog.Any("error", qerr))
+		}
+	}
+
+	// Ingestion poller — wakes mailboxes, normalizes messages, and
+	// publishes `es.evaluate.request` on the bus. Only constructed
+	// when at least one MailboxProvider is configured. The
+	// checkpoint store + distributed lock factory are Redis-backed;
+	// when Redis is absent the poller still runs (per-mailbox
+	// locks are no-ops, checkpoints reset on restart), so dev mode
+	// keeps working.
+	app.poller = buildPoller(ctx, cfg, logger, app)
+
+	// Periodic workers.
+	app.relationshipRunner, app.vendorRunner, app.cleanupRunner = buildWorkers(cfg, logger, app)
+
+	// AI agents. Wiring is best-effort: each agent skips when its
+	// inputs are missing. The onboarding + support agents publish
+	// follow-up events on the bus; the tuning agent persists
+	// updated weights/thresholds via the repository layer.
+	app.onboardAgent, app.tuningAgent, app.supportAgent = buildAgents(cfg, logger, app)
+
 	return app, nil
 }
 
@@ -801,6 +931,68 @@ func (a *application) StartConsumers(ctx context.Context) error {
 			a.logger.Error("sn360-es: subscribe evaluate.result (ingestion-action) failed",
 				slog.Any("error", err))
 			critErrs = append(critErrs, fmt.Errorf("ingestion-action: %w", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
+	// es.action.label → apply tier + category native labels via the
+	// provider-aware LabelApplier. Critical only when a label
+	// applier is wired; without one the consumer would no-op so we
+	// keep the subscription itself best-effort.
+	if a.labelApplier != nil {
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.label", a.handleActionLabel,
+			events.WithDurable("action-label"),
+			events.WithMaxDeliver(3))
+		if err != nil {
+			a.logger.Warn("sn360-es: subscribe action.label (action-label) failed",
+				slog.Any("error", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
+	// es.action.banner → inject pre-rendered banner HTML into the
+	// recipient's mailbox via Gmail's shadow-copy or Outlook's
+	// PATCH.
+	if a.providers != nil && a.providers.hasAny() {
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.banner", a.handleActionBanner,
+			events.WithDurable("action-banner"),
+			events.WithMaxDeliver(3))
+		if err != nil {
+			a.logger.Warn("sn360-es: subscribe action.banner (action-banner) failed",
+				slog.Any("error", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
+	// es.action.url_rewrite → log + observe for now. Full
+	// body-rewrite implementation is deferred until the provider
+	// body abstraction generalises across Gmail's shadow-copy and
+	// Outlook's PATCH paths (see handleActionURLRewrite docstring).
+	if a.urlRewriter != nil {
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.url_rewrite", a.handleActionURLRewrite,
+			events.WithDurable("action-url-rewrite"),
+			events.WithMaxDeliver(3))
+		if err != nil {
+			a.logger.Warn("sn360-es: subscribe action.url_rewrite (action-url-rewrite) failed",
+				slog.Any("error", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
+	// es.action.quarantine → move Blocked-tier messages into the
+	// hidden quarantine label / folder via the provider-aware
+	// QuarantineService.
+	if a.quarantineSvc != nil {
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.quarantine", a.handleActionQuarantine,
+			events.WithDurable("action-quarantine"),
+			events.WithMaxDeliver(3))
+		if err != nil {
+			a.logger.Warn("sn360-es: subscribe action.quarantine (action-quarantine) failed",
+				slog.Any("error", err))
 		} else {
 			a.trackSub(sub)
 		}
@@ -1098,18 +1290,16 @@ func (a *application) handleEvaluateRequest(ctx context.Context, msg events.Mess
 	if err != nil {
 		return fmt.Errorf("evaluate: %w", err)
 	}
-	if result.MessageID == "" {
-		result.MessageID = req.MessageID
-	}
-	if result.TenantID == "" {
-		result.TenantID = req.TenantID
-	}
-	if result.CorrelationID == "" {
-		result.CorrelationID = req.CorrelationID
-	}
-	if result.EvaluatedAt.IsZero() {
-		result.EvaluatedAt = time.Now().UTC()
-	}
+	// Backfill the routing / identity envelope fields the request
+	// carries so downstream consumers on `es.evaluate.result` see
+	// the same envelope regardless of which producer (per-message
+	// here, or BatchOrchestrator.processOnce) emitted the verdict.
+	// In particular, the Recipient backfill keeps the downstream
+	// action consumers (label / banner / url_rewrite / quarantine)
+	// from silently no-op'ing on the empty-email guard. The shared
+	// helper lives in `internal/dto` so the two producers cannot
+	// drift apart.
+	dto.BackfillRoutingFields(&result, req)
 	payload, err := json.Marshal(result)
 	if err != nil {
 		a.logger.WarnContext(ctx, "sn360-es: evaluate.result marshal failed",
@@ -1130,6 +1320,227 @@ func (a *application) handleEvaluateRequest(ctx context.Context, msg events.Mess
 	); err != nil {
 		return fmt.Errorf("publish evaluate.result: %w", err)
 	}
+	return nil
+}
+
+// actionLabelEnvelope is the wire format published by
+// handleIngestionAction on `es.action.label`. The fields are kept
+// in sync with the map[string]any literal that publishes the
+// signal so any future addition there must be reflected here.
+type actionLabelEnvelope struct {
+	TenantID      string            `json:"tenant_id"`
+	MessageID     string            `json:"message_id"`
+	CorrelationID string            `json:"correlation_id"`
+	Tier          constant.Tier     `json:"tier"`
+	Primary       constant.Category `json:"primary"`
+	Email         string            `json:"email"`
+}
+
+// actionBannerEnvelope is the wire format published by
+// handleIngestionAction on `es.action.banner`. HTML is the
+// pre-rendered banner ready to be spliced into the body.
+type actionBannerEnvelope struct {
+	TenantID      string        `json:"tenant_id"`
+	MessageID     string        `json:"message_id"`
+	CorrelationID string        `json:"correlation_id"`
+	Tier          constant.Tier `json:"tier"`
+	HTML          string        `json:"html"`
+	Email         string        `json:"email"`
+}
+
+// actionURLRewriteEnvelope is the wire format published by
+// handleIngestionAction on `es.action.url_rewrite`. The consumer
+// owns the per-URL fan-out.
+type actionURLRewriteEnvelope struct {
+	TenantID      string        `json:"tenant_id"`
+	MessageID     string        `json:"message_id"`
+	CorrelationID string        `json:"correlation_id"`
+	Tier          constant.Tier `json:"tier"`
+	Email         string        `json:"email"`
+}
+
+// actionQuarantineEnvelope is the wire format published by
+// handleIngestionAction on `es.action.quarantine`. Carries the
+// score and primary category so the consumer can persist them
+// alongside the encrypted reference.
+type actionQuarantineEnvelope struct {
+	TenantID      string            `json:"tenant_id"`
+	MessageID     string            `json:"message_id"`
+	CorrelationID string            `json:"correlation_id"`
+	Tier          constant.Tier     `json:"tier"`
+	Primary       constant.Category `json:"primary"`
+	Score         int               `json:"score"`
+	Email         string            `json:"email"`
+}
+
+// handleActionLabel applies the tier (and optional category) native
+// label via the provider-aware LabelApplier. Best-effort: a missing
+// provider or label-applier means we log and skip; the message is
+// not re-delivered.
+func (a *application) handleActionLabel(ctx context.Context, msg events.Message) error {
+	if a.labelApplier == nil || a.providers == nil {
+		return nil
+	}
+	var env actionLabelEnvelope
+	if err := json.Unmarshal(msg.Data(), &env); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: action.label unmarshal failed",
+			slog.Any("error", err))
+		return nil
+	}
+	if env.TenantID == "" || env.MessageID == "" || env.Email == "" {
+		a.logger.DebugContext(ctx, "sn360-es: action.label missing identifiers",
+			slog.String("tenant_id", env.TenantID),
+			slog.String("message_id", env.MessageID),
+			slog.Bool("has_email", env.Email != ""))
+		return nil
+	}
+	kind := a.providers.resolveKind(env.TenantID)
+	if kind == "" {
+		a.logger.DebugContext(ctx, "sn360-es: action.label: no provider registered",
+			slog.String("tenant_id", env.TenantID))
+		return nil
+	}
+	res, err := a.labelApplier.Apply(ctx, action.LabelApplyRequest{
+		Tenant:          env.TenantID,
+		Provider:        kind,
+		Email:           env.Email,
+		MessageID:       env.MessageID,
+		NewTier:         env.Tier,
+		PrimaryCategory: env.Primary,
+	})
+	if err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: action.label: applier failed",
+			slog.String("tenant_id", env.TenantID),
+			slog.String("provider", string(kind)),
+			slog.Any("error", err))
+		return nil
+	}
+	a.logger.DebugContext(ctx, "sn360-es: action.label applied",
+		slog.String("tenant_id", env.TenantID),
+		slog.String("provider", string(kind)),
+		slog.String("tier", string(env.Tier)),
+		slog.Bool("category_applied", res.SubCategoryID != ""))
+	return nil
+}
+
+// handleActionBanner splices the pre-rendered banner HTML into the
+// recipient's mailbox via the provider-specific injector (Gmail's
+// shadow-copy, Outlook's PATCH).
+func (a *application) handleActionBanner(ctx context.Context, msg events.Message) error {
+	if a.providers == nil {
+		return nil
+	}
+	var env actionBannerEnvelope
+	if err := json.Unmarshal(msg.Data(), &env); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: action.banner unmarshal failed",
+			slog.Any("error", err))
+		return nil
+	}
+	if env.TenantID == "" || env.MessageID == "" || env.HTML == "" || env.Email == "" {
+		return nil
+	}
+	kind := a.providers.resolveKind(env.TenantID)
+	if kind == "" {
+		return nil
+	}
+	inj := a.providers.bannerInjectorFor(env.TenantID, kind)
+	if inj == nil {
+		return nil
+	}
+	if err := inj.InjectBanner(ctx, action.BannerInjectRequest{
+		Tenant:    env.TenantID,
+		Provider:  kind,
+		Email:     env.Email,
+		MessageID: env.MessageID,
+		HTML:      []byte(env.HTML),
+	}); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: action.banner: inject failed",
+			slog.String("tenant_id", env.TenantID),
+			slog.String("provider", string(kind)),
+			slog.Any("error", err))
+		return nil
+	}
+	a.logger.DebugContext(ctx, "sn360-es: action.banner injected",
+		slog.String("tenant_id", env.TenantID),
+		slog.String("provider", string(kind)),
+		slog.Int("html_bytes", len(env.HTML)))
+	return nil
+}
+
+// handleActionURLRewrite acknowledges the rewrite signal. Real URL
+// rewriting requires reading the message body, walking the HTML
+// tokens, and writing back via the provider's body API — work that
+// is owned by the BannerInjector's body splice path. Today we log
+// the signal so the operator can correlate it against the verdict;
+// the full body-rewrite implementation lands in a follow-up task
+// once the provider body abstraction is generalised across Gmail's
+// shadow-copy and Outlook's PATCH paths.
+func (a *application) handleActionURLRewrite(ctx context.Context, msg events.Message) error {
+	if a.urlRewriter == nil {
+		return nil
+	}
+	var env actionURLRewriteEnvelope
+	if err := json.Unmarshal(msg.Data(), &env); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: action.url_rewrite unmarshal failed",
+			slog.Any("error", err))
+		return nil
+	}
+	if env.TenantID == "" || env.MessageID == "" {
+		return nil
+	}
+	a.logger.DebugContext(ctx, "sn360-es: action.url_rewrite observed",
+		slog.String("tenant_id", env.TenantID),
+		slog.String("tier", string(env.Tier)))
+	return nil
+}
+
+// handleActionQuarantine moves a Blocked-tier message into the
+// hidden quarantine label and persists an encrypted reference. The
+// caller's signal must include the recipient email so the provider
+// can address the mailbox; everything else is sourced from the
+// signal payload.
+func (a *application) handleActionQuarantine(ctx context.Context, msg events.Message) error {
+	if a.quarantineSvc == nil || a.providers == nil {
+		return nil
+	}
+	var env actionQuarantineEnvelope
+	if err := json.Unmarshal(msg.Data(), &env); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: action.quarantine unmarshal failed",
+			slog.Any("error", err))
+		return nil
+	}
+	if env.TenantID == "" || env.MessageID == "" || env.Email == "" {
+		return nil
+	}
+	if env.Tier != constant.TierBlocked {
+		// Skip non-Blocked signals — the publisher guards against
+		// this but a defensive check here keeps replays safe.
+		return nil
+	}
+	kind := a.providers.resolveKind(env.TenantID)
+	if kind == "" {
+		return nil
+	}
+	if _, err := a.quarantineSvc.Quarantine(ctx, action.QuarantineRequest{
+		Tenant:               env.TenantID,
+		PseudonymizedMessage: env.MessageID,
+		Provider:             kind,
+		Email:                env.Email,
+		MessageID:            env.MessageID,
+		Tier:                 env.Tier,
+		Primary:              env.Primary,
+	}); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: action.quarantine: quarantine failed",
+			slog.String("tenant_id", env.TenantID),
+			slog.String("provider", string(kind)),
+			slog.Any("error", err))
+		return nil
+	}
+	a.logger.InfoContext(ctx, "sn360-es: action.quarantine applied",
+		slog.String("tenant_id", env.TenantID),
+		slog.String("provider", string(kind)),
+		slog.String("primary", string(env.Primary)),
+		slog.Int("score", env.Score))
 	return nil
 }
 
@@ -1228,6 +1639,7 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 				"correlation_id": res.CorrelationID,
 				"tier":           res.Tier,
 				"html":           string(html),
+				"email":          res.Recipient,
 			}
 			if blob, merr := json.Marshal(bannerEvt); merr == nil {
 				if perr := a.eventBus.Publish(ctx, "es.action.banner", blob,
@@ -1254,6 +1666,7 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 			"message_id":     res.MessageID,
 			"correlation_id": res.CorrelationID,
 			"tier":           res.Tier,
+			"email":          res.Recipient,
 		}
 		if blob, merr := json.Marshal(signal); merr == nil {
 			if perr := a.eventBus.Publish(ctx, "es.action.url_rewrite", blob,
@@ -1280,6 +1693,7 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 			"tier":           res.Tier,
 			"primary":        res.Primary,
 			"score":          res.Score,
+			"email":          res.Recipient,
 		}
 		if blob, merr := json.Marshal(signal); merr == nil {
 			if perr := a.eventBus.Publish(ctx, "es.action.quarantine", blob,
@@ -1304,6 +1718,7 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 			"correlation_id": res.CorrelationID,
 			"tier":           res.Tier,
 			"primary":        res.Primary,
+			"email":          res.Recipient,
 		}
 		if blob, merr := json.Marshal(signal); merr == nil {
 			if perr := a.eventBus.Publish(ctx, "es.action.label", blob,
@@ -1583,6 +1998,47 @@ func buildMux(app *application) (http.Handler, error) {
 			return t1.Health(ctx)
 		}})
 	}
+	// Informational checkers for the components wired by the
+	// 2026-05-18 plan. These never error (they never fail readiness)
+	// — they exist so operators can see whether the provider
+	// registry, the poller, and the periodic workers were
+	// constructed when they look at /readyz. Anything actually
+	// broken (e.g. Redis lock acquisition failures) surfaces through
+	// the metrics + structured logs.
+	if app.providers != nil {
+		reg := app.providers
+		checkers = append(checkers, handler.HealthCheckerFunc{N: "provider_registry", F: func(_ context.Context) error {
+			if !reg.hasAny() {
+				logger.Debug("readyz: provider registry has no tenants registered")
+			}
+			return nil
+		}})
+	}
+	if app.poller != nil {
+		checkers = append(checkers, handler.HealthCheckerFunc{N: "ingestion_poller", F: func(_ context.Context) error {
+			return nil
+		}})
+	}
+	if app.relationshipRunner != nil {
+		checkers = append(checkers, handler.HealthCheckerFunc{N: "worker_relationship", F: func(_ context.Context) error {
+			return nil
+		}})
+	}
+	if app.vendorRunner != nil {
+		checkers = append(checkers, handler.HealthCheckerFunc{N: "worker_vendor", F: func(_ context.Context) error {
+			return nil
+		}})
+	}
+	if app.cleanupRunner != nil {
+		checkers = append(checkers, handler.HealthCheckerFunc{N: "worker_cleanup", F: func(_ context.Context) error {
+			return nil
+		}})
+	}
+	if app.tuningAgent != nil {
+		checkers = append(checkers, handler.HealthCheckerFunc{N: "agent_tuning", F: func(_ context.Context) error {
+			return nil
+		}})
+	}
 	health := handler.NewHealthHandler(handler.HealthConfig{Logger: logger, Checkers: checkers})
 	mux.HandleFunc("/healthz", health.Liveness)
 	mux.HandleFunc("/readyz", health.Readiness)
@@ -1760,6 +2216,130 @@ func evaluateResultRow(res dto.EvaluateResult, msg events.Message) *repository.E
 		Degraded:      res.Degraded,
 		EvaluatedAt:   evaluatedAt,
 	}
+}
+
+// redisLabelCache adapts redis.Client to action.LabelCache.
+type redisLabelCache struct{ client *redis.Client }
+
+func (c redisLabelCache) Get(ctx context.Context, key string) (string, error) {
+	v, ok, err := c.client.Get(ctx, key)
+	if err != nil || !ok {
+		return "", err
+	}
+	return v, nil
+}
+
+func (c redisLabelCache) Set(ctx context.Context, key, value string, ttl time.Duration) error {
+	return c.client.Set(ctx, key, value, ttl)
+}
+
+// memoryLabelCache is the in-process fallback when Redis is not
+// configured. Goroutine-safe; respects the supplied TTL.
+//
+// Expired entries are evicted lazily on Get and proactively by the
+// janitor goroutine started via runJanitor(ctx). Without the
+// janitor, keys that are written once and never read again would
+// linger forever — Set overwrites the slot but does not sweep peers,
+// so a long-running process can accumulate unbounded entries.
+type memoryLabelCache struct {
+	mu      sync.Mutex
+	entries map[string]memoryLabelEntry
+}
+
+type memoryLabelEntry struct {
+	value     string
+	expiresAt time.Time
+}
+
+// memoryLabelCacheJanitorInterval is how often the janitor sweeps
+// expired entries. Five minutes balances "bound memory growth" with
+// "do not wake up frequently on idle deployments".
+const memoryLabelCacheJanitorInterval = 5 * time.Minute
+
+func newMemoryLabelCache() *memoryLabelCache {
+	return &memoryLabelCache{entries: make(map[string]memoryLabelEntry)}
+}
+
+func (c *memoryLabelCache) Get(_ context.Context, key string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[key]
+	if !ok {
+		return "", nil
+	}
+	if !e.expiresAt.IsZero() && time.Now().After(e.expiresAt) {
+		delete(c.entries, key)
+		return "", nil
+	}
+	return e.value, nil
+}
+
+func (c *memoryLabelCache) Set(_ context.Context, key, value string, ttl time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	exp := time.Time{}
+	if ttl > 0 {
+		exp = time.Now().Add(ttl)
+	}
+	c.entries[key] = memoryLabelEntry{value: value, expiresAt: exp}
+	return nil
+}
+
+// sweepExpired removes every entry whose TTL has passed. Returns the
+// number of entries evicted so the caller can log it.
+func (c *memoryLabelCache) sweepExpired(now time.Time) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	removed := 0
+	for k, e := range c.entries {
+		if e.expiresAt.IsZero() {
+			continue
+		}
+		if now.After(e.expiresAt) {
+			delete(c.entries, k)
+			removed++
+		}
+	}
+	return removed
+}
+
+// runJanitor evicts expired entries on a fixed cadence until ctx is
+// cancelled. It is intentionally blocking so callers can wrap it in
+// a tracked goroutine (see application.StartBackground).
+func (c *memoryLabelCache) runJanitor(ctx context.Context, interval time.Duration, logger *slog.Logger) {
+	if interval <= 0 {
+		interval = memoryLabelCacheJanitorInterval
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			if n := c.sweepExpired(now); n > 0 && logger != nil {
+				logger.Debug("sn360-es: memoryLabelCache janitor swept entries",
+					slog.Int("evicted", n))
+			}
+		}
+	}
+}
+
+// newLabelCache picks the redis-backed adapter when redis is wired,
+// otherwise it falls back to the in-memory implementation. Both
+// satisfy action.LabelCache so the applier wiring is identical.
+//
+// When the in-memory cache is selected the returned *memoryLabelCache
+// is also returned so the caller can wire its janitor goroutine —
+// this avoids unbounded growth in long-running deployments that have
+// not configured Redis. The second return value is nil for the redis
+// path because the redis server enforces TTL eviction itself.
+func newLabelCache(r *redis.Client) (action.LabelCache, *memoryLabelCache) {
+	if r != nil {
+		return redisLabelCache{client: r}, nil
+	}
+	mem := newMemoryLabelCache()
+	return mem, mem
 }
 
 // redisURLStore adapts our redis.Client to the action.URLStore
@@ -2173,4 +2753,867 @@ func newLogger(cfg *config.Config) *slog.Logger {
 		h = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
 	}
 	return slog.New(middleware.NewLogSanitizer(h, privacy.NewSanitizer()))
+}
+
+// ---------------------------------------------------------------------
+// Ingestion poller wiring.
+// ---------------------------------------------------------------------
+
+// buildPoller constructs the ingestion poller from the configured
+// mailbox providers. When ingestion is disabled or no providers are
+// wired the function returns nil — Run() then simply skips the
+// goroutine.
+func buildPoller(ctx context.Context, cfg *config.Config, logger *slog.Logger, app *application) *ingestion.Poller {
+	if !cfg.Ingestion.Enabled {
+		logger.Info("sn360-es: ingestion polling disabled via config")
+		return nil
+	}
+
+	providers := buildMailboxProviders(ctx, cfg, logger)
+	if len(providers) == 0 {
+		logger.Info("sn360-es: ingestion polling skipped; no mailbox providers configured")
+		return nil
+	}
+
+	// Checkpoint store — Redis-backed in production; nil in
+	// fall-back mode (the poller still runs, it just re-fetches
+	// from the lookback window on every restart).
+	var checkpoint ingestion.CheckpointStore
+	if app.redis != nil {
+		store, cerr := ingestion.NewCheckpointStore(app.redis, "", 0)
+		if cerr != nil {
+			logger.Warn("sn360-es: ingestion checkpoint store init failed; running stateless",
+				slog.Any("error", cerr))
+		} else {
+			checkpoint = store
+		}
+	}
+
+	// Lock factory — Redis-backed in production; nil in dev so
+	// the poller does not deadlock against a missing Redis.
+	var lockFactory ingestion.LockFactory
+	if app.redis != nil {
+		lockTTL := cfg.Ingestion.LockTTL
+		if lockTTL <= 0 {
+			lockTTL = 3 * cfg.Ingestion.Interval / 2
+			if lockTTL <= 0 {
+				lockTTL = 45 * time.Second
+			}
+		}
+		client := app.redis
+		lockFactory = func(key string) ingestion.DistributedLock {
+			lock, lerr := redis.NewDistributedLock(client, key, lockTTL)
+			if lerr != nil {
+				logger.Warn("sn360-es: ingestion lock init failed; running unlocked",
+					slog.String("key", key), slog.Any("error", lerr))
+				return ingestion.NoopLock{}
+			}
+			return ingestionLockAdapter{lock: lock}
+		}
+	}
+
+	p, err := ingestion.New(ingestion.PollerConfig{
+		Providers:          providers,
+		Publisher:          app.eventBus,
+		Logger:             logger,
+		Normalizer:         ingestion.NewDefaultNormalizer(),
+		Checkpoint:         checkpoint,
+		Locks:              lockFactory,
+		Interval:           cfg.Ingestion.Interval,
+		BatchSize:          cfg.Ingestion.BatchSize,
+		Concurrency:        cfg.Ingestion.Concurrency,
+		LookbackOnFirstRun: cfg.Ingestion.InitialBackfill,
+	})
+	if err != nil {
+		logger.Warn("sn360-es: ingestion poller init failed; polling disabled",
+			slog.Any("error", err))
+		return nil
+	}
+	logger.Info("sn360-es: ingestion poller wired",
+		slog.Int("providers", len(providers)),
+		slog.Duration("interval", cfg.Ingestion.Interval))
+	return p
+}
+
+// buildMailboxProviders inspects the GWS / O365 configuration and
+// returns the matching MailboxProvider implementations. Returns an
+// empty slice when neither provider is configured.
+func buildMailboxProviders(ctx context.Context, cfg *config.Config, logger *slog.Logger) []ingestion.MailboxProvider {
+	out := make([]ingestion.MailboxProvider, 0, 2)
+	if cfg.GWS.HasGmail() {
+		sa, err := gmail.LoadServiceAccount(cfg.GWS.ServiceAccountJSON)
+		if err != nil {
+			logger.Warn("sn360-es: gmail mailbox provider init failed (service account)",
+				slog.Any("error", err))
+		} else {
+			tokens, terr := gmail.NewJWTBearerSource(gmail.JWTBearerConfig{
+				ServiceAccount:   sa,
+				ImpersonatedUser: cfg.GWS.DelegatedAdmin,
+			})
+			if terr != nil {
+				logger.Warn("sn360-es: gmail mailbox provider init failed (token source)",
+					slog.Any("error", terr))
+			} else {
+				mbp, merr := gmail.NewMailboxProvider(gmail.MailboxProviderConfig{
+					TokenSource: tokens,
+					// AdminTokenSource is required for the Admin SDK
+					// /admin/directory/v1/users call inside
+					// ListMailboxes. Without it the provider falls
+					// back to ManualMailboxes (empty in this wiring)
+					// and the poller silently observes zero
+					// mailboxes. The JWT bearer source above is
+					// already constructed with the
+					// admin.directory.user.readonly scope, so the
+					// same source is valid for the Admin SDK call.
+					AdminTokenSource: tokens,
+					Domain:           cfg.GWS.Domain,
+					AdminBaseURL:     cfg.GWS.AdminBaseURL,
+					BaseURL:          cfg.GWS.BaseURL,
+					TenantID:         cfg.GWS.Domain,
+				})
+				if merr != nil {
+					logger.Warn("sn360-es: gmail mailbox provider init failed",
+						slog.Any("error", merr))
+				} else {
+					out = append(out, mbp)
+					logger.Info("sn360-es: gmail mailbox provider wired",
+						slog.String("domain", cfg.GWS.Domain))
+				}
+			}
+		}
+	}
+	if cfg.O365.HasOutlook() {
+		tokens, terr := outlook.NewClientCredentialsSource(outlook.ClientCredentialsConfig{
+			TenantID:     cfg.O365.TenantID,
+			ClientID:     cfg.O365.ClientID,
+			ClientSecret: cfg.O365.ClientSecret,
+			TokenURL:     cfg.O365.TokenURL,
+		})
+		if terr != nil {
+			logger.Warn("sn360-es: outlook mailbox provider init failed (token source)",
+				slog.Any("error", terr))
+		} else {
+			mbp, merr := outlook.NewMailboxProvider(outlook.MailboxProviderConfig{
+				TokenSource: tokens,
+				BaseURL:     cfg.O365.BaseURL,
+				TenantID:    cfg.O365.TenantID,
+				// Default to admin-level user enumeration so the
+				// poller actually discovers tenant mailboxes. When
+				// false, ListMailboxes returns only the manually
+				// configured ManualMailboxes list — empty by default
+				// in this wiring — and the poller silently observes
+				// zero mailboxes. The client-credentials token
+				// source has User.Read.All by definition.
+				EnumerateUsers: true,
+			})
+			if merr != nil {
+				logger.Warn("sn360-es: outlook mailbox provider init failed",
+					slog.Any("error", merr))
+			} else {
+				out = append(out, mbp)
+				logger.Info("sn360-es: outlook mailbox provider wired",
+					slog.String("tenant", cfg.O365.TenantID))
+			}
+		}
+	}
+	_ = ctx
+	return out
+}
+
+// ingestionLockAdapter adapts *redis.DistributedLock to the
+// ingestion.DistributedLock interface. The ingestion package's
+// Release returns error only — we collapse the bool return from the
+// Redis primitive into "no error" since "released or already
+// expired" are both legitimate outcomes from the poller's
+// perspective.
+type ingestionLockAdapter struct {
+	lock *redis.DistributedLock
+}
+
+func (a ingestionLockAdapter) Acquire(ctx context.Context) (bool, error) {
+	return a.lock.Acquire(ctx)
+}
+
+func (a ingestionLockAdapter) Release(ctx context.Context) error {
+	_, err := a.lock.Release(ctx)
+	return err
+}
+
+// ---------------------------------------------------------------------
+// Periodic worker wiring.
+// ---------------------------------------------------------------------
+
+// buildWorkers constructs the three periodic workers (relationship
+// aggregation, vendor discovery, retention cleanup). Each returned
+// runner is nil when its dependencies are missing so Run() can
+// start only the ones that have a chance of running successfully.
+func buildWorkers(cfg *config.Config, logger *slog.Logger, app *application) (*worker.Runner, *worker.Runner, *worker.Runner) {
+	if app.repos == nil {
+		logger.Info("sn360-es: periodic workers skipped; repository registry not wired")
+		return nil, nil, nil
+	}
+
+	lockFactory := buildWorkerLockFactory(cfg, logger, app)
+
+	// Metrics adapter — uses the worker bucket on telemetry.Metrics.
+	metricsRec := workerMetricsAdapter{m: app.metrics}
+
+	relRunner := buildRelationshipRunner(cfg, logger, app, lockFactory, metricsRec)
+	vendorRunner := buildVendorRunner(cfg, logger, app, lockFactory, metricsRec)
+	cleanupRunner := buildCleanupRunner(cfg, logger, app, lockFactory, metricsRec)
+
+	return relRunner, vendorRunner, cleanupRunner
+}
+
+func buildWorkerLockFactory(cfg *config.Config, logger *slog.Logger, app *application) worker.LockFactory {
+	if app.redis == nil {
+		return nil
+	}
+	lockTTL := cfg.Worker.LockTTL
+	if lockTTL <= 0 {
+		lockTTL = 10 * time.Minute
+	}
+	client := app.redis
+	return func(name string) worker.DistributedLock {
+		lock, err := redis.NewDistributedLock(client, "worker:lock:"+name, lockTTL)
+		if err != nil {
+			logger.Warn("sn360-es: worker lock init failed; running unlocked",
+				slog.String("worker", name), slog.Any("error", err))
+			return workerLockNoop{}
+		}
+		return workerLockAdapter{lock: lock}
+	}
+}
+
+func buildRelationshipRunner(cfg *config.Config, logger *slog.Logger, app *application, locks worker.LockFactory, metrics worker.MetricsRecorder) *worker.Runner {
+	if app.repos.Tenants == nil || app.repos.CommunicationHistories == nil {
+		return nil
+	}
+	// CommunicationHistoryRepository now declares ListByTenant
+	// directly, so every implementation in this codebase (Postgres,
+	// in-memory, fakes) satisfies worker.CommunicationStore by
+	// definition. The runtime type assertion that previously gated
+	// this wiring would always fail because the interface didn't
+	// declare ListByTenant — workers silently never ran. Dropping
+	// the assertion is safe: the compiler now enforces the contract.
+	job, err := worker.NewRelationshipJob(worker.RelationshipJobConfig{
+		Interval:       cfg.Worker.RelationshipInterval,
+		Tenants:        app.repos.Tenants,
+		Communications: app.repos.CommunicationHistories,
+		Upserter:       app.repos.CommunicationHistories,
+		Logger:         logger,
+	})
+	if err != nil {
+		logger.Warn("sn360-es: relationship worker init failed",
+			slog.Any("error", err))
+		return nil
+	}
+	runner, rerr := worker.NewRunner(worker.RunnerConfig{
+		Job:     job,
+		Logger:  logger,
+		Locks:   locks,
+		Metrics: metrics,
+	})
+	if rerr != nil {
+		logger.Warn("sn360-es: relationship runner init failed",
+			slog.Any("error", rerr))
+		return nil
+	}
+	logger.Info("sn360-es: relationship worker wired",
+		slog.Duration("interval", cfg.Worker.RelationshipInterval))
+	return runner
+}
+
+func buildVendorRunner(cfg *config.Config, logger *slog.Logger, app *application, locks worker.LockFactory, metrics worker.MetricsRecorder) *worker.Runner {
+	if app.repos.Tenants == nil || app.repos.CommunicationHistories == nil || app.repos.Vendors == nil {
+		return nil
+	}
+	// See comment in buildRelationshipRunner — the
+	// CommunicationHistoryRepository interface now declares
+	// ListByTenant so worker.CommunicationStore is satisfied at
+	// compile time and no runtime assertion is needed.
+	discovery := relationship.NewVendorDiscovery(relationship.VendorDiscoveryConfig{}, logger)
+	job, err := worker.NewVendorJob(worker.VendorJobConfig{
+		Interval:         cfg.Worker.VendorDiscoveryInterval,
+		Tenants:          app.repos.Tenants,
+		Communications:   app.repos.CommunicationHistories,
+		Discovery:        discovery,
+		VendorRepository: app.repos.Vendors,
+		Logger:           logger,
+	})
+	if err != nil {
+		logger.Warn("sn360-es: vendor worker init failed",
+			slog.Any("error", err))
+		return nil
+	}
+	runner, rerr := worker.NewRunner(worker.RunnerConfig{
+		Job:     job,
+		Logger:  logger,
+		Locks:   locks,
+		Metrics: metrics,
+	})
+	if rerr != nil {
+		logger.Warn("sn360-es: vendor runner init failed",
+			slog.Any("error", rerr))
+		return nil
+	}
+	logger.Info("sn360-es: vendor worker wired",
+		slog.Duration("interval", cfg.Worker.VendorDiscoveryInterval))
+	return runner
+}
+
+func buildCleanupRunner(cfg *config.Config, logger *slog.Logger, app *application, locks worker.LockFactory, metrics worker.MetricsRecorder) *worker.Runner {
+	pruners := make([]worker.Pruner, 0, 4)
+	// Best-effort pruners — every pruner stays optional so the
+	// cleanup worker can boot even when only some dependencies
+	// are wired.
+	if app.pgDB != nil {
+		pruners = append(pruners, newPgPruner(app.pgDB, "evaluation_results", logger))
+		pruners = append(pruners, newPgPruner(app.pgDB, "feedback_events", logger))
+		pruners = append(pruners, newPgPruner(app.pgDB, "communication_histories", logger))
+	}
+	if len(pruners) == 0 {
+		logger.Info("sn360-es: cleanup worker skipped; no pruners configured")
+		return nil
+	}
+	job, err := worker.NewCleanupJob(worker.CleanupJobConfig{
+		Interval:      cfg.Worker.CleanupInterval,
+		RetentionDays: cfg.Worker.RetentionDays,
+		Pruners:       pruners,
+		Logger:        logger,
+	})
+	if err != nil {
+		logger.Warn("sn360-es: cleanup worker init failed",
+			slog.Any("error", err))
+		return nil
+	}
+	runner, rerr := worker.NewRunner(worker.RunnerConfig{
+		Job:     job,
+		Logger:  logger,
+		Locks:   locks,
+		Metrics: metrics,
+	})
+	if rerr != nil {
+		logger.Warn("sn360-es: cleanup runner init failed",
+			slog.Any("error", rerr))
+		return nil
+	}
+	logger.Info("sn360-es: cleanup worker wired",
+		slog.Int("pruners", len(pruners)),
+		slog.Duration("interval", cfg.Worker.CleanupInterval),
+		slog.Int("retention_days", cfg.Worker.RetentionDays))
+	return runner
+}
+
+// workerLockAdapter adapts *redis.DistributedLock to the worker
+// package's DistributedLock interface (Release returns only an
+// error there).
+type workerLockAdapter struct {
+	lock *redis.DistributedLock
+}
+
+func (a workerLockAdapter) Acquire(ctx context.Context) (bool, error) {
+	return a.lock.Acquire(ctx)
+}
+
+func (a workerLockAdapter) Release(ctx context.Context) error {
+	_, err := a.lock.Release(ctx)
+	return err
+}
+
+// workerLockNoop is returned when the Redis lock primitive cannot
+// be constructed — the worker still runs, it just relies on a
+// single replica being deployed (the common case in dev).
+type workerLockNoop struct{}
+
+func (workerLockNoop) Acquire(context.Context) (bool, error) { return true, nil }
+func (workerLockNoop) Release(context.Context) error         { return nil }
+
+// workerMetricsAdapter funnels Job runner outcomes into the
+// telemetry.Metrics counters. Nil-safe so a binary running without
+// metrics still emits cycle logs.
+type workerMetricsAdapter struct {
+	m *telemetry.Metrics
+}
+
+func (a workerMetricsAdapter) ObserveCycle(name string, duration time.Duration, err error) {
+	if a.m == nil {
+		return
+	}
+	a.m.ObserveWorkerCycle(name, duration, err)
+}
+
+// prunableTables is the exhaustive allow-list of table names that
+// newPgPruner may interpolate into a DELETE statement plus the
+// per-table "prune by this column" choice. Because Go's database/sql
+// does not support parameterised table or column identifiers, both
+// names are injected via fmt.Sprintf — restricting the table set AND
+// the column set to a compile-time map prevents accidental SQL
+// injection if a caller ever passes unsanitised input.
+//
+// The column choice matters: most append-only tables track a
+// `created_at` stamp, but the aggregation tables (e.g.
+// communication_histories) carry a `last_seen_at` instead. Pruning
+// communication_histories on `created_at` would fail with "column
+// does not exist" because the migration in
+// migrations/0001_init.up.sql:215-218 only declares
+// first_seen_at / last_seen_at / updated_at. Tying the column to the
+// table at registration time makes that class of bug impossible to
+// reproduce at runtime.
+var prunableTables = map[string]string{
+	"evaluation_results":      "created_at",
+	"feedback_events":         "created_at",
+	"communication_histories": "last_seen_at",
+	"quarantine_references":   "created_at",
+	"education_lesson_events": "created_at",
+	"simulation_send_events":  "created_at",
+}
+
+// newPgPruner returns a Postgres-backed pruner for the named table.
+// The DELETE statement uses the prune-column registered for the
+// table in prunableTables, so each table is pruned on its canonical
+// age column ("created_at" for append-only tables, "last_seen_at"
+// for aggregation tables like communication_histories).
+//
+// The table name MUST appear in prunableTables. A panic on
+// construction is intentional — it catches programming errors at
+// startup rather than silently ignoring a typo at the first
+// cleanup tick (which might be hours later).
+func newPgPruner(db *postgres.DB, table string, logger *slog.Logger) worker.Pruner {
+	column, ok := prunableTables[table]
+	if !ok {
+		panic(fmt.Sprintf("newPgPruner: table %q is not in the allow-list", table))
+	}
+	query := fmt.Sprintf("DELETE FROM %s WHERE %s < $1", table, column)
+	return worker.NewPruner(table, func(ctx context.Context, before time.Time) (int64, error) {
+		if db == nil {
+			return 0, nil
+		}
+		res, err := db.ExecContext(ctx, query, before)
+		if err != nil {
+			logger.Warn("sn360-es: cleanup prune failed",
+				slog.String("table", table),
+				slog.String("column", column),
+				slog.Any("error", err))
+			return 0, err
+		}
+		n, rerr := res.RowsAffected()
+		if rerr != nil {
+			return 0, nil
+		}
+		return n, nil
+	})
+}
+
+// ---------------------------------------------------------------------
+// AI agent wiring.
+// ---------------------------------------------------------------------
+
+// buildAgents constructs the onboarding / tuning / support agents.
+// Each returned agent is nil when its inputs are missing; the
+// consumer wiring (StartConsumers) checks for nil and falls back to
+// the original logging-only handlers.
+func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*agent.OnboardingAgent, *agent.TuningAgent, *agent.SupportAgent) {
+	var onboardA *agent.OnboardingAgent
+	var tuningA *agent.TuningAgent
+	var supportA *agent.SupportAgent
+
+	pub := agentPublisherFromBus(app.eventBus)
+
+	// Support agent — depends only on the event bus + repository
+	// (for verdict lookup). When the repos are missing it still
+	// wires up; the lookup adapter degrades gracefully.
+	if pub != nil {
+		audit := loggingAuditLog{logger: logger}
+		lookup := evalLookupAdapter{repos: app.repos}
+		sa, err := agent.NewSupportAgent(agent.SupportConfig{
+			Lookup:         lookup,
+			Audit:          audit,
+			Events:         pub,
+			SecOpsSubject:  "es.escalation.create",
+			ReleaseSubject: "es.quarantine.release",
+			Logger:         logger,
+		})
+		if err != nil {
+			logger.Warn("sn360-es: support agent init failed",
+				slog.Any("error", err))
+		} else {
+			supportA = sa
+			logger.Info("sn360-es: support agent wired")
+		}
+	}
+
+	// Onboarding agent — requires a directory client + LabelApplier.
+	// Today we only wire it when GWS or O365 credentials are
+	// configured so it has something to call.
+	if app.providers != nil && app.providers.hasAny() && pub != nil {
+		dir := buildDirectoryClient(cfg, logger)
+		labels := buildLabelApplier(app)
+		if dir != nil && labels != nil {
+			oa, err := agent.NewOnboardingAgent(agent.OnboardingConfig{
+				Directory: dir,
+				Labels:    labels,
+				Events:    pub,
+				Audit:     loggingAuditLog{logger: logger},
+				Logger:    logger,
+			})
+			if err != nil {
+				logger.Warn("sn360-es: onboarding agent init failed",
+					slog.Any("error", err))
+			} else {
+				onboardA = oa
+				logger.Info("sn360-es: onboarding agent wired")
+			}
+		}
+	}
+
+	// Tuning agent — needs a feedback / weights / thresholds
+	// repository. The repository registry doesn't expose
+	// ConfigStore today, so we degrade to an in-memory store.
+	if app.repos != nil && app.repos.FeedbackEvents != nil {
+		results := tuningResultAdapter{repos: app.repos}
+		store := newMemoryConfigStore()
+		ta, err := agent.NewTuningAgent(agent.TuningConfig{
+			Results: results,
+			Config:  store,
+			Audit:   loggingAuditLog{logger: logger},
+			Logger:  logger,
+		})
+		if err != nil {
+			logger.Warn("sn360-es: tuning agent init failed",
+				slog.Any("error", err))
+		} else {
+			tuningA = ta
+			logger.Info("sn360-es: tuning agent wired")
+		}
+	}
+	return onboardA, tuningA, supportA
+}
+
+// agentEventBusAdapter narrows the full event.Service surface to the
+// minimal Publish(ctx, subject, data) shape the agent package depends
+// on. Returns nil when bus is nil so callers can short-circuit.
+type agentEventBusAdapter struct {
+	bus events.EventService
+}
+
+// Publish forwards to the underlying bus with no publish options.
+func (a agentEventBusAdapter) Publish(ctx context.Context, subject string, data []byte) error {
+	return a.bus.Publish(ctx, subject, data)
+}
+
+// agentPublisherFromBus returns nil when bus is nil; otherwise the
+// adapter that satisfies agent.EventPublisher.
+func agentPublisherFromBus(bus events.EventService) agent.EventPublisher {
+	if bus == nil {
+		return nil
+	}
+	return agentEventBusAdapter{bus: bus}
+}
+
+// buildLabelApplier wires the onboarding agent's LabelApplier to the
+// already-configured provider registry. It iterates the registry on
+// each EnsureTierLabels call so multi-tenant deployments are routed
+// to the correct provider.
+func buildLabelApplier(app *application) agent.LabelApplier {
+	if app == nil || app.providers == nil {
+		return nil
+	}
+	return registryLabelApplier{registry: app.providers}
+}
+
+// registryLabelApplier dispatches EnsureTierLabels to whichever
+// provider (Gmail / Outlook) is registered for the tenant. If no
+// provider is registered the call is a no-op (best-effort).
+type registryLabelApplier struct {
+	registry *providerRegistry
+}
+
+// EnsureTierLabels resolves the tenant's provider and seeds the five
+// canonical SN360 tier labels on the target mailbox.
+func (r registryLabelApplier) EnsureTierLabels(ctx context.Context, tenantID, mailbox string) error {
+	entry := r.registry.lookup(tenantID)
+	if entry == nil {
+		return nil
+	}
+	if entry.labelProvider == nil {
+		return nil
+	}
+	tiers := []constant.Tier{
+		constant.TierBlocked,
+		constant.TierHighRisk,
+		constant.TierWarning,
+		constant.TierCaution,
+		constant.TierInformational,
+	}
+	for _, t := range tiers {
+		if _, err := entry.labelProvider.EnsureLabel(ctx, mailbox, "SN360 / "+string(t), action.ColorFor(t)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// buildDirectoryClient returns an agent.DirectoryClient sourced from
+// the GWS Admin SDK or the Microsoft Graph /users endpoint. Returns
+// nil when no provider is configured — the onboarding agent then
+// stays inactive.
+func buildDirectoryClient(cfg *config.Config, logger *slog.Logger) agent.DirectoryClient {
+	if cfg.GWS.HasGmail() {
+		// The Gmail MailboxProvider already wraps the Admin SDK
+		// client; it also satisfies the DirectoryClient surface
+		// via its ListUsers / ListGroups methods.
+		sa, err := gmail.LoadServiceAccount(cfg.GWS.ServiceAccountJSON)
+		if err != nil {
+			logger.Warn("sn360-es: directory client (gmail) init failed",
+				slog.Any("error", err))
+			return nil
+		}
+		tokens, terr := gmail.NewJWTBearerSource(gmail.JWTBearerConfig{
+			ServiceAccount:   sa,
+			ImpersonatedUser: cfg.GWS.DelegatedAdmin,
+		})
+		if terr != nil {
+			logger.Warn("sn360-es: directory client (gmail) token init failed",
+				slog.Any("error", terr))
+			return nil
+		}
+		dc, derr := gmail.NewDirectoryClient(gmail.DirectoryClientConfig{
+			TokenSource:  tokens,
+			Domain:       cfg.GWS.Domain,
+			AdminBaseURL: cfg.GWS.AdminBaseURL,
+		})
+		if derr != nil {
+			logger.Warn("sn360-es: directory client (gmail) wire failed",
+				slog.Any("error", derr))
+			return nil
+		}
+		return dc
+	}
+	if cfg.O365.HasOutlook() {
+		tokens, terr := outlook.NewClientCredentialsSource(outlook.ClientCredentialsConfig{
+			TenantID:     cfg.O365.TenantID,
+			ClientID:     cfg.O365.ClientID,
+			ClientSecret: cfg.O365.ClientSecret,
+			TokenURL:     cfg.O365.TokenURL,
+		})
+		if terr != nil {
+			logger.Warn("sn360-es: directory client (outlook) token init failed",
+				slog.Any("error", terr))
+			return nil
+		}
+		dc, derr := outlook.NewDirectoryClient(outlook.DirectoryClientConfig{
+			TokenSource: tokens,
+			BaseURL:     cfg.O365.BaseURL,
+			TenantID:    cfg.O365.TenantID,
+		})
+		if derr != nil {
+			logger.Warn("sn360-es: directory client (outlook) wire failed",
+				slog.Any("error", derr))
+			return nil
+		}
+		return dc
+	}
+	return nil
+}
+
+// loggingAuditLog implements agent.AuditLog by emitting structured
+// log lines. Production deployments can swap it for a Postgres
+// implementation once the schema is in place.
+type loggingAuditLog struct {
+	logger *slog.Logger
+}
+
+func (l loggingAuditLog) Record(_ context.Context, entry agent.AuditEntry) error {
+	l.logger.Info("agent.audit",
+		slog.String("agent", entry.Agent),
+		slog.String("tenant_id", entry.TenantID),
+		slog.String("action", entry.Action),
+		slog.String("reason", entry.Reason),
+		slog.Time("occurred_at", entry.OccurredAt),
+		slog.Any("detail", entry.Detail))
+	return nil
+}
+
+// evalLookupAdapter wraps the EvaluationResultRepository so the
+// support agent can fetch the stored verdict for a message.
+type evalLookupAdapter struct {
+	repos *repository.Registry
+}
+
+func (a evalLookupAdapter) FindResult(ctx context.Context, tenantID, messageID string) (dto.EvaluateResult, error) {
+	if a.repos == nil || a.repos.EvaluationResults == nil {
+		return dto.EvaluateResult{}, fmt.Errorf("evaluation lookup: not wired")
+	}
+	hash := sha256.Sum256([]byte(messageID))
+	row, err := a.repos.EvaluationResults.GetByMessageHash(ctx, tenantID, hash[:])
+	if err != nil {
+		return dto.EvaluateResult{}, err
+	}
+	return dto.EvaluateResult{
+		TenantID:    row.TenantID,
+		MessageID:   messageID,
+		Tier:        constant.Tier(row.Tier),
+		Primary:     constant.Category(row.Primary),
+		Score:       row.Score,
+		ReasonCodes: row.ReasonCodes,
+		EvaluatedAt: row.EvaluatedAt,
+	}, nil
+}
+
+// tuningResultAdapter exposes the FeedbackEventRepository as the
+// ResultRepository surface the tuning agent needs.
+type tuningResultAdapter struct {
+	repos *repository.Registry
+}
+
+func (a tuningResultAdapter) RecentFeedback(ctx context.Context, tenantID string, since time.Time) ([]agent.Feedback, error) {
+	// We don't expose a per-tenant feedback timeline yet — return
+	// an empty slice so the tuning agent has nothing new to act
+	// on. The slot is here so the call site is type-correct.
+	_ = ctx
+	_ = tenantID
+	_ = since
+	return nil, nil
+}
+
+func (a tuningResultAdapter) CurrentWeights(ctx context.Context, tenantID string) (agent.ScoreWeights, error) {
+	if a.repos == nil || a.repos.ScoreEngines == nil {
+		return agent.ScoreWeights{}, fmt.Errorf("tuning: score engines not wired")
+	}
+	row, err := a.repos.ScoreEngines.Get(ctx, tenantID)
+	if err != nil {
+		return agent.ScoreWeights{}, err
+	}
+	return agent.ScoreWeights{
+		AI:          float64(row.WeightAI),
+		Rspamd:      float64(row.WeightRspamd),
+		Attachments: float64(row.WeightAttachments),
+		Links:       float64(row.WeightLinks),
+	}, nil
+}
+
+func (a tuningResultAdapter) CurrentThresholds(ctx context.Context, tenantID string) (agent.Thresholds, error) {
+	if a.repos == nil || a.repos.ScoreEngines == nil {
+		return agent.Thresholds{}, fmt.Errorf("tuning: score engines not wired")
+	}
+	row, err := a.repos.ScoreEngines.Get(ctx, tenantID)
+	if err != nil {
+		return agent.Thresholds{}, err
+	}
+	return agent.Thresholds{
+		BannerBlocked:  row.ThresholdBlocked,
+		BannerHighRisk: row.ThresholdHigh,
+		BannerWarning:  row.ThresholdWarning,
+		BannerCaution:  row.ThresholdCaution,
+		BannerInfo:     row.ThresholdInfo,
+	}, nil
+}
+
+// memoryConfigStore is a tiny in-memory ConfigStore implementation
+// used until the management service exposes a proper score-engine
+// write endpoint. Decisions are logged so audit pipes can re-derive
+// the changes from logs.
+type memoryConfigStore struct {
+	mu         sync.Mutex
+	weights    map[string]agent.ScoreWeights
+	thresholds map[string]agent.Thresholds
+}
+
+func newMemoryConfigStore() *memoryConfigStore {
+	return &memoryConfigStore{
+		weights:    map[string]agent.ScoreWeights{},
+		thresholds: map[string]agent.Thresholds{},
+	}
+}
+
+func (s *memoryConfigStore) UpdateWeights(_ context.Context, tenantID string, w agent.ScoreWeights) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.weights[tenantID] = w
+	return nil
+}
+
+func (s *memoryConfigStore) UpdateThresholds(_ context.Context, tenantID string, t agent.Thresholds) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.thresholds[tenantID] = t
+	return nil
+}
+
+// ---------------------------------------------------------------------
+// Background lifecycle.
+// ---------------------------------------------------------------------
+
+// StartBackground starts the poller + worker goroutines. They each
+// respect context cancellation so SIGTERM cleanly stops them.
+// Errors from the long-running goroutines are logged but never
+// surfaced to the caller because a missed cycle on a recurring
+// worker is recoverable on the next tick.
+//
+// Every goroutine launched here is tracked on a.bgWG so the shutdown
+// sequence in run() can call WaitBackground() and drain them before
+// the bus and database connections close. Without that wait, an
+// in-flight poller cycle could publish to a closed bus or write to a
+// closed *sql.DB after the parent context fires.
+func (a *application) StartBackground(ctx context.Context) {
+	a.spawn(ctx, "ingestion poller", func(ctx context.Context) error {
+		if a.poller == nil {
+			return nil
+		}
+		return a.poller.Run(ctx)
+	})
+	a.spawn(ctx, "relationship worker", func(ctx context.Context) error {
+		if a.relationshipRunner == nil {
+			return nil
+		}
+		return a.relationshipRunner.Run(ctx)
+	})
+	a.spawn(ctx, "vendor worker", func(ctx context.Context) error {
+		if a.vendorRunner == nil {
+			return nil
+		}
+		return a.vendorRunner.Run(ctx)
+	})
+	a.spawn(ctx, "cleanup worker", func(ctx context.Context) error {
+		if a.cleanupRunner == nil {
+			return nil
+		}
+		return a.cleanupRunner.Run(ctx)
+	})
+	a.spawn(ctx, "memoryLabelCache janitor", func(ctx context.Context) error {
+		if a.memLabelCache == nil {
+			return nil
+		}
+		a.memLabelCache.runJanitor(ctx, memoryLabelCacheJanitorInterval, a.logger)
+		return nil
+	})
+}
+
+// spawn launches a tracked background goroutine. The Add(1) executes
+// on the calling goroutine BEFORE the spawned function runs so a
+// concurrent WaitBackground call cannot race past the counter.
+// Components whose handle is nil short-circuit inside fn; we still
+// spawn a goroutine that immediately returns because the alternative
+// (skipping spawn() when nil) bakes a sequencing dependency between
+// newApplication and StartBackground that is easy to break later.
+func (a *application) spawn(ctx context.Context, name string, fn func(ctx context.Context) error) {
+	a.bgWG.Add(1)
+	go func() {
+		defer a.bgWG.Done()
+		if err := fn(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			a.logger.Warn("sn360-es: background goroutine terminated",
+				slog.String("component", name),
+				slog.Any("error", err))
+		}
+	}()
+}
+
+// WaitBackground blocks until every goroutine launched by
+// StartBackground has returned. Callers must cancel the context they
+// passed to StartBackground first — otherwise the long-running
+// runners (poller, periodic workers) will not exit and Wait blocks
+// forever.
+func (a *application) WaitBackground() {
+	a.bgWG.Wait()
 }

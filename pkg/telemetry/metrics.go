@@ -57,6 +57,20 @@ type Metrics struct {
 	// --- HTTP server ----------------------------------------------
 	HTTPRequests       *prometheus.CounterVec
 	HTTPRequestLatency *prometheus.HistogramVec
+
+	// --- Ingestion polling ----------------------------------------
+	IngestionPolled      *prometheus.CounterVec
+	IngestionPollLatency *prometheus.HistogramVec
+
+	// --- Provider-side actions ------------------------------------
+	ActionLabelApplied       *prometheus.CounterVec
+	ActionBannerInjected     *prometheus.CounterVec
+	ActionURLRewritten       *prometheus.CounterVec
+	ActionQuarantineExecuted *prometheus.CounterVec
+
+	// --- Periodic workers -----------------------------------------
+	WorkerCycleCompleted *prometheus.CounterVec
+	WorkerCycleLatency   *prometheus.HistogramVec
 }
 
 // MetricsConfig configures the metric set. Subsystem maps to Prometheus
@@ -181,6 +195,35 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 			"HTTP request latency in seconds, partitioned by method/route.",
 			latencyBuckets(),
 			[]string{"method", "route"}),
+
+		IngestionPolled: b.counterVec("ingestion_polled_total",
+			"Emails polled from provider mailboxes.",
+			[]string{"provider", "tenant"}),
+		IngestionPollLatency: b.histogramVec("ingestion_poll_latency_seconds",
+			"Per-mailbox poll latency.",
+			latencyBuckets(),
+			[]string{"provider"}),
+
+		ActionLabelApplied: b.counterVec("action_label_applied_total",
+			"Labels applied via the provider API.",
+			[]string{"provider", "tier"}),
+		ActionBannerInjected: b.counterVec("action_banner_injected_total",
+			"Banners injected via the provider API.",
+			[]string{"provider", "tier"}),
+		ActionURLRewritten: b.counterVec("action_url_rewritten_total",
+			"URLs rewritten in message bodies via the provider API.",
+			[]string{"provider", "tier"}),
+		ActionQuarantineExecuted: b.counterVec("action_quarantine_executed_total",
+			"Messages quarantined via the provider API.",
+			[]string{"provider"}),
+
+		WorkerCycleCompleted: b.counterVec("worker_cycle_completed_total",
+			"Periodic worker cycles completed, partitioned by worker name and outcome.",
+			[]string{"worker", "outcome"}),
+		WorkerCycleLatency: b.histogramVec("worker_cycle_latency_seconds",
+			"Periodic worker cycle duration.",
+			latencyBuckets(),
+			[]string{"worker"}),
 	}
 	return m
 }
@@ -195,6 +238,66 @@ func (m *Metrics) ObserveHTTPRequest(method, route, status string, latencySecond
 	}
 	m.HTTPRequests.WithLabelValues(method, route, status).Inc()
 	m.HTTPRequestLatency.WithLabelValues(method, route).Observe(latencySeconds)
+}
+
+// ObserveIngestionPoll records a completed mailbox poll. count is the
+// number of new messages fetched in the cycle; latency is end-to-end
+// (lock acquire through publish).
+func (m *Metrics) ObserveIngestionPoll(provider, tenant string, count int, latency time.Duration) {
+	if m == nil {
+		return
+	}
+	if provider == "" {
+		provider = "unknown"
+	}
+	if tenant == "" {
+		tenant = "default"
+	}
+	if count > 0 {
+		m.IngestionPolled.WithLabelValues(provider, tenant).Add(float64(count))
+	}
+	m.IngestionPollLatency.WithLabelValues(provider).Observe(latency.Seconds())
+}
+
+// ObserveAction records a single provider-side action execution.
+// kind is one of "label", "banner", "url_rewrite", "quarantine".
+func (m *Metrics) ObserveAction(kind, provider, tier string) {
+	if m == nil {
+		return
+	}
+	if provider == "" {
+		provider = "unknown"
+	}
+	if tier == "" {
+		tier = "unknown"
+	}
+	switch kind {
+	case "label":
+		m.ActionLabelApplied.WithLabelValues(provider, tier).Inc()
+	case "banner":
+		m.ActionBannerInjected.WithLabelValues(provider, tier).Inc()
+	case "url_rewrite":
+		m.ActionURLRewritten.WithLabelValues(provider, tier).Inc()
+	case "quarantine":
+		m.ActionQuarantineExecuted.WithLabelValues(provider).Inc()
+	}
+}
+
+// ObserveWorkerCycle records a periodic worker cycle outcome. err is
+// nil on success; any non-nil err counts as a failure.
+func (m *Metrics) ObserveWorkerCycle(worker string, latency time.Duration, err error) {
+	if m == nil {
+		return
+	}
+	if worker == "" {
+		worker = "unknown"
+	}
+	outcome := "ok"
+	if err != nil {
+		outcome = "error"
+	}
+	m.WorkerCycleCompleted.WithLabelValues(worker, outcome).Inc()
+	m.WorkerCycleLatency.WithLabelValues(worker).Observe(latency.Seconds())
 }
 
 // Registerer returns the underlying registerer (useful for sub-component

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -471,6 +472,66 @@ func (m *memoryCommHistory) Get(_ context.Context, tenantID string, senderHash, 
 		return nil, ErrNotFound
 	}
 	return &h, nil
+}
+
+// ListByTenant returns rows for tenantID whose LastSeenAt is at or
+// after `since`, sorted by LastSeenAt descending. A non-positive
+// limit disables the cap. Mirrors the Postgres implementation so
+// tests using the in-memory registry behave identically to
+// production.
+func (m *memoryCommHistory) ListByTenant(_ context.Context, tenantID string, since time.Time, limit int) ([]CommunicationHistory, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	rows := make([]CommunicationHistory, 0)
+	for _, h := range m.rows {
+		if h.TenantID != tenantID {
+			continue
+		}
+		if !since.IsZero() && h.LastSeenAt.Before(since) {
+			continue
+		}
+		rows = append(rows, h)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].LastSeenAt.After(rows[j].LastSeenAt)
+	})
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows, nil
+}
+
+// UpdateCountsIfFresh is the optimistic-concurrency CAS write the
+// relationship worker uses to avoid clobbering ingestion-time
+// increments with a stale snapshot. See the docstring on
+// CommunicationHistoryRepository.UpdateCountsIfFresh for the
+// semantic contract; this implementation mirrors the Postgres
+// version by gating the in-memory write on `UpdatedAt == readAt`.
+func (m *memoryCommHistory) UpdateCountsIfFresh(_ context.Context, h *CommunicationHistory, readAt time.Time) (bool, error) {
+	if h == nil || h.ID == "" {
+		return false, errors.New("repository: UpdateCountsIfFresh requires a row id")
+	}
+	if readAt.IsZero() {
+		return false, errors.New("repository: UpdateCountsIfFresh requires a non-zero readAt")
+	}
+	key := commKey(h.TenantID, h.SenderHash, h.RecipientHash)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.rows[key]
+	if !ok {
+		return false, ErrNotFound
+	}
+	if !cur.UpdatedAt.Equal(readAt) {
+		return false, nil
+	}
+	cur.Count7d = h.Count7d
+	cur.Relationship = h.Relationship
+	cur.UpdatedAt = time.Now().UTC()
+	m.rows[key] = cur
+	// Reflect the write back to the caller so callers that inspect
+	// `h.UpdatedAt` after the CAS see the fresh stamp.
+	h.UpdatedAt = cur.UpdatedAt
+	return true, nil
 }
 
 // --- feedback events ----------------------------------------------------

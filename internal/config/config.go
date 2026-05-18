@@ -80,6 +80,10 @@ type Config struct {
 	URLRewrite URLRewrite
 	CORS       CORS
 	SMTP       SMTP
+	GWS        GWS
+	O365       O365
+	Ingestion  Ingestion
+	Worker     Worker
 }
 
 // Log carries structured-logging configuration.
@@ -260,6 +264,99 @@ type SMTP struct {
 	SkipVerify bool
 }
 
+// GWS holds Google Workspace API credentials. ServiceAccountJSON is
+// the path or inline JSON of a service-account key with domain-wide
+// delegation; DelegatedAdmin is the admin user the service account
+// impersonates when calling the Admin SDK Directory API.
+//
+// All fields are optional: when ServiceAccountJSON is empty the GWS
+// provider is disabled and the action consumers / mailbox poller
+// fall back to logging-only mode.
+type GWS struct {
+	ServiceAccountJSON string
+	DelegatedAdmin     string
+	// Domain is the workspace primary domain (e.g. "example.com");
+	// used by the mailbox poller's Admin SDK list-users call.
+	Domain string
+	// BaseURL overrides the Gmail / Admin API endpoint; left blank in
+	// production. Tests use httptest server URLs here.
+	BaseURL string
+	// AdminBaseURL overrides the Admin SDK endpoint; production
+	// leaves this blank to use https://admin.googleapis.com.
+	AdminBaseURL string
+}
+
+// O365 holds Microsoft 365 client-credentials configuration. All
+// fields are optional; when ClientID + ClientSecret + TenantID are
+// not all set the O365 provider is disabled.
+type O365 struct {
+	ClientID     string
+	ClientSecret string
+	TenantID     string
+	// BaseURL overrides the Graph API endpoint; tests inject
+	// httptest URLs here.
+	BaseURL string
+	// TokenURL overrides https://login.microsoftonline.com when the
+	// caller needs to point at a mock OAuth server.
+	TokenURL string
+}
+
+// HasGmail reports whether enough fields are set to build a Gmail
+// provider. Domain is required because the mailbox poller's Admin
+// SDK list-users call needs it; without it the poller silently
+// observes zero mailboxes and the provider registry would hold an
+// unreachable entry. Keeping Domain in the predicate ensures the
+// provider registry, mailbox poller, and directory client all agree
+// on a single "Gmail is wired" gate.
+func (g GWS) HasGmail() bool {
+	return g.ServiceAccountJSON != "" && g.DelegatedAdmin != "" && g.Domain != ""
+}
+
+// HasOutlook reports whether enough fields are set to build an
+// Outlook provider.
+func (o O365) HasOutlook() bool {
+	return o.ClientID != "" && o.ClientSecret != "" && o.TenantID != ""
+}
+
+// Ingestion holds the per-mailbox poller tuning knobs.
+type Ingestion struct {
+	// Enabled gates the entire poller. Default false so a deployment
+	// without provider credentials never starts a noop ticker.
+	Enabled bool
+	// Interval is the gap between polls per mailbox. Default 30s.
+	Interval time.Duration
+	// BatchSize is the max number of messages fetched per mailbox
+	// per cycle.
+	BatchSize int
+	// Concurrency is the max number of concurrent mailbox fetches.
+	Concurrency int
+	// LockTTL is the Redis-lock TTL per (tenant, mailbox). Should be
+	// at least 1.5x Interval to absorb drift.
+	LockTTL time.Duration
+	// InitialBackfill is how far back to look on first poll (when no
+	// checkpoint exists yet). Default 1h.
+	InitialBackfill time.Duration
+}
+
+// Worker holds the periodic-worker tuning knobs.
+type Worker struct {
+	// RelationshipInterval is the gap between relationship-aggregation
+	// cycles. Default 4h.
+	RelationshipInterval time.Duration
+	// VendorDiscoveryInterval is the gap between vendor-discovery
+	// cycles. Default 7 * 24h.
+	VendorDiscoveryInterval time.Duration
+	// CleanupInterval is the gap between data-retention cycles.
+	// Default 24h.
+	CleanupInterval time.Duration
+	// RetentionDays is the maximum age of historical rows before
+	// the cleanup worker deletes them. Default 90.
+	RetentionDays int
+	// LockTTL is the Redis-lock TTL for leader election. Should be
+	// at least 1.5x the cycle duration the workers expect.
+	LockTTL time.Duration
+}
+
 // CORS configures the cross-origin policy applied to every HTTP route.
 //
 // AllowedOrigins is read from the CORS_ALLOWED_ORIGINS environment
@@ -415,6 +512,53 @@ func Load() (Config, error) {
 			StartTLS:   getBool("SMTP_STARTTLS", true),
 			Timeout:    getDuration("SMTP_TIMEOUT", 10*time.Second),
 			SkipVerify: getBool("SMTP_SKIP_VERIFY", false),
+		},
+		GWS: GWS{
+			// ServiceAccountJSON is either a file path or inline
+			// JSON. JSON tolerates surrounding whitespace, but a
+			// stray newline at the end of a file path (Helm `tpl`
+			// indirection, k8s ConfigMap rendering, `echo $path`
+			// piping) makes os.ReadFile fail with a "no such file"
+			// the operator then has to debug. Trim here so the same
+			// invariant the other four credential fields enforce
+			// — no leading/trailing whitespace — applies uniformly.
+			ServiceAccountJSON: strings.TrimSpace(getStr("GWS_SERVICE_ACCOUNT_JSON", "")),
+			DelegatedAdmin:     strings.TrimSpace(getStr("GWS_DELEGATED_ADMIN", "")),
+			// Domain is the registry key the provider lookup
+			// matches against the MailboxProvider's emitted
+			// TenantID. Both flow from this single field, so we
+			// trim once at the source — otherwise a stray space
+			// in GWS_DOMAIN silently desyncs the registry key
+			// (which used to be trimmed in providers.go) from
+			// the TenantID (which is not), and action consumers
+			// drop every event for the tenant.
+			Domain:       strings.TrimSpace(getStr("GWS_DOMAIN", "")),
+			BaseURL:      getStr("GWS_GMAIL_BASE_URL", ""),
+			AdminBaseURL: getStr("GWS_ADMIN_BASE_URL", ""),
+		},
+		O365: O365{
+			ClientID:     strings.TrimSpace(getStr("O365_CLIENT_ID", "")),
+			ClientSecret: getStr("O365_CLIENT_SECRET", ""),
+			// TenantID has the same registry-key invariant as
+			// GWS.Domain above — trim at the source.
+			TenantID: strings.TrimSpace(getStr("O365_TENANT_ID", "")),
+			BaseURL:  getStr("O365_BASE_URL", ""),
+			TokenURL: getStr("O365_TOKEN_URL", ""),
+		},
+		Ingestion: Ingestion{
+			Enabled:         getBool("INGESTION_ENABLED", false),
+			Interval:        getDuration("INGESTION_INTERVAL", 30*time.Second),
+			BatchSize:       getInt("INGESTION_BATCH_SIZE", 50),
+			Concurrency:     getInt("INGESTION_CONCURRENCY", 10),
+			LockTTL:         getDuration("INGESTION_LOCK_TTL", 45*time.Second),
+			InitialBackfill: getDuration("INGESTION_INITIAL_BACKFILL", time.Hour),
+		},
+		Worker: Worker{
+			RelationshipInterval:    getDuration("WORKER_RELATIONSHIP_INTERVAL", 4*time.Hour),
+			VendorDiscoveryInterval: getDuration("WORKER_VENDOR_DISCOVERY_INTERVAL", 7*24*time.Hour),
+			CleanupInterval:         getDuration("WORKER_CLEANUP_INTERVAL", 24*time.Hour),
+			RetentionDays:           getInt("WORKER_RETENTION_DAYS", 90),
+			LockTTL:                 getDuration("WORKER_LOCK_TTL", 5*time.Minute),
 		},
 	}
 

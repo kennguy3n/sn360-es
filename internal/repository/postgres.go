@@ -554,10 +554,11 @@ func (p *pgCommHistory) Upsert(ctx context.Context, h *CommunicationHistory) err
 	}
 	_, err := p.db.ExecContext(ctx, `
 INSERT INTO communication_histories (id, tenant_id, sender_hash, recipient_hash, sender_domain_hash,
-                                     count_7d, count_30d, first_seen_at, last_seen_at, relationship)
-VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8,NOW()),COALESCE($9,NOW()),$10)
+                                     sender_domain, count_7d, count_30d, first_seen_at, last_seen_at, relationship)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,NOW()),COALESCE($10,NOW()),$11)
 ON CONFLICT (tenant_id, sender_hash, recipient_hash) DO UPDATE SET
     sender_domain_hash=EXCLUDED.sender_domain_hash,
+    sender_domain=EXCLUDED.sender_domain,
     count_7d=EXCLUDED.count_7d,
     count_30d=EXCLUDED.count_30d,
     last_seen_at=EXCLUDED.last_seen_at,
@@ -565,19 +566,102 @@ ON CONFLICT (tenant_id, sender_hash, recipient_hash) DO UPDATE SET
     updated_at=NOW()
 `,
 		h.ID, h.TenantID, h.SenderHash, h.RecipientHash, h.SenderDomainHash,
-		h.Count7d, h.Count30d, nullableTime(h.FirstSeenAt), nullableTime(h.LastSeenAt), h.Relationship,
+		h.SenderDomain, h.Count7d, h.Count30d, nullableTime(h.FirstSeenAt), nullableTime(h.LastSeenAt), h.Relationship,
 	)
 	return err
 }
 
+// ListByTenant returns every CommunicationHistory row for `tenantID`
+// whose last_seen_at is at or after `since`, ordered by last_seen_at
+// descending so the relationship worker re-processes the freshest
+// rows first. A non-positive `limit` is treated as "no cap" by way
+// of `LIMIT NULLIF($3,0)` — Postgres interprets `LIMIT NULL` as
+// unlimited, which matches the established pattern used by every
+// other LIMIT-driven query in this file (e.g. tenants.List at
+// `LIMIT NULLIF($1,0)`, users.List at `LIMIT NULLIF($2,0)`,
+// evaluation_results.ListRecent at `LIMIT NULLIF($2,0)`).
+func (p *pgCommHistory) ListByTenant(ctx context.Context, tenantID string, since time.Time, limit int) ([]CommunicationHistory, error) {
+	rows, err := p.db.QueryContext(ctx, `
+SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(sender_domain, ''),
+       count_7d, count_30d, first_seen_at, last_seen_at, relationship, updated_at
+  FROM communication_histories
+ WHERE tenant_id=$1 AND last_seen_at >= $2
+ ORDER BY last_seen_at DESC
+ LIMIT NULLIF($3,0)`,
+		tenantID, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]CommunicationHistory, 0)
+	for rows.Next() {
+		var h CommunicationHistory
+		if err := rows.Scan(&h.ID, &h.TenantID, &h.SenderHash, &h.RecipientHash, &h.SenderDomainHash, &h.SenderDomain,
+			&h.Count7d, &h.Count30d, &h.FirstSeenAt, &h.LastSeenAt, &h.Relationship, &h.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// UpdateCountsIfFresh applies the relationship-worker's recomputed
+// Count7d + Relationship to the row IFF its updated_at still matches
+// `readAt`. The WHERE-clause acts as an optimistic-concurrency guard
+// against ingestion-time Upsert racing with the worker's stale
+// snapshot (loaded by ListByTenant N seconds earlier). Returns
+// (true, nil) when one row was updated and (false, nil) when the
+// guard rejected the write because ingestion produced a fresher
+// snapshot in the meantime — see the interface docstring on
+// CommunicationHistoryRepository.UpdateCountsIfFresh for why the
+// (false, nil) case is treated as success by the worker.
+//
+// Only the worker-mutated columns (count_7d, relationship,
+// updated_at) are touched. The ingestion-bumped columns (count_30d,
+// last_seen_at, sender_domain, sender_domain_hash) stay at whatever
+// value the latest writer produced, so a worker that missed a
+// concurrent ingestion-time Upsert still does not regress those
+// fields. The id column is used as the WHERE key so a row whose
+// (sender_hash, recipient_hash) somehow got remapped between the
+// list and the update doesn't get cross-updated.
+func (p *pgCommHistory) UpdateCountsIfFresh(ctx context.Context, h *CommunicationHistory, readAt time.Time) (bool, error) {
+	if h == nil || h.ID == "" {
+		return false, errors.New("repository: UpdateCountsIfFresh requires a row id")
+	}
+	if readAt.IsZero() {
+		// A zero readAt would match every row whose updated_at is
+		// also zero — a class of bug we'd rather surface than
+		// silently overwrite the wrong row.
+		return false, errors.New("repository: UpdateCountsIfFresh requires a non-zero readAt")
+	}
+	res, err := p.db.ExecContext(ctx, `
+UPDATE communication_histories
+   SET count_7d = $1,
+       relationship = $2,
+       updated_at = NOW()
+ WHERE id = $3 AND updated_at = $4
+`, h.Count7d, h.Relationship, h.ID, readAt)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 func (p *pgCommHistory) Get(ctx context.Context, tenantID string, senderHash, recipientHash []byte) (*CommunicationHistory, error) {
 	row := p.db.QueryRowContext(ctx, `
-SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, count_7d, count_30d,
-       first_seen_at, last_seen_at, relationship, updated_at
+SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(sender_domain, ''),
+       count_7d, count_30d, first_seen_at, last_seen_at, relationship, updated_at
   FROM communication_histories WHERE tenant_id=$1 AND sender_hash=$2 AND recipient_hash=$3`,
 		tenantID, senderHash, recipientHash)
 	var h CommunicationHistory
-	err := row.Scan(&h.ID, &h.TenantID, &h.SenderHash, &h.RecipientHash, &h.SenderDomainHash,
+	err := row.Scan(&h.ID, &h.TenantID, &h.SenderHash, &h.RecipientHash, &h.SenderDomainHash, &h.SenderDomain,
 		&h.Count7d, &h.Count30d, &h.FirstSeenAt, &h.LastSeenAt, &h.Relationship, &h.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound

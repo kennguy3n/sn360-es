@@ -275,6 +275,59 @@ a runnable binary:
 
 ---
 
+## Composition (2026-05-18 update)
+
+The binary now produces and consumes the full pipeline end-to-end
+when provider credentials are present, and degrades gracefully when
+they are not:
+
+- **Ingestion polling** — `internal/service/ingestion/{poller,normalizer,checkpoint}.go`
+  drives per-(tenant, mailbox) polling against a bounded worker pool.
+  Each cycle takes a Redis distributed lock
+  (`pkg/storage/redis/lock.go`), reads the previous high-water mark
+  from the Redis-backed `CheckpointStore`, fetches new messages from
+  the appropriate `MailboxProvider`, normalises them (HTML stripping,
+  pseudonymisation, hash computation, SPF / DKIM / DMARC extraction),
+  publishes `es.evaluate.request`, and advances the checkpoint.
+- **Provider-side action consumers** — `cmd/sn360-es/main.go`
+  subscribes to `es.action.{label,banner,url_rewrite,quarantine}`
+  with `MaxDeliver=3`. Each handler routes through the
+  `providerRegistry` (`cmd/sn360-es/providers.go`) keyed by
+  `(tenant_id, provider_kind)`. When no provider is registered for a
+  tenant the handlers skip the work but ACK the message so the
+  pipeline does not back up.
+- **Provider clients** — `pkg/email_provider/{gmail,outlook}/`
+  hosts the concrete `LabelProvider`, `BannerInjector`,
+  `QuarantineProvider`, `DirectoryClient`, and `MailboxProvider`
+  implementations. Gmail uses the import-and-trash pattern for body
+  modification; Outlook uses `PATCH /me/messages/{id}` via Microsoft
+  Graph categories.
+- **AI agents** — `buildAgents` constructs the Onboarding / Tuning
+  / Support agents on top of `pkg/email_provider` directory clients,
+  the evaluation-result repository, and the release / lookup
+  adapters. Each is wired when its inputs are present.
+- **Periodic workers** — `internal/service/worker/` runs the
+  relationship aggregator (4h), the vendor discovery job (7d), and
+  the data-retention cleanup job (24h) on a single `Runner`
+  abstraction that obtains a distributed lock per worker name so
+  only one replica runs each cycle.
+- **Health checks** — `/readyz` reports informational status for
+  the provider registry, the ingestion poller, and the configured
+  periodic workers in addition to the existing event-bus / Postgres
+  / Redis / Tier 1 probes.
+- **Metrics** — `pkg/telemetry/metrics.go` adds counters and
+  histograms for ingestion, actions, and worker cycles (see
+  PROGRESS.md changelog for the 2026-05-18 entry).
+
+## Cross-Cutting Tracks (additions)
+
+| Track | Source of truth |
+|---|---|
+| Provider-side action execution | `cmd/sn360-es/providers.go`, `pkg/email_provider/{gmail,outlook}/`, `cmd/sn360-es/main_action_consumers_test.go`. |
+| Ingestion polling | `internal/service/ingestion/`, `pkg/email_provider/{gmail,outlook}/mailbox_provider.go`. |
+| Periodic workers | `internal/service/worker/`, `cmd/sn360-es/main.go` (`buildWorkers`). |
+| Distributed locking | `pkg/storage/redis/lock.go`, `pkg/storage/redis/lock_test.go`. |
+
 ## Remaining Work
 
 The codebase compiles and the binary boots end-to-end, but the
