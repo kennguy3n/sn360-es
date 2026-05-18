@@ -142,6 +142,30 @@ func (s *ClawbackService) HandleScoreUpgrade(ctx context.Context, req ScoreUpgra
 		quarantined++
 	}
 
+	s.log.InfoContext(ctx, "clawback: completed",
+		slog.String("tenant_id", req.TenantID),
+		slog.String("message_id", req.PseudonymizedMessage),
+		slog.String("old_tier", string(req.OldTier)),
+		slog.String("new_tier", string(req.NewTier)),
+		slog.Int("quarantined", quarantined),
+		slog.Int("total_recipients", len(recipients)))
+
+	// Check for total failure before publishing — downstream consumers
+	// should never see an 'executed' event with zero quarantines.
+	if quarantined == 0 && len(recipients) > 0 {
+		s.publishClawbackEvent(ctx, req, quarantined, "clawback.failed")
+		return fmt.Errorf("clawback: all %d quarantine attempts failed for tenant %s: %w",
+			len(recipients), req.TenantID, lastErr)
+	}
+
+	s.publishClawbackEvent(ctx, req, quarantined, "clawback.executed")
+	return nil
+}
+
+func (s *ClawbackService) publishClawbackEvent(ctx context.Context, req ScoreUpgradeRequest, quarantined int, eventType string) {
+	if s.pub == nil {
+		return
+	}
 	evt := ClawbackEvent{
 		TenantID:             req.TenantID,
 		PseudonymizedMessage: req.PseudonymizedMessage,
@@ -151,33 +175,17 @@ func (s *ClawbackService) HandleScoreUpgrade(ctx context.Context, req ScoreUpgra
 		QuarantinedCount:     quarantined,
 		OccurredAt:           s.now(),
 	}
-
-	if s.pub != nil {
-		payload, merr := json.Marshal(evt)
-		if merr != nil {
-			return fmt.Errorf("clawback: marshal: %w", merr)
-		}
-		if perr := s.pub.Publish(ctx, "es.action.clawback.executed", payload,
-			events.WithTenantID(req.TenantID),
-			events.WithEventType("clawback.executed"),
-		); perr != nil {
-			s.log.WarnContext(ctx, "clawback: publish failed", slog.Any("error", perr))
-		}
+	payload, merr := json.Marshal(evt)
+	if merr != nil {
+		s.log.WarnContext(ctx, "clawback: marshal event failed", slog.Any("error", merr))
+		return
 	}
-
-	s.log.InfoContext(ctx, "clawback: executed",
-		slog.String("tenant_id", req.TenantID),
-		slog.String("message_id", req.PseudonymizedMessage),
-		slog.String("old_tier", string(req.OldTier)),
-		slog.String("new_tier", string(req.NewTier)),
-		slog.Int("quarantined", quarantined),
-		slog.Int("total_recipients", len(recipients)))
-
-	if quarantined == 0 && len(recipients) > 0 {
-		return fmt.Errorf("clawback: all %d quarantine attempts failed for tenant %s: %w",
-			len(recipients), req.TenantID, lastErr)
+	if perr := s.pub.Publish(ctx, "es.action."+eventType, payload,
+		events.WithTenantID(req.TenantID),
+		events.WithEventType(eventType),
+	); perr != nil {
+		s.log.WarnContext(ctx, "clawback: publish failed", slog.Any("error", perr))
 	}
-	return nil
 }
 
 // HandleReportConfirmed is a consumer for es.action.feedback.report_confirmed
