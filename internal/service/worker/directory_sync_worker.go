@@ -173,6 +173,7 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 			j.cfg.Logger.Warn("directory sync: user upsert failed",
 				slog.String("tenant_id", tenantID),
 				slog.String("err", err.Error()))
+			continue
 		}
 
 		// Emit event for new users (compare by email hash — the stable conflict key).

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -63,15 +64,15 @@ func (v *HTTPPostConsentValidator) validateGoogle(ctx context.Context, token Tok
 	if baseURL == "" {
 		baseURL = "https://admin.googleapis.com"
 	}
-	url := baseURL + "/admin/directory/v1/users?maxResults=1"
+	endpoint := baseURL + "/admin/directory/v1/users?maxResults=1"
 	domain := v.gwsDomain
 	if domain == "" {
 		domain = tenantID
 	}
 	if domain != "" {
-		url += "&domain=" + domain
+		endpoint += "&domain=" + url.QueryEscape(domain)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}
