@@ -199,6 +199,13 @@ func (a *OnboardingAgent) Onboard(ctx context.Context, tctx TenantContext) (Onbo
 		}
 	}
 
+	// Persist discovered users/groups to the database.
+	if a.cfg.Persister != nil {
+		if err := a.cfg.Persister.PersistDiscoveredUsers(ctx, tctx.TenantID, users, groups); err != nil {
+			log.Warn("agent.onboarding: persist users failed", slog.String("err", err.Error()))
+		}
+	}
+
 	if a.cfg.Config != nil {
 		if err := a.cfg.Config.UpdateWeights(ctx, tctx.TenantID, a.cfg.DefaultWeights); err != nil {
 			log.Warn("agent.onboarding: seed weights failed", slog.String("err", err.Error()))

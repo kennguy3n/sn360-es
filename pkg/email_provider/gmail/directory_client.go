@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
 )
@@ -41,6 +42,13 @@ type DirectoryClient struct {
 	adminBase  string
 	domain     string
 	customerID string
+
+	// cachedGroups avoids duplicate ListGroups API calls when ListUsers
+	// internally fetches groups for membership enrichment and the caller
+	// also calls ListGroups separately (OnboardingAgent, DirectorySyncJob).
+	groupsMu     sync.Mutex
+	cachedGroups []agent.DiscoveredGroup
+	groupsCached bool
 }
 
 // NewDirectoryClient builds a DirectoryClient. Requires a token
@@ -261,9 +269,19 @@ func (c *DirectoryClient) ListGroupMembers(ctx context.Context, groupID string) 
 	return emails, nil
 }
 
-// ListGroups enumerates the workspace groups.
+// ListGroups enumerates the workspace groups. Results are cached for
+// the lifetime of the client so that callers who call both ListUsers
+// and ListGroups don't trigger duplicate Admin SDK requests.
 func (c *DirectoryClient) ListGroups(ctx context.Context, tenantID string) ([]agent.DiscoveredGroup, error) {
 	_ = tenantID
+	c.groupsMu.Lock()
+	if c.groupsCached {
+		out := c.cachedGroups
+		c.groupsMu.Unlock()
+		return out, nil
+	}
+	c.groupsMu.Unlock()
+
 	var out []agent.DiscoveredGroup
 	page := ""
 	for {
@@ -296,6 +314,13 @@ func (c *DirectoryClient) ListGroups(ctx context.Context, tenantID string) ([]ag
 		}
 		page = list.NextPageToken
 	}
+
+	// Cache for subsequent calls within this sync cycle.
+	c.groupsMu.Lock()
+	c.cachedGroups = out
+	c.groupsCached = true
+	c.groupsMu.Unlock()
+
 	return out, nil
 }
 

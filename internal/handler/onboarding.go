@@ -55,7 +55,7 @@ func (h *OnboardingHandler) ServeStart(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("onboarding: auth URL failed",
 			slog.String("err", err.Error()),
 			slog.String("tenant_id", tenantID))
-		writeJSON(w, http.StatusBadRequest, onboardingErrorResp(err.Error()))
+		writeJSON(w, http.StatusBadRequest, onboardingErrorResp("failed to generate auth URL"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"redirect_url": url})
@@ -79,7 +79,7 @@ func (h *OnboardingHandler) ServeCallback(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		h.logger.Warn("onboarding: callback failed",
 			slog.String("err", err.Error()))
-		writeJSON(w, http.StatusUnauthorized, onboardingErrorResp(err.Error()))
+		writeJSON(w, http.StatusUnauthorized, onboardingErrorResp("callback validation failed"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{

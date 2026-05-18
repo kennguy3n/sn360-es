@@ -384,14 +384,14 @@ func applyAdminBoost(users []UserClassifyInput, results []ClassifyResult) []Clas
 
 func classifyCacheKey(u UserClassifyInput) string {
 	h, _ := blake2b.New256(nil)
-	h.Write([]byte(u.JobTitle))
-	h.Write([]byte("|"))
-	h.Write([]byte(u.Department))
-	h.Write([]byte("|"))
-	h.Write([]byte(u.DisplayName))
-	h.Write([]byte("|"))
-	h.Write([]byte(strings.Join(u.GroupNames, ",")))
-	h.Write([]byte("|"))
+	// Length-prefixed encoding prevents field-boundary collisions
+	// (e.g. Title="VP|Finance" vs Title="VP", Dept="Finance").
+	fmt.Fprintf(h, "%d:%s", len(u.JobTitle), u.JobTitle)
+	fmt.Fprintf(h, "%d:%s", len(u.Department), u.Department)
+	fmt.Fprintf(h, "%d:%s", len(u.DisplayName), u.DisplayName)
+	for _, g := range u.GroupNames {
+		fmt.Fprintf(h, "%d:%s", len(g), g)
+	}
 	if u.IsAdmin {
 		h.Write([]byte("admin"))
 	}

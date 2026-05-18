@@ -166,7 +166,6 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 			SensitivityTier: sens.DBTier(),
 			Locale:          "",
 		}
-		_ = confidence
 		_ = needsReview
 
 		if err := j.cfg.Users.Upsert(ctx, repoUser); err != nil {
@@ -182,8 +181,10 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 			evt := map[string]any{
 				"tenant_id":   tenantID,
 				"user_id":     repoUser.ID,
+				"email_hash":  hashHex,
 				"department":  u.Department,
 				"sensitivity": sens.String(),
+				"confidence":  confidence,
 				"occurred_at": time.Now().UTC(),
 			}
 			data, _ := json.Marshal(evt)
