@@ -197,10 +197,9 @@ func (s *ClawbackService) HandleReportConfirmed(ctx context.Context, msg events.
 
 	newTier := constant.TierBlocked
 	// When tier is unknown (legacy producers), default to Informational
-	// so shouldClawback always fires. Defaulting to Warning would skip
-	// clawback for Warning→Blocked, and defaulting to Trusted would be
-	// correct but overly aggressive for messages that may already be
-	// at HighRisk/Blocked (quarantine is idempotent but wastes API calls).
+	// (severity 0 in our clawback scale) so shouldClawback always fires
+	// for the Blocked upgrade. Using Informational rather than Trusted
+	// is a documentation choice — both map to severity 0 in tierSeverity.
 	oldTier := constant.TierInformational
 	if evt.Tier != "" {
 		oldTier = constant.Tier(evt.Tier)

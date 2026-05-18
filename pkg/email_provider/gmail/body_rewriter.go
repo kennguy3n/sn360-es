@@ -2,7 +2,10 @@ package gmail
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
+	"mime/quotedprintable"
 	"strings"
 	"sync"
 	"time"
@@ -101,7 +104,10 @@ func (g *BodyRewriter) WriteBody(ctx context.Context, email, messageID, htmlBody
 
 	modified, mutated := replaceHTMLInRFC822(raw, htmlBody)
 	if !mutated {
-		modified = raw
+		// No HTML part found or replacement unchanged — skip the
+		// import+trash cycle to avoid wasting API quota and
+		// changing the message's internal Gmail ID.
+		return nil
 	}
 
 	if err := g.inj.importMessage(ctx, email, modified, threadID); err != nil {
@@ -114,8 +120,9 @@ func (g *BodyRewriter) WriteBody(ctx context.Context, email, messageID, htmlBody
 }
 
 // extractHTMLFromRFC822 is a lightweight extraction of the first
-// text/html part from an RFC-2822 message. For messages with no HTML
-// part it returns "".
+// text/html part from an RFC-2822 message. It handles base64 and
+// quoted-printable Content-Transfer-Encoding. For messages with no
+// HTML part it returns "".
 func extractHTMLFromRFC822(raw []byte) string {
 	s := string(raw)
 	// Find the boundary between headers and body.
@@ -138,23 +145,26 @@ func extractHTMLFromRFC822(raw []byte) string {
 			if strings.HasPrefix(s[idx:], "\n\n") {
 				bodyStart = idx + 2
 			}
-			return s[bodyStart:]
+			cte := detectCTE(headerBlock)
+			return decodeCTE(s[bodyStart:], cte)
 		}
 		return ""
 	}
 
 	// Skip past the part headers to the body.
-	partBody := body[htmlStart:]
-	bodyIdx := strings.Index(partBody, "\r\n\r\n")
+	partHeaders := body[htmlStart:]
+	bodyIdx := strings.Index(partHeaders, "\r\n\r\n")
 	if bodyIdx < 0 {
-		bodyIdx = strings.Index(partBody, "\n\n")
+		bodyIdx = strings.Index(partHeaders, "\n\n")
 	}
 	if bodyIdx < 0 {
 		return ""
 	}
-	content := partBody[bodyIdx+4:]
-	if strings.HasPrefix(partBody[bodyIdx:], "\n\n") {
-		content = partBody[bodyIdx+2:]
+
+	headerSection := partHeaders[:bodyIdx]
+	content := partHeaders[bodyIdx+4:]
+	if strings.HasPrefix(partHeaders[bodyIdx:], "\n\n") {
+		content = partHeaders[bodyIdx+2:]
 	}
 
 	// Truncate at the next MIME boundary.
@@ -163,7 +173,47 @@ func extractHTMLFromRFC822(raw []byte) string {
 	} else if bIdx := strings.Index(content, "\n--"); bIdx >= 0 {
 		content = content[:bIdx]
 	}
-	return strings.TrimSpace(content)
+
+	cte := detectCTE(headerSection)
+	return decodeCTE(strings.TrimSpace(content), cte)
+}
+
+// detectCTE extracts the Content-Transfer-Encoding from a header block.
+func detectCTE(headers string) string {
+	lower := strings.ToLower(headers)
+	idx := strings.Index(lower, "content-transfer-encoding:")
+	if idx < 0 {
+		return "7bit"
+	}
+	rest := headers[idx+len("content-transfer-encoding:"):]
+	end := strings.IndexAny(rest, "\r\n")
+	if end >= 0 {
+		rest = rest[:end]
+	}
+	return strings.TrimSpace(strings.ToLower(rest))
+}
+
+// decodeCTE decodes content based on Content-Transfer-Encoding.
+func decodeCTE(content, cte string) string {
+	switch cte {
+	case "base64":
+		cleaned := strings.ReplaceAll(content, "\r\n", "")
+		cleaned = strings.ReplaceAll(cleaned, "\n", "")
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(cleaned))
+		if err != nil {
+			return content
+		}
+		return string(decoded)
+	case "quoted-printable":
+		r := quotedprintable.NewReader(strings.NewReader(content))
+		decoded, err := io.ReadAll(r)
+		if err != nil {
+			return content
+		}
+		return string(decoded)
+	default:
+		return content
+	}
 }
 
 // replaceHTMLInRFC822 replaces the first text/html part body in the
