@@ -614,6 +614,9 @@ func (c Config) validate() error {
 		c.Score.Caution <= c.Score.Info {
 		return errors.New("SCORE_*_THRESHOLD must be strictly decreasing: blocked > high > warning > caution > info")
 	}
+	if c.Onboarding.StateSecret != "" && len(c.Onboarding.StateSecret) < 16 {
+		return errors.New("ONBOARDING_STATE_SECRET must be at least 16 bytes when set")
+	}
 	return nil
 }
 

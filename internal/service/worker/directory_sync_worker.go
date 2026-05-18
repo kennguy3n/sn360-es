@@ -205,10 +205,11 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 		resolvedByHash[fmt.Sprintf("%x", ru.EmailHash)] = ru.ID
 	}
 
-	// Upsert groups.
+	// Upsert groups. Do NOT pass provider-assigned IDs (e.g. GWS
+	// alphanumeric IDs) because the DB column is UUID. Let pgGroups.Upsert
+	// generate a proper UUID; ON CONFLICT (tenant_id, name) handles dedup.
 	for _, g := range groups {
 		repoGroup := &repository.Group{
-			ID:          g.ID,
 			TenantID:    tenantID,
 			Name:        g.Name,
 			Description: g.Description,

@@ -8,12 +8,22 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/onboarding"
 )
 
+// OnboardingStatus holds the response for the status endpoint.
+type OnboardingStatus struct {
+	TenantID         string `json:"tenant_id"`
+	Status           string `json:"status"`
+	UsersDiscovered  int    `json:"users_discovered"`
+	GroupsDiscovered int    `json:"groups_discovered"`
+	NeedsReviewCount int    `json:"needs_review_count"`
+}
+
 // OnboardingService is the interface the handler expects from the
 // onboarding service. Kept minimal to allow easy testing.
 type OnboardingService interface {
 	AuthURL(provider onboarding.ProviderType, tenantID string) (string, error)
 	HandleCallback(ctx context.Context, stateTok, code string) (string, onboarding.ProviderType, error)
 	Revoke(ctx context.Context, tenantID string, provider onboarding.ProviderType) error
+	Status(ctx context.Context, tenantID string) (OnboardingStatus, error)
 }
 
 // OnboardingHandler exposes HTTP endpoints for the OAuth onboarding
@@ -91,7 +101,8 @@ func (h *OnboardingHandler) ServeCallback(w http.ResponseWriter, r *http.Request
 
 // ServeStatus handles GET /v1/onboarding/status.
 // Query params: tenant_id.
-// Returns: {"tenant_id": "...", "status": "active"}.
+// Returns tenant onboarding status including user/group counts and
+// the number of users needing admin review.
 func (h *OnboardingHandler) ServeStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, onboardingErrorResp("method not allowed"))
@@ -102,10 +113,15 @@ func (h *OnboardingHandler) ServeStatus(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, onboardingErrorResp("tenant_id is required"))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
-		"tenant_id": tenantID,
-		"status":    "active",
-	})
+	status, err := h.svc.Status(r.Context(), tenantID)
+	if err != nil {
+		h.logger.Warn("onboarding: status query failed",
+			slog.String("err", err.Error()),
+			slog.String("tenant_id", tenantID))
+		writeJSON(w, http.StatusInternalServerError, onboardingErrorResp("failed to retrieve status"))
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 // ServeRevoke handles DELETE /v1/onboarding/revoke.

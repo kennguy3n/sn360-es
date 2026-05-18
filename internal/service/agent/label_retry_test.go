@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"sync"
 	"testing"
@@ -56,8 +57,10 @@ func TestLabelRetryQueue_Enqueue(t *testing.T) {
 	if evt.TenantID != "t1" {
 		t.Errorf("TenantID = %q, want %q", evt.TenantID, "t1")
 	}
-	if evt.Mailbox != "user@example.com" {
-		t.Errorf("Mailbox = %q, want %q", evt.Mailbox, "user@example.com")
+	// Without encryptor, mailbox is base64-encoded.
+	wantCT := base64.StdEncoding.EncodeToString([]byte("user@example.com"))
+	if evt.MailboxCiphertext != wantCT {
+		t.Errorf("MailboxCiphertext = %q, want %q", evt.MailboxCiphertext, wantCT)
 	}
 	if evt.Attempt != 1 {
 		t.Errorf("Attempt = %d, want 1", evt.Attempt)
@@ -92,11 +95,12 @@ func TestLabelRetryQueue_ProcessRetry_Success(t *testing.T) {
 		MaxRetries: 3,
 	})
 
+	// Build event with base64-encoded mailbox (no encryptor fallback path).
 	evt := LabelRetryEvent{
-		TenantID:      "t1",
-		Mailbox:       "user@example.com",
-		LabelsMissing: []string{"SN360 / Tier 1"},
-		Attempt:       1,
+		TenantID:          "t1",
+		MailboxCiphertext: base64.StdEncoding.EncodeToString([]byte("user@example.com")),
+		LabelsMissing:     []string{"SN360 / Tier 1"},
+		Attempt:           1,
 	}
 	data, _ := json.Marshal(evt)
 

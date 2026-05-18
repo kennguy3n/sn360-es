@@ -15,6 +15,7 @@ type mockOnboardingService struct {
 	authURLFn      func(provider onboarding.ProviderType, tenantID string) (string, error)
 	handleCallback func(ctx context.Context, state, code string) (string, onboarding.ProviderType, error)
 	revokeFn       func(ctx context.Context, tenantID string, provider onboarding.ProviderType) error
+	statusFn       func(ctx context.Context, tenantID string) (OnboardingStatus, error)
 }
 
 func (m *mockOnboardingService) AuthURL(provider onboarding.ProviderType, tenantID string) (string, error) {
@@ -36,6 +37,19 @@ func (m *mockOnboardingService) Revoke(ctx context.Context, tenantID string, pro
 		return m.revokeFn(ctx, tenantID, provider)
 	}
 	return nil
+}
+
+func (m *mockOnboardingService) Status(ctx context.Context, tenantID string) (OnboardingStatus, error) {
+	if m.statusFn != nil {
+		return m.statusFn(ctx, tenantID)
+	}
+	return OnboardingStatus{
+		TenantID:         tenantID,
+		Status:           "active",
+		UsersDiscovered:  10,
+		GroupsDiscovered: 3,
+		NeedsReviewCount: 1,
+	}, nil
 }
 
 func TestOnboardingHandler_ServeStart(t *testing.T) {

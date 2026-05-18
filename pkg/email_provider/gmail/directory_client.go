@@ -272,15 +272,20 @@ func (c *DirectoryClient) ListGroupMembers(ctx context.Context, groupID string) 
 // ListGroups enumerates the workspace groups. Results are cached for
 // the lifetime of the client so that callers who call both ListUsers
 // and ListGroups don't trigger duplicate Admin SDK requests.
+//
+// The lock is held for the entire fetch to prevent TOCTOU races where
+// concurrent callers both observe an empty cache and issue duplicate
+// Admin SDK requests. This is safe because:
+// (a) the client is scoped to a single sync cycle,
+// (b) blocking is preferable to redundant API calls against quota.
 func (c *DirectoryClient) ListGroups(ctx context.Context, tenantID string) ([]agent.DiscoveredGroup, error) {
 	_ = tenantID
 	c.groupsMu.Lock()
+	defer c.groupsMu.Unlock()
+
 	if c.groupsCached {
-		out := c.cachedGroups
-		c.groupsMu.Unlock()
-		return out, nil
+		return c.cachedGroups, nil
 	}
-	c.groupsMu.Unlock()
 
 	var out []agent.DiscoveredGroup
 	page := ""
@@ -315,12 +320,8 @@ func (c *DirectoryClient) ListGroups(ctx context.Context, tenantID string) ([]ag
 		page = list.NextPageToken
 	}
 
-	// Cache for subsequent calls within this sync cycle.
-	c.groupsMu.Lock()
 	c.cachedGroups = out
 	c.groupsCached = true
-	c.groupsMu.Unlock()
-
 	return out, nil
 }
 
