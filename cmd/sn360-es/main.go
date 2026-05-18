@@ -3001,15 +3001,17 @@ func buildRelationshipRunner(cfg *config.Config, logger *slog.Logger, app *appli
 	if app.repos.Tenants == nil || app.repos.CommunicationHistories == nil {
 		return nil
 	}
-	commStore, ok := app.repos.CommunicationHistories.(worker.CommunicationStore)
-	if !ok {
-		logger.Info("sn360-es: relationship worker skipped; CommunicationHistoryRepository does not implement ListByTenant")
-		return nil
-	}
+	// CommunicationHistoryRepository now declares ListByTenant
+	// directly, so every implementation in this codebase (Postgres,
+	// in-memory, fakes) satisfies worker.CommunicationStore by
+	// definition. The runtime type assertion that previously gated
+	// this wiring would always fail because the interface didn't
+	// declare ListByTenant — workers silently never ran. Dropping
+	// the assertion is safe: the compiler now enforces the contract.
 	job, err := worker.NewRelationshipJob(worker.RelationshipJobConfig{
 		Interval:       cfg.Worker.RelationshipInterval,
 		Tenants:        app.repos.Tenants,
-		Communications: commStore,
+		Communications: app.repos.CommunicationHistories,
 		Upserter:       app.repos.CommunicationHistories,
 		Logger:         logger,
 	})
@@ -3038,16 +3040,15 @@ func buildVendorRunner(cfg *config.Config, logger *slog.Logger, app *application
 	if app.repos.Tenants == nil || app.repos.CommunicationHistories == nil || app.repos.Vendors == nil {
 		return nil
 	}
-	commStore, ok := app.repos.CommunicationHistories.(worker.CommunicationStore)
-	if !ok {
-		logger.Info("sn360-es: vendor worker skipped; CommunicationHistoryRepository does not implement ListByTenant")
-		return nil
-	}
+	// See comment in buildRelationshipRunner — the
+	// CommunicationHistoryRepository interface now declares
+	// ListByTenant so worker.CommunicationStore is satisfied at
+	// compile time and no runtime assertion is needed.
 	discovery := relationship.NewVendorDiscovery(relationship.VendorDiscoveryConfig{}, logger)
 	job, err := worker.NewVendorJob(worker.VendorJobConfig{
 		Interval:         cfg.Worker.VendorDiscoveryInterval,
 		Tenants:          app.repos.Tenants,
-		Communications:   commStore,
+		Communications:   app.repos.CommunicationHistories,
 		Discovery:        discovery,
 		VendorRepository: app.repos.Vendors,
 		Logger:           logger,

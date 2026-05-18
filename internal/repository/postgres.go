@@ -571,6 +571,44 @@ ON CONFLICT (tenant_id, sender_hash, recipient_hash) DO UPDATE SET
 	return err
 }
 
+// ListByTenant returns every CommunicationHistory row for `tenantID`
+// whose last_seen_at is at or after `since`, ordered by last_seen_at
+// descending so the relationship worker re-processes the freshest
+// rows first. A non-positive `limit` is treated as "no cap"; in that
+// case we pass NULL to the SQL LIMIT placeholder which Postgres
+// interprets as unlimited.
+func (p *pgCommHistory) ListByTenant(ctx context.Context, tenantID string, since time.Time, limit int) ([]CommunicationHistory, error) {
+	var limitArg interface{}
+	if limit > 0 {
+		limitArg = limit
+	}
+	rows, err := p.db.QueryContext(ctx, `
+SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(sender_domain, ''),
+       count_7d, count_30d, first_seen_at, last_seen_at, relationship, updated_at
+  FROM communication_histories
+ WHERE tenant_id=$1 AND last_seen_at >= $2
+ ORDER BY last_seen_at DESC
+ LIMIT $3`,
+		tenantID, since, limitArg)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]CommunicationHistory, 0)
+	for rows.Next() {
+		var h CommunicationHistory
+		if err := rows.Scan(&h.ID, &h.TenantID, &h.SenderHash, &h.RecipientHash, &h.SenderDomainHash, &h.SenderDomain,
+			&h.Count7d, &h.Count30d, &h.FirstSeenAt, &h.LastSeenAt, &h.Relationship, &h.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (p *pgCommHistory) Get(ctx context.Context, tenantID string, senderHash, recipientHash []byte) (*CommunicationHistory, error) {
 	row := p.db.QueryRowContext(ctx, `
 SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(sender_domain, ''),

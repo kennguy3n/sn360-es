@@ -473,6 +473,33 @@ func (m *memoryCommHistory) Get(_ context.Context, tenantID string, senderHash, 
 	return &h, nil
 }
 
+// ListByTenant returns rows for tenantID whose LastSeenAt is at or
+// after `since`, sorted by LastSeenAt descending. A non-positive
+// limit disables the cap. Mirrors the Postgres implementation so
+// tests using the in-memory registry behave identically to
+// production.
+func (m *memoryCommHistory) ListByTenant(_ context.Context, tenantID string, since time.Time, limit int) ([]CommunicationHistory, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	rows := make([]CommunicationHistory, 0)
+	for _, h := range m.rows {
+		if h.TenantID != tenantID {
+			continue
+		}
+		if !since.IsZero() && h.LastSeenAt.Before(since) {
+			continue
+		}
+		rows = append(rows, h)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].LastSeenAt.After(rows[j].LastSeenAt)
+	})
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows, nil
+}
+
 // --- feedback events ----------------------------------------------------
 
 type memoryFeedbackEvents struct {

@@ -299,8 +299,21 @@ func (p *Poller) pollMailbox(ctx context.Context, j job) {
 	// this barrier, a later message in the same batch succeeding
 	// would silently mask the failure on the next poll cycle (the
 	// failed message would never be re-fetched).
+	//
+	// When the provider hands us a zero ReceivedAt (e.g. a Gmail
+	// message with a malformed internalDate, or an Outlook message
+	// missing receivedDateTime), we substitute the current wall
+	// clock. Leaving the zero value would make `failBarrier.IsZero()`
+	// stay true downstream, which causes the barrier to be ignored
+	// when computing `newest` — the failed message would never be
+	// re-fetched. Choosing time.Now().UTC() instead is conservative:
+	// it forces the checkpoint to stay <= now, so the next cycle
+	// will re-poll the affected window.
 	var failBarrier time.Time
 	recordFailure := func(t time.Time) {
+		if t.IsZero() {
+			t = time.Now().UTC()
+		}
 		if failBarrier.IsZero() || t.Before(failBarrier) {
 			failBarrier = t
 		}

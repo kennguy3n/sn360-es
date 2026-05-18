@@ -20,6 +20,19 @@ import (
 // folder isolates SN360 from tenant-side retention policy.
 const QuarantineFolderName = "SN360 / Quarantined"
 
+// defaultFolderCacheMax bounds the in-memory cache that maps mailbox
+// email -> Graph folder id. The cache only holds string -> string
+// entries (~200 bytes each), so 16384 entries cap memory at ~4 MB —
+// well above the largest realistic single-tenant footprint while
+// preventing a runaway tenant from exhausting memory if the binary
+// is reused across many tenants in a long-running deployment. When
+// the cap is hit, the first entry encountered during map iteration
+// (Go-randomised, so effectively random eviction) is dropped to make
+// room. Random eviction is acceptable here because cache misses are
+// cheap — they trigger a single Graph round-trip that recovers the
+// id via the create-then-list flow in ensureQuarantineFolder.
+const defaultFolderCacheMax = 16384
+
 // QuarantineProvider implements action.QuarantineProvider for
 // Microsoft 365 / Exchange Online.
 //
@@ -40,8 +53,9 @@ const QuarantineFolderName = "SN360 / Quarantined"
 type QuarantineProvider struct {
 	labels *LabelProvider
 
-	folderMu      sync.Mutex
-	folderIDCache map[string]string // email -> folder id
+	folderMu       sync.Mutex
+	folderIDCache  map[string]string // email -> folder id
+	folderCacheMax int               // 0 = use defaultFolderCacheMax
 }
 
 // QuarantineProviderConfig wires the provider.
@@ -184,8 +198,23 @@ func (p *QuarantineProvider) ensureQuarantineFolder(ctx context.Context, email s
 	return "", fmt.Errorf("quarantine folder not found after create+list")
 }
 
+// cacheFolderID stores email -> folder id and enforces the size cap.
+// When the cap is reached we drop a single map entry (Go-randomised
+// iteration order makes this effectively random eviction) to make
+// room for the new mapping. Random eviction is acceptable because
+// cache misses are cheap — see the comment on defaultFolderCacheMax.
 func (p *QuarantineProvider) cacheFolderID(email, id string) {
 	p.folderMu.Lock()
 	defer p.folderMu.Unlock()
+	max := p.folderCacheMax
+	if max <= 0 {
+		max = defaultFolderCacheMax
+	}
+	if _, exists := p.folderIDCache[email]; !exists && len(p.folderIDCache) >= max {
+		for k := range p.folderIDCache {
+			delete(p.folderIDCache, k)
+			break
+		}
+	}
 	p.folderIDCache[email] = id
 }

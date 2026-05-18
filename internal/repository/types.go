@@ -255,9 +255,18 @@ type EvaluationResultRepository interface {
 }
 
 // CommunicationHistoryRepository persists CommunicationHistory rows.
+//
+// ListByTenant returns rows whose LastSeenAt is at or after `since`,
+// capped at `limit` entries (limit <= 0 disables the cap). The
+// relationship-aggregation and vendor-discovery periodic workers
+// drive their per-tenant scans through this method, so every
+// implementation MUST honour both the time filter and the limit —
+// otherwise the workers degrade silently when wired in
+// `cmd/sn360-es/main.go`.
 type CommunicationHistoryRepository interface {
 	Upsert(ctx context.Context, h *CommunicationHistory) error
 	Get(ctx context.Context, tenantID string, senderHash, recipientHash []byte) (*CommunicationHistory, error)
+	ListByTenant(ctx context.Context, tenantID string, since time.Time, limit int) ([]CommunicationHistory, error)
 }
 
 // FeedbackEventRepository persists FeedbackEvent rows and exposes the
