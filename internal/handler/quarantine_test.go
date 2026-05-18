@@ -108,6 +108,29 @@ func (qhFakePublisher) Publish(_ context.Context, _ string, _ []byte, _ ...event
 	return nil
 }
 
+// qhCapturingPublisher records the most recent publish call so tests
+// can assert on the JSON envelope and the bus headers (correlation_id,
+// tenant_id, event_type) emitted by ReleaseService.publishOutcome.
+type qhCapturingPublisher struct {
+	mu      sync.Mutex
+	subject string
+	payload []byte
+	opts    events.PublishOptions
+}
+
+func (p *qhCapturingPublisher) Publish(_ context.Context, subject string, payload []byte, opts ...events.PublishOption) error {
+	resolved := events.PublishOptions{}
+	for _, o := range opts {
+		o(&resolved)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.subject = subject
+	p.payload = append([]byte(nil), payload...)
+	p.opts = resolved
+	return nil
+}
+
 // quarantineFixture wires a real QuarantineService + ReleaseService against
 // the in-memory fakes above. The reevaluator verdict is configurable so the
 // tests can drive different ReleaseReason branches.
@@ -277,6 +300,100 @@ func TestQuarantineHandler_Rejections(t *testing.T) {
 				t.Fatalf("status=%d want=%d body=%s", rec.Code, tc.want, rec.Body.String())
 			}
 		})
+	}
+}
+
+// TestQuarantineHandler_PropagatesCorrelationID is a regression test for
+// the fix where the HTTP release path was dropping X-Correlation-ID. Bus-
+// driven releases (handleQuarantineRelease at cmd/sn360-es/main.go) had
+// already been threading the correlation ID through env.CorrelationID,
+// but the HTTP handler constructed action.ReleaseRequest from JWT claims
+// alone, so HTTP-originated releases published outcome events with an
+// empty correlation_id in both the JSON body and the bus header — making
+// it impossible to join the release back to the originating evaluation
+// for the entire HTTP code path.
+//
+// We assert two surfaces here, both of which would have stayed empty
+// before the fix:
+//   - The JSON `correlation_id` field on the published envelope.
+//   - The `events.WithCorrelationID(...)` header on the publish call.
+func TestQuarantineHandler_PropagatesCorrelationID(t *testing.T) {
+	// Build a ReleaseService backed by a capturing publisher so we can
+	// inspect what publishOutcome actually emitted.
+	issuer, err := privacy.NewJWTIssuer(privacy.JWTConfig{
+		Secret: bytes.Repeat([]byte{0xab}, 32),
+		Issuer: "sn360-es",
+		TTL:    time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("issuer: %v", err)
+	}
+	prov := &qhFakeProvider{}
+	qsvc, err := action.NewQuarantineService(action.QuarantineConfig{
+		Providers: []action.QuarantineProvider{prov},
+		Store:     newQHFakeStore(),
+		Encryptor: qhFakeEncryptor{},
+		Publisher: qhFakePublisher{},
+	})
+	if err != nil {
+		t.Fatalf("quarantine svc: %v", err)
+	}
+	if _, err := qsvc.Quarantine(context.Background(), action.QuarantineRequest{
+		Tenant:               "acme",
+		PseudonymizedMessage: "pmid-cid",
+		Provider:             action.LabelProviderGmail,
+		Email:                "user@acme.com",
+		MessageID:            "raw-cid",
+		Tier:                 constant.TierBlocked,
+		Primary:              constant.CategoryLikelyPhishing,
+	}); err != nil {
+		t.Fatalf("seed quarantine: %v", err)
+	}
+	cap := &qhCapturingPublisher{}
+	rsvc, err := action.NewReleaseService(action.ReleaseConfig{
+		Quarantine: qsvc,
+		Reevaluator: qhFakeReevaluator{verdict: dto.EvaluateResult{
+			Tier:    constant.TierInformational,
+			Primary: constant.CategoryFirstContactExternal,
+		}},
+		Publisher: cap,
+	})
+	if err != nil {
+		t.Fatalf("release svc: %v", err)
+	}
+	h, err := NewQuarantineHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), issuer, rsvc)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	tok := issueQuarantineToken(t, issuer, "acme", "pmid-cid")
+	body, _ := json.Marshal(map[string]string{"token": tok})
+	req := httptest.NewRequest(http.MethodPost, "/v1/quarantine/release", bytes.NewReader(body))
+	req.Header.Set("X-Correlation-ID", "cid-http-test")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Header: must be propagated as a bus option.
+	if cap.opts.CorrelationID != "cid-http-test" {
+		t.Fatalf("bus correlation_id=%q want %q", cap.opts.CorrelationID, "cid-http-test")
+	}
+	// JSON body: must include correlation_id alongside the existing
+	// release fields. We decode into a loose map so the test stays
+	// resilient to future fields being added to the envelope.
+	var env map[string]any
+	if err := json.Unmarshal(cap.payload, &env); err != nil {
+		t.Fatalf("decode published envelope: %v body=%s", err, string(cap.payload))
+	}
+	if got, _ := env["correlation_id"].(string); got != "cid-http-test" {
+		t.Fatalf("envelope correlation_id=%q want %q", got, "cid-http-test")
+	}
+	// Subject sanity-check: should still be the canonical release
+	// outcome subject — the fix must not have shifted it.
+	if cap.subject != "es.action.quarantine.release" {
+		t.Fatalf("publish subject=%q", cap.subject)
 	}
 }
 

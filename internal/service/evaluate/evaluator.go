@@ -253,11 +253,23 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 			// does the equivalent at batch.go:327; without this
 			// copy the per-message path produced verdicts with
 			// strictly fewer reason codes than the batch path for
-			// the same encoder response. Guarded by the goroutine's
-			// own mutex implicitly via the wg.Wait below: nothing
-			// else reads res.ReasonCodes until step 4.
+			// the same encoder response.
+			//
+			// RACE SAFETY: today the Rspamd goroutine only writes
+			// res.Rspamd (a distinct struct field) and never touches
+			// res.ReasonCodes, so this append is technically race-
+			// free under Go's struct-field-write model. But that
+			// invariant is fragile — if anyone later adds a second
+			// writer (e.g. Rspamd surfacing its own symbol names as
+			// reason codes) the race becomes silent and corrupting.
+			// Re-use the existing `mu` mutex (it already guards
+			// `degraded`) to make the write explicit. The cost is
+			// negligible: at most one uncontended Lock/Unlock per
+			// evaluation.
 			if len(outcome.ReasonCodes) > 0 {
+				mu.Lock()
 				res.ReasonCodes = append(res.ReasonCodes, outcome.ReasonCodes...)
+				mu.Unlock()
 			}
 			res.Tier1 = &outcome
 		}()
