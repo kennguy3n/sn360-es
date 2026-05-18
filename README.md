@@ -198,6 +198,10 @@ infrastructure is missing.
 | Rspamd client + cache | Yes | Optional | Requires Rspamd |
 | Evaluator, scorer, categorizer | Yes | Yes | Drives the `es.evaluate.request` → `es.evaluate.result` flow |
 | Banner / label / quarantine / URL-rewrite / feedback services | Yes | Partial | URL rewriter and quarantine release require Redis + JWT secret; degrade to 503 when unset |
+| Provider-side action consumers (`es.action.{banner,label,url_rewrite,quarantine}`) | Yes | Yes | Best-effort; degrade to logging when no provider is registered for the tenant |
+| Ingestion polling (Gmail + Outlook MailboxProviders, Redis checkpoint, distributed lock) | Yes | Optional | Requires GWS / O365 credentials; the poller is not constructed when both are unset |
+| AI agents (Onboarding, Tuning, Support) | Yes | Optional | Each is wired only when its inputs (directory client, repos, event bus) are available |
+| Periodic workers (relationship aggregation, vendor discovery, data cleanup) | Yes | Yes | Coordinated via Redis distributed lock so only one replica runs each cycle |
 | Predict (recipient / open) | Yes | Yes | Tier-based pre-open and recipient warning HTTP endpoints |
 | Education (micro-lessons, simulation, resilience, adaptive) | Yes | Yes | The `/v1/education/lesson/` route + `es.education.lesson.trigger` consumer |
 | Onboarding (OAuth, discovery, agent) | Yes | Optional | Requires provider OAuth credentials |

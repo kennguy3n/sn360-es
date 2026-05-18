@@ -1986,6 +1986,47 @@ func buildMux(app *application) (http.Handler, error) {
 			return t1.Health(ctx)
 		}})
 	}
+	// Informational checkers for the components wired by the
+	// 2026-05-18 plan. These never error (they never fail readiness)
+	// — they exist so operators can see whether the provider
+	// registry, the poller, and the periodic workers were
+	// constructed when they look at /readyz. Anything actually
+	// broken (e.g. Redis lock acquisition failures) surfaces through
+	// the metrics + structured logs.
+	if app.providers != nil {
+		reg := app.providers
+		checkers = append(checkers, handler.HealthCheckerFunc{N: "provider_registry", F: func(_ context.Context) error {
+			if !reg.hasAny() {
+				logger.Debug("readyz: provider registry has no tenants registered")
+			}
+			return nil
+		}})
+	}
+	if app.poller != nil {
+		checkers = append(checkers, handler.HealthCheckerFunc{N: "ingestion_poller", F: func(_ context.Context) error {
+			return nil
+		}})
+	}
+	if app.relationshipRunner != nil {
+		checkers = append(checkers, handler.HealthCheckerFunc{N: "worker_relationship", F: func(_ context.Context) error {
+			return nil
+		}})
+	}
+	if app.vendorRunner != nil {
+		checkers = append(checkers, handler.HealthCheckerFunc{N: "worker_vendor", F: func(_ context.Context) error {
+			return nil
+		}})
+	}
+	if app.cleanupRunner != nil {
+		checkers = append(checkers, handler.HealthCheckerFunc{N: "worker_cleanup", F: func(_ context.Context) error {
+			return nil
+		}})
+	}
+	if app.tuningAgent != nil {
+		checkers = append(checkers, handler.HealthCheckerFunc{N: "agent_tuning", F: func(_ context.Context) error {
+			return nil
+		}})
+	}
 	health := handler.NewHealthHandler(handler.HealthConfig{Logger: logger, Checkers: checkers})
 	mux.HandleFunc("/healthz", health.Liveness)
 	mux.HandleFunc("/readyz", health.Readiness)

@@ -40,8 +40,14 @@ evaluator degrades gracefully and surfaces those tiers as "pending".
 | `es.action.feedback.>` consumer (`feedback-persist`) | Wired (critical when feedback repo present) |
 | `es.action.quarantine.release` consumer (`quarantine-release`) | Wired (critical when release service present) |
 | `es.action.escalation.>` consumer (`escalation`) | Wired (critical when escalation service present) |
+| `es.action.banner` / `.label` / `.url_rewrite` / `.quarantine` provider-side consumers (`action-banner`, `action-label`, `action-url-rewrite`, `action-quarantine`) | Wired (best-effort; degrade to logging when no provider is registered) |
 | `es.education.simulation.send` + `.result` consumers (`education-sim`, `education-sim-track`) | Wired (`send` critical, `result` best-effort) |
 | `es.onboarding.>` consumer (`ingestion-onboard`) | Wired (best-effort, observe-only until a DirectoryClient is provided) |
+| Ingestion polling (Gmail + Outlook `MailboxProvider`s + `Poller` + Redis checkpoint + per-mailbox distributed lock) | Wired (no-op when no provider credentials are configured) |
+| AI agents (Onboarding / Tuning / Support) | Wired in `buildAgents` (best-effort; only constructed when their inputs are present) |
+| Periodic workers (relationship aggregation 4h, vendor discovery 7d, data cleanup 24h) | Wired in `buildWorkers`; coordinated via Redis distributed lock so only one replica runs each cycle |
+| Provider-side label / banner / quarantine / URL-rewrite execution (Gmail import-and-trash, Outlook `PATCH /me/messages/{id}`) | Wired via `pkg/email_provider/{gmail,outlook}/` |
+| Distributed Redis lock (`pkg/storage/redis/lock.go`, `SET NX EX` + Lua-scripted Release/Extend) | Wired |
 | Tier 1 batch orchestrator (NATS pull-fetch, 50/msg batches, fallback to evaluator) | Wired when `TIER1_BATCH_ENABLED=true` and bus is NATS |
 | DLQ processor (`service.DLQProcessor`) on the canonical DLQ subjects | Wired (best-effort, log-only by default) |
 | Tier 0 classification gate | Wired (pure CPU) |
@@ -68,6 +74,58 @@ evaluator degrades gracefully and surfaces those tiers as "pending".
 ## Changelog
 
 The dates below are commit dates on the `main` branch.
+
+### 2026-05-18 — Provider-side action consumers + ingestion polling + AI agents + periodic workers
+
+- **Provider-side action consumers** (`cmd/sn360-es/main.go`,
+  `cmd/sn360-es/providers.go`): four new event subscriptions
+  (`es.action.banner`, `.label`, `.url_rewrite`, `.quarantine`)
+  routed through a per-tenant `providerRegistry` that maps
+  `(tenant_id, provider_kind)` onto the Gmail / Outlook adapters.
+  Each consumer skips gracefully when no provider is registered for
+  the target tenant so the binary still functions as a pipeline
+  processor without provider credentials. Unit tests live in
+  `cmd/sn360-es/main_action_consumers_test.go`.
+- **Provider clients** (`pkg/email_provider/{gmail,outlook}/`): new
+  `BannerInjector`, `QuarantineProvider`, `DirectoryClient`, and
+  `MailboxProvider` implementations. Gmail uses the import-and-trash
+  pattern for body modification (the Gmail API does not allow
+  in-place body edits). Outlook uses `PATCH /me/messages/{id}` and
+  Microsoft Graph categories. Every client is covered by
+  `httptest`-mocked unit tests.
+- **Ingestion polling**
+  (`internal/service/ingestion/{poller,normalizer,checkpoint}.go`):
+  per-(tenant, mailbox) polling engine with a bounded worker pool, a
+  Redis-backed checkpoint store, and a Redis distributed lock that
+  prevents two replicas from polling the same mailbox. The
+  normalizer strips HTML, pseudonymises addresses, extracts auth
+  results (SPF / DKIM / DMARC) from the headers, and computes the
+  `RawBodyHash` / `NormalisedHash` pair before publishing
+  `es.evaluate.request`.
+- **Distributed Redis lock** (`pkg/storage/redis/lock.go`): generic
+  `SET NX EX` + Lua-scripted `Release` / `Extend` with value-based
+  ownership checks; tested against `miniredis`.
+- **AI agents** wired in `buildAgents`: the onboarding agent
+  consumes the `DirectoryClient`, the tuning agent consumes the
+  evaluation-result repository, and the support agent consumes the
+  release / lookup adapters. Each is constructed only when its
+  inputs are available so the wiring is graceful by default.
+- **Periodic workers** (`internal/service/worker/`): `RelationshipWorker`
+  (4h), `VendorWorker` (7d), and `CleanupWorker` (24h) all run
+  against a `LockFactory` + `MetricsRecorder` and are started
+  alongside the poller from `application.StartBackground(ctx)` on
+  the same context as the consumers so SIGTERM cleanly stops them.
+- **Telemetry** (`pkg/telemetry/metrics.go`): new counters /
+  histograms for ingestion (`ingestion_polled_total`,
+  `ingestion_poll_latency_seconds`), actions
+  (`action_{label_applied,banner_injected,url_rewritten,quarantine_executed}_total`),
+  and periodic workers (`worker_cycle_completed_total`,
+  `worker_cycle_latency_seconds`). `ObserveIngestionPoll`,
+  `ObserveAction`, `ObserveWorkerCycle` helpers expose them in a
+  single call.
+- **Health checks** (`cmd/sn360-es/main.go`): `/readyz` now
+  reports informational status for the provider registry, the
+  ingestion poller, and the configured periodic workers.
 
 ### 2026-05-17 — Evaluation pipeline wiring + provider adapters
 

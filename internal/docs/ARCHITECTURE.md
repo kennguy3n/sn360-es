@@ -188,6 +188,10 @@ them by name so multiple replicas of `sn360-es` can share work.
 | `education-sim-track` | ES_EDUCATION | `es.education.simulation.result` | 3 | 30s | Yes (best-effort when tracker wired) | Record per-user interaction outcomes |
 | `quarantine-release` | ES_ACTION | `es.action.quarantine.release` | 3 | 30s | Yes (critical when release service wired) | Quarantine release flow |
 | `escalation` | ES_ACTION | `es.action.escalation.>` | 3 | 30s | Yes (critical when escalation service wired) | SecOps escalation ticket fan-out |
+| `action-banner` | ES_ACTION | `es.action.banner` | 3 | 30s | Yes (best-effort; degrades to logging without a provider) | Banner injection via provider API (Gmail import-and-trash, Outlook `PATCH /me/messages/{id}`) |
+| `action-label` | ES_ACTION | `es.action.label` | 3 | 30s | Yes (best-effort; degrades to logging without a provider) | Tier-aware label application via Gmail Labels / Outlook categories |
+| `action-url-rewrite` | ES_ACTION | `es.action.url_rewrite` | 3 | 30s | Yes (best-effort; degrades to logging without a provider) | Body URL rewriting to interstitial tokens |
+| `action-quarantine` | ES_ACTION | `es.action.quarantine` | 3 | 30s | Yes (best-effort; degrades to logging without a provider) | Provider-side quarantine (move to hidden label/folder, store encrypted reference) |
 
 #### `TIER1_BATCH_ENABLED` wire-format dependency
 
@@ -359,6 +363,48 @@ multiple replicas of the same binary behind the same event bus.
 - **Normalizer**: Provider-specific → unified `EmailEvent` with PII tagging
 - **Action Pipeline**: Tiered banner injection + native label application + quarantine (see Section 8)
 - **Event bridge**: Publishes to `es.evaluate.request`, consumes from `es.evaluate.result`
+
+#### 5.1.1 Ingestion Polling
+
+The polling layer lives in `internal/service/ingestion/` and is wired
+by `cmd/sn360-es/main.go` (`buildPoller`, `buildMailboxProviders`).
+
+- **`Poller`** (`internal/service/ingestion/poller.go`): owns one
+  `MailboxProvider` per provider kind (Gmail, Outlook) plus a worker
+  pool sized by `PollerConfig.Concurrency`. Each tick:
+  1. Calls `MailboxProvider.ListMailboxes(ctx, tenant)` to discover
+     the mailboxes the provider has access to for the tenant.
+  2. Submits one job per mailbox onto a buffered channel; the worker
+     pool drains the channel so a slow mailbox cannot block the
+     others.
+  3. For each mailbox the worker acquires a Redis distributed lock
+     keyed `ingestion:lock:{tenant}:{mailbox_hash}` (TTL slightly
+     larger than the poll interval to absorb GC pauses without
+     allowing double-polling).
+  4. Reads the previous high-water mark from the `CheckpointStore`
+     (`internal/service/ingestion/checkpoint.go`, Redis-backed,
+     keyed `ingestion:checkpoint:{tenant}:{mailbox_hash}`), calls
+     `MailboxProvider.FetchNew(ctx, mailbox, since, limit)`, runs
+     each `RawEmail` through the `Normalizer`, publishes the
+     resulting `dto.EvaluateRequest` on `es.evaluate.request`, and
+     finally advances the checkpoint.
+- **`Normalizer`** (`internal/service/ingestion/normalizer.go`):
+  strips HTML, pseudonymises addresses via
+  `pkg/privacy/pseudonymizer.go`, computes the `RawBodyHash` /
+  `NormalisedHash` pair, extracts SPF / DKIM / DMARC results from
+  the `Authentication-Results` header, derives `RiskSignals`
+  (`IsExternal`, `IsFreeDomain`, `HasAttachment`, sender / recipient
+  domains), and assigns a locale from `Content-Language` or the
+  tenant default.
+- **Distributed lock** (`pkg/storage/redis/lock.go`): the same
+  `SET NX EX` + Lua-scripted `Release` / `Extend` primitive that
+  the periodic workers use (see Section 5.3). The poller wraps it in
+  a `LockFactory` so each cycle gets a fresh lock instance.
+- **Graceful degradation**: failures on a single mailbox are logged
+  but not fatal — the next cycle retries from the previous
+  checkpoint. When no provider credentials are configured the
+  poller is not constructed at all and `StartBackground` becomes a
+  no-op.
 
 ### 5.2 Evaluation Domain
 
