@@ -13,9 +13,9 @@ func TestScoreClampsAndAggregates(t *testing.T) {
 		w    Weights
 		want int
 	}{
-		{"defaults_ai_heavy", Components{AI: 80, Rspamd: 10}, DefaultWeights(), 66},
-		{"defaults_pure_ai", Components{AI: 50}, DefaultWeights(), 40},
-		{"defaults_pure_rspamd", Components{Rspamd: 60}, DefaultWeights(), 12},
+		{"defaults_ai_heavy", Components{AI: 80, Rspamd: 10}, DefaultWeights(), 49},
+		{"defaults_pure_ai", Components{AI: 50}, DefaultWeights(), 30},
+		{"defaults_pure_rspamd", Components{Rspamd: 60}, DefaultWeights(), 6},
 		{"clamp_high", Components{AI: 200}, Weights{AI: 1}, 100},
 		{"clamp_low", Components{AI: -10}, Weights{AI: 1}, 0},
 		{"zero_weights_returns_ai", Components{AI: 73}, Weights{}, 73},
@@ -50,6 +50,37 @@ func TestFromResultNilSafe(t *testing.T) {
 	c := FromResult(nil)
 	if (c != Components{}) {
 		t.Errorf("FromResult(nil) should be zero, got %+v", c)
+	}
+}
+
+func TestFromResultIncludesLinkAndAttachment(t *testing.T) {
+	linkScore := 80
+	attachScore := 60
+	r := &dto.EvaluateResult{
+		Tier1:           &dto.Tier1Outcome{Score: 50},
+		LinkScore:       &linkScore,
+		AttachmentScore: &attachScore,
+	}
+	c := FromResult(r)
+	if c.Links != 80 {
+		t.Errorf("Links = %d, want 80", c.Links)
+	}
+	if c.Attachments != 60 {
+		t.Errorf("Attachments = %d, want 60", c.Attachments)
+	}
+	if c.AI != 50 {
+		t.Errorf("AI = %d, want 50", c.AI)
+	}
+}
+
+func TestScoreWithLinkAndAttachment(t *testing.T) {
+	comp := Components{AI: 60, Rspamd: 40, Links: 80, Attachments: 70}
+	w := DefaultWeights()
+	got := Score(comp, w)
+	// Expected: (60*0.60 + 40*0.10 + 70*0.15 + 80*0.15) / 1.0
+	// = 36 + 4 + 10.5 + 12 = 62.5 → 63
+	if got != 63 {
+		t.Errorf("got %d, want 63", got)
 	}
 }
 

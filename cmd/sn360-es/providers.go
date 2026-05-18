@@ -33,6 +33,7 @@ type providerEntry struct {
 	quarantineProvider action.QuarantineProvider
 	gmailBanner        *gmail.BannerInjector   // nil for Outlook
 	outlookBanner      *outlook.BannerInjector // nil for Gmail
+	bodyRewriter       action.BodyRewriter     // nil when no rewriter configured
 }
 
 // providerRegistry holds the per-tenant provider clients used by the
@@ -122,6 +123,17 @@ func (r *providerRegistry) bannerInjectorFor(tenant string, kind action.LabelPro
 		}
 	}
 	return r.fallbackInjector
+}
+
+// bodyRewriterFor returns the BodyRewriter matching the (tenant, kind)
+// tuple. Returns nil when no rewriter is configured.
+func (r *providerRegistry) bodyRewriterFor(tenant string, kind action.LabelProviderKind) action.BodyRewriter {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if e, ok := r.entries[providerKey{tenant: tenant, kind: kind}]; ok && e.bodyRewriter != nil {
+		return e.bodyRewriter
+	}
+	return nil
 }
 
 // resolveKind picks the provider kind for a tenant when the consumer
@@ -307,6 +319,7 @@ func buildGmailEntry(_ context.Context, cfg *config.Config, logger *slog.Logger)
 		labelProvider:      label,
 		quarantineProvider: quarantine,
 		gmailBanner:        banner,
+		bodyRewriter:       gmail.NewBodyRewriter(banner),
 	}, nil
 }
 
@@ -350,6 +363,7 @@ func buildOutlookEntry(_ context.Context, cfg *config.Config, logger *slog.Logge
 		labelProvider:      label,
 		quarantineProvider: quarantine,
 		outlookBanner:      banner,
+		bodyRewriter:       outlook.NewBodyRewriter(banner),
 	}, nil
 }
 

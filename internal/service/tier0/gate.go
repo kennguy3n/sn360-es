@@ -37,15 +37,30 @@ func DefaultGateConfig() GateConfig {
 type Gate struct {
 	cfg       GateConfig
 	recurring *RecurringDetector
+	ato       *ATOHeuristic
 }
 
 // NewGate constructs a Gate with the given configuration. A nil recurring
-// detector falls back to NewRecurringDetector().
+// detector falls back to NewRecurringDetector(). A nil ATO heuristic
+// falls back to NewATOHeuristic(DefaultATOHeuristicConfig()).
 func NewGate(cfg GateConfig, recurring *RecurringDetector) *Gate {
 	if recurring == nil {
 		recurring = NewRecurringDetector()
 	}
-	return &Gate{cfg: cfg, recurring: recurring}
+	return &Gate{
+		cfg:       cfg,
+		recurring: recurring,
+		ato:       NewATOHeuristic(DefaultATOHeuristicConfig()),
+	}
+}
+
+// NewGateWithATO is like NewGate but accepts a custom ATOHeuristic.
+func NewGateWithATO(cfg GateConfig, recurring *RecurringDetector, ato *ATOHeuristic) *Gate {
+	g := NewGate(cfg, recurring)
+	if ato != nil {
+		g.ato = ato
+	}
+	return g
 }
 
 // Apply runs the gate on req and returns the structured Tier0Outcome. It
@@ -54,8 +69,15 @@ func NewGate(cfg GateConfig, recurring *RecurringDetector) *Gate {
 func (g *Gate) Apply(req dto.EvaluateRequest) dto.Tier0Outcome {
 	out := dto.Tier0Outcome{}
 
-	// 1. Internal-trusted bypass.
+	// 1. Internal-trusted bypass — guarded by ATO heuristic.
 	if g.cfg.SkipInternal && req.Signals.IsInternal {
+		atoResult := g.ato.Check(req)
+		if atoResult.Flagged {
+			out.Bypass = false
+			out.ForceEscalate = true
+			out.Reason = "internal_ato_suspected"
+			return out
+		}
 		out.Bypass = true
 		out.SkipML = true
 		out.Reason = "internal_trusted"

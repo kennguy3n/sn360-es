@@ -20,14 +20,15 @@ type Weights struct {
 	Links       float64 `json:"links"`
 }
 
-// DefaultWeights match the global defaults in PROPOSAL.md Section 3
-// (ai = 80%, rspamd = 20%, attachments and links = 0% pending future tiers).
+// DefaultWeights returns the recommended scoring weights. AI and Rspamd
+// carry the majority; URL and attachment scanners contribute meaningful
+// signal now that they are wired into the pipeline.
 func DefaultWeights() Weights {
 	return Weights{
-		AI:          0.80,
-		Rspamd:      0.20,
-		Attachments: 0.0,
-		Links:       0.0,
+		AI:          0.60,
+		Rspamd:      0.10,
+		Attachments: 0.15,
+		Links:       0.15,
 	}
 }
 
@@ -65,6 +66,12 @@ func FromResult(r *dto.EvaluateResult) Components {
 	}
 	if r.Rspamd != nil {
 		c.Rspamd = normaliseRspamd(r.Rspamd.Score, r.Rspamd.Threshold)
+	}
+	if r.LinkScore != nil {
+		c.Links = *r.LinkScore
+	}
+	if r.AttachmentScore != nil {
+		c.Attachments = *r.AttachmentScore
 	}
 	return c
 }
