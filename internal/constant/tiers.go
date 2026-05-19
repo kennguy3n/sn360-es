@@ -65,7 +65,7 @@ func (t Tier) AllowsMarkSafe() bool {
 }
 
 // LabelName returns the canonical Gmail label / Outlook category for the
-// tier. Used by the label applier (Phase 5 Task 25).
+// tier. Used by the label applier.
 func (t Tier) LabelName() string {
 	return "SN360 / " + string(t)
 }

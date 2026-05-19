@@ -37,8 +37,8 @@ type RspamdClient interface {
 }
 
 // Categorizer maps the verdict + risk signals to (primary, secondaries).
-// Phase 5 implements the real one; the orchestrator only depends on the
-// interface so it can be developed independently.
+// The orchestrator depends only on this interface so the rule-based
+// categorizer can be swapped independently.
 type Categorizer interface {
 	Categorise(res dto.EvaluateResult, sig dto.RiskSignals) (primary constant.Category, secondary []constant.Category, reasons []string)
 }
