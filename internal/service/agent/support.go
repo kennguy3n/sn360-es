@@ -154,9 +154,20 @@ func (a *SupportAgent) release(ctx context.Context, q SupportQuery, v dto.Evalua
 	// The consumer (handleQuarantineRelease) expects "pseudonymized_message_id"
 	// and "requested_by". The MessageID here comes from the verdict lookup which
 	// already stores the pseudonymised form, so the mapping is correct.
-	payload := fmt.Sprintf(`{"tenant_id":%q,"pseudonymized_message_id":%q,"requested_by":%q}`,
-		q.TenantID, q.MessageID, q.UserEmail)
-	if err := a.cfg.Events.Publish(ctx, a.cfg.ReleaseSubject, []byte(payload)); err != nil {
+	releasePayload := struct {
+		TenantID             string `json:"tenant_id"`
+		PseudonymizedMessage string `json:"pseudonymized_message_id"`
+		RequestedBy          string `json:"requested_by"`
+	}{
+		TenantID:             q.TenantID,
+		PseudonymizedMessage: q.MessageID,
+		RequestedBy:          q.UserEmail,
+	}
+	payload, err := json.Marshal(releasePayload)
+	if err != nil {
+		return SupportReply{}, fmt.Errorf("support: marshal release: %w", err)
+	}
+	if err := a.cfg.Events.Publish(ctx, a.cfg.ReleaseSubject, payload); err != nil {
 		return SupportReply{}, fmt.Errorf("support: emit release: %w", err)
 	}
 	cat := a.cfg.Explanations
@@ -189,6 +200,20 @@ func (a *SupportAgent) escalate(ctx context.Context, q SupportQuery, v dto.Evalu
 	if a.cfg.Events == nil {
 		return SupportReply{Escalated: true, Suggestion: escSuggestion}, nil
 	}
+	var escReason dto.EscalationReason
+	switch reason {
+	case "low_confidence":
+		escReason = dto.EscalationReasonLowConfidence
+	case string(dto.EscalationReasonUserRequested):
+		escReason = dto.EscalationReasonUserRequested
+	default:
+		r := dto.EscalationReason(reason)
+		if r.Valid() {
+			escReason = r
+		} else {
+			escReason = dto.EscalationReasonUserRequested
+		}
+	}
 	envelope := struct {
 		TenantID string               `json:"tenant_id"`
 		Incident dto.EscalationIncident `json:"incident"`
@@ -198,7 +223,7 @@ func (a *SupportAgent) escalate(ctx context.Context, q SupportQuery, v dto.Evalu
 			PseudoMessageID: q.MessageID,
 			Tier:            string(v.Tier),
 			Category:        string(v.Primary),
-			Reason:          dto.EscalationReasonUserRequested,
+			Reason:          escReason,
 			Score:           float64(v.Score),
 			AISummary:       reason,
 			DetectedAt:      time.Now().UTC(),

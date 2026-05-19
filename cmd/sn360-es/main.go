@@ -3926,8 +3926,8 @@ func buildOnboardingService(cfg *config.Config, logger *slog.Logger, app *applic
 		providers[onboarding.ProviderMicrosoft] = onboarding.ProviderConfig{
 			ClientID:     cfg.O365.ClientID,
 			ClientSecret: cfg.O365.ClientSecret,
-			AuthURL:      "https://login.microsoftonline.com/" + cfg.O365.TenantID + "/oauth2/v2.0/authorize",
-			TokenURL:     "https://login.microsoftonline.com/" + cfg.O365.TenantID + "/oauth2/v2.0/token",
+			AuthURL:      "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize",
+			TokenURL:     "https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
 			Scopes:       []string{"https://graph.microsoft.com/.default", "offline_access"},
 			RedirectURL:  cfg.Onboarding.CallbackURL,
 		}
