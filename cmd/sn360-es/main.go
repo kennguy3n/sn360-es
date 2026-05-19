@@ -3725,13 +3725,14 @@ func (p *userPersisterAdapter) PersistDiscoveredUsers(ctx context.Context, tenan
 			emailHash = []byte(p.hasher.HashPII(tenantID, u.Email))
 		}
 		if err := p.users.Upsert(ctx, &repository.User{
-			ID:         u.ID,
-			TenantID:   tenantID,
-			EmailHash:  emailHash,
-			Role:       u.JobTitle,
-			Department: u.Department,
-			CreatedAt:  now,
-			UpdatedAt:  now,
+			ID:              u.ID,
+			TenantID:        tenantID,
+			EmailHash:       emailHash,
+			Role:            u.JobTitle,
+			Department:      u.Department,
+			SensitivityTier: u.SensitivityHint.DBTier(),
+			CreatedAt:       now,
+			UpdatedAt:       now,
 		}); err != nil {
 			return fmt.Errorf("persist user %s: %w", u.ID, err)
 		}
