@@ -1919,7 +1919,8 @@ func (a *application) handleOnboarding(ctx context.Context, msg events.Message) 
 			a.bgWG.Add(1)
 			go func() {
 				defer a.bgWG.Done()
-				bgCtx := context.WithoutCancel(ctx)
+				bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
+				defer cancel()
 				if _, err := a.onboardAgent.Onboard(bgCtx, tctx); err != nil {
 					a.logger.Error("sn360-es: onboarding agent failed",
 						slog.String("tenant_id", env.TenantID),
@@ -4027,6 +4028,8 @@ func buildTokenEncryptor(cfg *config.Config, logger *slog.Logger) (onboarding.To
 			logger.Info("sn360-es: onboarding token encryptor using ONBOARDING_TOKEN_KEY_HEX")
 			return newAESGCMTokenEncryptor(decoded)
 		}
+		logger.Warn("sn360-es: ONBOARDING_TOKEN_KEY_HEX is set but invalid (must be 64 hex chars encoding 32 bytes); falling back",
+			slog.Bool("hex_error", err != nil), slog.Int("decoded_len", len(decoded)))
 	}
 	if seed := strings.TrimSpace(cfg.AWS.KMSMockKeyHex); seed != "" {
 		decoded, err := hex.DecodeString(seed)
@@ -4034,6 +4037,8 @@ func buildTokenEncryptor(cfg *config.Config, logger *slog.Logger) (onboarding.To
 			logger.Info("sn360-es: onboarding token encryptor using KMS_MOCK_KEY_HEX")
 			return newAESGCMTokenEncryptor(decoded)
 		}
+		logger.Warn("sn360-es: KMS_MOCK_KEY_HEX is set but invalid (must be 64 hex chars encoding 32 bytes); falling back",
+			slog.Bool("hex_error", err != nil), slog.Int("decoded_len", len(decoded)))
 	}
 	h := sha256.Sum256([]byte("onboarding-token-encryption:" + cfg.Onboarding.StateSecret))
 	logger.Warn("sn360-es: onboarding token encryptor using derived key from state secret; set ONBOARDING_TOKEN_KEY_HEX for production")

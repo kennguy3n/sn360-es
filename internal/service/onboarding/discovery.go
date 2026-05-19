@@ -38,8 +38,9 @@ func (b *AgentBridge) StartOnboarding(ctx context.Context, tenantID string, prov
 	if b.WG != nil {
 		b.WG.Add(1)
 	}
-	bgCtx := context.WithoutCancel(ctx)
+	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
 	go func() {
+		defer cancel()
 		if b.WG != nil {
 			defer b.WG.Done()
 		}
