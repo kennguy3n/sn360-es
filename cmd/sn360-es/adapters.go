@@ -410,8 +410,7 @@ func (a evalLookupAdapter) FindResult(ctx context.Context, tenantID, messageID s
 	if a.repos == nil || a.repos.EvaluationResults == nil {
 		return dto.EvaluateResult{}, fmt.Errorf("evaluation lookup: not wired")
 	}
-	hash := sha256.Sum256([]byte(messageID))
-	row, err := a.repos.EvaluationResults.GetByMessageHash(ctx, tenantID, hash[:])
+	row, err := a.repos.EvaluationResults.GetByMessageHash(ctx, tenantID, []byte(messageID))
 	if err != nil {
 		return dto.EvaluateResult{}, err
 	}

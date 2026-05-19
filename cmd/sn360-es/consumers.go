@@ -584,6 +584,9 @@ func (a *application) handleActionURLRewrite(ctx context.Context, msg events.Mes
 	if env.TenantID == "" || env.MessageID == "" || env.Email == "" {
 		return nil
 	}
+	if a.providers == nil {
+		return nil
+	}
 
 	kind := a.providers.resolveKind(env.TenantID)
 	if kind == "" {
