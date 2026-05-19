@@ -302,6 +302,13 @@ func TestClassifyUserSensitivity(t *testing.T) {
 		{"founder via display name", DiscoveredUser{DisplayName: "Jane (Founder)"}, SensitivityMax},
 		{"chief executive via group", DiscoveredUser{GroupIDs: []string{"chief"}}, SensitivityMax},
 
+		// Punctuated titles: CTO/COO with commas, slashes, etc.
+		{"CTO comma", DiscoveredUser{JobTitle: "CTO, Engineering"}, SensitivityMax},
+		{"CTO slash", DiscoveredUser{JobTitle: "CTO/Founder"}, SensitivityMax},
+		{"COO parens", DiscoveredUser{JobTitle: "COO (Operations)"}, SensitivityMax},
+		// Full spelled-out forms → Max, not High
+		{"chief technology officer", DiscoveredUser{JobTitle: "Chief Technology Officer"}, SensitivityMax},
+		{"chief operating officer", DiscoveredUser{JobTitle: "Chief Operating Officer"}, SensitivityMax},
 		// Regression: "coo"/"cto" must NOT match inside common words
 		{"coordinator not max", DiscoveredUser{JobTitle: "Project Coordinator"}, SensitivityDefault},
 		{"director not max", DiscoveredUser{JobTitle: "Marketing Director"}, SensitivityDefault},

@@ -269,6 +269,13 @@ func TestKeywordClassifyInput_MultilingualFallback(t *testing.T) {
 		{"Chinese EA", UserClassifyInput{JobTitle: "行政助理"}, SensitivityElevated},
 		{"Chinese Procurement", UserClassifyInput{JobTitle: "采购"}, SensitivityElevated},
 		{"Chinese Nurse", UserClassifyInput{JobTitle: "护士"}, SensitivityElevated},
+		// Punctuated titles — space-guarded keywords with commas/slashes
+		{"CTO comma", UserClassifyInput{JobTitle: "CTO, Engineering"}, SensitivityMax},
+		{"CTO slash", UserClassifyInput{JobTitle: "CTO/Founder"}, SensitivityMax},
+		{"COO parens", UserClassifyInput{JobTitle: "COO (Operations)"}, SensitivityMax},
+		// Full spelled-out forms → Max, not High
+		{"Chief Technology Officer", UserClassifyInput{JobTitle: "Chief Technology Officer"}, SensitivityMax},
+		{"Chief Operating Officer", UserClassifyInput{JobTitle: "Chief Operating Officer"}, SensitivityMax},
 		// English fallback still works
 		{"English CEO", UserClassifyInput{JobTitle: "CEO"}, SensitivityMax},
 		{"English Finance", UserClassifyInput{Department: "Finance"}, SensitivityHigh},

@@ -341,10 +341,10 @@ func indexGroups(groups []DiscoveredGroup) map[string]DiscoveredGroup {
 func ClassifyUserSensitivity(u DiscoveredUser, groups map[string]DiscoveredGroup) Sensitivity {
 	// Pad with spaces so word-boundary checks (e.g. " cto") work at
 	// the start/end of the string without special-casing.
-	hay := " " + strings.ToLower(u.JobTitle+" "+u.Department+" "+u.DisplayName) + " "
+	hay := " " + normalizeHaystack(strings.ToLower(u.JobTitle+" "+u.Department+" "+u.DisplayName)) + " "
 	for _, gID := range u.GroupIDs {
 		if g, ok := groups[gID]; ok {
-			hay += strings.ToLower(g.Name) + " "
+			hay += normalizeHaystack(strings.ToLower(g.Name)) + " "
 		}
 	}
 	switch {
@@ -358,7 +358,8 @@ func ClassifyUserSensitivity(u DiscoveredUser, groups map[string]DiscoveredGroup
 	// Max — C-suite, board members, founders.
 	// " cto " / " coo " use both leading+trailing space to avoid
 	// matching inside "director" / "coordinator".
-	case containsAny(hay, "ceo", "cfo", " coo ", " cto ", "ciso", "founder", "chief executive", "chief financial", "owner"):
+	case containsAny(hay, "ceo", "cfo", " coo ", " cto ", "ciso", "founder",
+		"chief executive", "chief financial", "chief operating", "chief technology", "owner"):
 		return SensitivityMax
 	// High — Finance, treasury.
 	case containsAny(hay, "finance", "treasury", "accounts payable", "accounts receivable", "controller", "bookkeep"):
@@ -382,7 +383,7 @@ func ClassifyUserSensitivity(u DiscoveredUser, groups map[string]DiscoveredGroup
 		return SensitivityHigh
 	// High — R&D / Intellectual Property.
 	case containsAny(hay, "research director", "r&d", "patent", "intellectual property",
-		"chief scientist", "chief technology", "data scientist", "ml engineer"):
+		"chief scientist", "data scientist", "ml engineer"):
 		return SensitivityHigh
 	// Elevated — Technology supporting roles.
 	case containsAny(hay, "devops engineer", "devops", "junior dba", "help desk manager", "it support lead"):

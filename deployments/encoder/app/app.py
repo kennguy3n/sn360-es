@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from functools import lru_cache
@@ -305,6 +306,11 @@ def predict_batch(req: BatchRequest) -> BatchResponse:
 # Sensitivity role classification endpoint
 # ---------------------------------------------------------------------------
 
+# Punctuation normalizer — replaces commas, slashes, periods, hyphens,
+# colons, semicolons, brackets, and pipes with spaces so space-guarded
+# keywords like " cto " match titles such as "CTO, Engineering".
+_PUNCT_RE = re.compile(r"[,/.\-:;()\[\]|]")
+
 # Infrastructure-access keywords that map to "critical" tier. If the
 # encoder model was not fine-tuned on "critical" examples, this
 # post-processing step catches them via keyword match.
@@ -353,7 +359,8 @@ class RoleClassifyResponse(BaseModel):
 _TIER_KEYWORDS: dict[str, list[str]] = {
     "max": [
         "ceo", "cfo", " coo ", " cto ", "ciso", "founder",
-        "chief executive", "chief financial", "owner",
+        "chief executive", "chief financial", "chief operating", "chief technology",
+        "owner",
         # Japanese
         "最高経営責任者", "最高財務責任者", "代表取締役", "社長", "創業者",
         # Korean
@@ -382,7 +389,7 @@ _TIER_KEYWORDS: dict[str, list[str]] = {
         "chief nursing", "nurse manager",
         # English — R&D
         "research director", "r&d", "patent", "intellectual property",
-        "chief scientist", "chief technology", "data scientist", "ml engineer",
+        "chief scientist", "data scientist", "ml engineer",
         # Japanese
         "財務", "経理", "人事", "法務", "コンプライアンス",
         "データベースエンジニア", "セキュリティエンジニア", "クラウドエンジニア",
@@ -446,10 +453,11 @@ def _classify_role_sensitivity(item: RoleClassifyItem) -> RoleClassifyResult:
     """
     # Pad with spaces so word-boundary keywords (e.g. " coo ", "dba ")
     # work correctly at start/end of the string.
-    hay = " " + " ".join([
+    raw = " ".join([
         item.job_title, item.department,
         item.display_name, " ".join(item.group_names),
-    ]).lower() + " "
+    ]).lower()
+    hay = " " + _PUNCT_RE.sub(" ", raw) + " "
 
     # Check for infrastructure-level (critical) keywords first.
     for kw in _INFRA_KEYWORDS:

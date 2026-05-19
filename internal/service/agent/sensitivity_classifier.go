@@ -35,6 +35,21 @@ type UserClassifyInput struct {
 // lists. This is a best-effort fallback — the encoder (Tier 1) handles
 // multilingual classification properly, and this only activates when
 // ML is unavailable.
+// normalizeHaystack replaces common punctuation (commas, slashes,
+// periods, hyphens, colons, semicolons, parentheses) with spaces so
+// that space-guarded keywords like " cto " match titles such as
+// "CTO, Engineering" or "CTO/Founder".
+func normalizeHaystack(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case ',', '/', '.', '-', ':', ';', '(', ')', '[', ']', '|':
+			return ' '
+		default:
+			return r
+		}
+	}, s)
+}
+
 var sensitivityKeywords = map[Sensitivity][]string{
 	SensitivityCritical: {
 		// English — Infrastructure access roles
@@ -55,7 +70,8 @@ var sensitivityKeywords = map[Sensitivity][]string{
 	},
 	SensitivityMax: {
 		// English
-		"ceo", "cfo", " coo ", " cto ", "ciso", "founder", "chief executive", "chief financial", "owner",
+		"ceo", "cfo", " coo ", " cto ", "ciso", "founder",
+		"chief executive", "chief financial", "chief operating", "chief technology", "owner",
 		// Japanese
 		"最高経営責任者", "最高財務責任者", "代表取締役", "社長", "創業者",
 		// Korean
@@ -87,7 +103,7 @@ var sensitivityKeywords = map[Sensitivity][]string{
 
 		// English — R&D / Intellectual Property
 		"research director", "r&d", "patent", "intellectual property",
-		"chief scientist", "chief technology", "data scientist", "ml engineer",
+		"chief scientist", "data scientist", "ml engineer",
 
 		// Japanese — Finance / HR / Legal (existing)
 		"財務", "経理", "人事", "法務", "コンプライアンス",
@@ -182,9 +198,9 @@ var sensitivityKeywords = map[Sensitivity][]string{
 func KeywordClassifyInput(u UserClassifyInput) Sensitivity {
 	// Pad with spaces so word-boundary keywords (e.g. " coo ", "dba ")
 	// work correctly at start/end of the string.
-	hay := " " + strings.ToLower(u.JobTitle+" "+u.Department+" "+u.DisplayName) + " "
+	hay := " " + normalizeHaystack(strings.ToLower(u.JobTitle+" "+u.Department+" "+u.DisplayName)) + " "
 	for _, g := range u.GroupNames {
-		hay += strings.ToLower(g) + " "
+		hay += normalizeHaystack(strings.ToLower(g)) + " "
 	}
 	// Check tiers in descending priority order.
 	for _, tier := range []Sensitivity{SensitivityCritical, SensitivityMax, SensitivityHigh, SensitivityElevated} {
