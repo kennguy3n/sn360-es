@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -125,6 +126,12 @@ func run() error {
 	// Close subscriptions before shutting down the bus so in-flight
 	// messages can ack cleanly.
 	app.StopConsumers(logger)
+
+	// Signal that the application is draining so HTTP-spawned background
+	// work (e.g. AgentBridge) stops accepting new goroutines. This must
+	// happen BEFORE WaitBackground to prevent bgWG.Add(1) from racing
+	// with bgWG.Wait().
+	app.draining.Store(true)
 
 	// Drain background goroutines (poller, periodic workers, label
 	// cache janitor) BEFORE we tear down the HTTP server and the
@@ -238,7 +245,8 @@ type application struct {
 	// process exits. Each goroutine MUST `defer a.bgWG.Done()` and
 	// the matching `a.bgWG.Add(1)` MUST run on the calling
 	// goroutine (not inside the spawned one) to avoid a Wait race.
-	bgWG sync.WaitGroup
+	bgWG     sync.WaitGroup
+	draining atomic.Bool
 }
 
 // newApplication wires every component the binary needs. Required
@@ -3732,7 +3740,7 @@ func (p *userPersisterAdapter) PersistDiscoveredUsers(ctx context.Context, tenan
 }
 
 func buildUserPersister(app *application, hasher agent.PIIHasher) agent.UserPersister {
-	if app.repos == nil || app.repos.Users == nil || app.repos.Groups == nil {
+	if app.repos == nil || app.repos.Users == nil || app.repos.Groups == nil || hasher == nil {
 		return nil
 	}
 	return &userPersisterAdapter{
@@ -3748,8 +3756,9 @@ func buildSensitivityClassifier(cfg *config.Config, logger *slog.Logger) agent.S
 	}
 	encoder := agent.NewEncoderSensitivityClassifier(cfg.Tier1.URL, nil, cfg.Tier1.Timeout, logger)
 	return agent.NewTieredSensitivityClassifier(agent.TieredClassifierConfig{
-		Encoder: encoder,
-		Logger:  logger,
+		Encoder:  encoder,
+		Fallback: agent.KeywordClassifyInput,
+		Logger:   logger,
 	})
 }
 
@@ -3952,6 +3961,7 @@ func buildOnboardingService(cfg *config.Config, logger *slog.Logger, app *applic
 			Onboarding: app.onboardAgent,
 			Log:        logger,
 			WG:         &app.bgWG,
+			Draining:   &app.draining,
 		}
 	}
 

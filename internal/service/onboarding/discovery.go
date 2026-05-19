@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
@@ -22,12 +23,19 @@ type AgentBridge struct {
 	// the background goroutine so the application can wait for
 	// in-flight onboarding runs during shutdown.
 	WG *sync.WaitGroup
+	// Draining is set to 1 before WaitBackground is called. Once set,
+	// StartOnboarding rejects new work to prevent bgWG.Add(1) from
+	// racing with a concurrent bgWG.Wait().
+	Draining *atomic.Bool
 }
 
 // StartOnboarding implements PostConsentTrigger.
 func (b *AgentBridge) StartOnboarding(ctx context.Context, tenantID string, provider ProviderType) error {
 	if b == nil || b.Onboarding == nil {
 		return errors.New("onboarding: agent not configured")
+	}
+	if b.Draining != nil && b.Draining.Load() {
+		return errors.New("onboarding: server is shutting down")
 	}
 	tctx := agent.TenantContext{
 		TenantID:  tenantID,
