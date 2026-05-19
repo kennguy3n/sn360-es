@@ -273,8 +273,7 @@ contract.
 |---|---|
 | [`internal/docs/PROPOSAL.md`](./internal/docs/PROPOSAL.md) | Design document: tiered pipeline, privacy, zero-admin, banner UX, education |
 | [`internal/docs/ARCHITECTURE.md`](./internal/docs/ARCHITECTURE.md) | System architecture: single-binary deployment, streams, consumers, data flow |
-| [`internal/docs/PHASES.md`](./internal/docs/PHASES.md) | Development history with code pointers and remaining wiring |
-| [`internal/docs/PROGRESS.md`](./internal/docs/PROGRESS.md) | Per-task changelog |
+| [`internal/docs/PHASES.md`](./internal/docs/PHASES.md) | Codebase guide: per-package code pointers organized by domain |
 | [`scripts/CORPUS.md`](./scripts/CORPUS.md) | Labelled corpus dataset contract |
 | [`scripts/corpus_generator/README.md`](./scripts/corpus_generator/README.md) | How the corpus is generated and which models are targeted |
 | [`benchmarks/README.md`](./benchmarks/README.md) | Benchmark suite, baselines, and how to compare runs |
@@ -320,7 +319,7 @@ sn360-es/
 │   │   ├── tenant/                      # Tenant CRUD + cryptographic erasure
 │   │   ├── tier0/                       # Pure-CPU classification gates
 │   │   └── tier1/                       # Encoder client + batch orchestration
-│   ├── docs/                            # Internal documentation
+│   ├── docs/                            # Design, architecture, and codebase guide
 │   └── translation/                     # Cross-service i18n bundles (banners/)
 ├── pkg/
 │   ├── events/                          # bus factory, NATS JetStream, Redis Streams fallback
