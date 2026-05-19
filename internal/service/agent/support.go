@@ -49,10 +49,10 @@ func NewSupportAgent(cfg SupportConfig) (*SupportAgent, error) {
 		return nil, errors.New("agent: support requires Lookup")
 	}
 	if cfg.SecOpsSubject == "" {
-		cfg.SecOpsSubject = "es.action.escalate.secops"
+		cfg.SecOpsSubject = "es.action.escalation.created"
 	}
 	if cfg.ReleaseSubject == "" {
-		cfg.ReleaseSubject = "es.action.release.request"
+		cfg.ReleaseSubject = "es.action.quarantine.release"
 	}
 	if cfg.EscalationConfidence <= 0 {
 		cfg.EscalationConfidence = 0.45
@@ -150,8 +150,11 @@ func (a *SupportAgent) release(ctx context.Context, q SupportQuery, v dto.Evalua
 	if a.cfg.Events == nil {
 		return SupportReply{}, errors.New("support: events publisher required for release")
 	}
-	payload := fmt.Sprintf(`{"tenant_id":%q,"message_id":%q,"user":%q,"requested_at":%q}`,
-		q.TenantID, q.MessageID, q.UserEmail, time.Now().UTC().Format(time.RFC3339))
+	// The consumer (handleQuarantineRelease) expects "pseudonymized_message_id"
+	// and "requested_by". The MessageID here comes from the verdict lookup which
+	// already stores the pseudonymised form, so the mapping is correct.
+	payload := fmt.Sprintf(`{"tenant_id":%q,"pseudonymized_message_id":%q,"requested_by":%q}`,
+		q.TenantID, q.MessageID, q.UserEmail)
 	if err := a.cfg.Events.Publish(ctx, a.cfg.ReleaseSubject, []byte(payload)); err != nil {
 		return SupportReply{}, fmt.Errorf("support: emit release: %w", err)
 	}

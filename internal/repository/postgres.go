@@ -722,6 +722,27 @@ SELECT
 	return c, nil
 }
 
+func (p *pgFeedbackEvents) ListSince(ctx context.Context, tenantID string, since time.Time) ([]FeedbackEvent, error) {
+	rows, err := p.db.QueryContext(ctx, `
+SELECT id, tenant_id, pseudo_message_id, action, tier, COALESCE(correlation_id,''), occurred_at, created_at
+  FROM feedback_events
+ WHERE tenant_id = $1 AND occurred_at >= $2
+ ORDER BY occurred_at`, tenantID, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []FeedbackEvent
+	for rows.Next() {
+		var e FeedbackEvent
+		if err := rows.Scan(&e.ID, &e.TenantID, &e.PseudoMessageID, &e.Action, &e.Tier, &e.CorrelationID, &e.OccurredAt, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // --- group memberships --------------------------------------------------
 
 type pgGroupMemberships struct{ db *postgres.DB }

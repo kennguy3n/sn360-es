@@ -9,6 +9,7 @@ import (
 
 	"github.com/kennguy3n/sn360-es/internal/config"
 	"github.com/kennguy3n/sn360-es/internal/service/action"
+	"github.com/kennguy3n/sn360-es/internal/service/onboarding"
 	"github.com/kennguy3n/sn360-es/pkg/email_provider/gmail"
 	"github.com/kennguy3n/sn360-es/pkg/email_provider/outlook"
 )
@@ -371,3 +372,76 @@ func buildOutlookEntry(_ context.Context, cfg *config.Config, logger *slog.Logge
 // is registered for the (tenant, kind) tuple. Consumers treat it as a
 // best-effort skip rather than a hard failure.
 var ErrNoProvider = errors.New("provider registry: no entry for tenant")
+
+// providerRegistrarAdapter implements onboarding.ProviderRegistrar by
+// constructing Gmail/Outlook provider entries from OAuth tokens and
+// registering them in the runtime registry.
+type providerRegistrarAdapter struct {
+	registry *providerRegistry
+	cfg      *config.Config
+	logger   *slog.Logger
+}
+
+// RegisterFromToken implements onboarding.ProviderRegistrar.
+func (a *providerRegistrarAdapter) RegisterFromToken(ctx context.Context, tenantID string, provider onboarding.ProviderType, token onboarding.Token) error {
+	switch provider {
+	case onboarding.ProviderGoogle:
+		// For GWS the service-account flow does not use user OAuth tokens
+		// directly. The static boot-time registration covers GWS.
+		a.logger.Info("provider-registrar: GWS registration from token not yet implemented",
+			slog.String("tenant_id", tenantID))
+		return nil
+	case onboarding.ProviderMicrosoft:
+		entry, err := buildOutlookEntryFromToken(ctx, a.cfg, token, a.logger)
+		if err != nil {
+			return fmt.Errorf("provider-registrar: build outlook entry: %w", err)
+		}
+		a.registry.register(tenantID, entry)
+		a.logger.Info("provider-registrar: outlook provider registered from token",
+			slog.String("tenant_id", tenantID))
+		return nil
+	default:
+		return fmt.Errorf("provider-registrar: unknown provider %q", provider)
+	}
+}
+
+// buildOutlookEntryFromToken constructs a providerEntry using the
+// OAuth token's access token as a static token source. This parallels
+// buildOutlookEntry but uses a pre-acquired token instead of client
+// credentials.
+func buildOutlookEntryFromToken(_ context.Context, cfg *config.Config, tok onboarding.Token, logger *slog.Logger) (*providerEntry, error) {
+	accessToken := tok.AccessToken
+	tokens := outlook.TokenSourceFunc(func(_ context.Context) (string, error) {
+		return accessToken, nil
+	})
+	baseURL := cfg.O365.BaseURL
+	label, err := outlook.New(outlook.Config{
+		BaseURL:     baseURL,
+		TokenSource: tokens,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("label provider: %w", err)
+	}
+	banner, err := outlook.NewBannerInjector(outlook.BannerInjectorConfig{
+		BaseURL:     baseURL,
+		TokenSource: tokens,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("banner injector: %w", err)
+	}
+	quarantine, err := outlook.NewQuarantineProvider(outlook.QuarantineProviderConfig{Labels: label})
+	if err != nil {
+		return nil, fmt.Errorf("quarantine provider: %w", err)
+	}
+	if logger != nil {
+		logger.Debug("sn360-es: outlook provider wired from token",
+			slog.String("base_url", baseURL))
+	}
+	return &providerEntry{
+		kind:               action.LabelProviderOutlook,
+		labelProvider:      label,
+		quarantineProvider: quarantine,
+		outlookBanner:      banner,
+		bodyRewriter:       outlook.NewBodyRewriter(banner),
+	}, nil
+}

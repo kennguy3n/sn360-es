@@ -618,6 +618,22 @@ func (m *memoryFeedbackEvents) Counts(_ context.Context, tenantID string, start,
 	return c, nil
 }
 
+func (m *memoryFeedbackEvents) ListSince(_ context.Context, tenantID string, since time.Time) ([]FeedbackEvent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []FeedbackEvent
+	for _, r := range m.rows {
+		if r.TenantID != tenantID {
+			continue
+		}
+		if !since.IsZero() && r.OccurredAt.Before(since) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
 // --- group memberships ---------------------------------------------------
 
 type memoryGroupMemberships struct {

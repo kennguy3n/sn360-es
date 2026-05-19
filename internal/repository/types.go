@@ -311,6 +311,7 @@ type CommunicationHistoryRepository interface {
 type FeedbackEventRepository interface {
 	Create(ctx context.Context, e *FeedbackEvent) error
 	Counts(ctx context.Context, tenantID string, start, end time.Time) (FeedbackCounts, error)
+	ListSince(ctx context.Context, tenantID string, since time.Time) ([]FeedbackEvent, error)
 }
 
 // GroupMembership is a join-table row linking a user to a group.
