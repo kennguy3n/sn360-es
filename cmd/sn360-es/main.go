@@ -3723,8 +3723,11 @@ func (p *userPersisterAdapter) PersistDiscoveredUsers(ctx context.Context, tenan
 		}
 	}
 	for _, u := range users {
+		if u.Email == "" {
+			continue
+		}
 		var emailHash []byte
-		if p.hasher != nil && u.Email != "" {
+		if p.hasher != nil {
 			emailHash = []byte(p.hasher.HashPII(tenantID, u.Email))
 		}
 		if err := p.users.Upsert(ctx, &repository.User{
