@@ -1,4 +1,7 @@
 -- Revert any rows using new values before re-applying old constraints.
+-- Note: 'critical' (infrastructure-access) maps to 'executive' on rollback
+-- to over-protect rather than under-protect. A DBA treated as C-suite-
+-- equivalent is safer than silently dropping to 'standard'.
 UPDATE users SET sensitivity_tier = 'executive' WHERE sensitivity_tier = 'critical';
 UPDATE groups SET risk_class = 'standard'
     WHERE risk_class IN ('engineering', 'medical', 'legal', 'strategy', 'research');
