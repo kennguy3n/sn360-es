@@ -230,10 +230,23 @@ func Project(tenantID string, users []agent.DiscoveredUser, groups []agent.Disco
 }
 
 // IsHighRiskGroupName returns true if name looks like a high-risk
-// group (finance, exec, HR, IT admins). Exported for tests.
+// group (finance, exec, HR, IT admins, technology, healthcare, M&A, R&D).
+// Exported for tests.
 func IsHighRiskGroupName(name string) bool {
 	n := lowerASCII(name)
-	for _, t := range []string{"finance", "exec", "c-suite", "leadership", "hr ", "people ops", "legal", "it admin", "sysadmin", "security"} {
+	for _, t := range []string{
+		// Existing
+		"finance", "exec", "c-suite", "leadership", "hr ", "people ops", "legal", "it admin", "sysadmin", "security",
+		// Technology
+		"devops", "site reliability", "sre", "database admin", "dba ", "cloud admin",
+		"infrastructure", "platform engineer", "network ops", "secops", "devsecops",
+		// M&A / Strategy
+		"m&a", "mergers", "corporate development", "corp dev", "investor relation", "board of",
+		// Healthcare
+		"medical", "clinical", "pharmacy", "physician", "nursing", "health information",
+		// R&D
+		"research", "r&d", "patent", "intellectual property",
+	} {
 		if contains(n, t) {
 			return true
 		}

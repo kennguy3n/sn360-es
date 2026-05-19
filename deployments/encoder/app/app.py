@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from functools import lru_cache
@@ -299,3 +300,205 @@ def predict_batch(req: BatchRequest) -> BatchResponse:
     PREDICTIONS.labels(mode="batch").inc(len(req.items))
     LATENCY.labels(mode="batch").observe(time.perf_counter() - t0)
     return BatchResponse(items=out)
+
+
+# ---------------------------------------------------------------------------
+# Sensitivity role classification endpoint
+# ---------------------------------------------------------------------------
+
+# Punctuation normalizer — replaces commas, slashes, periods, hyphens,
+# colons, semicolons, brackets, and pipes with spaces so space-guarded
+# keywords like " cto " match titles such as "CTO, Engineering".
+_PUNCT_RE = re.compile(r"[,/.\-:;()\[\]|]")
+
+# Infrastructure-access keywords that map to "critical" tier. If the
+# encoder model was not fine-tuned on "critical" examples, this
+# post-processing step catches them via keyword match.
+_INFRA_KEYWORDS = (
+    "database administrator", "dba ", "system administrator", "sysadmin",
+    "domain admin", "cloud administrator", "infrastructure engineer",
+    "devops lead", "sre lead", "network administrator",
+    "security administrator", "platform engineer", "root access",
+    # Japanese
+    "データベース管理者", "システム管理者", "インフラエンジニア", "クラウド管理者",
+    # Korean
+    "데이터베이스 관리자", "시스템 관리자", "인프라 엔지니어", "클라우드 관리자",
+    # Thai
+    "ผู้ดูแลระบบฐานข้อมูล", "ผู้ดูแลระบบ",
+    # Chinese
+    "数据库管理员", "系统管理员", "运维工程师", "云管理员", "基础设施工程师",
+    # Vietnamese
+    "quản trị cơ sở dữ liệu", "quản trị hệ thống", "quản trị viên hạ tầng",
+)
+
+
+class RoleClassifyItem(BaseModel):
+    index: int = Field(..., ge=0)
+    job_title: str = Field(default="")
+    department: str = Field(default="")
+    display_name: str = Field(default="")
+    group_names: List[str] = Field(default_factory=list)
+
+
+class RoleClassifyResult(BaseModel):
+    index: int
+    sensitivity: str
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    reason: str = ""
+
+
+class RoleClassifyRequest(BaseModel):
+    users: List[RoleClassifyItem]
+
+
+class RoleClassifyResponse(BaseModel):
+    results: List[RoleClassifyResult]
+
+
+# Tier-based keyword matching consistent with the Go sensitivityKeywords map.
+_TIER_KEYWORDS: dict[str, list[str]] = {
+    "max": [
+        "ceo", "cfo", " coo ", " cto ", "ciso", "founder",
+        "chief executive", "chief financial", "chief operating", "chief technology",
+        "owner",
+        # Japanese
+        "最高経営責任者", "最高財務責任者", "代表取締役", "社長", "創業者",
+        # Korean
+        "최고경영자", "최고재무책임자", "대표이사", "창업자",
+        # Thai
+        "ประธานเจ้าหน้าที่บริหาร", "ประธานเจ้าหน้าที่การเงิน",
+        # Vietnamese
+        "giám đốc điều hành", "giám đốc tài chính", "tổng giám đốc", "chủ tịch",
+        # Chinese
+        "首席执行官", "首席财务官", "总裁", "创始人", "董事长",
+    ],
+    "high": [
+        # English — Finance / HR / Legal
+        "finance", "treasury", "accounts payable", "accounts receivable",
+        "controller", "bookkeep", "human resources", "people ops",
+        " legal", "compliance", "general counsel",
+        # English — Technology
+        "site reliability engineer", "security engineer", "security analyst",
+        "cloud engineer", "network engineer", "data engineer",
+        # English — M&A / Strategy
+        "mergers and acquisitions", "m&a", "corporate development", "corp dev",
+        "investor relations", "board secretary", "corporate strategy",
+        # English — Healthcare
+        "doctor", "physician", "surgeon", "medical director", "chief medical",
+        "pharmacist", "clinical director", "medical records", "health information",
+        "chief nursing", "nurse manager",
+        # English — R&D
+        "research director", "r&d", "patent", "intellectual property",
+        "chief scientist", "data scientist", "ml engineer",
+        # Japanese
+        "財務", "経理", "人事", "法務", "コンプライアンス",
+        "データベースエンジニア", "セキュリティエンジニア", "クラウドエンジニア",
+        "医師", "薬剤師", "看護師長", "医療情報",
+        "経営企画", "事業開発", "投資家向け広報",
+        # Korean
+        "재무", "회계", "인사", "법무", "컴플라이언스",
+        "보안 엔지니어", "클라우드 엔지니어", "데이터 엔지니어",
+        "의사", "약사", "간호부장",
+        "경영기획", "사업개발", "투자자 관계",
+        # Thai
+        "การเงิน", "บัญชี", "ทรัพยากรบุคคล", "กฎหมาย",
+        "แพทย์", "เภสัชกร", "หัวหน้าพยาบาล",
+        # Vietnamese
+        "tài chính", "kế toán", "nhân sự", "pháp lý",
+        "bác sĩ", "dược sĩ", "trưởng phòng y tế",
+        "phát triển doanh nghiệp", "quan hệ nhà đầu tư",
+        # Chinese
+        "财务", "会计", "人力资源", "法务", "合规",
+        "安全工程师", "云工程师", "数据工程师",
+        "医生", "药剂师", "护士长", "医疗信息",
+        "企业发展", "并购", "投资者关系", "董事会秘书",
+    ],
+    "elevated": [
+        # English
+        "executive assistant", "admin assistant", "office manager",
+        "procurement", "vendor management", "supplier",
+        # English — Technology
+        "devops engineer", "devops", "junior dba", "help desk manager", "it support lead",
+        # English — Healthcare
+        "nurse", "lab technician", "radiologist", "physical therapist",
+        "clinical research", "clinical coordinator",
+        # English — Legal
+        "paralegal", "litigation support", "privacy officer", "data protection officer",
+        # English — Sales
+        "sales director", "account executive", "customer success", "customer data",
+        # Japanese
+        "秘書", "調達", "購買", "事務長",
+        "看護師", "検査技師", "パラリーガル",
+        # Korean
+        "비서", "조달", "사무장",
+        "간호사", "검사기사", "법률보조원",
+        # Thai
+        "ผู้ช่วยผู้บริหาร", "จัดซื้อ", "พยาบาล",
+        # Vietnamese
+        "trợ lý giám đốc", "mua sắm", "quản lý nhà cung cấp",
+        "y tá", "kỹ thuật viên xét nghiệm",
+        # Chinese
+        "行政助理", "采购", "供应商管理", "办公室经理",
+        "护士", "检验技师", "法律助理",
+    ],
+}
+
+
+def _classify_role_sensitivity(item: RoleClassifyItem) -> RoleClassifyResult:
+    """Classify a single user's sensitivity tier using keyword matching.
+
+    When the encoder model supports "critical" as a fine-tuned label this
+    function can be replaced with model inference; currently it uses the
+    same multilingual keyword map the Go keyword classifier uses.
+    """
+    # Pad with spaces so word-boundary keywords (e.g. " coo ", "dba ")
+    # work correctly at start/end of the string.
+    raw = " ".join([
+        item.job_title, item.department,
+        item.display_name, " ".join(item.group_names),
+    ]).lower()
+    hay = " " + _PUNCT_RE.sub(" ", raw) + " "
+
+    # Check for infrastructure-level (critical) keywords first.
+    for kw in _INFRA_KEYWORDS:
+        if kw in hay:
+            return RoleClassifyResult(
+                index=item.index,
+                sensitivity="critical",
+                confidence=0.92,
+                reason=f"infrastructure keyword: {kw}",
+            )
+
+    for tier, keywords in _TIER_KEYWORDS.items():
+        for kw in keywords:
+            if kw in hay:
+                return RoleClassifyResult(
+                    index=item.index,
+                    sensitivity=tier,
+                    confidence=0.85,
+                    reason=f"keyword: {kw}",
+                )
+
+    return RoleClassifyResult(
+        index=item.index,
+        sensitivity="default",
+        confidence=0.50,
+        reason="no matching keywords",
+    )
+
+
+@app.post("/classify/roles", response_model=RoleClassifyResponse)
+def classify_roles(req: RoleClassifyRequest) -> RoleClassifyResponse:
+    """Classify users into sensitivity tiers based on role signals.
+
+    Uses keyword matching as a fallback when the encoder model has not
+    been fine-tuned on the full 5-tier sensitivity vocabulary. Results
+    are consistent with the Go-side KeywordClassifyInput function.
+    """
+    if not req.users:
+        return RoleClassifyResponse(results=[])
+    t0 = time.perf_counter()
+    results = [_classify_role_sensitivity(u) for u in req.users]
+    PREDICTIONS.labels(mode="roles").inc(len(req.users))
+    LATENCY.labels(mode="roles").observe(time.perf_counter() - t0)
+    return RoleClassifyResponse(results=results)

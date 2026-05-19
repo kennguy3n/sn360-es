@@ -527,16 +527,57 @@ attention. Reduces admin friction for the most error-prone onboarding step.
 
 User sensitivity classification (`internal/service/agent/sensitivity_classifier.go`)
 uses a tiered pipeline: Tier 1 encoder → optional Bonsai SLM
-(`SENSITIVITY_BONSAI_URL`) → multilingual keyword fallback. The keyword
-fallback covers executive titles (Max), finance/legal/HR roles (High),
-and procurement/admin roles (Elevated) across English, Japanese, Korean,
-Thai, Vietnamese, and Chinese.
+(`SENSITIVITY_BONSAI_URL`) → multilingual keyword fallback. The encoder
+endpoint (`/classify/roles`) returns one of five tiers; the keyword
+fallback covers 100+ role-specific terms across six languages (English,
+Japanese, Korean, Thai, Vietnamese, Chinese) and multiple industry
+verticals (Technology, Healthcare, M&A/Strategy, R&D, Finance, Legal,
+HR, IT).
 
-The application uses four levels — Default (0), Elevated (1), High (2),
-Max (3) — while the `users.sensitivity_tier` column stores a coarser
-three-value mapping: `standard` (Default), `elevated` (Elevated),
-`executive` (High + Max). The `Sensitivity.DBTier()` method
-(`internal/service/agent/types.go`) handles the conversion.
+##### 5-Tier Sensitivity Model
+
+| Tier | Value | Database tier | Description | Example roles |
+|---|---|---|---|---|
+| **Default** | 0 | `standard` | No elevated data access | Software Engineer, Marketing |
+| **Elevated** | 1 | `elevated` | Supporting roles with some access | DevOps Engineer, Nurse, Paralegal, Sales Director |
+| **High** | 2 | `executive` | Finance, Legal, HR, Compliance, M&A, Healthcare, R&D | VP Finance, Security Engineer, Physician, Data Scientist |
+| **Max** | 3 | `executive` | C-suite, board members, founders | CEO, CFO, Board Member |
+| **Critical** | 4 | `critical` | Infrastructure-level access | DBA, System Admin, Cloud Admin, SRE Lead, Platform Engineer |
+
+The `Sensitivity.DBTier()` method (`internal/service/agent/types.go`)
+maps the five application tiers to four database tiers: `standard`,
+`elevated`, `executive` (High + Max), and `critical`.
+
+##### Critical Tier Behaviour
+
+Users classified as Critical have infrastructure-level access to
+production systems (databases, cloud accounts, network devices). They
+receive special treatment throughout the platform:
+
+- **Insider threat detection**: ATO heuristic score threshold is lowered
+  (0.4 instead of 0.5), and outbound emails to freemail/disposable
+  domains are flagged regardless of content.
+- **Vulnerability scoring**: Critical maps to `RoleRiskInfrastructure`
+  (score 100), the highest risk score in the per-user vulnerability
+  model.
+- **Volume anomaly**: Critical/Max users use a 2σ threshold (more
+  sensitive) compared to 3σ for default users.
+
+##### Industry-Aware Classification
+
+The keyword classifier detects industry-specific roles automatically:
+
+| Vertical | Example High/Critical roles | Group risk class |
+|---|---|---|
+| **Technology** | DBA, SRE Lead, Security Engineer, Cloud Admin | `engineering` |
+| **Healthcare** | Physician, Pharmacist, Medical Director, Nurse | `medical` |
+| **M&A / Strategy** | Corp Dev, Investor Relations, Board | `strategy` |
+| **R&D** | Research Director, Data Scientist, Patent | `research` |
+| **Finance** | Treasury, Controller, Accounts Payable | `finance` |
+| **Legal** | General Counsel, Compliance, Privacy Officer | `legal` |
+
+All classification is zero-config and multilingual — patterns are
+built-in and cover English plus five Asian languages.
 
 ## 6. Infrastructure
 

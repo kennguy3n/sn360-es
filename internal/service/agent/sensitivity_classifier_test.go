@@ -13,12 +13,14 @@ func TestTieredSensitivityClassifier_EncoderOnly(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := encoderResponse{
 			Results: []struct {
+				Index       int     `json:"index"`
 				Sensitivity string  `json:"sensitivity"`
 				Confidence  float64 `json:"confidence"`
+				Reason      string  `json:"reason"`
 			}{
-				{Sensitivity: "max", Confidence: 0.95},
-				{Sensitivity: "high", Confidence: 0.85},
-				{Sensitivity: "default", Confidence: 0.92},
+				{Index: 0, Sensitivity: "max", Confidence: 0.95},
+				{Index: 1, Sensitivity: "high", Confidence: 0.85},
+				{Index: 2, Sensitivity: "default", Confidence: 0.92},
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -110,10 +112,12 @@ func TestTieredSensitivityClassifier_BonsaiEscalation(t *testing.T) {
 	encoderSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := encoderResponse{
 			Results: []struct {
+				Index       int     `json:"index"`
 				Sensitivity string  `json:"sensitivity"`
 				Confidence  float64 `json:"confidence"`
+				Reason      string  `json:"reason"`
 			}{
-				{Sensitivity: "default", Confidence: 0.4},
+				{Index: 0, Sensitivity: "default", Confidence: 0.4},
 			},
 		}
 		_ = json.NewEncoder(w).Encode(resp)
@@ -177,10 +181,12 @@ func TestEncoderSensitivityClassifier_MultilingualTitles(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				resp := encoderResponse{
 					Results: []struct {
+						Index       int     `json:"index"`
 						Sensitivity string  `json:"sensitivity"`
 						Confidence  float64 `json:"confidence"`
+						Reason      string  `json:"reason"`
 					}{
-						{Sensitivity: tt.want.String(), Confidence: 0.92},
+						{Index: 0, Sensitivity: tt.want.String(), Confidence: 0.92},
 					},
 				}
 				_ = json.NewEncoder(w).Encode(resp)
@@ -207,28 +213,50 @@ func TestKeywordClassifyInput_MultilingualFallback(t *testing.T) {
 		input UserClassifyInput
 		want  Sensitivity
 	}{
+		// Critical — Infrastructure (English)
+		{"English DBA", UserClassifyInput{JobTitle: "Database Administrator"}, SensitivityCritical},
+		{"English SysAdmin", UserClassifyInput{JobTitle: "System Administrator"}, SensitivityCritical},
+		{"English SRE Lead", UserClassifyInput{JobTitle: "SRE Lead"}, SensitivityCritical},
+		{"English Platform Engineer", UserClassifyInput{JobTitle: "Platform Engineer"}, SensitivityCritical},
+		// Critical — Multilingual
+		{"Japanese DBA", UserClassifyInput{JobTitle: "データベース管理者"}, SensitivityCritical},
+		{"Korean SysAdmin", UserClassifyInput{JobTitle: "시스템 관리자"}, SensitivityCritical},
+		{"Chinese SysAdmin", UserClassifyInput{JobTitle: "系统管理员"}, SensitivityCritical},
+		{"Chinese CloudAdmin", UserClassifyInput{JobTitle: "云管理员"}, SensitivityCritical},
+		{"Vietnamese SysAdmin", UserClassifyInput{JobTitle: "quản trị hệ thống"}, SensitivityCritical},
+
 		// Japanese
 		{"Japanese CEO", UserClassifyInput{JobTitle: "代表取締役"}, SensitivityMax},
 		{"Japanese CFO", UserClassifyInput{JobTitle: "最高財務責任者"}, SensitivityMax},
 		{"Japanese Finance", UserClassifyInput{Department: "財務部"}, SensitivityHigh},
 		{"Japanese HR", UserClassifyInput{Department: "人事"}, SensitivityHigh},
+		{"Japanese Doctor", UserClassifyInput{JobTitle: "医師"}, SensitivityHigh},
+		{"Japanese Pharmacist", UserClassifyInput{JobTitle: "薬剤師"}, SensitivityHigh},
 		{"Japanese Secretary", UserClassifyInput{JobTitle: "秘書"}, SensitivityElevated},
+		{"Japanese Nurse", UserClassifyInput{JobTitle: "看護師"}, SensitivityElevated},
 		// Korean
 		{"Korean CEO", UserClassifyInput{JobTitle: "대표이사"}, SensitivityMax},
 		{"Korean CFO", UserClassifyInput{JobTitle: "최고재무책임자"}, SensitivityMax},
 		{"Korean Finance", UserClassifyInput{Department: "재무"}, SensitivityHigh},
 		{"Korean Legal", UserClassifyInput{Department: "법무"}, SensitivityHigh},
+		{"Korean Doctor", UserClassifyInput{JobTitle: "의사"}, SensitivityHigh},
 		{"Korean Secretary", UserClassifyInput{JobTitle: "비서"}, SensitivityElevated},
+		{"Korean Nurse", UserClassifyInput{JobTitle: "간호사"}, SensitivityElevated},
 		// Thai
 		{"Thai CEO", UserClassifyInput{JobTitle: "ประธานเจ้าหน้าที่บริหาร"}, SensitivityMax},
 		{"Thai Finance", UserClassifyInput{Department: "การเงิน"}, SensitivityHigh},
+		{"Thai Doctor", UserClassifyInput{JobTitle: "แพทย์"}, SensitivityHigh},
 		{"Thai Procurement", UserClassifyInput{JobTitle: "จัดซื้อ"}, SensitivityElevated},
+		{"Thai Nurse", UserClassifyInput{JobTitle: "พยาบาล"}, SensitivityElevated},
 		// Vietnamese
 		{"Vietnamese CEO", UserClassifyInput{JobTitle: "giám đốc điều hành"}, SensitivityMax},
 		{"Vietnamese CFO", UserClassifyInput{JobTitle: "giám đốc tài chính"}, SensitivityMax},
 		{"Vietnamese Finance", UserClassifyInput{Department: "tài chính"}, SensitivityHigh},
 		{"Vietnamese HR", UserClassifyInput{Department: "nhân sự"}, SensitivityHigh},
+		{"Vietnamese Doctor", UserClassifyInput{JobTitle: "bác sĩ"}, SensitivityHigh},
+		{"Vietnamese Pharmacist", UserClassifyInput{JobTitle: "dược sĩ"}, SensitivityHigh},
 		{"Vietnamese EA", UserClassifyInput{JobTitle: "trợ lý giám đốc"}, SensitivityElevated},
+		{"Vietnamese Nurse", UserClassifyInput{JobTitle: "y tá"}, SensitivityElevated},
 		// Chinese
 		{"Chinese CEO", UserClassifyInput{JobTitle: "首席执行官"}, SensitivityMax},
 		{"Chinese CFO", UserClassifyInput{JobTitle: "首席财务官"}, SensitivityMax},
@@ -236,8 +264,18 @@ func TestKeywordClassifyInput_MultilingualFallback(t *testing.T) {
 		{"Chinese Finance", UserClassifyInput{Department: "财务"}, SensitivityHigh},
 		{"Chinese HR", UserClassifyInput{Department: "人力资源"}, SensitivityHigh},
 		{"Chinese Compliance", UserClassifyInput{Department: "合规"}, SensitivityHigh},
+		{"Chinese Doctor", UserClassifyInput{JobTitle: "医生"}, SensitivityHigh},
+		{"Chinese Pharmacist", UserClassifyInput{JobTitle: "药剂师"}, SensitivityHigh},
 		{"Chinese EA", UserClassifyInput{JobTitle: "行政助理"}, SensitivityElevated},
 		{"Chinese Procurement", UserClassifyInput{JobTitle: "采购"}, SensitivityElevated},
+		{"Chinese Nurse", UserClassifyInput{JobTitle: "护士"}, SensitivityElevated},
+		// Punctuated titles — space-guarded keywords with commas/slashes
+		{"CTO comma", UserClassifyInput{JobTitle: "CTO, Engineering"}, SensitivityMax},
+		{"CTO slash", UserClassifyInput{JobTitle: "CTO/Founder"}, SensitivityMax},
+		{"COO parens", UserClassifyInput{JobTitle: "COO (Operations)"}, SensitivityMax},
+		// Full spelled-out forms → Max, not High
+		{"Chief Technology Officer", UserClassifyInput{JobTitle: "Chief Technology Officer"}, SensitivityMax},
+		{"Chief Operating Officer", UserClassifyInput{JobTitle: "Chief Operating Officer"}, SensitivityMax},
 		// English fallback still works
 		{"English CEO", UserClassifyInput{JobTitle: "CEO"}, SensitivityMax},
 		{"English Finance", UserClassifyInput{Department: "Finance"}, SensitivityHigh},
@@ -258,6 +296,9 @@ func TestParseSensitivityString(t *testing.T) {
 		input string
 		want  Sensitivity
 	}{
+		{"critical", SensitivityCritical},
+		{"CRITICAL", SensitivityCritical},
+		{"Critical", SensitivityCritical},
 		{"max", SensitivityMax},
 		{"MAX", SensitivityMax},
 		{"high", SensitivityHigh},

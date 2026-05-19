@@ -29,6 +29,13 @@ type FreeDomainSet interface {
 	Contains(domain string) bool
 }
 
+// DisposableDomainSet allows callers to inject a curated disposable-
+// domain list (temporary email services). A nil set means "no domain
+// is treated as disposable"; the normalizer never panics on a nil set.
+type DisposableDomainSet interface {
+	Contains(domain string) bool
+}
+
 // staticFreeDomains is the minimal default used when no
 // FreeDomainSet is supplied. Production deployments override this
 // with the full list from `pkg/privacy/free_domains.go`.
@@ -61,6 +68,38 @@ func defaultFreeDomains() FreeDomainSet {
 	}
 }
 
+// staticDisposableDomains is the minimal default for throwaway
+// email providers. Production deployments should override via
+// WithDisposableDomains.
+type staticDisposableDomains struct {
+	domains map[string]struct{}
+}
+
+func (s *staticDisposableDomains) Contains(d string) bool {
+	if s == nil {
+		return false
+	}
+	_, ok := s.domains[strings.ToLower(d)]
+	return ok
+}
+
+func defaultDisposableDomains() DisposableDomainSet {
+	return &staticDisposableDomains{
+		domains: map[string]struct{}{
+			"guerrillamail.com": {},
+			"tempmail.com":      {},
+			"throwaway.email":   {},
+			"mailinator.com":    {},
+			"10minutemail.com":  {},
+			"trashmail.com":     {},
+			"yopmail.com":       {},
+			"sharklasers.com":   {},
+			"dispostable.com":   {},
+			"temp-mail.org":     {},
+		},
+	}
+}
+
 // DefaultNormalizer is the production Normalizer used by the
 // Poller. It is safe for concurrent use.
 //
@@ -72,8 +111,9 @@ func defaultFreeDomains() FreeDomainSet {
 // identifiers is the persistence layer's responsibility (see
 // CommunicationHistory.RecipientHash), not the normaliser's.
 type DefaultNormalizer struct {
-	freeDomains   FreeDomainSet
-	defaultLocale string
+	freeDomains       FreeDomainSet
+	disposableDomains DisposableDomainSet
+	defaultLocale     string
 }
 
 // NormalizerOption configures the default normalizer at
@@ -86,6 +126,12 @@ func WithFreeDomains(s FreeDomainSet) NormalizerOption {
 	return func(n *DefaultNormalizer) { n.freeDomains = s }
 }
 
+// WithDisposableDomains injects the disposable-domain set used for
+// the IsDisposableDomain and RecipientIsDisposableDomain risk signals.
+func WithDisposableDomains(s DisposableDomainSet) NormalizerOption {
+	return func(n *DefaultNormalizer) { n.disposableDomains = s }
+}
+
 // WithDefaultLocale sets the locale used when the message itself
 // does not declare one.
 func WithDefaultLocale(loc string) NormalizerOption {
@@ -95,8 +141,9 @@ func WithDefaultLocale(loc string) NormalizerOption {
 // NewDefaultNormalizer builds a Normalizer with sensible defaults.
 func NewDefaultNormalizer(opts ...NormalizerOption) *DefaultNormalizer {
 	n := &DefaultNormalizer{
-		freeDomains:   defaultFreeDomains(),
-		defaultLocale: "en",
+		freeDomains:       defaultFreeDomains(),
+		disposableDomains: defaultDisposableDomains(),
+		defaultLocale:     "en",
 	}
 	for _, opt := range opts {
 		opt(n)
@@ -176,6 +223,11 @@ func (n *DefaultNormalizer) buildSignals(raw RawEmail) dto.RiskSignals {
 		!strings.EqualFold(senderDomain, recipientDomain)
 	if n.freeDomains != nil {
 		signals.IsFreeDomain = n.freeDomains.Contains(senderDomain)
+		signals.RecipientIsFreeDomain = n.freeDomains.Contains(recipientDomain)
+	}
+	if n.disposableDomains != nil {
+		signals.IsDisposableDomain = n.disposableDomains.Contains(senderDomain)
+		signals.RecipientIsDisposableDomain = n.disposableDomains.Contains(recipientDomain)
 	}
 	if ct := headerLookup(raw.Headers, "Content-Type"); ct != "" {
 		signals.HasAttachment = strings.Contains(strings.ToLower(ct), "multipart/mixed") ||

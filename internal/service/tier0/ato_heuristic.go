@@ -61,6 +61,7 @@ func NewATOHeuristic(cfg ATOHeuristicConfig) *ATOHeuristic {
 //   - Link-heavy body: sender normally sends text-only but this message
 //     is link-heavy.
 //   - Auth failure on an internal sender (should never happen legitimately).
+//   - High-privilege outbound: Critical/Max sender emailing freemail/disposable.
 func (h *ATOHeuristic) Check(req dto.EvaluateRequest) ATOHeuristicResult {
 	if !h.cfg.Enabled {
 		return ATOHeuristicResult{}
@@ -81,12 +82,27 @@ func (h *ATOHeuristic) Check(req dto.EvaluateRequest) ATOHeuristicResult {
 	// 4. Auth failure on internal sender.
 	score += h.checkAuthFailure(req, &reasons)
 
+	// 5. High-privilege outbound: Critical/Max user sending to freemail
+	// or disposable domains is an insider-threat signal regardless of
+	// content.
+	score += h.checkHighPrivilegeOutbound(req, &reasons)
+
+	// Apply sensitivity-based threshold adjustment: Critical/Max users
+	// use a lower threshold (0.4 instead of default) so suspicious
+	// behaviour triggers alerts more easily.
+	threshold := h.cfg.ScoreThreshold
+	if isHighPrivilegeSender(req) {
+		if threshold > 0.4 {
+			threshold = 0.4
+		}
+	}
+
 	if score > 1.0 {
 		score = 1.0
 	}
 
 	return ATOHeuristicResult{
-		Flagged: score >= h.cfg.ScoreThreshold,
+		Flagged: score >= threshold,
 		Score:   score,
 		Reasons: reasons,
 	}
@@ -195,6 +211,44 @@ func hourDistance(a, b int) int {
 		d = 24 - d
 	}
 	return d
+}
+
+// checkHighPrivilegeOutbound flags when a Critical/Max sensitivity user
+// sends email to freemail or disposable domains. The combination of
+// high-privilege sender + personal email recipient is an insider-threat
+// signal even without suspicious content.
+func (h *ATOHeuristic) checkHighPrivilegeOutbound(req dto.EvaluateRequest, reasons *[]string) float64 {
+	if !isHighPrivilegeSender(req) {
+		return 0
+	}
+	var score float64
+
+	// Freemail / disposable recipient.
+	if req.Signals.RecipientIsFreeDomain || req.Signals.RecipientIsDisposableDomain {
+		*reasons = append(*reasons, "high_privilege_to_freemail")
+		score += 0.3
+	}
+
+	// Attachment to non-internal recipient. RecipientIsFreeDomain and
+	// RecipientIsDisposableDomain are populated by the normalizer from
+	// the recipient's domain, not the sender's.
+	recipientIsExternal := req.Signals.RecipientIsFreeDomain || req.Signals.RecipientIsDisposableDomain ||
+		(!req.Signals.IsFromVendor && req.Signals.RecipientDomain != "" &&
+			!strings.EqualFold(req.Signals.RecipientDomain, req.Signals.SenderDomain))
+	if req.Signals.HasAttachment && recipientIsExternal {
+		*reasons = append(*reasons, "high_privilege_external_attachment")
+		score += 0.2
+	}
+
+	return score
+}
+
+// isHighPrivilegeSender returns true when the sender's sensitivity tier
+// is "critical" or "max", indicating infrastructure-level or C-suite
+// access.
+func isHighPrivilegeSender(req dto.EvaluateRequest) bool {
+	s := strings.ToLower(req.Signals.SenderSensitivity)
+	return s == "critical" || s == "max"
 }
 
 // ReceivedAtOrNow returns ReceivedAt if set, otherwise Now.

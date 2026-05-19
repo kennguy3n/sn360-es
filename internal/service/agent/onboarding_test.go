@@ -284,16 +284,83 @@ func TestClassifyUserSensitivity(t *testing.T) {
 		user DiscoveredUser
 		want Sensitivity
 	}{
+		// Critical — Infrastructure access
+		{"DBA title", DiscoveredUser{JobTitle: "Database Administrator"}, SensitivityCritical},
+		{"sysadmin", DiscoveredUser{JobTitle: "System Administrator"}, SensitivityCritical},
+		{"cloud admin", DiscoveredUser{JobTitle: "Cloud Administrator"}, SensitivityCritical},
+		{"platform engineer", DiscoveredUser{JobTitle: "Platform Engineer"}, SensitivityCritical},
+		{"network admin", DiscoveredUser{JobTitle: "Network Administrator"}, SensitivityCritical},
+		{"sre lead", DiscoveredUser{JobTitle: "SRE Lead"}, SensitivityCritical},
+		{"security administrator", DiscoveredUser{JobTitle: "Security Administrator"}, SensitivityCritical},
+		{"devops lead critical", DiscoveredUser{JobTitle: "DevOps Lead"}, SensitivityCritical},
+		{"infrastructure engineer", DiscoveredUser{JobTitle: "Infrastructure Engineer"}, SensitivityCritical},
+
+		// Max — C-suite (existing)
 		{"CFO title", DiscoveredUser{JobTitle: "CFO"}, SensitivityMax},
+		{"COO title", DiscoveredUser{JobTitle: "COO"}, SensitivityMax},
+		{"CTO title", DiscoveredUser{JobTitle: "CTO"}, SensitivityMax},
 		{"founder via display name", DiscoveredUser{DisplayName: "Jane (Founder)"}, SensitivityMax},
 		{"chief executive via group", DiscoveredUser{GroupIDs: []string{"chief"}}, SensitivityMax},
+
+		// Punctuated titles: CTO/COO with commas, slashes, etc.
+		{"CTO comma", DiscoveredUser{JobTitle: "CTO, Engineering"}, SensitivityMax},
+		{"CTO slash", DiscoveredUser{JobTitle: "CTO/Founder"}, SensitivityMax},
+		{"COO parens", DiscoveredUser{JobTitle: "COO (Operations)"}, SensitivityMax},
+		// Full spelled-out forms → Max, not High
+		{"chief technology officer", DiscoveredUser{JobTitle: "Chief Technology Officer"}, SensitivityMax},
+		{"chief operating officer", DiscoveredUser{JobTitle: "Chief Operating Officer"}, SensitivityMax},
+		// Regression: "coo"/"cto" must NOT match inside common words
+		{"coordinator not max", DiscoveredUser{JobTitle: "Project Coordinator"}, SensitivityDefault},
+		{"director not max", DiscoveredUser{JobTitle: "Marketing Director"}, SensitivityDefault},
+
+		// High — Finance/Legal/HR (existing)
 		{"finance dept", DiscoveredUser{Department: "Finance"}, SensitivityHigh},
 		{"controller", DiscoveredUser{JobTitle: "Controller"}, SensitivityHigh},
 		{"human resources via group", DiscoveredUser{GroupIDs: []string{"hr"}}, SensitivityHigh},
 		{"legal department", DiscoveredUser{Department: "Legal"}, SensitivityHigh},
+
+		// High — Technology
+		{"security engineer", DiscoveredUser{JobTitle: "Security Engineer"}, SensitivityHigh},
+		{"data engineer", DiscoveredUser{JobTitle: "Data Engineer"}, SensitivityHigh},
+		{"cloud engineer", DiscoveredUser{JobTitle: "Cloud Engineer"}, SensitivityHigh},
+
+		// High — M&A
+		{"m&a department", DiscoveredUser{Department: "Mergers and Acquisitions"}, SensitivityHigh},
+		{"corporate dev", DiscoveredUser{Department: "Corporate Development"}, SensitivityHigh},
+		{"investor relations", DiscoveredUser{Department: "Investor Relations"}, SensitivityHigh},
+
+		// High — Healthcare
+		{"doctor", DiscoveredUser{JobTitle: "Physician"}, SensitivityHigh},
+		{"pharmacist", DiscoveredUser{JobTitle: "Pharmacist"}, SensitivityHigh},
+		{"medical director", DiscoveredUser{JobTitle: "Medical Director"}, SensitivityHigh},
+
+		// High — R&D
+		{"r&d director", DiscoveredUser{JobTitle: "R&D Director"}, SensitivityHigh},
+		{"data scientist", DiscoveredUser{JobTitle: "Data Scientist"}, SensitivityHigh},
+		{"patent attorney", DiscoveredUser{Department: "Patent Law"}, SensitivityHigh},
+
+		// Elevated — Technology supporting
+		{"devops engineer", DiscoveredUser{JobTitle: "DevOps Engineer"}, SensitivityElevated},
+
+		// Elevated — Healthcare
+		{"nurse", DiscoveredUser{JobTitle: "Nurse"}, SensitivityElevated},
+		{"lab technician", DiscoveredUser{JobTitle: "Lab Technician"}, SensitivityElevated},
+
+		// Elevated — Legal extended
+		{"paralegal", DiscoveredUser{JobTitle: "Paralegal"}, SensitivityElevated},
+		{"privacy officer", DiscoveredUser{JobTitle: "Privacy Officer"}, SensitivityElevated},
+
+		// Elevated — Sales
+		{"sales director", DiscoveredUser{JobTitle: "Sales Director"}, SensitivityElevated},
+		{"customer success", DiscoveredUser{JobTitle: "Customer Success Manager"}, SensitivityElevated},
+
+		// Elevated — existing
 		{"exec assistant", DiscoveredUser{JobTitle: "Executive Assistant"}, SensitivityElevated},
 		{"procurement", DiscoveredUser{JobTitle: "Procurement Lead"}, SensitivityElevated},
+
+		// Default
 		{"marketing default", DiscoveredUser{JobTitle: "Marketing"}, SensitivityDefault},
+		{"software engineer default", DiscoveredUser{JobTitle: "Software Engineer"}, SensitivityDefault},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -310,9 +377,25 @@ func TestSensitivity_StringLabels(t *testing.T) {
 		SensitivityElevated: "elevated",
 		SensitivityHigh:     "high",
 		SensitivityMax:      "max",
+		SensitivityCritical: "critical",
 	}
 	for s, want := range cases {
 		if got := s.String(); got != want {
+			t.Fatalf("%d: got %q want %q", s, got, want)
+		}
+	}
+}
+
+func TestSensitivity_DBTier(t *testing.T) {
+	cases := map[Sensitivity]string{
+		SensitivityDefault:  "standard",
+		SensitivityElevated: "elevated",
+		SensitivityHigh:     "executive",
+		SensitivityMax:      "executive",
+		SensitivityCritical: "critical",
+	}
+	for s, want := range cases {
+		if got := s.DBTier(); got != want {
 			t.Fatalf("%d: got %q want %q", s, got, want)
 		}
 	}

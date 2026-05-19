@@ -35,10 +35,43 @@ type UserClassifyInput struct {
 // lists. This is a best-effort fallback — the encoder (Tier 1) handles
 // multilingual classification properly, and this only activates when
 // ML is unavailable.
+// normalizeHaystack replaces common punctuation (commas, slashes,
+// periods, hyphens, colons, semicolons, parentheses) with spaces so
+// that space-guarded keywords like " cto " match titles such as
+// "CTO, Engineering" or "CTO/Founder".
+func normalizeHaystack(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case ',', '/', '.', '-', ':', ';', '(', ')', '[', ']', '|':
+			return ' '
+		default:
+			return r
+		}
+	}, s)
+}
+
 var sensitivityKeywords = map[Sensitivity][]string{
+	SensitivityCritical: {
+		// English — Infrastructure access roles
+		"database administrator", "dba ", "system administrator", "sysadmin",
+		"domain admin", "cloud administrator", "infrastructure engineer",
+		"devops lead", "sre lead", "network administrator",
+		"security administrator", "platform engineer", "root access",
+		// Japanese
+		"データベース管理者", "システム管理者", "インフラエンジニア", "クラウド管理者",
+		// Korean
+		"데이터베이스 관리자", "시스템 관리자", "인프라 엔지니어", "클라우드 관리자",
+		// Thai
+		"ผู้ดูแลระบบฐานข้อมูล", "ผู้ดูแลระบบ",
+		// Vietnamese
+		"quản trị cơ sở dữ liệu", "quản trị hệ thống", "quản trị viên hạ tầng",
+		// Chinese
+		"数据库管理员", "系统管理员", "运维工程师", "云管理员", "基础设施工程师",
+	},
 	SensitivityMax: {
 		// English
-		"ceo", "cfo", "coo", "cto", "ciso", "founder", "chief executive", "chief financial", "owner",
+		"ceo", "cfo", " coo ", " cto ", "ciso", "founder",
+		"chief executive", "chief financial", "chief operating", "chief technology", "owner",
 		// Japanese
 		"最高経営責任者", "最高財務責任者", "代表取締役", "社長", "創業者",
 		// Korean
@@ -51,34 +84,108 @@ var sensitivityKeywords = map[Sensitivity][]string{
 		"首席执行官", "首席财务官", "总裁", "创始人", "董事长",
 	},
 	SensitivityHigh: {
-		// English
+		// English — Finance / HR / Legal (existing)
 		"finance", "treasury", "accounts payable", "accounts receivable", "controller", "bookkeep",
-		"human resources", "people ops", "legal", "compliance", "general counsel",
-		// Japanese
+		"human resources", "people ops", " legal", "compliance", "general counsel",
+
+		// English — Technology (sensitive access, not infra-level)
+		"site reliability engineer", "security engineer", "security analyst",
+		"cloud engineer", "network engineer", "data engineer",
+
+		// English — M&A / Strategy
+		"mergers and acquisitions", "m&a", "corporate development", "corp dev",
+		"investor relations", "board secretary", "corporate strategy",
+
+		// English — Healthcare / Medical
+		"doctor", "physician", "surgeon", "medical director", "chief medical",
+		"pharmacist", "clinical director", "medical records", "health information",
+		"chief nursing", "nurse manager",
+
+		// English — R&D / Intellectual Property
+		"research director", "r&d", "patent", "intellectual property",
+		"chief scientist", "data scientist", "ml engineer",
+
+		// Japanese — Finance / HR / Legal (existing)
 		"財務", "経理", "人事", "法務", "コンプライアンス",
-		// Korean
+		// Japanese — Technology
+		"データベースエンジニア", "セキュリティエンジニア", "クラウドエンジニア",
+		// Japanese — Healthcare
+		"医師", "薬剤師", "看護師長", "医療情報",
+		// Japanese — M&A
+		"経営企画", "事業開発", "投資家向け広報",
+
+		// Korean — Finance / HR / Legal (existing)
 		"재무", "회계", "인사", "법무", "컴플라이언스",
-		// Thai
+		// Korean — Technology
+		"보안 엔지니어", "클라우드 엔지니어", "데이터 엔지니어",
+		// Korean — Healthcare
+		"의사", "약사", "간호부장",
+		// Korean — M&A
+		"경영기획", "사업개발", "투자자 관계",
+
+		// Thai (existing)
 		"การเงิน", "บัญชี", "ทรัพยากรบุคคล", "กฎหมาย",
-		// Vietnamese
+		// Thai — Healthcare
+		"แพทย์", "เภสัชกร", "หัวหน้าพยาบาล",
+
+		// Vietnamese (existing)
 		"tài chính", "kế toán", "nhân sự", "pháp lý",
-		// Chinese
+		// Vietnamese — Healthcare
+		"bác sĩ", "dược sĩ", "trưởng phòng y tế",
+		// Vietnamese — M&A
+		"phát triển doanh nghiệp", "quan hệ nhà đầu tư",
+
+		// Chinese (existing)
 		"财务", "会计", "人力资源", "法务", "合规",
+		// Chinese — Technology
+		"安全工程师", "云工程师", "数据工程师",
+		// Chinese — Healthcare
+		"医生", "药剂师", "护士长", "医疗信息",
+		// Chinese — M&A
+		"企业发展", "并购", "投资者关系", "董事会秘书",
 	},
 	SensitivityElevated: {
-		// English
+		// English (existing)
 		"executive assistant", "admin assistant", "office manager",
 		"procurement", "vendor management", "supplier",
-		// Japanese
+
+		// English — Technology (supporting roles)
+		"devops engineer", "devops", "junior dba", "help desk manager", "it support lead",
+
+		// English — Healthcare (clinical support)
+		"nurse", "lab technician", "radiologist", "physical therapist",
+		"clinical research", "clinical coordinator",
+
+		// English — Legal (extended)
+		"paralegal", "litigation support", "privacy officer", "data protection officer",
+
+		// English — Sales (customer data access)
+		"sales director", "account executive", "customer success", "customer data",
+
+		// Japanese (existing)
 		"秘書", "調達", "購買", "事務長",
-		// Korean
+		// Japanese — Healthcare / Legal
+		"看護師", "検査技師", "パラリーガル",
+
+		// Korean (existing)
 		"비서", "조달", "사무장",
-		// Thai
+		// Korean — Healthcare / Legal
+		"간호사", "검사기사", "법률보조원",
+
+		// Thai (existing)
 		"ผู้ช่วยผู้บริหาร", "จัดซื้อ",
-		// Vietnamese
+		// Thai — Healthcare
+		"พยาบาล",
+
+		// Vietnamese (existing)
 		"trợ lý giám đốc", "mua sắm", "quản lý nhà cung cấp",
-		// Chinese
+		// Vietnamese — Healthcare
+		"y tá", "kỹ thuật viên xét nghiệm",
+
+		// Chinese (existing)
 		"行政助理", "采购", "供应商管理", "办公室经理",
+		// Chinese — Healthcare / Legal
+		"护士", "检验技师", "法律助理",
 	},
 }
 
@@ -89,12 +196,14 @@ var sensitivityKeywords = map[Sensitivity][]string{
 // Iterates the multilingual sensitivityKeywords map in tier-priority
 // order (Max → High → Elevated) and returns the first match.
 func KeywordClassifyInput(u UserClassifyInput) Sensitivity {
-	hay := strings.ToLower(u.JobTitle + " " + u.Department + " " + u.DisplayName)
+	// Pad with spaces so word-boundary keywords (e.g. " coo ", "dba ")
+	// work correctly at start/end of the string.
+	hay := " " + normalizeHaystack(strings.ToLower(u.JobTitle+" "+u.Department+" "+u.DisplayName)) + " "
 	for _, g := range u.GroupNames {
-		hay += " " + strings.ToLower(g)
+		hay += normalizeHaystack(strings.ToLower(g)) + " "
 	}
 	// Check tiers in descending priority order.
-	for _, tier := range []Sensitivity{SensitivityMax, SensitivityHigh, SensitivityElevated} {
+	for _, tier := range []Sensitivity{SensitivityCritical, SensitivityMax, SensitivityHigh, SensitivityElevated} {
 		for _, kw := range sensitivityKeywords[tier] {
 			if strings.Contains(hay, strings.ToLower(kw)) {
 				return tier
@@ -143,15 +252,24 @@ func NewEncoderSensitivityClassifier(url string, client *http.Client, timeout ti
 	return &EncoderSensitivityClassifier{url: url, client: client, timeout: timeout, logger: logger}
 }
 
-type encoderRequest struct {
-	Texts []string `json:"texts"`
-	Task  string   `json:"task"`
+type encoderRoleItem struct {
+	Index       int      `json:"index"`
+	JobTitle    string   `json:"job_title"`
+	Department  string   `json:"department"`
+	DisplayName string   `json:"display_name"`
+	GroupNames  []string `json:"group_names"`
+}
+
+type encoderRoleRequest struct {
+	Users []encoderRoleItem `json:"users"`
 }
 
 type encoderResponse struct {
 	Results []struct {
+		Index       int     `json:"index"`
 		Sensitivity string  `json:"sensitivity"`
 		Confidence  float64 `json:"confidence"`
+		Reason      string  `json:"reason"`
 	} `json:"results"`
 }
 
@@ -160,11 +278,17 @@ func (c *EncoderSensitivityClassifier) ClassifyBatch(ctx context.Context, users 
 	if len(users) == 0 {
 		return nil, nil
 	}
-	texts := make([]string, len(users))
+	items := make([]encoderRoleItem, len(users))
 	for i, u := range users {
-		texts[i] = buildClassifyText(u)
+		items[i] = encoderRoleItem{
+			Index:       i,
+			JobTitle:    u.JobTitle,
+			Department:  u.Department,
+			DisplayName: u.DisplayName,
+			GroupNames:  u.GroupNames,
+		}
 	}
-	body, err := json.Marshal(encoderRequest{Texts: texts, Task: "role_classify"})
+	body, err := json.Marshal(encoderRoleRequest{Users: items})
 	if err != nil {
 		return nil, fmt.Errorf("sensitivity: marshal request: %w", err)
 	}
@@ -480,39 +604,16 @@ func classifyCacheKey(u UserClassifyInput) string {
 	return "sensitivity:classify:" + fmt.Sprintf("%x", h.Sum(nil))
 }
 
-func buildClassifyText(u UserClassifyInput) string {
-	var sb strings.Builder
-	if u.JobTitle != "" {
-		sb.WriteString("Job: ")
-		sb.WriteString(u.JobTitle)
-	}
-	if u.Department != "" {
-		if sb.Len() > 0 {
-			sb.WriteString(", ")
-		}
-		sb.WriteString("Dept: ")
-		sb.WriteString(u.Department)
-	}
-	if u.DisplayName != "" {
-		if sb.Len() > 0 {
-			sb.WriteString(", ")
-		}
-		sb.WriteString("Name: ")
-		sb.WriteString(u.DisplayName)
-	}
-	if len(u.GroupNames) > 0 {
-		if sb.Len() > 0 {
-			sb.WriteString(", ")
-		}
-		sb.WriteString("Groups: ")
-		sb.WriteString(strings.Join(u.GroupNames, "/"))
-	}
-	return sb.String()
-}
-
 func buildBonsaiPrompt(users []UserClassifyInput) string {
 	var sb strings.Builder
-	sb.WriteString(`You are a security role classifier. For each user below, classify their organizational sensitivity into one of: "max" (C-suite/board), "high" (VP/Director/Finance/Legal), "elevated" (senior/manager), or "default" (other). Return JSON only: {"results": [{"index": 0, "sensitivity": "...", "confidence": 0.0-1.0}, ...]}
+	sb.WriteString(`You are a security role classifier for an email security product. For each user below, classify their organizational sensitivity into one of:
+- "critical" — Infrastructure-level access: DBA, System Admin, Domain Admin, Cloud Admin, DevOps Lead, SRE Lead, Network Admin, Security Admin
+- "max" — C-suite, board members, founders, owners
+- "high" — VP/Director, Finance, Legal, HR, Compliance, M&A, Medical Director, R&D Director, Security Engineer, Data Engineer
+- "elevated" — Senior/Manager, Nurse, Paralegal, DevOps Engineer, IT Support Lead, Sales Director
+- "default" — Other roles without elevated data access
+
+Consider the user's job title, department, group memberships, and whether the role implies access to production systems, sensitive data, or strategic information. Return JSON only: {"results": [{"index": 0, "sensitivity": "...", "confidence": 0.0-1.0, "reason": "brief reason"}, ...]}
 
 Users:
 `)
@@ -524,6 +625,8 @@ Users:
 
 func parseSensitivityString(s string) Sensitivity {
 	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "critical":
+		return SensitivityCritical
 	case "max":
 		return SensitivityMax
 	case "high":

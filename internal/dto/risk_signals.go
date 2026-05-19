@@ -45,6 +45,8 @@ func (r RelationshipCategory) Valid() bool {
 //   - IsFreeDomain: sender uses a public webmail provider (gmail.com,
 //     outlook.com, yahoo.com, ...).
 //   - IsDisposableDomain: sender uses a temporary email service.
+//   - RecipientIsFreeDomain: recipient uses a public webmail provider.
+//   - RecipientIsDisposableDomain: recipient uses a temporary email service.
 //   - IsHighVolumeSender: sender has been observed sending >N messages /
 //     hour to this tenant.
 //   - IsRecurringService: sender is `noreply@`, `mailer-daemon@`, etc.
@@ -59,6 +61,8 @@ type RiskSignals struct {
 	IsFromVendor            bool `json:"is_from_vendor"`
 	IsFreeDomain            bool `json:"is_free_domain"`
 	IsDisposableDomain      bool `json:"is_disposable_domain"`
+	RecipientIsFreeDomain       bool `json:"recipient_is_free_domain"`
+	RecipientIsDisposableDomain bool `json:"recipient_is_disposable_domain"`
 	IsHighVolumeSender      bool `json:"is_high_volume_sender"`
 	IsRecurringService      bool `json:"is_recurring_service"`
 	HasAttachment           bool `json:"has_attachment"`

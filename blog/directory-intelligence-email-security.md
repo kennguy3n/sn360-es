@@ -19,10 +19,10 @@ Content scanning cannot answer those questions. Directory intelligence can.
 Directory intelligence is the practice of integrating your organisation's identity provider — Google Workspace or Microsoft 365 — directly into the email security pipeline. Instead of treating the email as an isolated document, the security system understands:
 
 - **Who works here** — every employee, their department, their role, their manager.
-- **Who is sensitive** — C-suite, Finance, HR, Legal — the people attackers target first.
+- **Who is sensitive** — and *why* — a five-tier model that distinguishes infrastructure administrators from C-suite executives from clinical directors from junior analysts.
 - **Who are your vendors** — the external domains your organisation regularly does business with.
 - **What is normal** — the typical send hours, communication volume, and device types for each employee-sender pair.
-- **How the org is structured** — the reporting hierarchy, department boundaries, nested group memberships.
+- **How the org is structured** — the reporting hierarchy, department boundaries, nested group memberships, and industry-specific risk clusters.
 
 SN360-ES builds this organisational context automatically, keeps it fresh through incremental sync, and feeds it into every layer of the detection pipeline — from the sub-millisecond classification gate all the way to the deep-reasoning SLM.
 
@@ -43,24 +43,39 @@ The key innovation is **delta sync** — instead of re-enumerating every user in
 
 For Microsoft 365 tenants, the sync also resolves **nested group memberships**. If an employee belongs to "Engineering", which is a member of "All Staff", which is a member of "Company Newsletter Recipients", the system sees all three group memberships — not just the direct one. This matters because attackers increasingly target messages to broad distribution groups, and understanding the full membership graph is essential for detecting impersonation of group-specific senders.
 
-### Step 2: Sensitivity Classification
+During directory sync, the system also performs **group risk classification** — automatically mapping groups to industry-vertical risk classes (finance, engineering, medical, research, strategy, HR, IT, executive) based on their names. This classification drives the org graph and vulnerability scoring downstream.
 
-Once directory data is synced, SN360-ES classifies every employee's sensitivity level using a tiered pipeline:
+### Step 2: Industry-Aware Sensitivity Classification
 
-1. **Encoder model** (Tier 1) — the XLM-RoBERTa multilingual encoder analyses job titles and department names across 100+ languages.
-2. **Bonsai SLM** (optional) — the Ternary-Bonsai-8B small language model provides deeper reasoning for ambiguous cases.
-3. **Multilingual keyword fallback** — when ML is unavailable, a curated keyword list covering English, Japanese, Korean, Thai, Vietnamese, and Chinese maps job titles to sensitivity levels.
+Once directory data is synced, SN360-ES classifies every employee's sensitivity level using a tiered pipeline that understands industry context:
 
-The result is a four-level classification:
+1. **Encoder model** (Tier 1) — the XLM-RoBERTa multilingual encoder analyses job titles, department names, and group memberships across 100+ languages. The encoder's keyword classifier covers six languages natively: English, Japanese, Korean, Thai, Vietnamese, and Chinese.
+2. **Bonsai SLM** (optional escalation) — the Ternary-Bonsai-8B small language model provides deeper reasoning for ambiguous cases where the encoder's confidence is below threshold.
+3. **Multilingual keyword fallback** — when ML confidence is low, a curated keyword list with 170+ terms across six languages maps job titles to sensitivity levels. The Go and Python classifiers share the same keyword sets and word-boundary matching strategy for consistent results.
+
+The result is a **five-level classification** that captures both organisational seniority and technical access:
 
 | Level | Who | Why It Matters |
 |---|---|---|
-| **Max** | CEO, CFO, CTO, founders | Primary BEC targets; impersonation vectors |
-| **High** | Finance, HR, Legal, Compliance | Wire-transfer authority; data access |
-| **Elevated** | Executive assistants, Procurement | Indirect access to sensitive operations |
+| **Critical** | DBA, System Admin, Cloud Admin, DevOps Lead, SRE Lead, Network Admin | Infrastructure-level access — a compromised account can exfiltrate entire databases or deploy malicious infrastructure. Highest blast radius. |
+| **Max** | CEO, CFO, COO, CTO, CISO, founders, board members | Primary BEC targets; wire-transfer authority; impersonation vectors |
+| **High** | Finance, HR, Legal, Compliance, Security Engineers, M&A, Medical Directors, R&D Directors, Data Scientists | Sensitive data access across industry verticals — financial records, employee PII, legal privilege, patient data, trade secrets |
+| **Elevated** | Executive assistants, Procurement, DevOps Engineers, Nurses, Paralegals, Sales Directors | Indirect access to sensitive operations; stepping stones for lateral movement |
 | **Default** | Everyone else | Standard protection |
 
-This classification feeds directly into the detection pipeline: emails targeting Max-sensitivity users get lower escalation thresholds, meaning even slightly suspicious messages are pushed to the SLM for deep analysis rather than being cleared by the fast encoder alone.
+The Critical tier is a key differentiator. Most email security products equate "sensitivity" with "seniority" — the CEO is the most important user to protect. SN360-ES goes further: a compromised DBA account can exfiltrate the entire customer database; a compromised Cloud Admin can deploy a cryptominer across every production server. These infrastructure roles get the highest sensitivity tier because their **blast radius** exceeds even C-suite accounts.
+
+The classification is **industry-aware by design**. Healthcare organisations see their physicians, pharmacists, and clinical directors automatically classified as High sensitivity. Financial firms see their M&A analysts and corporate development teams flagged. Technology companies see their SRE leads and platform engineers placed in the Critical tier. All of this happens automatically from directory signals — no manual configuration, no industry-specific setup wizards.
+
+#### Word-Boundary Intelligence
+
+Keyword classification sounds simple until you encounter real-world job titles. A naive substring search for "coo" (Chief Operating Officer) matches inside "coordinator" — turning every Project Coordinator into a C-suite executive. SN360-ES solves this with a consistent word-boundary strategy across all three classifiers:
+
+- Space-guarded keywords: `" coo "` and `" cto "` require whitespace on both sides, preventing false matches inside "coordinator" and "director".
+- Haystack padding: every input string is padded with leading and trailing spaces so that boundary keywords work correctly at string start and end.
+- Trailing-space guards: `"dba "` prevents matching inside "feedback"; `" legal"` prevents matching inside "paralegal".
+
+This strategy is applied identically in the Go rule-based classifier, the Go keyword fallback, and the Python encoder endpoint — ensuring consistent classification regardless of which code path handles a given user.
 
 ### Step 3: The Org Graph
 
@@ -68,14 +83,16 @@ After sync, SN360-ES builds a **persistent org graph** — a queryable snapshot 
 
 - Reporting hierarchies (who reports to whom)
 - Department boundaries
-- High-risk user clusters (Finance team, C-suite)
+- High-risk user clusters by industry vertical (Finance team, Clinical staff, Infrastructure admins, M&A working group)
 - Group memberships (including transitive/nested)
+- Group risk classifications (engineering, medical, research, strategy, finance, HR, IT, executive)
 
 This graph powers detection rules that content scanning cannot:
 
 - **CEO impersonation**: An email claiming to be from the CEO but originating from an external domain is instantly flagged — because the system knows who the CEO is.
 - **Cross-department anomaly**: A "Finance" sender emailing an "Engineering" recipient about an invoice is unusual if those departments have no historical communication.
 - **Vendor compromise**: A known vendor sending to a recipient they've never contacted before, at an unusual hour, triggers escalation.
+- **Infrastructure admin exfiltration**: A DBA sending an attachment to a freemail address is flagged regardless of content — the combination of Critical-tier sender and personal email recipient is itself a signal.
 
 ### Step 4: Behavioral Baselines
 
@@ -87,7 +104,15 @@ The relationship aggregation worker builds per-(employee, sender-domain) behavio
 
 When an inbound message arrives, the timing anomaly checker compares the current message against the stored baseline. A vendor who normally emails your Finance team between 9 AM and 5 PM Tokyo time suddenly sending at 3 AM raises a flag — not because the content is suspicious, but because the **behavior** is.
 
-### Step 5: Vendor Trust (With a Safety Net)
+### Step 5: Insider Threat Detection
+
+SN360-ES doesn't just protect against external threats. The ATO (Account Takeover) heuristic integrates sensitivity classification to catch insider threats and compromised internal accounts:
+
+- **Sensitivity-aware thresholds**: Critical and Max-tier users trigger alerts at a lower ATO score threshold (0.4 vs. the default). This means even mildly suspicious behaviour from a DBA or CEO is escalated for review — because the consequences of missing a compromised high-privilege account are severe.
+- **High-privilege outbound monitoring**: When a Critical or Max-tier user sends to a freemail or disposable domain, the system flags it as an insider-threat signal regardless of content. A Cloud Admin emailing `personal.gmail.com` with an attachment is inherently suspicious.
+- **Recipient-centric analysis**: The system checks whether the *recipient* is external (different domain, freemail, or disposable address) rather than relying on the sender's external flag — ensuring the detection logic fires correctly for internal-origin messages.
+
+### Step 6: Vendor Trust (With a Safety Net)
 
 Vendor management in SN360-ES combines automatic discovery with admin oversight:
 
@@ -98,6 +123,20 @@ Vendor management in SN360-ES combines automatic discovery with admin oversight:
 But here's the critical safety net: the Tier 0 classification gate checks the `LooksLikeVendorCompromise` signal **before** granting vendor bypass. If the signal indicates a potential vendor account takeover — for example, the vendor's sending patterns have changed dramatically, or the email contains content inconsistent with the vendor relationship — the gate force-escalates to the full ML pipeline instead of bypassing it.
 
 This means vendor trust is not blind trust. The system continuously validates that vendor behavior matches expectations.
+
+### Step 7: Vulnerability Scoring
+
+SN360-ES computes a vulnerability score for every user based on their sensitivity tier, communication patterns, and organisational position. The scoring model assigns role-based risk weights that reflect the blast radius of a compromised account:
+
+| Sensitivity | Role Risk Score | Rationale |
+|---|---|---|
+| **Critical (Infrastructure)** | 100 | Full database/infrastructure access; broadest exfiltration surface |
+| **Max (C-suite)** | 90 | Wire-transfer authority; organisation-wide impersonation value |
+| **High** | 70 | Sensitive data access (financial, legal, medical, strategic) |
+| **Elevated** | 45 | Indirect sensitive access; lateral movement enabler |
+| **Default** | 20 | Standard access; limited blast radius |
+
+This score feeds into prioritisation: when multiple alerts fire simultaneously, the system surfaces threats targeting higher-vulnerability users first. An alert on a DBA's account takes precedence over an alert on a marketing coordinator's account — because the potential damage is orders of magnitude greater.
 
 ---
 
@@ -114,6 +153,7 @@ Pure CPU, pure rules, sub-millisecond. The gate checks:
 - Is this a known newsletter or recurring service? → **Rspamd heuristics only**.
 - Is this from a high-volume sender with established history? → **Reduced scrutiny**.
 - Is this a first-time external contact? → **Always escalate to Tier 1**.
+- Is this from a Critical/Max-sensitivity sender with unusual patterns? → **Always run ATO heuristic** (never bypass, regardless of internal status).
 
 Result: 60-70% of all email never touches the ML pipeline. This is where directory intelligence has the biggest cost impact — the system knows which senders are safe because it knows your organisation.
 
@@ -124,6 +164,8 @@ For emails that survive Tier 0, the self-hosted XLM-RoBERTa encoder provides fas
 - **100+ languages native** — no translation step, no accuracy loss for non-English content.
 - **Micro-batching** — up to 50 emails processed in a single inference call via NATS JetStream batch fetch.
 - **Three verdicts**: Pass (<20 confidence), Flag (>60), Escalate (20-60 ambiguous range → Tier 2).
+
+The encoder also serves double duty for **sensitivity classification** — the `/classify/roles` endpoint analyses job titles using the same multilingual model, with keyword-based post-processing for the Critical tier and a confidence-threshold escalation path to the Bonsai SLM for ambiguous cases.
 
 The encoder handles 80-90% of the emails that reach it. Only ambiguous cases — the 10-20% where the model isn't confident — get escalated to the expensive SLM.
 
@@ -160,14 +202,15 @@ Regardless of which ML tier processes the email, Rspamd runs in parallel checkin
 |---|---|---|
 | **Directory integration** | Deep (native to M365) | Deep (M365 + GWS; delta sync, nested groups) |
 | **Cross-platform** | M365 only | M365 + Google Workspace simultaneously |
+| **Sensitivity model** | Basic (admin-defined labels) | 5-tier, industry-aware, multilingual auto-classification |
+| **Insider threat** | Microsoft Purview (separate product) | Built-in (sensitivity-aware ATO heuristic) |
 | **ML pipeline** | Proprietary, opaque | 3-tier, transparent, self-hosted |
 | **Cost model** | Per-user/month ($2-5.60) | Self-hosted, fixed infrastructure cost |
 | **Privacy** | Microsoft processes content | Zero-knowledge: no PII stored, per-tenant encryption |
-| **Multilingual** | Good (large model) | Native (XLM-RoBERTa 100+ languages + multilingual keywords) |
+| **Multilingual** | Good (large model) | Native (XLM-RoBERTa 100+ languages + 6-language keyword sets) |
 | **SME fit** | Requires E5 or add-on license | Single binary, zero-admin |
-| **Behavioral baselines** | SafeLinks / Safe Attachments | Per-user send-hour, volume, device baselines |
 
-Defender's strength is its native integration with the M365 ecosystem. SN360-ES's advantage is cross-platform support (protecting both GWS and O365 from one system), privacy-first architecture (Microsoft sees your email content; SN360-ES does not store it), and transparent detection logic that admins can understand and tune.
+Defender's strength is its native integration with the M365 ecosystem. SN360-ES's advantage is cross-platform support (protecting both GWS and O365 from one system), privacy-first architecture (Microsoft sees your email content; SN360-ES does not store it), and an industry-aware sensitivity model that automatically identifies high-risk roles across healthcare, finance, technology, and other verticals without manual label configuration.
 
 ### vs. Proofpoint / Mimecast
 
@@ -175,7 +218,9 @@ Defender's strength is its native integration with the M365 ecosystem. SN360-ES'
 |---|---|---|
 | **Deployment** | Cloud gateway (MX record change) | API-based, no MX change |
 | **Directory sync** | LDAP/AD connector | Native Graph API + Admin SDK delta sync |
+| **Sensitivity** | Manual policy-based | 5-tier auto-classification with industry awareness |
 | **Detection** | Proprietary ML + threat intel | 3-tier ML + Rspamd + relationship intelligence |
+| **Insider threat** | DLP-focused | Behavioral (sensitivity-aware ATO, high-privilege outbound) |
 | **Cost** | $3-6/user/month | Self-hosted, fixed cost |
 | **Admin overhead** | Significant (policy management) | Zero-admin (AI agents configure and tune) |
 | **Education** | Separate product (Security Awareness Training) | Built-in (simulations, micro-lessons, resilience scoring) |
@@ -187,16 +232,17 @@ Proofpoint and Mimecast are enterprise-grade but enterprise-complex. They requir
 
 | Capability | Abnormal Security | SN360-ES |
 |---|---|---|
-| **Approach** | Behavioral AI, API-based | 3-tier ML + behavioral baselines, API-based |
-| **Directory integration** | Deep (behavioral profiling) | Deep (delta sync, org graph, behavioral baselines) |
+| **Approach** | Behavioral AI, API-based | 3-tier ML + behavioral baselines + insider threat, API-based |
+| **Directory integration** | Deep (behavioral profiling) | Deep (delta sync, org graph, 5-tier sensitivity, group risk classes) |
+| **Insider threat** | Behavioral anomaly | Sensitivity-aware ATO + high-privilege outbound monitoring |
+| **Industry awareness** | General-purpose | Auto-detects healthcare, finance, tech, M&A, R&D verticals |
 | **Cost** | Premium ($4-8/user/month) | Self-hosted, fixed cost |
 | **Self-hosted option** | No (cloud only) | Yes (single binary, your infrastructure) |
 | **Privacy** | Cloud-processed | Zero-knowledge, per-tenant encryption keys |
-| **Multilingual** | English-primary | Native 100+ language support |
+| **Multilingual** | English-primary | Native 6-language keyword sets + 100+ language encoder |
 | **Education** | No built-in education | Built-in simulations + micro-lessons |
-| **Open detection logic** | Opaque | Transparent 3-tier pipeline with human-readable reasons |
 
-Abnormal Security is the closest competitor in approach — they also use behavioral AI and API-based integration. The key differences: SN360-ES is self-hostable (your data never leaves your infrastructure), natively multilingual (critical for APAC SMEs), includes built-in education, and provides transparent detection reasoning that employees and admins can understand.
+Abnormal Security is the closest competitor in approach — they also use behavioral AI and API-based integration. The key differences: SN360-ES is self-hostable (your data never leaves your infrastructure), natively multilingual (critical for APAC SMEs), includes built-in education, provides transparent detection reasoning, and offers industry-specific sensitivity classification that automatically adapts to healthcare, finance, technology, and other verticals without configuration.
 
 ### vs. Google Workspace Built-In Protection
 
@@ -204,13 +250,14 @@ Abnormal Security is the closest competitor in approach — they also use behavi
 |---|---|---|
 | **Detection** | Heuristic + ML (opaque) | 3-tier ML + relationship intelligence |
 | **BEC protection** | Basic (DMARC enforcement) | Advanced (org graph, behavioral baselines, vendor compromise) |
+| **Sensitivity** | None | 5-tier industry-aware auto-classification |
+| **Insider threat** | None | Sensitivity-aware ATO + high-privilege outbound |
 | **Vendor trust** | No concept | Auto-discovered + admin-managed with compromise guard |
 | **Education** | No | Built-in simulations + micro-lessons |
 | **Cost** | Included with GWS | Additional (self-hosted) |
 | **Cross-platform** | GWS only | GWS + M365 |
-| **Customisation** | Minimal | Per-tenant threshold tuning, AI agent auto-optimization |
 
-Google's built-in protection catches commodity threats well but lacks the organisational context that catches targeted attacks. SN360-ES adds the directory intelligence layer that GWS doesn't provide — knowing who your VIPs are, which vendors are trusted, and what normal communication looks like for each employee.
+Google's built-in protection catches commodity threats well but lacks the organisational context that catches targeted attacks. SN360-ES adds the directory intelligence layer that GWS doesn't provide — knowing who your VIPs are, which infrastructure admins need extra scrutiny, which vendors are trusted, and what normal communication looks like for each employee.
 
 ---
 
@@ -237,6 +284,6 @@ SN360-ES is a single `sn360-es` Go binary. To connect your directory:
 
 3. **Both**: SN360-ES supports both providers simultaneously — the directory sync worker handles each tenant independently with provider-specific delta sync.
 
-Within 6 hours of configuration, SN360-ES will have synced your directory, classified employee sensitivity, built the org graph, started populating behavioral baselines, and auto-discovered your vendors. Every email flowing through the system after that point benefits from the full organisational context — no manual configuration, no policy writing, no ongoing admin work.
+Within 6 hours of configuration, SN360-ES will have synced your directory, classified employee sensitivity across five tiers and multiple industry verticals, built the org graph with group risk classifications, started populating behavioral baselines, auto-discovered your vendors, and activated insider threat monitoring for your highest-privilege users. Every email flowing through the system after that point benefits from the full organisational context — no manual configuration, no policy writing, no ongoing admin work.
 
 That's the promise of directory intelligence: **your organisation's structure becomes your strongest defense**.

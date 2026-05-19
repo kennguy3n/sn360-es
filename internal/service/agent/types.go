@@ -101,6 +101,7 @@ const (
 	SensitivityElevated Sensitivity = 1
 	SensitivityHigh     Sensitivity = 2
 	SensitivityMax      Sensitivity = 3
+	SensitivityCritical Sensitivity = 4
 )
 
 // String returns a stable label used in audit logs and Redis keys.
@@ -112,20 +113,24 @@ func (s Sensitivity) String() string {
 		return "high"
 	case SensitivityMax:
 		return "max"
+	case SensitivityCritical:
+		return "critical"
 	default:
 		return "default"
 	}
 }
 
 // DBTier returns the database-compatible sensitivity tier string.
-// The users.sensitivity_tier CHECK constraint accepts only
-// ('standard', 'elevated', 'executive').
+// The users.sensitivity_tier CHECK constraint accepts
+// ('standard', 'elevated', 'executive', 'critical').
 func (s Sensitivity) DBTier() string {
 	switch s {
 	case SensitivityElevated:
 		return "elevated"
 	case SensitivityHigh, SensitivityMax:
 		return "executive"
+	case SensitivityCritical:
+		return "critical"
 	default:
 		return "standard"
 	}

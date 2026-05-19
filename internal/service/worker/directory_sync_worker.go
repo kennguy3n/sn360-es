@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/repository"
@@ -215,7 +216,7 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 			TenantID:    tenantID,
 			Name:        g.Name,
 			Description: g.Description,
-			RiskClass:   "standard",
+			RiskClass:   classifyGroupRisk(g.Name),
 		}
 		if err := j.cfg.Groups.Upsert(ctx, repoGroup); err != nil {
 			j.cfg.Logger.Warn("directory sync: group upsert failed",
@@ -342,4 +343,34 @@ func (j *DirectorySyncJob) fetchUsers(ctx context.Context, tenantID string) ([]a
 	}
 
 	return users, nil
+}
+
+// classifyGroupRisk maps a group name to a risk_class value stored in
+// the groups table. Uses case-insensitive substring matching against
+// known industry-vertical keywords.
+func classifyGroupRisk(name string) string {
+	n := strings.ToLower(name)
+	type rule struct {
+		keywords []string
+		class    string
+	}
+	rules := []rule{
+		{[]string{"engineering", "devops", "sre", "infrastructure", "platform"}, "engineering"},
+		{[]string{"medical", "clinical", "pharmacy", "nursing"}, "medical"},
+		{[]string{"research", "r&d", "patent"}, "research"},
+		{[]string{"m&a", "corporate development", "strategy", "board of"}, "strategy"},
+		{[]string{"finance", "treasury", "accounts payable"}, "finance"},
+		{[]string{"exec", "c-suite", "leadership"}, "executive"},
+		{[]string{"hr ", "human resource", "people ops"}, "hr"},
+		{[]string{"legal", "compliance"}, "legal"},
+		{[]string{"it admin", "sysadmin", "security"}, "it"},
+	}
+	for _, r := range rules {
+		for _, kw := range r.keywords {
+			if strings.Contains(n, kw) {
+				return r.class
+			}
+		}
+	}
+	return "standard"
 }
