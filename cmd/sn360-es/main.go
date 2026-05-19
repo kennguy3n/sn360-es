@@ -3832,8 +3832,13 @@ func buildSensitivityClassifier(cfg *config.Config, logger *slog.Logger) agent.S
 		return nil
 	}
 	encoder := agent.NewEncoderSensitivityClassifier(cfg.Tier1.URL, nil, cfg.Tier1.Timeout, logger)
+	var bonsai *agent.BonsaiSensitivityClassifier
+	if cfg.SensitivityBonsaiURL != "" {
+		bonsai = agent.NewBonsaiSensitivityClassifier(cfg.SensitivityBonsaiURL, nil, cfg.SensitivityBonsaiTimeout, logger)
+	}
 	return agent.NewTieredSensitivityClassifier(agent.TieredClassifierConfig{
 		Encoder:  encoder,
+		Bonsai:   bonsai,
 		Fallback: agent.KeywordClassifyInput,
 		Logger:   logger,
 	})

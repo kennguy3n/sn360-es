@@ -78,8 +78,10 @@ type Config struct {
 	AWS        AWS
 	Rspamd     Rspamd
 	AI         AI
-	Tier1      Tier1
-	Tier0      Tier0
+	Tier1                    Tier1
+	Tier0                    Tier0
+	SensitivityBonsaiURL     string
+	SensitivityBonsaiTimeout time.Duration
 	CB         CircuitBreaker
 	Privacy    Privacy
 	Banner     Banner
@@ -499,6 +501,8 @@ func Load() (Config, error) {
 			FlagThreshold: getInt("TIER1_FLAG_THRESHOLD", 60),
 			BatchEnabled:  getBool("TIER1_BATCH_ENABLED", false),
 		},
+		SensitivityBonsaiURL:     getStr("SENSITIVITY_BONSAI_URL", ""),
+		SensitivityBonsaiTimeout: getDuration("SENSITIVITY_BONSAI_TIMEOUT", 30*time.Second),
 		Tier0: Tier0{
 			SkipInternal:         getBool("TIER0_SKIP_INTERNAL", true),
 			SkipVendor:           getBool("TIER0_SKIP_VENDOR", true),
