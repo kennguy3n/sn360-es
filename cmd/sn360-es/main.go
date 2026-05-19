@@ -1905,7 +1905,7 @@ func (a *application) handleOnboarding(ctx context.Context, msg events.Message) 
 				return nil
 			}
 			p := agent.Provider(env.Provider)
-			if !p.Valid() {
+			if !p.Valid() || p == agent.ProviderUnknown {
 				a.logger.WarnContext(ctx, "sn360-es: onboarding.tenant.created unknown provider, skipping",
 					slog.String("tenant_id", env.TenantID),
 					slog.String("provider", env.Provider))
