@@ -229,8 +229,14 @@ func (h *ATOHeuristic) checkHighPrivilegeOutbound(req dto.EvaluateRequest, reaso
 		score += 0.3
 	}
 
-	// Large attachment to external recipient.
-	if req.Signals.HasAttachment && req.Signals.IsExternal {
+	// Attachment to non-internal recipient. Since IsExternal refers to the
+	// sender (and the ATO heuristic is invoked for internal senders),
+	// we check recipient externality via the domain signals: freemail,
+	// disposable, or a recipient domain different from the sender's.
+	recipientIsExternal := req.Signals.IsFreeDomain || req.Signals.IsDisposableDomain ||
+		(!req.Signals.IsFromVendor && req.Signals.RecipientDomain != "" &&
+			!strings.EqualFold(req.Signals.RecipientDomain, req.Signals.SenderDomain))
+	if req.Signals.HasAttachment && recipientIsExternal {
 		*reasons = append(*reasons, "high_privilege_external_attachment")
 		score += 0.2
 	}

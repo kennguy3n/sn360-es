@@ -187,9 +187,9 @@ func TestATOHeuristic_HighPrivilegeExternalAttachment(t *testing.T) {
 		Signals: dto.RiskSignals{
 			IsInternal:        true,
 			SenderDomain:      "company.com",
+			RecipientDomain:   "external-partner.com",
 			SenderSensitivity: "max",
 			HasAttachment:     true,
-			IsExternal:        true,
 		},
 	}
 	r := h.Check(req)

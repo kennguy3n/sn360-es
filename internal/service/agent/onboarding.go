@@ -355,9 +355,9 @@ func ClassifyUserSensitivity(u DiscoveredUser, groups map[string]DiscoveredGroup
 		"security administrator", "platform engineer", "network administrator"):
 		return SensitivityCritical
 	// Max — C-suite, board members, founders.
-	// " cto" / " coo" use leading-space to avoid matching inside
-	// "director" / "coordinator".
-	case containsAny(hay, "ceo", "cfo", " coo", " cto", "ciso", "founder", "chief executive", "chief financial", "owner"):
+	// " cto " / " coo " use both leading+trailing space to avoid
+	// matching inside "director" / "coordinator".
+	case containsAny(hay, "ceo", "cfo", " coo ", " cto ", "ciso", "founder", "chief executive", "chief financial", "owner"):
 		return SensitivityMax
 	// High — Finance, treasury.
 	case containsAny(hay, "finance", "treasury", "accounts payable", "accounts receivable", "controller", "bookkeep"):

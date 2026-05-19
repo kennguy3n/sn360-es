@@ -295,8 +295,14 @@ func TestClassifyUserSensitivity(t *testing.T) {
 
 		// Max — C-suite (existing)
 		{"CFO title", DiscoveredUser{JobTitle: "CFO"}, SensitivityMax},
+		{"COO title", DiscoveredUser{JobTitle: "COO"}, SensitivityMax},
+		{"CTO title", DiscoveredUser{JobTitle: "CTO"}, SensitivityMax},
 		{"founder via display name", DiscoveredUser{DisplayName: "Jane (Founder)"}, SensitivityMax},
 		{"chief executive via group", DiscoveredUser{GroupIDs: []string{"chief"}}, SensitivityMax},
+
+		// Regression: "coo"/"cto" must NOT match inside common words
+		{"coordinator not max", DiscoveredUser{JobTitle: "Project Coordinator"}, SensitivityDefault},
+		{"director not max", DiscoveredUser{JobTitle: "Marketing Director"}, SensitivityDefault},
 
 		// High — Finance/Legal/HR (existing)
 		{"finance dept", DiscoveredUser{Department: "Finance"}, SensitivityHigh},

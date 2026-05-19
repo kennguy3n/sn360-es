@@ -241,7 +241,7 @@ func IsHighRiskGroupName(name string) bool {
 		"devops", "site reliability", "sre", "database admin", "dba", "cloud admin",
 		"infrastructure", "platform engineer", "network ops", "secops", "devsecops",
 		// M&A / Strategy
-		"m&a", "mergers", "corporate development", "corp dev", "investor relation", "board",
+		"m&a", "mergers", "corporate development", "corp dev", "investor relation", "board of",
 		// Healthcare
 		"medical", "clinical", "pharmacy", "physician", "nursing", "health information",
 		// R&D

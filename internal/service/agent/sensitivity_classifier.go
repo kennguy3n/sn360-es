@@ -38,7 +38,7 @@ type UserClassifyInput struct {
 var sensitivityKeywords = map[Sensitivity][]string{
 	SensitivityCritical: {
 		// English — Infrastructure access roles
-		"database administrator", "dba", "system administrator", "sysadmin",
+		"database administrator", "dba ", "system administrator", "sysadmin",
 		"domain admin", "cloud administrator", "infrastructure engineer",
 		"devops lead", "sre lead", "network administrator",
 		"security administrator", "platform engineer", "root access",
@@ -55,7 +55,7 @@ var sensitivityKeywords = map[Sensitivity][]string{
 	},
 	SensitivityMax: {
 		// English
-		"ceo", "cfo", "coo", "cto", "ciso", "founder", "chief executive", "chief financial", "owner",
+		"ceo", "cfo", " coo ", " cto ", "ciso", "founder", "chief executive", "chief financial", "owner",
 		// Japanese
 		"最高経営責任者", "最高財務責任者", "代表取締役", "社長", "創業者",
 		// Korean
@@ -180,9 +180,11 @@ var sensitivityKeywords = map[Sensitivity][]string{
 // Iterates the multilingual sensitivityKeywords map in tier-priority
 // order (Max → High → Elevated) and returns the first match.
 func KeywordClassifyInput(u UserClassifyInput) Sensitivity {
-	hay := strings.ToLower(u.JobTitle + " " + u.Department + " " + u.DisplayName)
+	// Pad with spaces so word-boundary keywords (e.g. " coo ", "dba ")
+	// work correctly at start/end of the string.
+	hay := " " + strings.ToLower(u.JobTitle+" "+u.Department+" "+u.DisplayName) + " "
 	for _, g := range u.GroupNames {
-		hay += " " + strings.ToLower(g)
+		hay += strings.ToLower(g) + " "
 	}
 	// Check tiers in descending priority order.
 	for _, tier := range []Sensitivity{SensitivityCritical, SensitivityMax, SensitivityHigh, SensitivityElevated} {

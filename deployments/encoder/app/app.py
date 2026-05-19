@@ -309,7 +309,7 @@ def predict_batch(req: BatchRequest) -> BatchResponse:
 # encoder model was not fine-tuned on "critical" examples, this
 # post-processing step catches them via keyword match.
 _INFRA_KEYWORDS = {
-    "database administrator", "dba", "system administrator", "sysadmin",
+    "database administrator", "dba ", "system administrator", "sysadmin",
     "domain admin", "cloud administrator", "infrastructure engineer",
     "devops lead", "sre lead", "network administrator",
     "security administrator", "platform engineer", "root access",
@@ -350,7 +350,7 @@ class RoleClassifyResponse(BaseModel):
 # Tier-based keyword matching consistent with the Go sensitivityKeywords map.
 _TIER_KEYWORDS: dict[str, list[str]] = {
     "max": [
-        "ceo", "cfo", "coo", "cto", "ciso", "founder",
+        "ceo", "cfo", " coo ", " cto ", "ciso", "founder",
         "chief executive", "chief financial", "owner",
         "首席执行官", "首席财务官", "总裁", "创始人", "董事长",
         "代表取締役", "社長", "대표이사", "창업자",
@@ -377,10 +377,12 @@ def _classify_role_sensitivity(item: RoleClassifyItem) -> RoleClassifyResult:
     function can be replaced with model inference; currently it uses the
     same multilingual keyword map the Go keyword classifier uses.
     """
-    hay = " ".join([
+    # Pad with spaces so word-boundary keywords (e.g. " coo ", "dba ")
+    # work correctly at start/end of the string.
+    hay = " " + " ".join([
         item.job_title, item.department,
         item.display_name, " ".join(item.group_names),
-    ]).lower()
+    ]).lower() + " "
 
     # Check for infrastructure-level (critical) keywords first.
     for kw in _INFRA_KEYWORDS:

@@ -358,7 +358,7 @@ func classifyGroupRisk(name string) string {
 		{[]string{"engineering", "devops", "sre", "infrastructure", "platform"}, "engineering"},
 		{[]string{"medical", "clinical", "pharmacy", "nursing"}, "medical"},
 		{[]string{"research", "r&d", "patent"}, "research"},
-		{[]string{"m&a", "corporate development", "strategy", "board"}, "strategy"},
+		{[]string{"m&a", "corporate development", "strategy", "board of"}, "strategy"},
 		{[]string{"finance", "treasury", "accounts payable"}, "finance"},
 		{[]string{"exec", "c-suite", "leadership"}, "executive"},
 		{[]string{"hr ", "human resource", "people ops"}, "hr"},
