@@ -53,6 +53,34 @@ type Telemetry struct {
 	patterns []RoutePattern
 }
 
+// NormaliseRoute collapses path against patterns and returns the
+// matched Label together with a bool reporting whether any pattern
+// matched. When no pattern matches, the raw path is returned with
+// matched=false; callers that need a strict cardinality bound
+// (e.g. the rate-limit metrics callback, which is by definition
+// triggered by attacker traffic) should fall back to a fixed label
+// in that case instead of using the returned path as-is.
+//
+// Exported so the rate-limit middleware callback in cmd/sn360-es
+// can share the same matcher Telemetry uses — keeping both metrics
+// under one consistent set of route templates avoids series-name
+// drift between http_requests_total and http_rate_limited_total.
+func NormaliseRoute(patterns []RoutePattern, path string) (string, bool) {
+	for _, p := range patterns {
+		if p.Prefix == "" || p.Label == "" {
+			continue
+		}
+		// Match either the bare prefix (e.g. `/l/` itself) or
+		// anything below it (`/l/<token>`). Crucially we never
+		// strip the prefix slash to avoid `/longer-path` colliding
+		// with `/l/`.
+		if path == strings.TrimRight(p.Prefix, "/") || strings.HasPrefix(path, p.Prefix) {
+			return p.Label, true
+		}
+	}
+	return path, false
+}
+
 // NewTelemetry wraps next.
 func NewTelemetry(next http.Handler, cfg TelemetryConfig) http.Handler {
 	now := cfg.Clock
@@ -84,21 +112,13 @@ func (t *Telemetry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	t.metrics.ObserveHTTPRequest(r.Method, t.normaliseRoute(r.URL.Path), strconv.Itoa(sw.status), latency)
 }
 
-// normaliseRoute collapses a request path against the configured
-// RoutePatterns. The first matching pattern wins so more-specific
-// prefixes should appear earlier in the slice.
+// normaliseRoute is the per-instance wrapper around the package-level
+// NormaliseRoute helper. It exists so the http_requests_total label
+// keeps the historical "return raw path when nothing matches"
+// behaviour, while NormaliseRoute itself exposes the matched-or-not
+// signal for callers (rate-limit metrics, etc.) that need a stricter
+// fallback.
 func (t *Telemetry) normaliseRoute(path string) string {
-	for _, p := range t.patterns {
-		if p.Prefix == "" || p.Label == "" {
-			continue
-		}
-		// Match either the bare prefix (e.g. `/l/` itself) or
-		// anything below it (`/l/<token>`). Crucially we never
-		// strip the prefix slash to avoid `/longer-path` colliding
-		// with `/l/`.
-		if path == strings.TrimRight(p.Prefix, "/") || strings.HasPrefix(path, p.Prefix) {
-			return p.Label
-		}
-	}
-	return path
+	label, _ := NormaliseRoute(t.patterns, path)
+	return label
 }
