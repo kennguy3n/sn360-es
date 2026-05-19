@@ -187,6 +187,12 @@ SELECT id,tenant_id,email_hash,role,department,sensitivity_tier,resilience_score
 	return out, rows.Err()
 }
 
+func (p *pgUsers) Count(ctx context.Context, tenantID string) (int, error) {
+	var n int
+	err := p.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE tenant_id=$1`, tenantID).Scan(&n)
+	return n, err
+}
+
 // --- groups -------------------------------------------------------------
 
 type pgGroups struct{ db *postgres.DB }
@@ -247,6 +253,12 @@ SELECT id,tenant_id,name,COALESCE(description,''),risk_class,created_at,updated_
 		out = append(out, g)
 	}
 	return out, rows.Err()
+}
+
+func (p *pgGroups) Count(ctx context.Context, tenantID string) (int, error) {
+	var n int
+	err := p.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM groups WHERE tenant_id=$1`, tenantID).Scan(&n)
+	return n, err
 }
 
 // --- labels -------------------------------------------------------------

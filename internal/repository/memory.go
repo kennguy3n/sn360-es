@@ -164,6 +164,18 @@ func (m *memoryUsers) List(_ context.Context, tenantID string, limit int) ([]Use
 	return out, nil
 }
 
+func (m *memoryUsers) Count(_ context.Context, tenantID string) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	n := 0
+	for _, u := range m.rows {
+		if u.TenantID == tenantID {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // --- groups -------------------------------------------------------------
 
 type memoryGroups struct {
@@ -243,6 +255,18 @@ func (m *memoryGroups) List(_ context.Context, tenantID string) ([]Group, error)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+func (m *memoryGroups) Count(_ context.Context, tenantID string) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	n := 0
+	for _, g := range m.rows {
+		if g.TenantID == tenantID {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // --- labels -------------------------------------------------------------

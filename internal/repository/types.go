@@ -213,6 +213,7 @@ type UserRepository interface {
 	Upsert(ctx context.Context, u *User) error
 	GetByHash(ctx context.Context, tenantID string, emailHash []byte) (*User, error)
 	List(ctx context.Context, tenantID string, limit int) ([]User, error)
+	Count(ctx context.Context, tenantID string) (int, error)
 }
 
 // GroupRepository persists Group rows.
@@ -221,6 +222,7 @@ type GroupRepository interface {
 	Upsert(ctx context.Context, g *Group) error
 	GetByName(ctx context.Context, tenantID, name string) (*Group, error)
 	List(ctx context.Context, tenantID string) ([]Group, error)
+	Count(ctx context.Context, tenantID string) (int, error)
 }
 
 // LabelRepository persists Label rows.

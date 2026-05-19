@@ -4012,7 +4012,7 @@ func (e *aesGCMTokenEncryptor) Encrypt(plaintext []byte) ([]byte, error) {
 
 func (e *aesGCMTokenEncryptor) Decrypt(ciphertext []byte) ([]byte, error) {
 	ns := e.aead.NonceSize()
-	if len(ciphertext) < ns {
+	if len(ciphertext) < ns+e.aead.Overhead() {
 		return nil, fmt.Errorf("token encryptor: ciphertext too short")
 	}
 	return e.aead.Open(nil, ciphertext[:ns], ciphertext[ns:], nil)
@@ -4071,15 +4071,15 @@ func (a *onboardingServiceAdapter) Status(ctx context.Context, tenantID string) 
 		return status, nil
 	}
 	if a.repos.Users != nil {
-		users, err := a.repos.Users.List(ctx, tenantID, 0)
+		n, err := a.repos.Users.Count(ctx, tenantID)
 		if err == nil {
-			status.UsersDiscovered = len(users)
+			status.UsersDiscovered = n
 		}
 	}
 	if a.repos.Groups != nil {
-		groups, err := a.repos.Groups.List(ctx, tenantID)
+		n, err := a.repos.Groups.Count(ctx, tenantID)
 		if err == nil {
-			status.GroupsDiscovered = len(groups)
+			status.GroupsDiscovered = n
 		}
 	}
 	switch {
