@@ -2245,7 +2245,7 @@ func buildMux(app *application) (http.Handler, error) {
 		})
 	}
 
-	if app.repos.OrgGraphs != nil {
+	if app.repos != nil && app.repos.OrgGraphs != nil {
 		orgGraphH := handler.NewOrgGraphHandler(logger, app.repos.OrgGraphs)
 		mux.Handle("/v1/org-graph", orgGraphH)
 	}
