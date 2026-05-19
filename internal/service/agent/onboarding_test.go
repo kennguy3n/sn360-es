@@ -292,6 +292,8 @@ func TestClassifyUserSensitivity(t *testing.T) {
 		{"network admin", DiscoveredUser{JobTitle: "Network Administrator"}, SensitivityCritical},
 		{"sre lead", DiscoveredUser{JobTitle: "SRE Lead"}, SensitivityCritical},
 		{"security administrator", DiscoveredUser{JobTitle: "Security Administrator"}, SensitivityCritical},
+		{"devops lead critical", DiscoveredUser{JobTitle: "DevOps Lead"}, SensitivityCritical},
+		{"infrastructure engineer", DiscoveredUser{JobTitle: "Infrastructure Engineer"}, SensitivityCritical},
 
 		// Max — C-suite (existing)
 		{"CFO title", DiscoveredUser{JobTitle: "CFO"}, SensitivityMax},

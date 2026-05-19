@@ -308,7 +308,7 @@ def predict_batch(req: BatchRequest) -> BatchResponse:
 # Infrastructure-access keywords that map to "critical" tier. If the
 # encoder model was not fine-tuned on "critical" examples, this
 # post-processing step catches them via keyword match.
-_INFRA_KEYWORDS = {
+_INFRA_KEYWORDS = (
     "database administrator", "dba ", "system administrator", "sysadmin",
     "domain admin", "cloud administrator", "infrastructure engineer",
     "devops lead", "sre lead", "network administrator",
@@ -321,7 +321,7 @@ _INFRA_KEYWORDS = {
     "数据库管理员", "系统管理员", "运维工程师", "云管理员", "基础设施工程师",
     # Vietnamese
     "quản trị cơ sở dữ liệu", "quản trị hệ thống",
-}
+)
 
 
 class RoleClassifyItem(BaseModel):
@@ -357,7 +357,7 @@ _TIER_KEYWORDS: dict[str, list[str]] = {
     ],
     "high": [
         "finance", "treasury", "controller", "human resources",
-        "legal", "compliance", "security engineer", "data engineer",
+        " legal", "compliance", "security engineer", "data engineer",
         "physician", "pharmacist", "medical director",
         "research director", "data scientist", "m&a",
         "corporate development", "investor relations",

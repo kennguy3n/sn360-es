@@ -351,7 +351,8 @@ func ClassifyUserSensitivity(u DiscoveredUser, groups map[string]DiscoveredGroup
 	// Critical — Infrastructure-level access roles (highest priority).
 	// "dba " with trailing space avoids false positives like "feedback".
 	case containsAny(hay, "database administrator", "dba ", "domain admin", "sysadmin",
-		"system administrator", "cloud administrator", "infrastructure lead", "sre lead",
+		"system administrator", "cloud administrator", "infrastructure engineer", "sre lead",
+		"devops lead", "root access",
 		"security administrator", "platform engineer", "network administrator"):
 		return SensitivityCritical
 	// Max — C-suite, board members, founders.

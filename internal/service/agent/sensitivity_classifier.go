@@ -70,7 +70,7 @@ var sensitivityKeywords = map[Sensitivity][]string{
 	SensitivityHigh: {
 		// English — Finance / HR / Legal (existing)
 		"finance", "treasury", "accounts payable", "accounts receivable", "controller", "bookkeep",
-		"human resources", "people ops", "legal", "compliance", "general counsel",
+		"human resources", "people ops", " legal", "compliance", "general counsel",
 
 		// English — Technology (sensitive access, not infra-level)
 		"site reliability engineer", "security engineer", "security analyst",
