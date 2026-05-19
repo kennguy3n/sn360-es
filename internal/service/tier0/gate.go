@@ -85,9 +85,14 @@ func (g *Gate) Apply(req dto.EvaluateRequest) dto.Tier0Outcome {
 		return out
 	}
 
-	// 2. Vendor-trusted bypass. We also defer to the explicit recurring
-	//    detector below in case the vendor uses a "noreply@" mailbox.
+	// 2. Vendor-trusted bypass — guarded by vendor-compromise heuristic.
 	if g.cfg.SkipVendor && req.Signals.IsFromVendor {
+		if req.Signals.LooksLikeVendorCompromise {
+			out.Bypass = false
+			out.ForceEscalate = true
+			out.Reason = "vendor_compromise_suspected"
+			return out
+		}
 		out.Bypass = true
 		out.SkipML = true
 		out.Reason = "vendor_trusted"

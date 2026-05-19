@@ -32,6 +32,40 @@ func TestGateVendorBypass(t *testing.T) {
 	}
 }
 
+func TestGateVendorCompromiseBlocksBypass(t *testing.T) {
+	g := NewGate(DefaultGateConfig(), nil)
+
+	// Vendor with no compromise signal should get bypass.
+	clean := g.Apply(dto.EvaluateRequest{Signals: dto.RiskSignals{
+		IsFromVendor:            true,
+		LooksLikeVendorCompromise: false,
+	}})
+	if !clean.Bypass || !clean.SkipML {
+		t.Errorf("clean vendor should bypass, got %+v", clean)
+	}
+	if clean.ForcedCategory != constant.CategoryVendorTrusted {
+		t.Errorf("clean vendor category = %s, want VENDOR_TRUSTED", clean.ForcedCategory)
+	}
+	if clean.Reason != "vendor_trusted" {
+		t.Errorf("clean vendor reason = %s, want vendor_trusted", clean.Reason)
+	}
+
+	// Vendor with compromise signal should NOT bypass.
+	compromised := g.Apply(dto.EvaluateRequest{Signals: dto.RiskSignals{
+		IsFromVendor:            true,
+		LooksLikeVendorCompromise: true,
+	}})
+	if compromised.Bypass {
+		t.Errorf("compromised vendor should NOT bypass, got %+v", compromised)
+	}
+	if !compromised.ForceEscalate {
+		t.Errorf("compromised vendor should force escalation, got %+v", compromised)
+	}
+	if compromised.Reason != "vendor_compromise_suspected" {
+		t.Errorf("compromised vendor reason = %s, want vendor_compromise_suspected", compromised.Reason)
+	}
+}
+
 func TestGateRecurringDetectionViaSender(t *testing.T) {
 	g := NewGate(DefaultGateConfig(), nil)
 	cases := []string{
