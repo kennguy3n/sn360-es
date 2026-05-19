@@ -25,9 +25,11 @@ consumers are wired today.
 ### Tier 0 — Classification Gate
 
 `internal/service/tier0/` — pure-CPU, sub-millisecond gates:
-internal-trusted, vendor-trusted, recurring service, high-volume
-sender, first-time-external, and partner/customer relationship
-modifiers.
+internal-trusted, vendor-trusted (with compromise detection guard),
+recurring service, high-volume sender, first-time-external, and
+partner/customer relationship modifiers. The vendor bypass checks
+`LooksLikeVendorCompromise` before granting trust — if the signal
+is set, the gate force-escalates instead of bypassing ML.
 
 ### Evaluator + Scorer
 
@@ -53,6 +55,22 @@ orchestrator with per-component circuit breakers
   `pkg/httpclient` pool.
 - **Deployment** — `deployments/llm/` (multi-stage Dockerfile,
   kennguy3n/llama.cpp fork, GGUF model download via init container).
+
+### Sensitivity Classifier
+
+`internal/service/agent/sensitivity_classifier.go` — tiered
+classification pipeline for user sensitivity (Max / High / Elevated /
+Default) used during onboarding and directory sync:
+
+- **Encoder** — first pass via the Tier 1 encoder model.
+- **Bonsai** (optional) — second pass via the Bonsai SLM when
+  `SENSITIVITY_BONSAI_URL` is configured. Falls back to encoder-only
+  when unset.
+- **Keyword fallback** — multilingual keyword matching across English,
+  Japanese, Korean, Thai, Vietnamese, and Chinese. Three tiers of
+  keywords cover executive titles (Max), finance/legal/HR roles
+  (High), and procurement/admin roles (Elevated). Activates when ML
+  classifiers are unavailable.
 
 ### Categoriser
 
@@ -110,6 +128,92 @@ secondaries with deterministic ordering.
 - **Org-graph builder** — `onboarding/org_graph.go` producing the
   org hierarchy, department mapping, role classifications, and
   high-risk group identification (Finance, C-suite, HR).
+- **GWS setup wizard** — `internal/handler/onboarding_wizard.go` +
+  `cmd/sn360-es/gws_setup_checker.go`:
+  `GET /v1/onboarding/gws-setup-status?tenant_id={id}` validates
+  domain-wide delegation step-by-step (service account, delegated
+  admin, domain, directory access, Gmail access) and returns
+  human-readable `steps_remaining`.
+
+## Directory Intelligence
+
+### Directory Sync Worker
+
+`internal/service/worker/directory_sync_worker.go` — periodic (6 h)
+per-tenant directory synchronisation. Discovers users and groups from
+GWS or O365, upserts into the repository, classifies user sensitivity,
+and persists the org graph snapshot.
+
+### Delta / Incremental Sync
+
+The `DeltaSyncCapable` interface
+(`internal/service/agent/types.go`) enables incremental directory
+fetches:
+
+- **O365** — `pkg/email_provider/outlook/directory_client.go`
+  implements MS Graph `/users/delta` queries. The delta token is an
+  opaque `@odata.deltaLink` URL persisted across runs.
+- **GWS** — `pkg/email_provider/gmail/directory_client.go` implements
+  incremental sync via the Admin SDK `updatedMin` filter. The delta
+  token is an RFC 3339 timestamp.
+- **Checkpoint persistence** — `SyncCheckpointRepository`
+  (`internal/repository/types.go`) with Postgres and in-memory
+  implementations. Migration: `migrations/0008_sync_checkpoints`.
+- The `DirectorySyncJob` auto-detects whether the provider supports
+  delta sync and falls back to full enumeration on first run or
+  when no checkpoint exists.
+
+### Nested Group Resolution (O365)
+
+`pkg/email_provider/outlook/directory_client.go`
+`resolveTransitiveGroups` — after the initial `/users` pagination,
+a second pass calls `/users/{id}/transitiveMemberOf` for each user
+to resolve nested group memberships. Uses bounded concurrency (10
+goroutines). Controlled by `O365_RESOLVE_NESTED_GROUPS` (default
+`true`); falls back to direct `memberOf` on error.
+
+### Per-User Behavioral Baselines
+
+- **Repository** — `UserBehavioralBaselineRepository`
+  (`internal/repository/types.go`) with Postgres and in-memory
+  implementations. Tracks per-(user, sender-domain) send-hour
+  distributions, device types, and weekly message volume.
+  Migration: `migrations/0009_user_behavioral_baselines`.
+- **Worker integration** — the relationship aggregation worker
+  (`internal/service/worker/relationship_worker.go`) populates
+  baselines during its 4 h cycle.
+- **Timing anomaly check** — `relationship/timing.go`
+  `CheckBaselineAnomaly` compares current message timing against the
+  stored per-user baseline.
+
+### Org Graph Persistence
+
+- **Repository** — `OrgGraphRepository`
+  (`internal/repository/types.go`) with Postgres and in-memory
+  implementations. Stores per-tenant JSONB snapshots with aggregate
+  stats (employee, group, department counts, high-risk user IDs).
+  Migration: `migrations/0010_org_graphs`.
+- **Worker integration** — after directory sync, the worker builds
+  the org graph via `onboarding.Project()` and upserts the snapshot.
+- **API** — `internal/handler/org_graph.go`:
+  `GET /v1/org-graph?tenant_id={id}` returns the stored snapshot.
+
+## Vendor Management
+
+- **Auto-discovery** — `relationship/vendor_discovery.go` — 30-day
+  history scan, domain frequency + bidirectional heuristics, weekly
+  periodic job.
+- **Admin CRUD API** — `internal/handler/vendor.go`:
+  - `GET /v1/vendors?tenant_id={id}` — list all vendors (discovered
+    + manual, approved + pending).
+  - `POST /v1/vendors` — add a manual vendor.
+  - `PUT /v1/vendors/{domain}/approve` — approve a vendor.
+  - `PUT /v1/vendors/{domain}/revoke` — revoke approval.
+  - `DELETE /v1/vendors/{domain}?tenant_id={id}` — remove entirely.
+- **Repository** — `VendorRepository`
+  (`internal/repository/types.go`) with `List`, `Delete`, `Upsert`,
+  `GetByDomain`, `ListApproved` methods, backed by Postgres and
+  in-memory implementations.
 
 ## Tiered UX (Banners, Labels, Quarantine, URL Rewriting)
 
@@ -189,7 +293,8 @@ Blocked, `dir="rtl"` injection for RTL locales.
   30-day history scan, domain frequency + bidirectional heuristics,
   weekly periodic job.
 - **Timing anomaly detection** — `relationship/timing.go` —
-  per-sender hour-of-day baseline with circular distance.
+  per-sender hour-of-day baseline with circular distance, plus
+  per-user behavioral baseline comparison.
 
 ## Pre-Send / Pre-Open Add-Ins
 
@@ -236,8 +341,8 @@ deterministic fallback.
 ## Periodic Workers
 
 `internal/service/worker/` — relationship aggregator (4 h), vendor
-discovery (7 d), data-retention cleanup (24 h). Each uses a Redis
-distributed lock so only one replica runs per cycle.
+discovery (7 d), data-retention cleanup (24 h), directory sync (6 h).
+Each uses a Redis distributed lock so only one replica runs per cycle.
 
 ## Observability
 
@@ -279,30 +384,29 @@ process. Key wiring:
 | API documentation | `api/openapi.yaml` documents every public handler; Swagger UI at `/docs` and raw spec at `/openapi.yaml`. |
 | Helm + ArgoCD | `deployments/helm/sn360-es/` with NATS subchart, HPA, ServiceMonitor, migration Job. `deployments/argocd/application.yaml` covers dev / qa / uat / prod. |
 
-## Remaining Work
+## Operational Prerequisites
 
 The codebase compiles and the binary boots end-to-end, but the
-following items are deliberately out of scope of the in-repo work:
+following items are deployment-time concerns:
 
 - **Tier 1 encoder service**: the Python FastAPI service in
-  `deployments/encoder/` is a skeleton — running it requires baking
-  the actual XLM-RoBERTa model weights and bringing up the inference
-  pod. Until then, the Tier 1 client degrades gracefully and forces
-  Tier 2 escalation.
+  `deployments/encoder/` requires baking the XLM-RoBERTa model weights
+  and bringing up the inference pod. The Tier 1 client degrades
+  gracefully and forces Tier 2 escalation when unavailable.
 - **Tier 2 SLM service**: the Ternary-Bonsai-8B deployment in
-  `deployments/llm/` is described by manifests only. Until the model
-  is loaded and the service is reachable, the Tier 2 client returns
-  errors and the evaluator marks Tier 2 as "pending".
-- **External-provider OAuth credentials**: GWS domain-wide delegation
-  and O365 client credentials are required for live polling. Without
-  them, the ingestion poller is inactive but the binary still serves
-  every HTTP route.
-- **Production secrets**: KMS CMK ARNs, JWT signing secrets, provider
-  client secrets are expected to be injected via AWS Secrets Manager
-  in real deployments; the dev path uses local keys from
+  `deployments/llm/` is described by manifests; the model must be
+  loaded and the service reachable. The Tier 2 client returns errors
+  and the evaluator marks Tier 2 as "pending" when unavailable.
+- **Provider OAuth credentials**: GWS domain-wide delegation and O365
+  client credentials are required for live polling. Without them the
+  ingestion poller is inactive but all HTTP routes remain available.
+  The GWS setup wizard at `/v1/onboarding/gws-setup-status` can
+  validate the delegation configuration step-by-step.
+- **Production secrets**: KMS CMK ARNs, JWT signing secrets, and
+  provider client secrets are expected to be injected via AWS Secrets
+  Manager in production. The dev path uses local keys from
   `.env.example`.
 
-These are operational tasks that belong in the deployment pipeline,
-not in the codebase. The
-[`README.md`](../../README.md#project-status) project status matrix is
-the authoritative view of what is wired vs. optional.
+These are operational tasks that belong in the deployment pipeline.
+The [`README.md`](../../README.md#project-status) project status matrix
+is the authoritative view of what is wired vs. optional.
