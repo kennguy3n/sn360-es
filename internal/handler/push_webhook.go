@@ -107,16 +107,18 @@ func (h *PushWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			slog.String("provider", provider),
 			slog.String("tenant", tenantID),
 			slog.Any("error", verr))
+		// `msg` (not `body`) to avoid shadowing the outer `body`
+		// []byte that the post-verification dispatch path reads.
 		status := http.StatusUnauthorized
-		body := "unauthorized"
+		msg := "unauthorized"
 		if errors.Is(verr, ErrPushProviderUnknown) {
 			// Unknown provider is a client misuse (wrong path
 			// segment), not an auth failure, so surface a more
 			// accurate body together with the 400 status code.
 			status = http.StatusBadRequest
-			body = "unknown provider"
+			msg = "unknown provider"
 		}
-		http.Error(w, body, status)
+		http.Error(w, msg, status)
 		return
 	}
 
