@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
 )
@@ -237,6 +238,117 @@ func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]age
 		})
 	}
 	return out, nil
+}
+
+// ListUsersSince returns users modified after the given timestamp.
+// The Admin SDK supports filtering users by updatedMin parameter.
+// Deleted users are included when showDeleted=true.
+func (c *DirectoryClient) ListUsersSince(ctx context.Context, since time.Time) ([]directoryUser, error) {
+	var rawUsers []directoryUser
+	page := ""
+	for {
+		q := url.Values{}
+		if c.domain != "" {
+			q.Set("domain", c.domain)
+		} else {
+			q.Set("customer", c.customerID)
+		}
+		q.Set("maxResults", "200")
+		q.Set("showDeleted", "true")
+		q.Set("orderBy", "email")
+		q.Set("query", "updatedMin="+url.QueryEscape(since.UTC().Format(time.RFC3339)))
+		if page != "" {
+			q.Set("pageToken", page)
+		}
+		endpoint := fmt.Sprintf("%s/admin/directory/v1/users?%s", c.adminBase, q.Encode())
+		var list directoryUserList
+		if err := c.do(ctx, http.MethodGet, endpoint, &list); err != nil {
+			return nil, fmt.Errorf("gmail: list users since: %w", err)
+		}
+		rawUsers = append(rawUsers, list.Users...)
+		if list.NextPageToken == "" {
+			break
+		}
+		page = list.NextPageToken
+	}
+	return rawUsers, nil
+}
+
+// ListUsersDelta implements agent.DeltaSyncCapable. The deltaToken is
+// an RFC 3339 timestamp string representing the last sync time. On
+// the first call (empty token) a full ListUsers is performed; on
+// subsequent calls only users modified since the token are returned.
+func (c *DirectoryClient) ListUsersDelta(ctx context.Context, tenantID string, deltaToken string) ([]agent.DiscoveredUser, string, error) {
+	syncStart := time.Now().UTC()
+
+	if deltaToken == "" {
+		users, err := c.ListUsers(ctx, tenantID)
+		if err != nil {
+			return nil, "", err
+		}
+		return users, syncStart.Format(time.RFC3339), nil
+	}
+
+	since, err := time.Parse(time.RFC3339, deltaToken)
+	if err != nil {
+		users, ferr := c.ListUsers(ctx, tenantID)
+		if ferr != nil {
+			return nil, "", ferr
+		}
+		return users, syncStart.Format(time.RFC3339), nil
+	}
+
+	rawUsers, err := c.ListUsersSince(ctx, since)
+	if err != nil {
+		return nil, "", fmt.Errorf("gmail: delta sync: %w", err)
+	}
+
+	emailToID := make(map[string]string, len(rawUsers))
+	for _, u := range rawUsers {
+		if u.PrimaryEmail != "" {
+			emailToID[strings.ToLower(u.PrimaryEmail)] = u.ID
+		}
+	}
+
+	var out []agent.DiscoveredUser
+	for _, u := range rawUsers {
+		if u.PrimaryEmail == "" {
+			continue
+		}
+		dept := ""
+		title := ""
+		if len(u.OrganizationsRaw) > 0 {
+			dept = u.OrganizationsRaw[0].Department
+			title = u.OrganizationsRaw[0].Title
+		}
+		var managerID string
+		for _, rel := range u.Relations {
+			if strings.EqualFold(rel.Type, "manager") && rel.Value != "" {
+				if id, ok := emailToID[strings.ToLower(rel.Value)]; ok {
+					managerID = id
+				}
+				break
+			}
+		}
+		isServiceAccount := strings.Contains(strings.ToLower(u.OrgUnitPath), "service") ||
+			strings.HasPrefix(strings.ToLower(u.PrimaryEmail), "noreply@") ||
+			strings.HasPrefix(strings.ToLower(u.PrimaryEmail), "no-reply@")
+
+		email := strings.ToLower(u.PrimaryEmail)
+		out = append(out, agent.DiscoveredUser{
+			ID:               u.ID,
+			Email:            email,
+			DisplayName:      u.Name.FullName,
+			Department:       dept,
+			JobTitle:         title,
+			IsAdmin:          u.IsAdmin,
+			IsSuspended:      u.Suspended || u.Archived,
+			ManagerID:        managerID,
+			Aliases:          u.Aliases,
+			IsServiceAccount: isServiceAccount,
+		})
+	}
+	return out, syncStart.Format(time.RFC3339), nil
 }
 
 // ListGroupMembers returns the email addresses of members in a group.
