@@ -155,3 +155,41 @@ func TestRecurringDetectorEdgeCases(t *testing.T) {
 		}
 	}
 }
+
+// TestGate_BatchPathATODoesNotReadReqSignals asserts the gate threads
+// the explicit signals argument all the way through the ATO heuristic
+// — even when req.Signals is left zero by the caller. This is the
+// invariant the batch orchestrator depends on:
+// BatchMessage stores Request and Signals as separate fields, so
+// gate.Apply(bm.Request, bm.Signals) must drive every internal check
+// from the positional signals argument. If the heuristic regressed to
+// reading req.Signals.*, an ATO-compromised internal sender would
+// silently receive the trusted bypass in the batch path.
+func TestGate_BatchPathATODoesNotReadReqSignals(t *testing.T) {
+	cfg := DefaultGateConfig()
+	cfg.SkipInternal = true
+	g := NewGate(cfg, nil)
+
+	// req.Signals is intentionally zero — the way the batch
+	// orchestrator hands it to us.
+	req := dto.EvaluateRequest{Sender: "alice@company.com"}
+	// Authoritative signals: internal AND auth-failed, which the ATO
+	// heuristic scores at 0.6 (above the default 0.5 threshold).
+	signals := dto.RiskSignals{
+		IsInternal:    true,
+		SenderDomain:  "company.com",
+		HasFailedAuth: true,
+	}
+
+	out := g.Apply(req, signals)
+
+	if out.Bypass {
+		t.Fatalf("expected internal+auth-failed message to be denied the trusted bypass, got %+v", out)
+	}
+	if !out.ForceEscalate {
+		t.Errorf("expected ForceEscalate=true on ATO suspicion, got %+v", out)
+	}
+	if out.Reason != "internal_ato_suspected" {
+		t.Errorf("reason = %s, want internal_ato_suspected", out.Reason)
+	}
+}

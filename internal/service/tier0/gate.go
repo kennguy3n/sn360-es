@@ -80,7 +80,7 @@ func (g *Gate) Apply(req dto.EvaluateRequest, signals dto.RiskSignals) dto.Tier0
 
 	// 1. Internal-trusted bypass — guarded by ATO heuristic.
 	if g.cfg.SkipInternal && signals.IsInternal {
-		atoResult := g.ato.Check(req)
+		atoResult := g.ato.Check(req, signals)
 		if atoResult.Flagged {
 			out.Bypass = false
 			out.ForceEscalate = true

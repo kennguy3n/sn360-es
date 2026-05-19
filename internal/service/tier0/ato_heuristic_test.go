@@ -8,7 +8,7 @@ import (
 
 func TestATOHeuristic_Disabled(t *testing.T) {
 	h := NewATOHeuristic(ATOHeuristicConfig{Enabled: false})
-	r := h.Check(dto.EvaluateRequest{Signals: dto.RiskSignals{IsInternal: true}})
+	r := h.Check(dto.EvaluateRequest{Signals: dto.RiskSignals{IsInternal: true}}, dto.RiskSignals{IsInternal: true})
 	if r.Flagged {
 		t.Fatal("disabled heuristic should never flag")
 	}
@@ -26,7 +26,7 @@ func TestATOHeuristic_CleanInternalPassesThrough(t *testing.T) {
 			CurrentHourUTC:         15,
 		},
 	}
-	r := h.Check(req)
+	r := h.Check(req, req.Signals)
 	if r.Flagged {
 		t.Errorf("clean internal message should not flag, score=%.2f reasons=%v", r.Score, r.Reasons)
 	}
@@ -44,7 +44,7 @@ func TestATOHeuristic_TimingAnomaly(t *testing.T) {
 			CurrentHourUTC:         2, // 8 hours off → triggers timing_anomaly
 		},
 	}
-	r := h.Check(req)
+	r := h.Check(req, req.Signals)
 	if !contains(r.Reasons, "timing_anomaly") {
 		t.Errorf("expected timing_anomaly in reasons, got %v", r.Reasons)
 	}
@@ -60,7 +60,7 @@ func TestATOHeuristic_ExternalCC(t *testing.T) {
 			SenderDomain: "company.com",
 		},
 	}
-	r := h.Check(req)
+	r := h.Check(req, req.Signals)
 	if !contains(r.Reasons, "internal_sender_external_cc") {
 		t.Errorf("expected internal_sender_external_cc, got %v", r.Reasons)
 	}
@@ -75,7 +75,7 @@ func TestATOHeuristic_AuthFailure(t *testing.T) {
 			HasFailedAuth: true,
 		},
 	}
-	r := h.Check(req)
+	r := h.Check(req, req.Signals)
 	if !contains(r.Reasons, "internal_auth_failed") {
 		t.Errorf("expected internal_auth_failed, got %v", r.Reasons)
 	}
@@ -94,7 +94,7 @@ func TestATOHeuristic_LinkHeavy(t *testing.T) {
 			HasSuspiciousURL: true,
 		},
 	}
-	r := h.Check(req)
+	r := h.Check(req, req.Signals)
 	if !contains(r.Reasons, "link_heavy_internal") {
 		t.Errorf("expected link_heavy_internal, got %v", r.Reasons)
 	}
@@ -113,7 +113,7 @@ func TestATOHeuristic_MultipleSignalsCombine(t *testing.T) {
 			CurrentHourUTC:         2,
 		},
 	}
-	r := h.Check(req)
+	r := h.Check(req, req.Signals)
 	if !r.Flagged {
 		t.Errorf("combined timing+cc should flag, score=%.2f reasons=%v", r.Score, r.Reasons)
 	}
@@ -174,7 +174,7 @@ func TestATOHeuristic_HighPrivilegeToFreemail(t *testing.T) {
 			RecipientIsFreeDomain: true,
 		},
 	}
-	r := h.Check(req)
+	r := h.Check(req, req.Signals)
 	if !contains(r.Reasons, "high_privilege_to_freemail") {
 		t.Errorf("expected high_privilege_to_freemail, got %v", r.Reasons)
 	}
@@ -192,7 +192,7 @@ func TestATOHeuristic_HighPrivilegeExternalAttachment(t *testing.T) {
 			HasAttachment:     true,
 		},
 	}
-	r := h.Check(req)
+	r := h.Check(req, req.Signals)
 	if !contains(r.Reasons, "high_privilege_external_attachment") {
 		t.Errorf("expected high_privilege_external_attachment, got %v", r.Reasons)
 	}
@@ -216,7 +216,7 @@ func TestATOHeuristic_HighPrivilegeLowerThreshold(t *testing.T) {
 			CurrentHourUTC:         5, // 5 hours off → timing_unusual (0.15)
 		},
 	}
-	r := h.Check(req)
+	r := h.Check(req, req.Signals)
 	if !r.Flagged {
 		t.Errorf("critical sender with timing unusual + freemail should be flagged at lower threshold, score=%.2f reasons=%v", r.Score, r.Reasons)
 	}
@@ -237,7 +237,7 @@ func TestATOHeuristic_NormalUserNotFlaggedAtSameScore(t *testing.T) {
 			CurrentHourUTC:         2,
 		},
 	}
-	r := h.Check(req)
+	r := h.Check(req, req.Signals)
 	if r.Flagged {
 		t.Errorf("default sender with only timing anomaly should not be flagged at default threshold, score=%.2f", r.Score)
 	}
@@ -255,9 +255,45 @@ func TestATOHeuristic_DisposableDomainHighPrivilege(t *testing.T) {
 			RecipientIsDisposableDomain: true,
 		},
 	}
-	r := h.Check(req)
+	r := h.Check(req, req.Signals)
 	if !contains(r.Reasons, "high_privilege_to_freemail") {
 		t.Errorf("expected high_privilege_to_freemail for disposable domain, got %v", r.Reasons)
+	}
+}
+
+// TestATOHeuristic_BatchPathSignalsArePositional protects the contract
+// the batch orchestrator depends on: signals arrive as a separate
+// argument and req.Signals may be the zero value. Every sub-check must
+// read from the positional signals argument, otherwise an
+// ATO-compromised internal sender in the batch path would silently get
+// the trusted bypass.
+//
+// We pose the worst case — req.Signals is fully zero, the explicit
+// signals argument carries every red flag — and assert the heuristic
+// still flags. Before the gate.Apply / ATO refactor was completed,
+// this test would have failed because ATO.Check read req.Signals.*.
+func TestATOHeuristic_BatchPathSignalsArePositional(t *testing.T) {
+	h := NewATOHeuristic(DefaultATOHeuristicConfig())
+	// Authoritative signals carry the auth-failure red flag, which on
+	// its own is worth 0.6 and trivially exceeds the default 0.5
+	// threshold.
+	signals := dto.RiskSignals{
+		IsInternal:    true,
+		SenderDomain:  "company.com",
+		HasFailedAuth: true,
+	}
+	// The request envelope intentionally carries a zero Signals
+	// value — this is what the batch orchestrator hands us.
+	req := dto.EvaluateRequest{
+		Sender:  "alice@company.com",
+		Signals: dto.RiskSignals{}, // explicit zero
+	}
+	r := h.Check(req, signals)
+	if !r.Flagged {
+		t.Fatalf("ATO heuristic ignored the explicit signals argument; score=%.2f reasons=%v — every sub-check must read from the positional signals param, not req.Signals", r.Score, r.Reasons)
+	}
+	if !contains(r.Reasons, "internal_auth_failed") {
+		t.Errorf("expected internal_auth_failed in reasons, got %v", r.Reasons)
 	}
 }
 

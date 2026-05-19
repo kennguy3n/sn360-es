@@ -70,7 +70,7 @@ type fakeEvaluator struct {
 	called atomic.Int32
 }
 
-func (f *fakeEvaluator) Evaluate(_ context.Context, req dto.EvaluateRequest) dto.EvaluateResult {
+func (f *fakeEvaluator) Evaluate(_ context.Context, req dto.EvaluateRequest, _ dto.RiskSignals) dto.EvaluateResult {
 	f.called.Add(1)
 	return dto.EvaluateResult{
 		MessageID:     req.MessageID,

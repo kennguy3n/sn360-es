@@ -32,7 +32,12 @@ type RateLimitConfig struct {
 	// Defaults to 60.
 	Burst int
 	// CleanupInterval is how often the janitor sweeps idle buckets.
-	// Defaults to 1 minute. Zero or negative disables the janitor.
+	// A zero value selects the 1-minute default (so callers that
+	// leave the field unset still get sensible behaviour). A
+	// negative value disables the janitor entirely — the bucket map
+	// grows unbounded until [RateLimiter.Stop] is called, so use
+	// negative only in tests that drive eviction manually via
+	// the export-only helper RateLimiterSweepIdle.
 	CleanupInterval time.Duration
 	// IdleTTL is the grace period after which an idle bucket is
 	// evicted. Defaults to 5 minutes.
