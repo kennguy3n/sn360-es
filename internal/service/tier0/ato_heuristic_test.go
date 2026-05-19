@@ -167,11 +167,11 @@ func TestATOHeuristic_HighPrivilegeToFreemail(t *testing.T) {
 	req := dto.EvaluateRequest{
 		Sender: "dba@company.com",
 		Signals: dto.RiskSignals{
-			IsInternal:        true,
-			SenderDomain:      "company.com",
-			SenderSensitivity: "critical",
-			IsFreeDomain:      true,
-			IsExternal:        false,
+			IsInternal:            true,
+			SenderDomain:          "company.com",
+			RecipientDomain:       "gmail.com",
+			SenderSensitivity:     "critical",
+			RecipientIsFreeDomain: true,
 		},
 	}
 	r := h.Check(req)
@@ -208,8 +208,9 @@ func TestATOHeuristic_HighPrivilegeLowerThreshold(t *testing.T) {
 		Signals: dto.RiskSignals{
 			IsInternal:             true,
 			SenderDomain:           "company.com",
+			RecipientDomain:        "gmail.com",
 			SenderSensitivity:      "critical",
-			IsFreeDomain:           true,
+			RecipientIsFreeDomain:  true,
 			CommunicationFrequency: 20,
 			TypicalSendHour:        10,
 			CurrentHourUTC:         5, // 5 hours off → timing_unusual (0.15)
@@ -247,10 +248,11 @@ func TestATOHeuristic_DisposableDomainHighPrivilege(t *testing.T) {
 	req := dto.EvaluateRequest{
 		Sender: "admin@company.com",
 		Signals: dto.RiskSignals{
-			IsInternal:         true,
-			SenderDomain:       "company.com",
-			SenderSensitivity:  "critical",
-			IsDisposableDomain: true,
+			IsInternal:                 true,
+			SenderDomain:               "company.com",
+			RecipientDomain:            "tempmail.io",
+			SenderSensitivity:          "critical",
+			RecipientIsDisposableDomain: true,
 		},
 	}
 	r := h.Check(req)

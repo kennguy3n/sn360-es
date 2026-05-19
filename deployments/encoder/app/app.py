@@ -316,11 +316,13 @@ _INFRA_KEYWORDS = (
     # Japanese
     "データベース管理者", "システム管理者", "インフラエンジニア", "クラウド管理者",
     # Korean
-    "데이터베이스 관리자", "시스템 관리자", "인프라 엔지니어",
+    "데이터베이스 관리자", "시스템 관리자", "인프라 엔지니어", "클라우드 관리자",
+    # Thai
+    "ผู้ดูแลระบบฐานข้อมูล", "ผู้ดูแลระบบ",
     # Chinese
     "数据库管理员", "系统管理员", "运维工程师", "云管理员", "基础设施工程师",
     # Vietnamese
-    "quản trị cơ sở dữ liệu", "quản trị hệ thống",
+    "quản trị cơ sở dữ liệu", "quản trị hệ thống", "quản trị viên hạ tầng",
 )
 
 
@@ -352,8 +354,16 @@ _TIER_KEYWORDS: dict[str, list[str]] = {
     "max": [
         "ceo", "cfo", " coo ", " cto ", "ciso", "founder",
         "chief executive", "chief financial", "owner",
+        # Japanese
+        "最高経営責任者", "最高財務責任者", "代表取締役", "社長", "創業者",
+        # Korean
+        "최고경영자", "최고재무책임자", "대표이사", "창업자",
+        # Thai
+        "ประธานเจ้าหน้าที่บริหาร", "ประธานเจ้าหน้าที่การเงิน",
+        # Vietnamese
+        "giám đốc điều hành", "giám đốc tài chính", "tổng giám đốc", "chủ tịch",
+        # Chinese
         "首席执行官", "首席财务官", "总裁", "创始人", "董事长",
-        "代表取締役", "社長", "대표이사", "창업자",
     ],
     "high": [
         # English — Finance / HR / Legal

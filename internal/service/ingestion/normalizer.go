@@ -176,6 +176,7 @@ func (n *DefaultNormalizer) buildSignals(raw RawEmail) dto.RiskSignals {
 		!strings.EqualFold(senderDomain, recipientDomain)
 	if n.freeDomains != nil {
 		signals.IsFreeDomain = n.freeDomains.Contains(senderDomain)
+		signals.RecipientIsFreeDomain = n.freeDomains.Contains(recipientDomain)
 	}
 	if ct := headerLookup(raw.Headers, "Content-Type"); ct != "" {
 		signals.HasAttachment = strings.Contains(strings.ToLower(ct), "multipart/mixed") ||
