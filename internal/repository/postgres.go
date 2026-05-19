@@ -739,7 +739,8 @@ func (p *pgFeedbackEvents) ListSince(ctx context.Context, tenantID string, since
 SELECT id, tenant_id, pseudo_message_id, action, tier, COALESCE(correlation_id,''), occurred_at, created_at
   FROM feedback_events
  WHERE tenant_id = $1 AND occurred_at >= $2
- ORDER BY occurred_at`, tenantID, since)
+ ORDER BY occurred_at
+ LIMIT 10000`, tenantID, since)
 	if err != nil {
 		return nil, err
 	}

@@ -127,24 +127,27 @@ func run() error {
 	// messages can ack cleanly.
 	app.StopConsumers(logger)
 
-	// Signal that the application is draining so HTTP-spawned background
-	// work (e.g. AgentBridge) stops accepting new goroutines. This must
-	// happen BEFORE WaitBackground to prevent bgWG.Add(1) from racing
-	// with bgWG.Wait().
-	app.draining.Store(true)
-
-	// Drain background goroutines (poller, periodic workers, label
-	// cache janitor) BEFORE we tear down the HTTP server and the
-	// bus / database connections in app.Close. Without this, a
-	// poll cycle in flight at SIGTERM would publish to a closed
-	// bus or write to a torn-down *sql.DB.
-	app.WaitBackground()
-
+	// Shut down the HTTP server so no new requests are accepted.
+	// In-flight handlers run to completion before Shutdown returns,
+	// so any bgWG.Add(1) calls from HTTP handlers (e.g. AgentBridge
+	// post-consent trigger) are guaranteed to execute before we
+	// reach WaitBackground below.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("sn360-es: http shutdown error", slog.Any("error", err))
 	}
+
+	// Belt-and-suspenders: set draining after HTTP shutdown so any
+	// future non-HTTP paths that call bgWG.Add also get rejected.
+	app.draining.Store(true)
+
+	// Drain background goroutines (poller, periodic workers, label
+	// cache janitor, in-flight onboarding) AFTER the HTTP server
+	// and consumers are both shut down. No new bgWG.Add(1) calls
+	// can arrive, so Wait() is safe.
+	app.WaitBackground()
+
 	return nil
 }
 
