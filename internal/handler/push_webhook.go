@@ -22,6 +22,17 @@ type PushWebhookHandler struct {
 	SignatureVerifier PushSignatureVerifier
 }
 
+// log returns a non-nil logger. The Logger field is a struct-literal
+// field rather than a constructor parameter so a wiring mistake can
+// leave it nil; falling back to slog.Default() keeps the handler
+// from panicking on the warn paths.
+func (h *PushWebhookHandler) log() *slog.Logger {
+	if h.Logger != nil {
+		return h.Logger
+	}
+	return slog.Default()
+}
+
 // ServeHTTP handles POST /v1/push/{provider}/{tenant}.
 func (h *PushWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -63,7 +74,7 @@ func (h *PushWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
 	if err != nil {
-		h.Logger.Warn("push_webhook: read body failed", slog.Any("error", err))
+		h.log().Warn("push_webhook: read body failed", slog.Any("error", err))
 		http.Error(w, "read body failed", http.StatusBadRequest)
 		return
 	}
@@ -78,7 +89,7 @@ func (h *PushWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// explicit "accept" verifier (PushSignatureRouter with a
 		// nil entry) so this branch only fires on real
 		// mis-configuration.
-		h.Logger.Warn("push_webhook: signature verifier not configured",
+		h.log().Warn("push_webhook: signature verifier not configured",
 			slog.String("provider", provider),
 			slog.String("tenant", tenantID))
 		http.Error(w, "push verifier not configured", http.StatusInternalServerError)
@@ -90,7 +101,7 @@ func (h *PushWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// response (which would give an attacker free oracle
 		// bits). The provider/tenant identifiers are logged at
 		// Warn so on-call can correlate failures.
-		h.Logger.Warn("push_webhook: signature verification failed",
+		h.log().Warn("push_webhook: signature verification failed",
 			slog.String("provider", provider),
 			slog.String("tenant", tenantID),
 			slog.Any("error", verr))
@@ -103,7 +114,7 @@ func (h *PushWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := ingestion.HandlePushNotification(r.Context(), h.Manager, provider, tenantID, json.RawMessage(body)); err != nil {
-		h.Logger.Warn("push_webhook: handle notification failed",
+		h.log().Warn("push_webhook: handle notification failed",
 			slog.String("provider", provider),
 			slog.String("tenant", tenantID),
 			slog.Any("error", err))

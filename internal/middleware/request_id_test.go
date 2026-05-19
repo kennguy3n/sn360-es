@@ -109,3 +109,57 @@ func TestCorrelationIDFromContext_EmptyWhenUnset(t *testing.T) {
 		t.Fatalf("expected empty correlation_id on bare context, got %q", got)
 	}
 }
+
+// TestRequestID_RejectsControlCharacters covers the
+// sanitizeInboundCID guard: a caller-supplied X-Correlation-ID that
+// contains CR / LF / NUL or any other non-printable byte is dropped
+// (so it cannot smuggle a header-split into the response) and a fresh
+// UUID is generated instead. The "stub" injected ID is used to prove
+// the new ID path ran.
+func TestRequestID_RejectsControlCharacters(t *testing.T) {
+	const stub = "stub-generated-id"
+	cases := map[string]string{
+		"newline": "abc\nxyz",
+		"cr":      "abc\rxyz",
+		"crlf":    "abc\r\nxyz",
+		"nul":     "abc\x00xyz",
+		"tabmid":  "abc\txyz",
+		"highbit": "abc\x80xyz",
+	}
+	for name, bad := range cases {
+		t.Run(name, func(t *testing.T) {
+			inner := &stubHandler{}
+			m := NewRequestID(inner)
+			m.newID = func() string { return stub }
+
+			req := httptest.NewRequest(http.MethodGet, "/x", nil)
+			req.Header.Set(CorrelationIDHeader, bad)
+			rr := httptest.NewRecorder()
+			m.ServeHTTP(rr, req)
+
+			if got := rr.Header().Get(CorrelationIDHeader); got != stub {
+				t.Fatalf("response header = %q, want %q (sanitizer should have dropped %q)", got, stub, bad)
+			}
+			if got := CorrelationIDFromContext(inner.saw.Context()); got != stub {
+				t.Fatalf("context correlation_id = %q, want %q", got, stub)
+			}
+		})
+	}
+}
+
+// TestRequestID_RejectsOversizedHeader proves the length cap.
+func TestRequestID_RejectsOversizedHeader(t *testing.T) {
+	const stub = "stub-generated-id"
+	inner := &stubHandler{}
+	m := NewRequestID(inner)
+	m.newID = func() string { return stub }
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set(CorrelationIDHeader, strings.Repeat("a", maxInboundCorrelationIDLen+1))
+	rr := httptest.NewRecorder()
+	m.ServeHTTP(rr, req)
+
+	if got := rr.Header().Get(CorrelationIDHeader); got != stub {
+		t.Fatalf("response header = %q, want %q", got, stub)
+	}
+}
