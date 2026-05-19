@@ -55,7 +55,7 @@ prefer `git diff benchmarks/accuracy_*.md` over scraping the JSON blob.
 
 ## Acceptance criteria
 
-Targets are drawn from `internal/docs/PROPOSAL.md` §3 and §6:
+Acceptance targets for the SN360-ES detection pipeline:
 
 | Metric                                 | Target              |
 | -------------------------------------- | ------------------- |

@@ -1,6 +1,6 @@
 // Package constant defines compile-time constants shared across SN360-ES
 // services. The category vocabulary is the single source of truth used by
-// the categorizer (Phase 5) and the i18n banner copy.
+// the categorizer and the i18n banner copy.
 package constant
 
 // Category is the canonical risk / disposition label assigned to an email
