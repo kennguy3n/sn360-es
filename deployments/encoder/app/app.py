@@ -367,19 +367,22 @@ _TIER_KEYWORDS: dict[str, list[str]] = {
     ],
     "high": [
         # English — Finance / HR / Legal
-        "finance", "treasury", "controller", "human resources",
+        "finance", "treasury", "accounts payable", "accounts receivable",
+        "controller", "bookkeep", "human resources", "people ops",
         " legal", "compliance", "general counsel",
         # English — Technology
         "site reliability engineer", "security engineer", "security analyst",
         "cloud engineer", "network engineer", "data engineer",
         # English — M&A / Strategy
-        "m&a", "corporate development", "investor relations",
-        "board secretary", "corporate strategy",
+        "mergers and acquisitions", "m&a", "corporate development", "corp dev",
+        "investor relations", "board secretary", "corporate strategy",
         # English — Healthcare
-        "physician", "pharmacist", "medical director", "chief medical",
-        "clinical director", "surgeon",
+        "doctor", "physician", "surgeon", "medical director", "chief medical",
+        "pharmacist", "clinical director", "medical records", "health information",
+        "chief nursing", "nurse manager",
         # English — R&D
-        "research director", "data scientist", "ml engineer", "patent",
+        "research director", "r&d", "patent", "intellectual property",
+        "chief scientist", "chief technology", "data scientist", "ml engineer",
         # Japanese
         "財務", "経理", "人事", "法務", "コンプライアンス",
         "データベースエンジニア", "セキュリティエンジニア", "クラウドエンジニア",
@@ -406,11 +409,16 @@ _TIER_KEYWORDS: dict[str, list[str]] = {
     "elevated": [
         # English
         "executive assistant", "admin assistant", "office manager",
-        "procurement", "vendor management",
-        "devops engineer", "devops", "junior dba", "help desk manager",
-        "nurse", "lab technician", "radiologist",
-        "paralegal", "privacy officer", "data protection officer",
-        "sales director", "customer success",
+        "procurement", "vendor management", "supplier",
+        # English — Technology
+        "devops engineer", "devops", "junior dba", "help desk manager", "it support lead",
+        # English — Healthcare
+        "nurse", "lab technician", "radiologist", "physical therapist",
+        "clinical research", "clinical coordinator",
+        # English — Legal
+        "paralegal", "litigation support", "privacy officer", "data protection officer",
+        # English — Sales
+        "sales director", "account executive", "customer success", "customer data",
         # Japanese
         "秘書", "調達", "購買", "事務長",
         "看護師", "検査技師", "パラリーガル",
@@ -420,7 +428,7 @@ _TIER_KEYWORDS: dict[str, list[str]] = {
         # Thai
         "ผู้ช่วยผู้บริหาร", "จัดซื้อ", "พยาบาล",
         # Vietnamese
-        "trợ lý giám đốc", "mua sắm",
+        "trợ lý giám đốc", "mua sắm", "quản lý nhà cung cấp",
         "y tá", "kỹ thuật viên xét nghiệm",
         # Chinese
         "行政助理", "采购", "供应商管理", "办公室经理",
