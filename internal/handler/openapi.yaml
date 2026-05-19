@@ -266,6 +266,132 @@ paths:
               schema:
                 $ref: "#/components/schemas/PredictOpenResponse"
 
+  /v1/onboarding/start:
+    get:
+      tags: [onboarding]
+      summary: Start OAuth consent flow
+      description: |
+        Generates a redirect URL for the OAuth consent screen. The caller
+        should redirect the tenant admin's browser to the returned URL.
+      parameters:
+        - in: query
+          name: provider
+          required: true
+          schema:
+            type: string
+            enum: [google_workspace, microsoft_365]
+        - in: query
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Redirect URL generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  redirect_url:
+                    type: string
+                    format: uri
+        "400":
+          $ref: "#/components/responses/Error"
+
+  /v1/onboarding/callback:
+    get:
+      tags: [onboarding]
+      summary: OAuth callback handler
+      description: |
+        Receives the OAuth callback from the identity provider.
+        Validates the state token, exchanges the authorisation code
+        for tokens, and triggers the post-consent onboarding pipeline.
+      parameters:
+        - in: query
+          name: state
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: code
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Callback processed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenant_id:
+                    type: string
+                  provider:
+                    type: string
+                  status:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Error"
+
+  /v1/onboarding/status:
+    get:
+      tags: [onboarding]
+      summary: Onboarding status
+      description: |
+        Returns the current onboarding status for a tenant, including
+        user/group discovery counts and the number of users requiring
+        admin review.
+      parameters:
+        - in: query
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Onboarding status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OnboardingStatus"
+        "400":
+          $ref: "#/components/responses/Error"
+
+  /v1/onboarding/revoke:
+    delete:
+      tags: [onboarding]
+      summary: Revoke onboarding tokens
+      description: |
+        Revokes stored OAuth tokens for a tenant/provider pair,
+        effectively disconnecting the tenant from the identity provider.
+      parameters:
+        - in: query
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: provider
+          required: true
+          schema:
+            type: string
+            enum: [google_workspace, microsoft_365]
+      responses:
+        "200":
+          description: Tokens revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: revoked
+        "400":
+          $ref: "#/components/responses/Error"
+
 components:
   responses:
     Error:
@@ -462,129 +588,3 @@ components:
           type: integer
         needs_review_count:
           type: integer
-
-  /v1/onboarding/start:
-    get:
-      tags: [onboarding]
-      summary: Start OAuth consent flow
-      description: |
-        Generates a redirect URL for the OAuth consent screen. The caller
-        should redirect the tenant admin's browser to the returned URL.
-      parameters:
-        - in: query
-          name: provider
-          required: true
-          schema:
-            type: string
-            enum: [google, microsoft]
-        - in: query
-          name: tenant_id
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Redirect URL generated
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  redirect_url:
-                    type: string
-                    format: uri
-        "400":
-          $ref: "#/components/responses/Error"
-
-  /v1/onboarding/callback:
-    get:
-      tags: [onboarding]
-      summary: OAuth callback handler
-      description: |
-        Receives the OAuth callback from the identity provider.
-        Validates the state token, exchanges the authorisation code
-        for tokens, and triggers the post-consent onboarding pipeline.
-      parameters:
-        - in: query
-          name: state
-          required: true
-          schema:
-            type: string
-        - in: query
-          name: code
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Callback processed
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  tenant_id:
-                    type: string
-                  provider:
-                    type: string
-                  status:
-                    type: string
-        "401":
-          $ref: "#/components/responses/Error"
-
-  /v1/onboarding/status:
-    get:
-      tags: [onboarding]
-      summary: Onboarding status
-      description: |
-        Returns the current onboarding status for a tenant, including
-        user/group discovery counts and the number of users requiring
-        admin review.
-      parameters:
-        - in: query
-          name: tenant_id
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Onboarding status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OnboardingStatus"
-        "400":
-          $ref: "#/components/responses/Error"
-
-  /v1/onboarding/revoke:
-    delete:
-      tags: [onboarding]
-      summary: Revoke onboarding tokens
-      description: |
-        Revokes stored OAuth tokens for a tenant/provider pair,
-        effectively disconnecting the tenant from the identity provider.
-      parameters:
-        - in: query
-          name: tenant_id
-          required: true
-          schema:
-            type: string
-        - in: query
-          name: provider
-          required: true
-          schema:
-            type: string
-            enum: [google, microsoft]
-      responses:
-        "200":
-          description: Tokens revoked
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: revoked
-        "400":
-          $ref: "#/components/responses/Error"

@@ -387,9 +387,11 @@ type providerRegistrarAdapter struct {
 func (a *providerRegistrarAdapter) RegisterFromToken(ctx context.Context, tenantID string, provider onboarding.ProviderType, token onboarding.Token) error {
 	switch provider {
 	case onboarding.ProviderGoogle:
-		// For GWS the service-account flow does not use user OAuth tokens
-		// directly. The static boot-time registration covers GWS.
-		a.logger.Info("provider-registrar: GWS registration from token not yet implemented",
+		// GWS uses domain-wide-delegation via a service account, not
+		// per-user OAuth tokens. The static boot-time registration
+		// covers all GWS tenants. The consent-flow token is persisted
+		// for audit/revocation but not used as a runtime provider.
+		a.logger.Info("provider-registrar: GWS token stored; runtime uses service-account delegation",
 			slog.String("tenant_id", tenantID))
 		return nil
 	case onboarding.ProviderMicrosoft:

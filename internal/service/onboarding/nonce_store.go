@@ -55,6 +55,7 @@ func (s *RedisNonceStore) MarkUsed(ctx context.Context, nonce string, ttl time.D
 type InMemoryNonceStore struct {
 	mu   sync.Mutex
 	seen map[string]time.Time
+	ops  uint64
 }
 
 // NewInMemoryNonceStore constructs an in-memory nonce store.
@@ -62,7 +63,8 @@ func NewInMemoryNonceStore() *InMemoryNonceStore {
 	return &InMemoryNonceStore{seen: make(map[string]time.Time)}
 }
 
-// MarkUsed checks and marks a nonce.
+// MarkUsed checks and marks a nonce. Periodically evicts expired
+// entries so the map does not grow without bound.
 func (s *InMemoryNonceStore) MarkUsed(_ context.Context, nonce string, ttl time.Duration) (bool, error) {
 	if nonce == "" {
 		return false, fmt.Errorf("onboarding: empty nonce")
@@ -70,11 +72,21 @@ func (s *InMemoryNonceStore) MarkUsed(_ context.Context, nonce string, ttl time.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
+
+	// Evict expired entries every 64 calls to amortise the cost.
+	s.ops++
+	if s.ops%64 == 0 {
+		for k, exp := range s.seen {
+			if now.After(exp) {
+				delete(s.seen, k)
+			}
+		}
+	}
+
 	if exp, ok := s.seen[nonce]; ok {
 		if now.Before(exp) {
 			return true, nil
 		}
-		// Expired, treat as fresh.
 	}
 	s.seen[nonce] = now.Add(ttl)
 	return false, nil

@@ -369,6 +369,14 @@ func (s *Service) TokenFor(ctx context.Context, tenantID string, provider Provid
 	return refreshed, nil
 }
 
+// HasToken returns true when a token exists in storage for (tenantID,
+// provider). Unlike TokenFor it does NOT refresh expired tokens,
+// making it safe for read-only status checks.
+func (s *Service) HasToken(ctx context.Context, tenantID string, provider ProviderType) bool {
+	_, err := s.store.Load(ctx, tenantID, provider)
+	return err == nil
+}
+
 // Revoke clears the stored token. Used on tenant deletion or admin
 // revocation.
 func (s *Service) Revoke(ctx context.Context, tenantID string, provider ProviderType) error {

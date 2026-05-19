@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
@@ -17,6 +18,10 @@ type AgentBridge struct {
 	Onboarding *agent.OnboardingAgent
 	Locale     string
 	Log        *slog.Logger
+	// WG, when non-nil, is incremented before and decremented after
+	// the background goroutine so the application can wait for
+	// in-flight onboarding runs during shutdown.
+	WG *sync.WaitGroup
 }
 
 // StartOnboarding implements PostConsentTrigger.
@@ -30,11 +35,14 @@ func (b *AgentBridge) StartOnboarding(ctx context.Context, tenantID string, prov
 		Locale:    b.Locale,
 		StartedAt: time.Now().UTC(),
 	}
-	// We run the agent in the background so the OAuth callback can
-	// return immediately; full discovery may take seconds-to-minutes
-	// for large tenants.
+	if b.WG != nil {
+		b.WG.Add(1)
+	}
 	bgCtx := context.WithoutCancel(ctx)
 	go func() {
+		if b.WG != nil {
+			defer b.WG.Done()
+		}
 		log := b.Log
 		if log == nil {
 			log = slog.Default()

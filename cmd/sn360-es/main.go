@@ -2089,7 +2089,7 @@ func buildMux(app *application) (http.Handler, error) {
 		reg := app.providers
 		checkers = append(checkers, handler.HealthCheckerFunc{N: "provider_registry", F: func(_ context.Context) error {
 			if !reg.hasAny() {
-				logger.Warn("readyz: provider registry has no tenants registered")
+				logger.Debug("readyz: provider registry has no tenants registered")
 			}
 			return nil
 		}})
@@ -3935,6 +3935,7 @@ func buildOnboardingService(cfg *config.Config, logger *slog.Logger, app *applic
 		trigger = &onboarding.AgentBridge{
 			Onboarding: app.onboardAgent,
 			Log:        logger,
+			WG:         &app.bgWG,
 		}
 	}
 
@@ -4075,8 +4076,9 @@ func (a *onboardingServiceAdapter) Status(ctx context.Context, tenantID string) 
 		status.Status = "completed"
 	case a.svc != nil:
 		// Token exists but no users/groups discovered yet → in_progress.
+		// HasToken is a pure read (no refresh side-effect).
 		for _, p := range []onboarding.ProviderType{onboarding.ProviderGoogle, onboarding.ProviderMicrosoft} {
-			if _, err := a.svc.TokenFor(ctx, tenantID, p); err == nil {
+			if a.svc.HasToken(ctx, tenantID, p) {
 				status.Status = "in_progress"
 				break
 			}
