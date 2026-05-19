@@ -166,7 +166,10 @@ func TestNew_ValidatesRequired(t *testing.T) {
 }
 
 func TestPoller_RunOnce_PublishesEvaluateRequests(t *testing.T) {
-	now := time.Date(2026, 5, 17, 12, 0, 0, 0, time.UTC)
+	// Use the current wall clock so the timestamp is always inside the
+	// default 24h LookbackOnFirstRun window. A hardcoded past date
+	// drifts outside the window as time advances.
+	now := time.Now().UTC().Truncate(time.Second)
 	prov := &fakeMailboxProvider{
 		kind:   "gmail",
 		mboxes: []Mailbox{{Address: "alice@corp.example"}},
