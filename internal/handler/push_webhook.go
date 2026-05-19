@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"errors"
-	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -55,20 +54,23 @@ func (h *PushWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Microsoft Graph sends a one-shot validation request with a
-	// validationToken query param that must be echoed back as
-	// text/plain. Sanitise the value before reflecting it: the
-	// Content-Type is text/plain, but defense-in-depth requires
-	// HTML-escaping the response in case a downstream caller (a
-	// browser opened directly to this URL, a misconfigured proxy)
-	// renders the body as HTML. We also set X-Content-Type-Options
-	// to nosniff so an attacker cannot trick a downstream
-	// content-sniffer into treating the response as HTML.
+	// validationToken query param that must be echoed back
+	// VERBATIM as text/plain. Microsoft compares the echoed value
+	// byte-for-byte against what it sent: any mutation (HTML
+	// escaping, trimming, re-encoding) fails subscription
+	// validation. Defense-in-depth against a browser rendering the
+	// body as HTML is handled at the response-header layer:
+	//
+	//   - Content-Type: text/plain; charset=utf-8
+	//   - X-Content-Type-Options: nosniff
+	//
+	// which together stop content-type sniffing without changing
+	// the response bytes.
 	if vt := r.URL.Query().Get("validationToken"); vt != "" {
-		sanitized := html.EscapeString(vt)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(sanitized))
+		_, _ = w.Write([]byte(vt))
 		return
 	}
 
@@ -106,10 +108,15 @@ func (h *PushWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			slog.String("tenant", tenantID),
 			slog.Any("error", verr))
 		status := http.StatusUnauthorized
+		body := "unauthorized"
 		if errors.Is(verr, ErrPushProviderUnknown) {
+			// Unknown provider is a client misuse (wrong path
+			// segment), not an auth failure, so surface a more
+			// accurate body together with the 400 status code.
 			status = http.StatusBadRequest
+			body = "unknown provider"
 		}
-		http.Error(w, "unauthorized", status)
+		http.Error(w, body, status)
 		return
 	}
 

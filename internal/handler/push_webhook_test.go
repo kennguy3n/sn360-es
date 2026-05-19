@@ -85,23 +85,33 @@ func newTestPushHandler(verifier PushSignatureVerifier) *PushWebhookHandler {
 	}
 }
 
-// --- validationToken sanitization --------------------------------------
+// --- validationToken echo ----------------------------------------------
 
-func TestPushWebhook_ValidationTokenIsHTMLEscaped(t *testing.T) {
-	// The router refuses to call any verifier for the
-	// validation-token path, so we use an always-reject verifier
-	// here to prove the sanitiser short-circuits before
-	// verification.
+// TestPushWebhook_ValidationTokenEchoedVerbatim pins the Microsoft
+// Graph protocol contract: the validationToken query parameter must
+// be reflected byte-for-byte in the response body. Microsoft compares
+// the echoed value against what it sent and rejects subscription
+// creation on any mismatch — so even an "innocent" HTML escape that
+// turns "&" into "&amp;" breaks validation.
+//
+// Defense-in-depth against a browser rendering the body as HTML is
+// asserted at the response-header layer (Content-Type: text/plain;
+// charset=utf-8 + X-Content-Type-Options: nosniff), not by mutating
+// the body.
+func TestPushWebhook_ValidationTokenEchoedVerbatim(t *testing.T) {
+	// The handler must short-circuit before signature verification
+	// on the validation request, so wire an always-reject verifier
+	// to prove the validation-token branch runs first.
 	h := newTestPushHandler(rejectVerifier{})
 
-	const dangerous = "<script>alert('xss')</script>&\"'"
-	const expected = "&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;&amp;&#34;&#39;"
+	// Microsoft's real tokens are URL-safe base64-ish, but the
+	// protocol does not constrain the character set. Use a value
+	// that contains every HTML metacharacter (<, >, &, ", ') to
+	// guarantee a regression would re-introduce escaping.
+	const token = "<script>alert('xss')</script>&\"'"
 
 	req := httptest.NewRequest(http.MethodPost,
-		"/v1/push/outlook/tenantA?validationToken="+strings.ReplaceAll(dangerous, " ", ""), nil)
-	// Replace the URL with one whose RawQuery survives unmodified
-	// (httptest's NewRequest URL-decodes some chars). Build the
-	// query manually:
+		"/v1/push/outlook/tenantA?validationToken=anything", nil)
 	req.URL.RawQuery = "validationToken=%3Cscript%3Ealert%28%27xss%27%29%3C%2Fscript%3E%26%22%27"
 
 	rr := httptest.NewRecorder()
@@ -116,8 +126,8 @@ func TestPushWebhook_ValidationTokenIsHTMLEscaped(t *testing.T) {
 	if got := rr.Header().Get("X-Content-Type-Options"); got != "nosniff" {
 		t.Fatalf("X-Content-Type-Options=%q, want nosniff", got)
 	}
-	if got := rr.Body.String(); got != expected {
-		t.Fatalf("body=%q, want %q", got, expected)
+	if got := rr.Body.String(); got != token {
+		t.Fatalf("body=%q, want %q (validationToken must be echoed verbatim per Microsoft Graph)", got, token)
 	}
 }
 

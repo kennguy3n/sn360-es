@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"crypto/rsa"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/sync/singleflight"
 )
 
 // Sentinel errors returned by [PushSignatureVerifier] implementations.
@@ -138,38 +140,19 @@ func (v *MicrosoftClientStateVerifier) VerifyPush(_ context.Context, _ string, t
 		return ErrPushAuthMissing
 	}
 	for i, entry := range env.Value {
-		// Constant-time comparison so verifiers can't be turned
-		// into a clientState oracle by an attacker timing
-		// per-byte mismatches.
-		if !constantTimeStringEq(entry.ClientState, expected) {
+		// Constant-time comparison via crypto/subtle so verifiers
+		// cannot be turned into a clientState oracle by an attacker
+		// timing per-byte mismatches. crypto/subtle is documented
+		// to run in constant time even for unequal-length inputs
+		// (the function returns 0 immediately on length mismatch
+		// rather than walking the longer slice, which is fine for
+		// our threat model because the expected length is fixed
+		// per tenant and not attacker-derived).
+		if subtle.ConstantTimeCompare([]byte(entry.ClientState), []byte(expected)) != 1 {
 			return fmt.Errorf("%w: clientState mismatch at value[%d]", ErrPushAuthInvalid, i)
 		}
 	}
 	return nil
-}
-
-// constantTimeStringEq is a thin wrapper over subtle.ConstantTimeCompare
-// that returns false when lengths differ without leaking the length
-// through an early-return branch a real attacker could measure.
-func constantTimeStringEq(a, b string) bool {
-	if len(a) != len(b) {
-		// Comparing the longer side against itself keeps the
-		// branch's wall-clock cost roughly equal to the success
-		// path; this is not load-bearing for security (the length
-		// is public anyway) but keeps the timing profile flat.
-		_ = constantTimeBytesEq([]byte(a), []byte(a))
-		return false
-	}
-	return constantTimeBytesEq([]byte(a), []byte(b))
-}
-
-// constantTimeBytesEq is split out so tests can drive it directly.
-func constantTimeBytesEq(a, b []byte) bool {
-	var v byte
-	for i := 0; i < len(a); i++ {
-		v |= a[i] ^ b[i]
-	}
-	return v == 0
 }
 
 // --- Google Pub/Sub OIDC verifier --------------------------------------
@@ -222,6 +205,13 @@ type GoogleOIDCVerifier struct {
 	mu       sync.Mutex
 	cache    map[string]*rsa.PublicKey
 	cachedAt time.Time
+	// refresh collapses concurrent JWKS-refresh fetches into a
+	// single in-flight HTTP call. Without this, N concurrent
+	// requests that all hit a stale cache or a missing kid each
+	// independently call Google's certs endpoint, which both
+	// wastes bandwidth and risks rate-limit pushback under burst
+	// traffic.
+	refresh singleflight.Group
 }
 
 // VerifyPush implements [PushSignatureVerifier].
@@ -318,6 +308,11 @@ func (v *GoogleOIDCVerifier) now() time.Time {
 // rotation is handled implicitly: a kid that is not in the current
 // cache forces a single refresh attempt, which captures any newly
 // minted keys before the cache TTL elapses.
+//
+// Concurrent callers that all observe a stale/missing kid are
+// collapsed into a single in-flight refresh via singleflight; the
+// shared key ("jwks") names the operation so every kid-miss waits on
+// the same refresh.
 func (v *GoogleOIDCVerifier) lookupKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 	v.mu.Lock()
 	key, ok := v.cache[kid]
@@ -326,7 +321,9 @@ func (v *GoogleOIDCVerifier) lookupKey(ctx context.Context, kid string) (*rsa.Pu
 	if ok && fresh {
 		return key, nil
 	}
-	if err := v.refreshLocked(ctx); err != nil {
+	if _, err, _ := v.refresh.Do("jwks", func() (any, error) {
+		return nil, v.refreshJWKS(ctx)
+	}); err != nil {
 		return nil, err
 	}
 	v.mu.Lock()
@@ -338,7 +335,12 @@ func (v *GoogleOIDCVerifier) lookupKey(ctx context.Context, kid string) (*rsa.Pu
 	return key, nil
 }
 
-func (v *GoogleOIDCVerifier) refreshLocked(ctx context.Context) error {
+// refreshJWKS fetches Google's JWKS document, parses the RSA keys,
+// and atomically swaps the cache. The name is no longer "…Locked"
+// because the function does not run with v.mu held — singleflight
+// already serialises concurrent callers, and v.mu is only taken for
+// the final swap so reads do not block on the network round-trip.
+func (v *GoogleOIDCVerifier) refreshJWKS(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURL(), nil)
 	if err != nil {
 		return fmt.Errorf("%w: build JWKS request: %v", ErrPushAuthInvalid, err)
