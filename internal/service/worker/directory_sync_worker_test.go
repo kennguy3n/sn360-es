@@ -55,6 +55,14 @@ func (f *fakeUserRepo) List(_ context.Context, tenantID string, _ int) ([]reposi
 	return f.users[tenantID], nil
 }
 
+func (f *fakeUserRepo) Count(_ context.Context, _ string) (int, error) {
+	total := 0
+	for _, uu := range f.users {
+		total += len(uu)
+	}
+	return total, nil
+}
+
 type fakeGroupRepo struct {
 	groups  map[string][]repository.Group
 	upserts int
@@ -81,6 +89,14 @@ func (f *fakeGroupRepo) GetByName(_ context.Context, _, _ string) (*repository.G
 
 func (f *fakeGroupRepo) List(_ context.Context, _ string) ([]repository.Group, error) {
 	return nil, nil
+}
+
+func (f *fakeGroupRepo) Count(_ context.Context, _ string) (int, error) {
+	total := 0
+	for _, gg := range f.groups {
+		total += len(gg)
+	}
+	return total, nil
 }
 
 type fakeEventPublisher struct {

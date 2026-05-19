@@ -226,6 +226,14 @@ type DirectoryClient interface {
 	ListGroups(ctx context.Context, tenantID string) ([]DiscoveredGroup, error)
 }
 
+// DeltaSyncCapable is an optional interface that DirectoryClient
+// implementations can satisfy to enable incremental sync. When the
+// delta token is empty the implementation performs an initial full
+// sync; subsequent calls with the returned token fetch only changes.
+type DeltaSyncCapable interface {
+	ListUsersDelta(ctx context.Context, tenantID string, deltaToken string) ([]DiscoveredUser, string, error)
+}
+
 // VendorScanner discovers vendor candidates from the tenant's recent
 // inbound mail history.
 type VendorScanner interface {

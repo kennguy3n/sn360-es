@@ -28,6 +28,7 @@ func NewInMemoryRegistry() *Registry {
 		CommunicationHistories: newMemoryCommHistory(),
 		FeedbackEvents:         newMemoryFeedbackEvents(),
 		AuditLogs:              NewMemoryAuditLogs(),
+		SyncCheckpoints:        newMemorySyncCheckpoints(),
 	}
 }
 
@@ -743,5 +744,34 @@ func (m *memoryGroupMemberships) ReplaceForGroup(_ context.Context, groupID stri
 		})
 	}
 	m.rows = filtered
+	return nil
+}
+
+// --- sync checkpoints ---------------------------------------------------
+
+type memorySyncCheckpoints struct {
+	mu   sync.RWMutex
+	rows map[string]SyncCheckpoint // key: tenantID+":"+provider
+}
+
+func newMemorySyncCheckpoints() *memorySyncCheckpoints {
+	return &memorySyncCheckpoints{rows: map[string]SyncCheckpoint{}}
+}
+
+func (m *memorySyncCheckpoints) Get(_ context.Context, tenantID, provider string) (*SyncCheckpoint, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	cp, ok := m.rows[tenantID+":"+provider]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return &cp, nil
+}
+
+func (m *memorySyncCheckpoints) Upsert(_ context.Context, cp *SyncCheckpoint) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp.UpdatedAt = time.Now().UTC()
+	m.rows[cp.TenantID+":"+cp.Provider] = *cp
 	return nil
 }

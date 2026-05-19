@@ -34,6 +34,7 @@ func NewPostgresRegistry(db *postgres.DB) *Registry {
 		CommunicationHistories: &pgCommHistory{db: db},
 		FeedbackEvents:         &pgFeedbackEvents{db: db},
 		AuditLogs:              NewPgAuditLogs(db),
+		SyncCheckpoints:        &pgSyncCheckpoints{db: db},
 	}
 }
 
@@ -871,6 +872,33 @@ func nullableTime(t interface{}) interface{} {
 		return nil
 	}
 	return t
+}
+
+// --- sync checkpoints ---------------------------------------------------
+
+type pgSyncCheckpoints struct{ db *postgres.DB }
+
+func (p *pgSyncCheckpoints) Get(ctx context.Context, tenantID, provider string) (*SyncCheckpoint, error) {
+	row := p.db.QueryRowContext(ctx, `
+SELECT tenant_id, provider, delta_token, updated_at
+  FROM sync_checkpoints WHERE tenant_id=$1 AND provider=$2`, tenantID, provider)
+	var cp SyncCheckpoint
+	err := row.Scan(&cp.TenantID, &cp.Provider, &cp.DeltaToken, &cp.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return &cp, err
+}
+
+func (p *pgSyncCheckpoints) Upsert(ctx context.Context, cp *SyncCheckpoint) error {
+	_, err := p.db.ExecContext(ctx, `
+INSERT INTO sync_checkpoints (tenant_id, provider, delta_token, updated_at)
+VALUES ($1,$2,$3,NOW())
+ON CONFLICT (tenant_id, provider) DO UPDATE SET
+    delta_token=EXCLUDED.delta_token,
+    updated_at=NOW()
+`, cp.TenantID, cp.Provider, cp.DeltaToken)
+	return err
 }
 
 func stringOrEmpty(b []byte) string {

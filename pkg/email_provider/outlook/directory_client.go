@@ -190,6 +190,97 @@ func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]age
 	return out, nil
 }
 
+// graphDeltaUserList is the response shape for /users/delta queries.
+type graphDeltaUserList struct {
+	Value     []graphDirectoryUser `json:"value"`
+	NextLink  string               `json:"@odata.nextLink,omitempty"`
+	DeltaLink string               `json:"@odata.deltaLink,omitempty"`
+}
+
+// ListUsersDelta performs an incremental user sync via the MS Graph
+// delta query API. When deltaToken is empty an initial full delta sync
+// is performed; otherwise the stored deltaLink URL is followed.
+// Returns (changed users, new delta token, error).
+func (c *DirectoryClient) ListUsersDelta(ctx context.Context, _ string, deltaToken string) ([]agent.DiscoveredUser, string, error) {
+	var endpoint string
+	if deltaToken != "" {
+		endpoint = deltaToken
+	} else {
+		endpoint = c.baseURL + "/users/delta?" + url.Values{
+			"$select": []string{"id,displayName,userPrincipalName,mail,department,jobTitle,accountEnabled,userType,proxyAddresses"},
+			"$top":    []string{"200"},
+		}.Encode()
+	}
+
+	var out []agent.DiscoveredUser
+	var newDeltaToken string
+	for endpoint != "" {
+		var list graphDeltaUserList
+		if err := c.do(ctx, http.MethodGet, endpoint, &list); err != nil {
+			return nil, "", fmt.Errorf("outlook: delta users: %w", err)
+		}
+		for _, u := range list.Value {
+			email := u.Mail
+			if email == "" {
+				email = u.UserPrincipalName
+			}
+			if email == "" {
+				continue
+			}
+			var groupIDs []string
+			isAdmin := false
+			for _, m := range u.MemberOf {
+				switch {
+				case m.ODataType == "#microsoft.graph.group":
+					groupIDs = append(groupIDs, m.ID)
+				case m.ODataType == "#microsoft.graph.directoryRole":
+					if strings.Contains(m.DisplayName, "Global Administrator") ||
+						strings.Contains(m.DisplayName, "Exchange Administrator") {
+						isAdmin = true
+					}
+				}
+			}
+			isShared := false
+			if u.MailboxSettings != nil && u.MailboxSettings.MailboxType == "shared" {
+				isShared = true
+			}
+			isServiceAccount := u.UserType == "Guest"
+			var aliases []string
+			for _, addr := range u.ProxyAddresses {
+				if strings.HasPrefix(strings.ToLower(addr), "smtp:") {
+					alias := strings.TrimPrefix(strings.ToLower(addr), "smtp:")
+					if alias != strings.ToLower(email) {
+						aliases = append(aliases, alias)
+					}
+				}
+			}
+			var managerID string
+			if u.Manager != nil {
+				managerID = u.Manager.ID
+			}
+			out = append(out, agent.DiscoveredUser{
+				ID:               u.ID,
+				Email:            strings.ToLower(email),
+				DisplayName:      u.DisplayName,
+				Department:       u.Department,
+				JobTitle:         u.JobTitle,
+				IsAdmin:          isAdmin,
+				IsSuspended:      !u.AccountEnabled,
+				GroupIDs:         groupIDs,
+				ManagerID:        managerID,
+				Aliases:          aliases,
+				IsSharedMailbox:  isShared,
+				IsServiceAccount: isServiceAccount,
+			})
+		}
+		if list.DeltaLink != "" {
+			newDeltaToken = list.DeltaLink
+		}
+		endpoint = list.NextLink
+	}
+	return out, newDeltaToken, nil
+}
+
 // ListGroups enumerates the directory groups.
 func (c *DirectoryClient) ListGroups(ctx context.Context, tenantID string) ([]agent.DiscoveredGroup, error) {
 	_ = tenantID

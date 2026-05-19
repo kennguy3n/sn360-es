@@ -332,6 +332,21 @@ type GroupMembershipRepository interface {
 	ReplaceForGroup(ctx context.Context, groupID string, userIDs []string) error
 }
 
+// SyncCheckpoint stores delta-sync tokens for incremental directory
+// synchronization (MS Graph delta queries, GWS updatedMin timestamps).
+type SyncCheckpoint struct {
+	TenantID   string
+	Provider   string // "outlook" or "gmail"
+	DeltaToken string
+	UpdatedAt  time.Time
+}
+
+// SyncCheckpointRepository persists delta-sync checkpoints.
+type SyncCheckpointRepository interface {
+	Get(ctx context.Context, tenantID, provider string) (*SyncCheckpoint, error)
+	Upsert(ctx context.Context, cp *SyncCheckpoint) error
+}
+
 // Registry bundles all repositories for convenient wiring.
 type Registry struct {
 	Tenants                TenantRepository
@@ -346,4 +361,5 @@ type Registry struct {
 	CommunicationHistories CommunicationHistoryRepository
 	FeedbackEvents         FeedbackEventRepository
 	AuditLogs              AuditLogRepository
+	SyncCheckpoints        SyncCheckpointRepository
 }
