@@ -532,6 +532,12 @@ fallback covers executive titles (Max), finance/legal/HR roles (High),
 and procurement/admin roles (Elevated) across English, Japanese, Korean,
 Thai, Vietnamese, and Chinese.
 
+The application uses four levels — Default (0), Elevated (1), High (2),
+Max (3) — while the `users.sensitivity_tier` column stores a coarser
+three-value mapping: `standard` (Default), `elevated` (Elevated),
+`executive` (High + Max). The `Sensitivity.DBTier()` method
+(`internal/service/agent/types.go`) handles the conversion.
+
 ## 6. Infrastructure
 
 ### 6.1 Kubernetes Deployment
