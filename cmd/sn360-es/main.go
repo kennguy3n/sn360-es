@@ -2209,6 +2209,14 @@ func buildMux(app *application) (http.Handler, error) {
 		mux.HandleFunc("/v1/onboarding/revoke", onboardingH.ServeRevoke)
 	}
 
+	// GWS setup wizard — always registered so tenants can check
+	// configuration status even before onboarding is complete.
+	wizardH := handler.NewOnboardingWizardHandler(logger, &gwsSetupChecker{
+		cfg:    app.cfg,
+		logger: logger,
+	})
+	mux.HandleFunc("/v1/onboarding/gws-setup-status", wizardH.ServeGWSSetupStatus)
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		logger.Debug("http: unmatched route", slog.String("path", r.URL.Path))
 		w.WriteHeader(http.StatusNotFound)
