@@ -29,6 +29,7 @@ func NewInMemoryRegistry() *Registry {
 		FeedbackEvents:         newMemoryFeedbackEvents(),
 		AuditLogs:              NewMemoryAuditLogs(),
 		SyncCheckpoints:        newMemorySyncCheckpoints(),
+		BehavioralBaselines:    newMemoryBehavioralBaselines(),
 	}
 }
 
@@ -797,4 +798,46 @@ func (m *memorySyncCheckpoints) Upsert(_ context.Context, cp *SyncCheckpoint) er
 	cp.UpdatedAt = time.Now().UTC()
 	m.rows[cp.TenantID+":"+cp.Provider] = *cp
 	return nil
+}
+
+// --- user behavioral baselines ------------------------------------------
+
+type memoryBehavioralBaselines struct {
+	mu   sync.RWMutex
+	rows map[string]UserBehavioralBaseline // key: tenantID+":"+hex(userHash)+":"+hex(senderHash)
+}
+
+func newMemoryBehavioralBaselines() *memoryBehavioralBaselines {
+	return &memoryBehavioralBaselines{rows: map[string]UserBehavioralBaseline{}}
+}
+
+func baselineKey(tenantID string, userHash, senderHash []byte) string {
+	return tenantID + ":" + hex.EncodeToString(userHash) + ":" + hex.EncodeToString(senderHash)
+}
+
+func (m *memoryBehavioralBaselines) Upsert(_ context.Context, b *UserBehavioralBaseline) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if b.ID == "" {
+		b.ID = "mem-" + hex.EncodeToString(b.UserEmailHash)[:8]
+	}
+	now := time.Now().UTC()
+	b.UpdatedAt = now
+	if b.CreatedAt.IsZero() {
+		b.CreatedAt = now
+	}
+	key := baselineKey(b.TenantID, b.UserEmailHash, b.SenderDomainHash)
+	m.rows[key] = *b
+	return nil
+}
+
+func (m *memoryBehavioralBaselines) Get(_ context.Context, tenantID string, userHash, senderDomainHash []byte) (*UserBehavioralBaseline, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	key := baselineKey(tenantID, userHash, senderDomainHash)
+	b, ok := m.rows[key]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return &b, nil
 }

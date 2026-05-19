@@ -57,6 +57,14 @@ type RelationshipJobConfig struct {
 	MaxPerTenant int
 	// Logger is the structured logger; defaults to slog.Default().
 	Logger *slog.Logger
+	// Baselines is the optional behavioral baseline repository.
+	// When non-nil the worker extracts per-(user, sender_domain)
+	// send-hour distributions from CommunicationHistory rows and
+	// upserts them during each aggregation cycle.
+	Baselines repository.UserBehavioralBaselineRepository
+	// Hasher produces PII-safe hashes for the baseline keys.
+	// Required when Baselines is non-nil.
+	Hasher func(tenantID, input string) ([]byte, error)
 }
 
 // RelationshipJob refreshes the per-(tenant, sender, recipient)
@@ -257,6 +265,28 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 				continue
 			}
 			processed++
+
+			// Populate per-user behavioral baselines when the
+			// baseline repository is wired.
+			if j.cfg.Baselines != nil && j.cfg.Hasher != nil && len(h.RecipientHash) > 0 && len(h.SenderDomainHash) > 0 {
+				sendHour := h.LastSeenAt.Hour()
+				var avgPerWeek float64
+				if h.Count30d > 0 {
+					avgPerWeek = float64(h.Count30d) / 4.0
+				}
+				bl := &repository.UserBehavioralBaseline{
+					TenantID:           t.ID,
+					UserEmailHash:      h.RecipientHash,
+					SenderDomainHash:   h.SenderDomainHash,
+					TypicalSendHours:   []int{sendHour},
+					AvgMessagesPerWeek: avgPerWeek,
+					LastSeenAt:         h.LastSeenAt,
+				}
+				if berr := j.cfg.Baselines.Upsert(ctx, bl); berr != nil {
+					j.logger.Warn("worker.relationship: baseline upsert failed",
+						slog.String("tenant_id", t.ID), slog.Any("error", berr))
+				}
+			}
 		}
 	}
 	j.logger.Info("worker.relationship: cycle complete",

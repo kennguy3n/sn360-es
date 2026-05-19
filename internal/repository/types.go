@@ -349,6 +349,27 @@ type SyncCheckpointRepository interface {
 	Upsert(ctx context.Context, cp *SyncCheckpoint) error
 }
 
+// UserBehavioralBaseline tracks per-user-sender-domain communication
+// patterns for anomaly detection.
+type UserBehavioralBaseline struct {
+	ID                 string
+	TenantID           string
+	UserEmailHash      []byte
+	SenderDomainHash   []byte
+	TypicalSendHours   []int
+	TypicalDeviceTypes []string
+	AvgMessagesPerWeek float64
+	LastSeenAt         time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+// UserBehavioralBaselineRepository persists per-user behavioral baselines.
+type UserBehavioralBaselineRepository interface {
+	Upsert(ctx context.Context, b *UserBehavioralBaseline) error
+	Get(ctx context.Context, tenantID string, userHash, senderDomainHash []byte) (*UserBehavioralBaseline, error)
+}
+
 // Registry bundles all repositories for convenient wiring.
 type Registry struct {
 	Tenants                TenantRepository
@@ -364,4 +385,5 @@ type Registry struct {
 	FeedbackEvents         FeedbackEventRepository
 	AuditLogs              AuditLogRepository
 	SyncCheckpoints        SyncCheckpointRepository
+	BehavioralBaselines    UserBehavioralBaselineRepository
 }

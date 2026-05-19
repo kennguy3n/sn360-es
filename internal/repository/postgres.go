@@ -35,6 +35,7 @@ func NewPostgresRegistry(db *postgres.DB) *Registry {
 		FeedbackEvents:         &pgFeedbackEvents{db: db},
 		AuditLogs:              NewPgAuditLogs(db),
 		SyncCheckpoints:        &pgSyncCheckpoints{db: db},
+		BehavioralBaselines:    &pgBehavioralBaselines{db: db},
 	}
 }
 
@@ -929,6 +930,57 @@ ON CONFLICT (tenant_id, provider) DO UPDATE SET
     updated_at=NOW()
 `, cp.TenantID, cp.Provider, cp.DeltaToken)
 	return err
+}
+
+// --- user behavioral baselines ------------------------------------------
+
+type pgBehavioralBaselines struct{ db *postgres.DB }
+
+func (p *pgBehavioralBaselines) Upsert(ctx context.Context, b *UserBehavioralBaseline) error {
+	if b.ID == "" {
+		b.ID = uuid.NewString()
+	}
+	_, err := p.db.ExecContext(ctx, `
+INSERT INTO user_behavioral_baselines
+    (id, tenant_id, user_email_hash, sender_domain_hash,
+     typical_send_hours, typical_device_types, avg_messages_per_week,
+     last_seen_at, created_at, updated_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())
+ON CONFLICT (tenant_id, user_email_hash, sender_domain_hash) DO UPDATE SET
+    typical_send_hours=EXCLUDED.typical_send_hours,
+    typical_device_types=EXCLUDED.typical_device_types,
+    avg_messages_per_week=EXCLUDED.avg_messages_per_week,
+    last_seen_at=EXCLUDED.last_seen_at,
+    updated_at=NOW()
+`, b.ID, b.TenantID, b.UserEmailHash, b.SenderDomainHash,
+		pq.Array(b.TypicalSendHours), pq.Array(b.TypicalDeviceTypes),
+		b.AvgMessagesPerWeek, sql.NullTime{Time: b.LastSeenAt, Valid: !b.LastSeenAt.IsZero()})
+	return err
+}
+
+func (p *pgBehavioralBaselines) Get(ctx context.Context, tenantID string, userHash, senderDomainHash []byte) (*UserBehavioralBaseline, error) {
+	row := p.db.QueryRowContext(ctx, `
+SELECT id, tenant_id, user_email_hash, sender_domain_hash,
+       typical_send_hours, typical_device_types, avg_messages_per_week,
+       last_seen_at, created_at, updated_at
+  FROM user_behavioral_baselines
+ WHERE tenant_id=$1 AND user_email_hash=$2 AND sender_domain_hash=$3`,
+		tenantID, userHash, senderDomainHash)
+	var b UserBehavioralBaseline
+	var lastSeen sql.NullTime
+	err := row.Scan(&b.ID, &b.TenantID, &b.UserEmailHash, &b.SenderDomainHash,
+		pq.Array(&b.TypicalSendHours), pq.Array(&b.TypicalDeviceTypes),
+		&b.AvgMessagesPerWeek, &lastSeen, &b.CreatedAt, &b.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if lastSeen.Valid {
+		b.LastSeenAt = lastSeen.Time
+	}
+	return &b, nil
 }
 
 func stringOrEmpty(b []byte) string {
