@@ -2223,6 +2223,28 @@ func buildMux(app *application) (http.Handler, error) {
 	})
 	mux.HandleFunc("/v1/onboarding/gws-setup-status", wizardH.ServeGWSSetupStatus)
 
+	// Vendor management CRUD.
+	if app.repos != nil && app.repos.Vendors != nil {
+		vendorH := handler.NewVendorHandler(logger, app.repos.Vendors)
+		mux.HandleFunc("/v1/vendors", vendorH.ServeList)
+		mux.HandleFunc("/v1/vendors/", func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodPost && r.URL.Path == "/v1/vendors":
+				vendorH.ServeCreate(w, r)
+			case r.Method == http.MethodDelete:
+				vendorH.ServeDelete(w, r)
+			case strings.HasSuffix(r.URL.Path, "/approve"):
+				vendorH.ServeApprove(w, r)
+			case strings.HasSuffix(r.URL.Path, "/revoke"):
+				vendorH.ServeRevoke(w, r)
+			default:
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error":"not found"}`))
+			}
+		})
+	}
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		logger.Debug("http: unmatched route", slog.String("path", r.URL.Path))
 		w.WriteHeader(http.StatusNotFound)

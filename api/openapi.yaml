@@ -35,6 +35,7 @@ tags:
   - name: dashboard
   - name: predict
   - name: onboarding
+  - name: vendor
   - name: system
 
 paths:
@@ -392,6 +393,132 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
 
+  /v1/vendors:
+    get:
+      tags: [vendor]
+      summary: List vendors
+      parameters:
+        - in: query
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Vendor list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Vendor"
+    post:
+      tags: [vendor]
+      summary: Add a manual vendor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VendorCreateRequest"
+      responses:
+        "201":
+          description: Vendor created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vendor"
+        "400":
+          $ref: "#/components/responses/Error"
+
+  /v1/vendors/{domain}/approve:
+    put:
+      tags: [vendor]
+      summary: Approve a vendor
+      parameters:
+        - in: path
+          name: domain
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tenant_id]
+              properties:
+                tenant_id:
+                  type: string
+      responses:
+        "200":
+          description: Vendor approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vendor"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /v1/vendors/{domain}/revoke:
+    put:
+      tags: [vendor]
+      summary: Revoke a vendor
+      parameters:
+        - in: path
+          name: domain
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tenant_id]
+              properties:
+                tenant_id:
+                  type: string
+      responses:
+        "200":
+          description: Vendor revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vendor"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /v1/vendors/{domain}:
+    delete:
+      tags: [vendor]
+      summary: Delete a vendor
+      parameters:
+        - in: path
+          name: domain
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Vendor deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+        "400":
+          $ref: "#/components/responses/Error"
+
   /v1/onboarding/gws-setup-status:
     get:
       tags: [onboarding]
@@ -631,3 +758,41 @@ components:
           type: array
           items:
             type: string
+
+    Vendor:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        domain:
+          type: string
+        display_name:
+          type: string
+        approved:
+          type: boolean
+        auto_discovered:
+          type: boolean
+        confidence:
+          type: number
+        last_seen_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    VendorCreateRequest:
+      type: object
+      required: [tenant_id, domain]
+      properties:
+        tenant_id:
+          type: string
+        domain:
+          type: string
+        display_name:
+          type: string

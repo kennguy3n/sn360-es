@@ -450,6 +450,36 @@ SELECT id,tenant_id,domain,COALESCE(display_name,''),approved,auto_discovered,co
 	return out, rows.Err()
 }
 
+func (p *pgVendors) List(ctx context.Context, tenantID string, limit int) ([]Vendor, error) {
+	q := `
+SELECT id,tenant_id,domain,COALESCE(display_name,''),approved,auto_discovered,confidence,
+       COALESCE(last_seen_at,'epoch'::timestamptz),created_at,updated_at
+  FROM vendors WHERE tenant_id=$1 ORDER BY domain`
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := p.db.QueryContext(ctx, q, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Vendor
+	for rows.Next() {
+		var v Vendor
+		if err := rows.Scan(&v.ID, &v.TenantID, &v.Domain, &v.DisplayName, &v.Approved, &v.AutoDiscovered,
+			&v.Confidence, &v.LastSeenAt, &v.CreatedAt, &v.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (p *pgVendors) Delete(ctx context.Context, tenantID, domain string) error {
+	_, err := p.db.ExecContext(ctx, `DELETE FROM vendors WHERE tenant_id=$1 AND domain=$2`, tenantID, domain)
+	return err
+}
+
 // --- evaluation results -------------------------------------------------
 
 type pgEvalResults struct{ db *postgres.DB }

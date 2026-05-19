@@ -421,6 +421,29 @@ func (m *memoryVendors) ListApproved(_ context.Context, tenantID string) ([]Vend
 	return out, nil
 }
 
+func (m *memoryVendors) List(_ context.Context, tenantID string, limit int) ([]Vendor, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]Vendor, 0)
+	for _, v := range m.rows {
+		if v.TenantID == tenantID {
+			out = append(out, v)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (m *memoryVendors) Delete(_ context.Context, tenantID, domain string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := tenantID + ":" + domain
+	delete(m.rows, key)
+	return nil
+}
+
 // --- evaluation results -------------------------------------------------
 
 type memoryEvalResults struct {

@@ -248,6 +248,8 @@ type VendorRepository interface {
 	Upsert(ctx context.Context, v *Vendor) error
 	GetByDomain(ctx context.Context, tenantID, domain string) (*Vendor, error)
 	ListApproved(ctx context.Context, tenantID string) ([]Vendor, error)
+	List(ctx context.Context, tenantID string, limit int) ([]Vendor, error)
+	Delete(ctx context.Context, tenantID, domain string) error
 }
 
 // EvaluationResultRepository persists EvaluationResult rows.
