@@ -147,7 +147,7 @@ func buildMux(app *application) (http.Handler, error) {
 // auth so we can shed load before doing the expensive token-verify
 // work — an attacker hammering us with garbage Bearer tokens still
 // gets cut off at the limiter.
-func wrapMiddleware(mux http.Handler, app *application) http.Handler {
+func wrapMiddleware(mux http.Handler, app *application) (http.Handler, error) {
 	logger := app.logger
 	var h http.Handler = mux
 
@@ -169,11 +169,21 @@ func wrapMiddleware(mux http.Handler, app *application) http.Handler {
 	// app.metrics so 429 counts surface alongside other HTTP
 	// telemetry.
 	if app.cfg.RateLimit.Enabled {
+		// Parsing trusted-proxy CIDRs here (not in config.Load)
+		// keeps boot-time fatal errors next to the wiring that
+		// actually relies on them. An empty / unset value yields a
+		// nil slice, which the middleware interprets as the secure
+		// default: bucket on r.RemoteAddr only, ignore XFF.
+		trusted, perr := middleware.ParseTrustedProxies(app.cfg.RateLimit.TrustedProxies)
+		if perr != nil {
+			return nil, fmt.Errorf("rate-limit trusted proxies: %w", perr)
+		}
 		rl := middleware.NewRateLimiter(h, middleware.RateLimitConfig{
 			Rate:            app.cfg.RateLimit.Rate,
 			Burst:           app.cfg.RateLimit.Burst,
 			CleanupInterval: app.cfg.RateLimit.CleanupInterval,
 			IdleTTL:         app.cfg.RateLimit.IdleTTL,
+			TrustedProxies:  trusted, // boot-time-validated, may be nil
 			SkipPaths:       defaultRateLimitSkipPaths(),
 			OnLimited: func(ip, path string) {
 				if app.metrics != nil {
@@ -213,7 +223,7 @@ func wrapMiddleware(mux http.Handler, app *application) http.Handler {
 		RoutePatterns: routeTemplates,
 	})
 
-	return h
+	return h, nil
 }
 
 // defaultRouteTemplates lists the high-cardinality route prefixes the

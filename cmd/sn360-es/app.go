@@ -115,8 +115,26 @@ type application struct {
 // secret) log warnings and leave their consumers in a degraded mode so
 // the binary still answers /healthz and the routes that do not require
 // the missing dependency.
+//
+// On any error past the first opened resource the function closes
+// every closer it has accumulated so far before returning, so a
+// partial-wire failure cannot leak Postgres pools, Redis clients, or
+// the NATS connection. The defer below executes the public
+// [application.Close] path unless the function reaches its happy-path
+// `return app, nil` and sets `wired = true`.
 func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*application, error) {
 	app := &application{cfg: cfg, logger: logger, metrics: telemetry.DefaultMetrics()}
+	wired := false
+	defer func() {
+		if !wired {
+			// Reverse-apply every closer the partial wire-up
+			// registered so far. Safe to call on a struct whose
+			// closers slice is empty (e.g. event-bus init
+			// itself failed) — Close is a plain range over
+			// closers and degrades to a no-op.
+			app.Close(logger)
+		}
+	}()
 
 	// Event bus is required.
 	eventBus, err := bus.New(ctx, factoryConfigFromAppConfig(cfg), logger)
@@ -578,6 +596,7 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		return nil, err
 	}
 
+	wired = true
 	return app, nil
 }
 

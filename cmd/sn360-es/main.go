@@ -46,7 +46,10 @@ func run() error {
 		return fmt.Errorf("build mux: %w", err)
 	}
 
-	httpHandler := wrapMiddleware(mux, app)
+	httpHandler, err := wrapMiddleware(mux, app)
+	if err != nil {
+		return fmt.Errorf("middleware: %w", err)
+	}
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTP.Port),

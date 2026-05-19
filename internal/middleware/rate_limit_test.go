@@ -269,7 +269,14 @@ func TestRateLimiter_OnLimitedCallback(t *testing.T) {
 	}
 }
 
-func TestRateLimiter_XForwardedForRespected(t *testing.T) {
+// TestRateLimiter_XForwardedForIgnoredByDefault confirms the secure
+// default: when no trusted-proxy CIDRs are configured, the middleware
+// refuses to use X-Forwarded-For — preventing a direct attacker from
+// either evading their own bucket (rotating XFF on each request) or
+// exhausting an arbitrary IP's bucket (planting a victim's IP in
+// XFF). Two requests from the same RemoteAddr with different XFF
+// values share a single bucket keyed on RemoteAddr.
+func TestRateLimiter_XForwardedForIgnoredByDefault(t *testing.T) {
 	t.Parallel()
 	clk := &stubClock{now: time.Unix(1_700_000_000, 0)}
 	backend := &countedHandler{}
@@ -281,25 +288,152 @@ func TestRateLimiter_XForwardedForRespected(t *testing.T) {
 	})
 	t.Cleanup(rl.Stop)
 
-	// Two requests from the same ALB-source RemoteAddr but DIFFERENT
-	// XFF client IPs must NOT share a bucket.
-	r1 := newRequest(t, "10.0.0.1", "/")
-	r1.Header.Set("X-Forwarded-For", "203.0.113.5")
-	r2 := newRequest(t, "10.0.0.1", "/")
-	r2.Header.Set("X-Forwarded-For", "203.0.113.6")
+	r1 := newRequest(t, "203.0.113.10", "/")
+	r1.Header.Set("X-Forwarded-For", "10.20.30.40")
+	r2 := newRequest(t, "203.0.113.10", "/")
+	r2.Header.Set("X-Forwarded-For", "10.20.30.41")
 
-	rec1, rec2 := httptest.NewRecorder(), httptest.NewRecorder()
+	rec1 := httptest.NewRecorder()
 	rl.ServeHTTP(rec1, r1)
-	rl.ServeHTTP(rec2, r2)
-	if rec1.Code != http.StatusOK || rec2.Code != http.StatusOK {
-		t.Fatalf("XFF bucket isolation broken: %d %d", rec1.Code, rec2.Code)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first request: want 200, got %d", rec1.Code)
 	}
 
-	// A second request from 203.0.113.5 should be limited because
-	// burst=1 and the first one already drained it.
+	rec2 := httptest.NewRecorder()
+	rl.ServeHTTP(rec2, r2)
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request from same RemoteAddr with rotated XFF: want 429, got %d (attacker can evade bucket by rotating XFF)", rec2.Code)
+	}
+}
+
+// TestRateLimiter_TrustedProxyXFFFromRight verifies the proxy-aware
+// extractor walks XFF from the right past trusted-proxy IPs and
+// returns the first untrusted IP it finds. This is the exact failure
+// mode the leftmost-XFF parser had: when an AWS-style ALB appends the
+// real client IP to whatever the client supplied, the leftmost entry
+// is attacker-controlled and must NEVER be returned as the bucket key.
+func TestRateLimiter_TrustedProxyXFFFromRight(t *testing.T) {
+	t.Parallel()
+	clk := &stubClock{now: time.Unix(1_700_000_000, 0)}
+	backend := &countedHandler{}
+	trusted, err := middleware.ParseTrustedProxies("10.0.0.0/8")
+	if err != nil {
+		t.Fatalf("ParseTrustedProxies: %v", err)
+	}
+	rl := middleware.NewRateLimiter(backend, middleware.RateLimitConfig{
+		Rate:           1,
+		Burst:          1,
+		Now:            clk.Now,
+		IdleTTL:        time.Minute,
+		TrustedProxies: trusted,
+	})
+	t.Cleanup(rl.Stop)
+
+	// Peer is a trusted proxy (10.0.0.5). Both requests come from
+	// the SAME real client 203.0.113.5 (whose IP the ALB appends),
+	// but the attacker has rotated the leftmost XFF entry hoping to
+	// evade their bucket. The rightmost-untrusted walk must collapse
+	// both into the same bucket keyed on 203.0.113.5.
+	r1 := newRequest(t, "10.0.0.5", "/")
+	r1.Header.Set("X-Forwarded-For", "198.51.100.99, 203.0.113.5")
+	r2 := newRequest(t, "10.0.0.5", "/")
+	r2.Header.Set("X-Forwarded-For", "198.51.100.42, 203.0.113.5")
+
+	rec1 := httptest.NewRecorder()
+	rl.ServeHTTP(rec1, r1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first request: want 200, got %d", rec1.Code)
+	}
+	rec2 := httptest.NewRecorder()
+	rl.ServeHTTP(rec2, r2)
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request from same real client with rotated leftmost XFF: want 429, got %d (attacker can evade rate limit by spinning the leftmost XFF entry)", rec2.Code)
+	}
+
+	// A third request from a DIFFERENT real client (different
+	// rightmost-untrusted IP) must still pass through — confirming
+	// the rightmost-walk produces stable, per-real-client buckets
+	// even though the proxy chain is identical.
+	r3 := newRequest(t, "10.0.0.5", "/")
+	r3.Header.Set("X-Forwarded-For", "198.51.100.42, 203.0.113.6")
 	rec3 := httptest.NewRecorder()
-	rl.ServeHTTP(rec3, r1)
-	if rec3.Code != http.StatusTooManyRequests {
-		t.Fatalf("XFF=203.0.113.5 second call: want 429, got %d", rec3.Code)
+	rl.ServeHTTP(rec3, r3)
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("request from different real client 203.0.113.6: want 200, got %d (rightmost-walk collapsed unrelated clients into one bucket)", rec3.Code)
+	}
+}
+
+// TestRateLimiter_UntrustedPeerIgnoresXFF guards the half of the
+// trust model that catches a direct attacker spoofing XFF when the
+// service is exposed to the public internet without (or alongside) a
+// proxy. If the peer itself is not in the trusted-proxy set, XFF must
+// be ignored regardless of what the trusted-proxy config says.
+func TestRateLimiter_UntrustedPeerIgnoresXFF(t *testing.T) {
+	t.Parallel()
+	clk := &stubClock{now: time.Unix(1_700_000_000, 0)}
+	backend := &countedHandler{}
+	trusted, err := middleware.ParseTrustedProxies("10.0.0.0/8")
+	if err != nil {
+		t.Fatalf("ParseTrustedProxies: %v", err)
+	}
+	rl := middleware.NewRateLimiter(backend, middleware.RateLimitConfig{
+		Rate:           1,
+		Burst:          1,
+		Now:            clk.Now,
+		IdleTTL:        time.Minute,
+		TrustedProxies: trusted,
+	})
+	t.Cleanup(rl.Stop)
+
+	// Peer 203.0.113.10 is NOT trusted. XFF is attacker-controlled.
+	// Two requests with rotated XFF must share the same bucket.
+	r1 := newRequest(t, "203.0.113.10", "/")
+	r1.Header.Set("X-Forwarded-For", "198.51.100.1")
+	r2 := newRequest(t, "203.0.113.10", "/")
+	r2.Header.Set("X-Forwarded-For", "198.51.100.2")
+
+	rec1 := httptest.NewRecorder()
+	rl.ServeHTTP(rec1, r1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first: %d", rec1.Code)
+	}
+	rec2 := httptest.NewRecorder()
+	rl.ServeHTTP(rec2, r2)
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("untrusted-peer XFF spoof bypassed bucket: want 429, got %d", rec2.Code)
+	}
+}
+
+// TestParseTrustedProxies covers the configuration parser: bare
+// addresses expand to host prefixes, CIDR prefixes pass through,
+// empty / whitespace entries are skipped, and malformed entries fail
+// fast.
+func TestParseTrustedProxies(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in      string
+		wantLen int
+		wantErr bool
+	}{
+		{"", 0, false},
+		{"   ", 0, false},
+		{"10.0.0.0/8", 1, false},
+		{"10.0.0.0/8,192.168.0.0/16", 2, false},
+		{"10.0.0.1", 1, false},
+		{"10.0.0.1, 10.0.0.2,", 2, false},
+		{"::1", 1, false},
+		{"fd00::/8", 1, false},
+		{"not-an-ip", 0, true},
+		{"10.0.0.0/99", 0, true},
+	}
+	for _, tc := range cases {
+		got, err := middleware.ParseTrustedProxies(tc.in)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("ParseTrustedProxies(%q): err=%v wantErr=%v", tc.in, err, tc.wantErr)
+			continue
+		}
+		if !tc.wantErr && len(got) != tc.wantLen {
+			t.Errorf("ParseTrustedProxies(%q): len=%d want=%d", tc.in, len(got), tc.wantLen)
+		}
 	}
 }

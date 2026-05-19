@@ -64,6 +64,89 @@ func TestWithTraceContext_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestWithTraceContext_OrderInvariantWithWithHeaders pins the
+// invariant the consumer side relies on: PublishOption ordering MUST
+// NOT affect whether traceparent survives in the resolved headers.
+//
+// The functional-options pattern lets callers compose
+// [WithTraceContext], [WithHeader], and [WithHeaders] in any order;
+// because each option mutates the shared Headers map by key (rather
+// than replacing it) the trace headers must coexist with any
+// non-overlapping operator-supplied headers regardless of when they
+// were appended. We verify both orderings here: with [WithHeaders]
+// first the trace inject sees a pre-populated map and must merge
+// into it; with [WithTraceContext] first the merge runs in the
+// other direction.
+//
+// If a future refactor regresses this — e.g. by overwriting Headers
+// instead of merging — the downstream span reconstruction in
+// `pkg/events/nats/consumer.go` silently breaks and traces fall back
+// to root spans. This test exists to catch that regression at the
+// option layer, where it is cheap to fix.
+func TestWithTraceContext_OrderInvariantWithWithHeaders(t *testing.T) {
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() { otel.SetTextMapPropagator(propagation.TraceContext{}) })
+
+	traceID, _ := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	spanID, _ := trace.SpanIDFromHex("00f067aa0ba902b7")
+	parent := trace.ContextWithRemoteSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    traceID,
+		SpanID:     spanID,
+		TraceFlags: trace.FlagsSampled,
+		Remote:     true,
+	}))
+	custom := map[string]string{"x-tenant-region": "us-east-1", "x-feature": "tier0"}
+
+	got1 := events.ResolvePublishOptions(events.PublishOptions{},
+		events.WithTraceContext(parent),
+		events.WithHeaders(custom),
+	)
+	if got1.Headers[events.HeaderTraceparent] == "" {
+		t.Fatalf("WithTraceContext-then-WithHeaders dropped traceparent: %v", got1.Headers)
+	}
+	if got1.Headers["x-tenant-region"] != "us-east-1" || got1.Headers["x-feature"] != "tier0" {
+		t.Fatalf("WithTraceContext-then-WithHeaders dropped custom headers: %v", got1.Headers)
+	}
+
+	got2 := events.ResolvePublishOptions(events.PublishOptions{},
+		events.WithHeaders(custom),
+		events.WithTraceContext(parent),
+	)
+	if got2.Headers[events.HeaderTraceparent] == "" {
+		t.Fatalf("WithHeaders-then-WithTraceContext dropped traceparent: %v", got2.Headers)
+	}
+	if got2.Headers["x-tenant-region"] != "us-east-1" || got2.Headers["x-feature"] != "tier0" {
+		t.Fatalf("WithHeaders-then-WithTraceContext dropped custom headers: %v", got2.Headers)
+	}
+
+	// Both orderings must produce the same traceparent — the option
+	// pattern is for ergonomic composition, not for selecting
+	// different trace IDs.
+	if got1.Headers[events.HeaderTraceparent] != got2.Headers[events.HeaderTraceparent] {
+		t.Fatalf("traceparent diverged across orderings: %q vs %q",
+			got1.Headers[events.HeaderTraceparent],
+			got2.Headers[events.HeaderTraceparent])
+	}
+}
+
+// TestWithHeaders_DoesNotOverwriteUnrelatedKeys is the companion
+// guard for [TestWithTraceContext_OrderInvariantWithWithHeaders]:
+// WithHeaders' contract per its docstring is "existing keys are
+// overwritten", which must mean keys-supplied-to-WithHeaders, NOT
+// the entire map. This test asserts that distinction.
+func TestWithHeaders_DoesNotOverwriteUnrelatedKeys(t *testing.T) {
+	opts := events.ResolvePublishOptions(events.PublishOptions{},
+		events.WithHeader("traceparent", "00-aaaa-bbbb-01"),
+		events.WithHeaders(map[string]string{"x-feature": "tier0"}),
+	)
+	if got := opts.Headers["traceparent"]; got != "00-aaaa-bbbb-01" {
+		t.Fatalf("WithHeaders wiped unrelated keys: traceparent=%q", got)
+	}
+	if got := opts.Headers["x-feature"]; got != "tier0" {
+		t.Fatalf("WithHeaders failed to merge new key: x-feature=%q", got)
+	}
+}
+
 // TestWithTraceContext_NoOpWithoutSpan asserts that calling
 // WithTraceContext against a context without any active span does
 // not inject a malformed traceparent header — observability is

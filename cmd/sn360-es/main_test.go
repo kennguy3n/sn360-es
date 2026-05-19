@@ -241,7 +241,11 @@ func TestWrapMiddleware_AppliesChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildMux: %v", err)
 	}
-	srv := httptest.NewServer(wrapMiddleware(mux, app))
+	wrapped, werr := wrapMiddleware(mux, app)
+	if werr != nil {
+		t.Fatalf("wrapMiddleware: %v", werr)
+	}
+	srv := httptest.NewServer(wrapped)
 	t.Cleanup(srv.Close)
 
 	t.Run("healthz remains reachable through chain", func(t *testing.T) {

@@ -418,6 +418,17 @@ type RateLimit struct {
 	Burst           int
 	CleanupInterval time.Duration
 	IdleTTL         time.Duration
+	// TrustedProxies is the raw comma-separated list of reverse-proxy
+	// CIDR ranges from RATE_LIMIT_TRUSTED_PROXIES. Parsing happens at
+	// the wiring layer so a malformed entry fails boot fast rather
+	// than silently widening (or narrowing) the trust set.
+	//
+	// When empty, the limiter buckets on r.RemoteAddr only and
+	// ignores X-Forwarded-For / X-Real-IP entirely. Operators
+	// deploying behind a single ALB should set e.g.
+	// RATE_LIMIT_TRUSTED_PROXIES=10.0.0.0/8 so the limiter picks the
+	// real client IP from the ALB-appended XFF.
+	TrustedProxies string
 }
 
 // Load reads configuration from the environment.
@@ -560,6 +571,7 @@ func Load() (Config, error) {
 			Burst:           getInt("RATE_LIMIT_BURST", 60),
 			CleanupInterval: getDuration("RATE_LIMIT_CLEANUP_INTERVAL", time.Minute),
 			IdleTTL:         getDuration("RATE_LIMIT_IDLE_TTL", 5*time.Minute),
+			TrustedProxies:  getStr("RATE_LIMIT_TRUSTED_PROXIES", ""),
 		},
 		SMTP: SMTP{
 			Host:       getStr("SMTP_HOST", ""),

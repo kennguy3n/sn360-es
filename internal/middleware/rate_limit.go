@@ -2,8 +2,10 @@ package middleware
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,9 +39,21 @@ type RateLimitConfig struct {
 	IdleTTL time.Duration
 	// Now is an injectable clock for tests. Defaults to time.Now.
 	Now func() time.Time
-	// ClientIP extracts the client IP from a request. Defaults to
-	// [DefaultClientIP], which respects X-Forwarded-For when present.
+	// ClientIP extracts the client IP from a request. When nil the
+	// middleware constructs one from TrustedProxies: an empty
+	// TrustedProxies set yields [DefaultClientIP] (which trusts no
+	// proxy headers); a non-empty set yields [ProxyAwareClientIP]
+	// (which walks X-Forwarded-For from the right past trusted
+	// proxies). Callers may also supply their own extractor — useful
+	// for tests or for stacks that key on something other than IP
+	// (e.g. authenticated tenant ID).
 	ClientIP func(*http.Request) string
+	// TrustedProxies is the list of reverse-proxy / ALB CIDR ranges
+	// whose X-Forwarded-For chain we trust. When empty the middleware
+	// refuses to read proxy headers and buckets on r.RemoteAddr only
+	// — the safe default for a service deployed without a proxy in
+	// front. Use [ParseTrustedProxies] to populate from configuration.
+	TrustedProxies []netip.Prefix
 	// SkipPaths is the list of exact paths that bypass rate limiting
 	// (e.g. /healthz, /metrics). Trailing slash makes the entry a
 	// prefix match (so "/docs/" matches "/docs/swagger.css").
@@ -100,7 +114,7 @@ func NewRateLimiter(next http.Handler, cfg RateLimitConfig) *RateLimiter {
 		cfg.Now = time.Now
 	}
 	if cfg.ClientIP == nil {
-		cfg.ClientIP = DefaultClientIP
+		cfg.ClientIP = ProxyAwareClientIP(cfg.TrustedProxies)
 	}
 
 	skip := make(map[string]bool, len(cfg.SkipPaths))
@@ -273,27 +287,148 @@ func (b *bucket) retryAfter(rate float64) time.Duration {
 	return time.Duration(secs * float64(time.Second))
 }
 
-// DefaultClientIP extracts the originating client IP from a request,
-// respecting X-Forwarded-For when present (we trust it because the
-// production deployment terminates TLS at an ALB that rewrites the
-// header). Falls back to RemoteAddr otherwise.
+// DefaultClientIP extracts the originating client IP from a request
+// without trusting any proxy headers. It returns the host portion of
+// r.RemoteAddr — the only value an attacker cannot forge, since
+// RemoteAddr is the actual TCP peer.
+//
+// X-Forwarded-For / X-Real-IP are NEVER trusted by this function. If
+// the service sits behind a trusted reverse proxy / ALB that appends
+// the real client IP to XFF, configure that proxy's CIDR via
+// [RateLimitConfig.TrustedProxies] and the middleware will use
+// [ProxyAwareClientIP] instead, which safely walks XFF from the right.
+//
+// This is the secure default: a service mistakenly deployed without a
+// proxy in front cannot be tricked into rate-limiting (or releasing
+// the bucket for) any IP an attacker chooses to put in the header.
 func DefaultClientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// XFF is a comma-separated list; the leftmost entry is the
-		// originating client.
-		if i := strings.IndexByte(xff, ','); i > 0 {
-			return strings.TrimSpace(xff[:i])
+	return remoteAddrHost(r)
+}
+
+// ProxyAwareClientIP returns a ClientIP function that walks the
+// X-Forwarded-For chain from the rightmost (closest-to-server) entry
+// backwards, skipping entries whose IP falls inside any
+// trustedProxies CIDR, and returns the first untrusted IP it
+// encounters as the originating client.
+//
+// XFF is consulted ONLY when the immediate TCP peer (r.RemoteAddr) is
+// itself a trusted proxy. If the peer is not trusted, the function
+// behaves like [DefaultClientIP] and returns the peer address —
+// preventing a direct attacker from spoofing the header.
+//
+// This implements the only safe XFF-trust pattern: production AWS
+// ALBs (and most other reverse proxies) APPEND the real client IP to
+// any client-supplied X-Forwarded-For header rather than replacing
+// it. Walking from the left, as naive parsers do, returns the
+// attacker-controlled value. Walking from the right past known
+// proxies returns the first hop the proxy itself observed — the real
+// client.
+//
+// If trustedProxies is empty the returned function is equivalent to
+// [DefaultClientIP] and trusts no headers.
+func ProxyAwareClientIP(trustedProxies []netip.Prefix) func(*http.Request) string {
+	if len(trustedProxies) == 0 {
+		return DefaultClientIP
+	}
+	prefixes := append([]netip.Prefix(nil), trustedProxies...)
+	return func(r *http.Request) string {
+		host := remoteAddrHost(r)
+		peer, err := netip.ParseAddr(host)
+		if err != nil || !isTrustedProxy(peer, prefixes) {
+			// Peer is not a trusted proxy — refuse to trust any
+			// header it set or relayed. Return the peer itself.
+			return host
 		}
-		return strings.TrimSpace(xff)
+		// Peer is trusted; consult X-Forwarded-For from the right.
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			for i := len(parts) - 1; i >= 0; i-- {
+				candidate := strings.TrimSpace(parts[i])
+				if candidate == "" {
+					continue
+				}
+				addr, perr := netip.ParseAddr(candidate)
+				if perr != nil {
+					// Malformed entry — refuse to use it,
+					// but keep walking left in case a
+					// later (i.e. earlier-in-chain) entry
+					// is valid and untrusted.
+					continue
+				}
+				if isTrustedProxy(addr, prefixes) {
+					continue
+				}
+				return addr.String()
+			}
+		}
+		// Header missing or every entry was a trusted proxy. The
+		// real client is the immediate peer (which is itself a
+		// trusted proxy here — degenerate but safe: we bucket on
+		// the proxy IP rather than fabricating a client).
+		return host
 	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
-	}
+}
+
+// remoteAddrHost extracts the host portion of r.RemoteAddr, which is
+// the actual TCP peer the listener accepted from. This is the only
+// piece of request metadata an attacker cannot influence directly.
+func remoteAddrHost(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// isTrustedProxy reports whether addr is contained by any of the
+// configured trusted-proxy prefixes. The function unmaps IPv4-mapped
+// IPv6 addresses so a configured 10.0.0.0/8 prefix matches both
+// 10.1.2.3 and ::ffff:10.1.2.3.
+func isTrustedProxy(addr netip.Addr, prefixes []netip.Prefix) bool {
+	candidate := addr.Unmap()
+	for _, p := range prefixes {
+		if p.Contains(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseTrustedProxies parses a comma-separated list of IP addresses
+// and CIDR prefixes into a normalised slice of [netip.Prefix].
+//
+// Bare addresses (e.g. "10.0.0.1") are expanded to a host-bit-length
+// prefix ("10.0.0.1/32"). CIDR prefixes pass through unchanged.
+// Empty entries are skipped so operators can use trailing commas in
+// environment variables without diagnostics.
+//
+// Returns an error on the first malformed entry so misconfiguration
+// fails fast at startup rather than silently widening the trust set.
+func ParseTrustedProxies(csv string) ([]netip.Prefix, error) {
+	if strings.TrimSpace(csv) == "" {
+		return nil, nil
+	}
+	var out []netip.Prefix
+	for _, raw := range strings.Split(csv, ",") {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			p, err := netip.ParsePrefix(entry)
+			if err != nil {
+				return nil, fmt.Errorf("trusted proxy %q: %w", entry, err)
+			}
+			out = append(out, p.Masked())
+			continue
+		}
+		addr, err := netip.ParseAddr(entry)
+		if err != nil {
+			return nil, fmt.Errorf("trusted proxy %q: %w", entry, err)
+		}
+		out = append(out, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+	return out, nil
 }
 
 func writeRateLimitError(w http.ResponseWriter, status int, message string, retry time.Duration) {

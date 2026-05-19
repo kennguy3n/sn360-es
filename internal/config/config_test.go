@@ -1,6 +1,12 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/base32"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -225,5 +231,211 @@ func TestIsLowEntropy(t *testing.T) {
 				t.Fatalf("isLowEntropy(%q) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestIsLowEntropy_RealisticSecretsNeverFalsePositive is a property
+// test that drives isLowEntropy with the four secret encodings ken
+// would actually generate at the command line — UUID hex, base32,
+// base58, and base64 — at the two lengths production validation
+// actually uses (the 16-byte ONBOARDING_STATE_SECRET gate at config.go
+// validate() and the 32-byte BANNER_TOKEN_SECRET gate). The function
+// must classify each generated value as high-entropy, otherwise a
+// legitimate `openssl rand -base64 32` output would prevent the
+// binary from booting in production.
+//
+// The pool size (1000 samples per shape) catches statistical edge
+// cases — periodic accidents, monotone-run accidents — that a
+// hand-picked test table would miss. Failures fail the test with the
+// offending sample so the regression is reproducible by inspection.
+func TestIsLowEntropy_RealisticSecretsNeverFalsePositive(t *testing.T) {
+	t.Parallel()
+
+	// Realistic v4 UUIDs without hyphens — what `uuidgen | tr -d '-'`
+	// produces and what services occasionally use as state secrets.
+	// 32 hex chars = 16 bytes of randomness, encoded as 16 distinct
+	// nibble characters.
+	t.Run("uuid-hex-32", func(t *testing.T) {
+		for i := 0; i < 1000; i++ {
+			raw := make([]byte, 16)
+			if _, err := rand.Read(raw); err != nil {
+				t.Fatalf("rand.Read: %v", err)
+			}
+			// Stamp v4 / variant bits so generated values look
+			// like real UUIDs (does not affect entropy).
+			raw[6] = (raw[6] & 0x0f) | 0x40
+			raw[8] = (raw[8] & 0x3f) | 0x80
+			s := hex.EncodeToString(raw)
+			if isLowEntropy(s) {
+				t.Fatalf("uuid-hex sample %d=%q false-positive (Shannon should be ~4 bits/byte over 16 distinct symbols)", i, s)
+			}
+		}
+	})
+
+	// 32 random bytes encoded as 64 hex chars — what
+	// `openssl rand -hex 32` emits. Same alphabet as UUID hex but
+	// double the length, so a property accident at length 32 still
+	// has another 1000 trials at length 64.
+	t.Run("hex-64", func(t *testing.T) {
+		for i := 0; i < 1000; i++ {
+			raw := make([]byte, 32)
+			if _, err := rand.Read(raw); err != nil {
+				t.Fatalf("rand.Read: %v", err)
+			}
+			s := hex.EncodeToString(raw)
+			if isLowEntropy(s) {
+				t.Fatalf("hex-64 sample %d=%q false-positive", i, s)
+			}
+		}
+	})
+
+	// 32 random bytes encoded as base32 (no padding) — used by some
+	// configuration tools and by `openssl rand -base32`. Alphabet
+	// of 32 distinct chars, Shannon ≈ 5 bits/byte.
+	t.Run("base32-32bytes", func(t *testing.T) {
+		enc := base32.StdEncoding.WithPadding(base32.NoPadding)
+		for i := 0; i < 1000; i++ {
+			raw := make([]byte, 32)
+			if _, err := rand.Read(raw); err != nil {
+				t.Fatalf("rand.Read: %v", err)
+			}
+			s := enc.EncodeToString(raw)
+			if isLowEntropy(s) {
+				t.Fatalf("base32 sample %d=%q false-positive (len=%d)", i, s, len(s))
+			}
+		}
+	})
+
+	// Base58 (Bitcoin alphabet, no 0/O/I/l) — what some k8s secret
+	// generators emit. Alphabet of 58 distinct chars, Shannon ≈
+	// 5.86 bits/byte.
+	t.Run("base58-32bytes", func(t *testing.T) {
+		const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+		for i := 0; i < 1000; i++ {
+			// Sample one character per output byte directly
+			// from crypto/rand using rejection sampling so the
+			// alphabet stays uniform. This sidesteps the
+			// big-int divisions of a real base58 encoder while
+			// producing the same character distribution.
+			out := make([]byte, 44) // ≈ 32 bytes of base58 worth of payload
+			for j := range out {
+				out[j] = uniformByte(t, alphabet)
+			}
+			s := string(out)
+			if isLowEntropy(s) {
+				t.Fatalf("base58 sample %d=%q false-positive", i, s)
+			}
+		}
+	})
+
+	// 32 random bytes encoded as raw base64 (no padding) — what
+	// `openssl rand -base64 32` produces after stripping the
+	// trailing '=='. Alphabet of 64 distinct chars, Shannon ≈
+	// 6 bits/byte.
+	t.Run("base64-32bytes", func(t *testing.T) {
+		for i := 0; i < 1000; i++ {
+			raw := make([]byte, 32)
+			if _, err := rand.Read(raw); err != nil {
+				t.Fatalf("rand.Read: %v", err)
+			}
+			s := base64.RawStdEncoding.EncodeToString(raw)
+			if isLowEntropy(s) {
+				t.Fatalf("base64-32 sample %d=%q false-positive", i, s)
+			}
+		}
+	})
+
+	// 64 random bytes encoded as base64 — what the wider
+	// JWT-friendly env vars use. Higher entropy budget; failure here
+	// would indicate a structural bug in isLowEntropy because the
+	// signal-to-noise of 64 base64 chars is overwhelming.
+	t.Run("base64-64bytes", func(t *testing.T) {
+		for i := 0; i < 1000; i++ {
+			raw := make([]byte, 64)
+			if _, err := rand.Read(raw); err != nil {
+				t.Fatalf("rand.Read: %v", err)
+			}
+			s := base64.RawStdEncoding.EncodeToString(raw)
+			if isLowEntropy(s) {
+				t.Fatalf("base64-64 sample %d=%q false-positive", i, s)
+			}
+		}
+	})
+}
+
+// uniformByte returns a single character from alphabet using
+// rejection sampling on crypto/rand, so the resulting distribution is
+// uniform across alphabet regardless of |alphabet|. Used for
+// alphabet-based property generation (e.g. base58) where we want the
+// natural character distribution rather than a constructed encoder.
+func uniformByte(t *testing.T, alphabet string) byte {
+	t.Helper()
+	n := uint16(len(alphabet))
+	// Largest multiple of n that fits in a byte; reject the
+	// remainder so each draw stays uniform. The arithmetic is done
+	// in uint16 to keep 256 representable.
+	cutoff := uint16(256) - (uint16(256) % n)
+	for {
+		var b [1]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			t.Fatalf("rand.Read: %v", err)
+		}
+		if uint16(b[0]) < cutoff {
+			return alphabet[uint16(b[0])%n]
+		}
+	}
+}
+
+// TestIsLowEntropy_CryptoRandomBytesAreHighEntropy is the most
+// general property the function must satisfy: any 32 random bytes
+// converted to a printable hex string (the cheapest realistic
+// representation we can both generate and feed back through the
+// validator) must look high-entropy. This 1000-trial run is what the
+// reviewer asked for under M4.
+func TestIsLowEntropy_CryptoRandomBytesAreHighEntropy(t *testing.T) {
+	t.Parallel()
+	for i := 0; i < 1000; i++ {
+		raw := make([]byte, 32)
+		if _, err := rand.Read(raw); err != nil {
+			t.Fatalf("rand.Read: %v", err)
+		}
+		s := hex.EncodeToString(raw)
+		if isLowEntropy(s) {
+			t.Fatalf("crypto-random 32-byte secret sample %d=%q false-positive — production gate would refuse a legitimate openssl-rand secret", i, s)
+		}
+	}
+}
+
+// TestIsLowEntropy_CatchesKnownWeakInputs guards the other side of
+// the contract: the function must still trip on the structural-weak
+// inputs it was designed for. The cases below are constructed
+// (rather than randomised) because they are the patterns operators
+// type by hand when they don't realise the secret matters.
+//
+// All cases here either (a) fail the Shannon ≥ 3.0 floor, (b) contain
+// a monotone run ≥ ceil(len/2), or (c) tile the string with a period
+// that divides len exactly. These are the three structural shapes
+// isLowEntropy is documented to catch. Borderline inputs (e.g. a
+// non-tiling periodic-looking string whose period does not divide
+// the length) are explicitly outside scope — the production gate
+// invokes isLowEntropy alongside a min-length check, and operators
+// who manage to type a 32-byte secret whose only weakness is a
+// 10-character cycle that doesn't tile have crossed enough other
+// guardrails that we don't need to block them here.
+func TestIsLowEntropy_CatchesKnownWeakInputs(t *testing.T) {
+	t.Parallel()
+	weak := []string{
+		strings.Repeat("a", 32),                  // Shannon = 0
+		strings.Repeat("a", 64),                  // Shannon = 0
+		"abcdefghijklmnopqrstuvwxyz012345",       // monotone run ≥ 26
+		strings.Repeat("ab", 32),                 // period 2 tiles len 64
+		strings.Repeat("abcd", 16),               // period 4 tiles len 64
+		strings.Repeat("password", 4),            // period 8 tiles len 32
+		fmt.Sprintf("%s%s", strings.Repeat("01234567", 4), ""), // period 8 tiles len 32
+	}
+	for i, s := range weak {
+		if !isLowEntropy(s) {
+			t.Fatalf("weak input %d=%q passed isLowEntropy", i, s)
+		}
 	}
 }
