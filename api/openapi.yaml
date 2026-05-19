@@ -448,6 +448,21 @@ components:
         verdict:
           type: string
 
+    OnboardingStatus:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+        status:
+          type: string
+          enum: [not_started, in_progress, completed]
+        users_discovered:
+          type: integer
+        groups_discovered:
+          type: integer
+        needs_review_count:
+          type: integer
+
   /v1/onboarding/start:
     get:
       tags: [onboarding]
@@ -573,18 +588,3 @@ components:
                     example: revoked
         "400":
           $ref: "#/components/responses/Error"
-
-    OnboardingStatus:
-      type: object
-      properties:
-        tenant_id:
-          type: string
-        status:
-          type: string
-          enum: [not_started, in_progress, completed]
-        users_discovered:
-          type: integer
-        groups_discovered:
-          type: integer
-        needs_review_count:
-          type: integer

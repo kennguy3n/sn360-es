@@ -1909,7 +1909,9 @@ func (a *application) handleOnboarding(ctx context.Context, msg events.Message) 
 				Provider:  agent.Provider(env.Provider),
 				StartedAt: time.Now().UTC(),
 			}
+			a.bgWG.Add(1)
 			go func() {
+				defer a.bgWG.Done()
 				bgCtx := context.WithoutCancel(ctx)
 				if _, err := a.onboardAgent.Onboard(bgCtx, tctx); err != nil {
 					a.logger.Error("sn360-es: onboarding agent failed",
@@ -2087,7 +2089,7 @@ func buildMux(app *application) (http.Handler, error) {
 		reg := app.providers
 		checkers = append(checkers, handler.HealthCheckerFunc{N: "provider_registry", F: func(_ context.Context) error {
 			if !reg.hasAny() {
-				return fmt.Errorf("provider registry has no tenants registered")
+				logger.Warn("readyz: provider registry has no tenants registered")
 			}
 			return nil
 		}})
@@ -2256,6 +2258,11 @@ func defaultAuthSkipPaths() []string {
 		// only returns static localised copy, so skipping auth
 		// here is safe — no tenant scoping is needed.
 		"/v1/education/lesson/",
+		// OAuth callback is hit by the IdP redirect — the browser
+		// will not carry a Bearer JWT. Start also needs to be
+		// reachable for the initial consent redirect.
+		"/v1/onboarding/callback",
+		"/v1/onboarding/start",
 	}
 }
 
@@ -3898,10 +3905,10 @@ func buildOnboardingService(cfg *config.Config, logger *slog.Logger, app *applic
 
 	// Provider configs.
 	providers := make(map[onboarding.ProviderType]onboarding.ProviderConfig)
-	if cfg.GWS.HasGmail() {
+	if cfg.GWS.OAuthClientID != "" && cfg.GWS.OAuthClientSecret != "" {
 		providers[onboarding.ProviderGoogle] = onboarding.ProviderConfig{
-			ClientID:     cfg.GWS.ServiceAccountJSON,
-			ClientSecret: "service-account",
+			ClientID:     cfg.GWS.OAuthClientID,
+			ClientSecret: cfg.GWS.OAuthClientSecret,
 			AuthURL:      "https://accounts.google.com/o/oauth2/v2/auth",
 			TokenURL:     "https://oauth2.googleapis.com/token",
 			Scopes:       []string{"https://www.googleapis.com/auth/admin.directory.user.readonly", "https://www.googleapis.com/auth/admin.directory.group.readonly"},
@@ -3931,17 +3938,22 @@ func buildOnboardingService(cfg *config.Config, logger *slog.Logger, app *applic
 		}
 	}
 
-	// Provider registrar.
+	// Provider registrar — holds a pointer to the service which is
+	// set below after NewService returns. RegisterFromToken is only
+	// called post-construction (from the callback handler), so the
+	// pointer is always populated before first use.
+	var reg *providerRegistrarAdapter
 	var registrar onboarding.ProviderRegistrar
 	if app.providers != nil {
-		registrar = &providerRegistrarAdapter{
+		reg = &providerRegistrarAdapter{
 			registry: app.providers,
 			cfg:      cfg,
 			logger:   logger,
 		}
+		registrar = reg
 	}
 
-	return onboarding.NewService(onboarding.ServiceConfig{
+	svc, svcErr := onboarding.NewService(onboarding.ServiceConfig{
 		Providers: providers,
 		Store:     store,
 		Exch:      exch,
@@ -3952,6 +3964,13 @@ func buildOnboardingService(cfg *config.Config, logger *slog.Logger, app *applic
 		Validator: validator,
 		Logger:    logger,
 	})
+	if svcErr != nil {
+		return nil, svcErr
+	}
+	if reg != nil {
+		reg.svc = svc
+	}
+	return svc, nil
 }
 
 // aesGCMTokenEncryptor implements onboarding.TokenEncryptor using
@@ -3992,9 +4011,16 @@ func (e *aesGCMTokenEncryptor) Decrypt(ciphertext []byte) ([]byte, error) {
 }
 
 // buildTokenEncryptor returns an onboarding.TokenEncryptor for the
-// PgTokenStore. It re-uses the mock-KMS key when available so the
-// same credential protects both URL pre-images and OAuth tokens.
+// PgTokenStore. Priority: ONBOARDING_TOKEN_KEY_HEX (dedicated) →
+// KMS_MOCK_KEY_HEX (shared) → derived from StateSecret (fallback).
 func buildTokenEncryptor(cfg *config.Config, logger *slog.Logger) (onboarding.TokenEncryptor, error) {
+	if seed := strings.TrimSpace(cfg.Onboarding.TokenKeyHex); seed != "" {
+		decoded, err := hex.DecodeString(seed)
+		if err == nil && len(decoded) == 32 {
+			logger.Info("sn360-es: onboarding token encryptor using ONBOARDING_TOKEN_KEY_HEX")
+			return newAESGCMTokenEncryptor(decoded)
+		}
+	}
 	if seed := strings.TrimSpace(cfg.AWS.KMSMockKeyHex); seed != "" {
 		decoded, err := hex.DecodeString(seed)
 		if err == nil && len(decoded) == 32 {
@@ -4002,10 +4028,8 @@ func buildTokenEncryptor(cfg *config.Config, logger *slog.Logger) (onboarding.To
 			return newAESGCMTokenEncryptor(decoded)
 		}
 	}
-	// Derive a key from the onboarding state secret so we always have
-	// a deterministic encryption key even without KMS_MOCK_KEY_HEX.
 	h := sha256.Sum256([]byte("onboarding-token-encryption:" + cfg.Onboarding.StateSecret))
-	logger.Info("sn360-es: onboarding token encryptor using derived key from state secret")
+	logger.Warn("sn360-es: onboarding token encryptor using derived key from state secret; set ONBOARDING_TOKEN_KEY_HEX for production")
 	return newAESGCMTokenEncryptor(h[:])
 }
 
@@ -4014,7 +4038,6 @@ func buildTokenEncryptor(cfg *config.Config, logger *slog.Logger) (onboarding.To
 // the repository layer.
 type onboardingServiceAdapter struct {
 	svc   *onboarding.Service
-	store onboarding.TokenStore
 	repos *repository.Registry
 }
 
@@ -4047,8 +4070,17 @@ func (a *onboardingServiceAdapter) Status(ctx context.Context, tenantID string) 
 			status.GroupsDiscovered = len(groups)
 		}
 	}
-	if status.UsersDiscovered > 0 || status.GroupsDiscovered > 0 {
+	switch {
+	case status.UsersDiscovered > 0 || status.GroupsDiscovered > 0:
 		status.Status = "completed"
+	case a.svc != nil:
+		// Token exists but no users/groups discovered yet → in_progress.
+		for _, p := range []onboarding.ProviderType{onboarding.ProviderGoogle, onboarding.ProviderMicrosoft} {
+			if _, err := a.svc.TokenFor(ctx, tenantID, p); err == nil {
+				status.Status = "in_progress"
+				break
+			}
+		}
 	}
 	return status, nil
 }

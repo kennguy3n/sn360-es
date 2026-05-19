@@ -292,6 +292,12 @@ type GWS struct {
 	// AdminBaseURL overrides the Admin SDK endpoint; production
 	// leaves this blank to use https://admin.googleapis.com.
 	AdminBaseURL string
+	// OAuthClientID and OAuthClientSecret are the web-application
+	// OAuth 2.0 credentials used by the self-service onboarding
+	// consent flow (separate from the domain-wide-delegation service
+	// account). Only needed when the onboarding service is enabled.
+	OAuthClientID     string
+	OAuthClientSecret string
 }
 
 // O365 holds Microsoft 365 client-credentials configuration. All
@@ -374,6 +380,11 @@ type Onboarding struct {
 	StateSecret string
 	// CallbackURL is the redirect URI registered with providers.
 	CallbackURL string
+	// TokenKeyHex is an optional 32-byte hex-encoded AES-256 key
+	// dedicated to encrypting OAuth tokens at rest. When empty the
+	// encryptor falls back to KMS_MOCK_KEY_HEX, then to a key
+	// derived from StateSecret.
+	TokenKeyHex string
 }
 
 // CORS configures the cross-origin policy applied to every HTTP route.
@@ -551,9 +562,11 @@ func Load() (Config, error) {
 			// (which used to be trimmed in providers.go) from
 			// the TenantID (which is not), and action consumers
 			// drop every event for the tenant.
-			Domain:       strings.TrimSpace(getStr("GWS_DOMAIN", "")),
-			BaseURL:      getStr("GWS_GMAIL_BASE_URL", ""),
-			AdminBaseURL: getStr("GWS_ADMIN_BASE_URL", ""),
+			Domain:            strings.TrimSpace(getStr("GWS_DOMAIN", "")),
+			BaseURL:           getStr("GWS_GMAIL_BASE_URL", ""),
+			AdminBaseURL:      getStr("GWS_ADMIN_BASE_URL", ""),
+			OAuthClientID:     strings.TrimSpace(getStr("GWS_OAUTH_CLIENT_ID", "")),
+			OAuthClientSecret: getStr("GWS_OAUTH_CLIENT_SECRET", ""),
 		},
 		O365: O365{
 			ClientID:     strings.TrimSpace(getStr("O365_CLIENT_ID", "")),
@@ -583,6 +596,7 @@ func Load() (Config, error) {
 		Onboarding: Onboarding{
 			StateSecret: getStr("ONBOARDING_STATE_SECRET", ""),
 			CallbackURL: getStr("ONBOARDING_CALLBACK_URL", ""),
+			TokenKeyHex: getStr("ONBOARDING_TOKEN_KEY_HEX", ""),
 		},
 	}
 

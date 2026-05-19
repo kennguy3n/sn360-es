@@ -378,6 +378,7 @@ var ErrNoProvider = errors.New("provider registry: no entry for tenant")
 // registering them in the runtime registry.
 type providerRegistrarAdapter struct {
 	registry *providerRegistry
+	svc      *onboarding.Service
 	cfg      *config.Config
 	logger   *slog.Logger
 }
@@ -392,7 +393,7 @@ func (a *providerRegistrarAdapter) RegisterFromToken(ctx context.Context, tenant
 			slog.String("tenant_id", tenantID))
 		return nil
 	case onboarding.ProviderMicrosoft:
-		entry, err := buildOutlookEntryFromToken(ctx, a.cfg, token, a.logger)
+		entry, err := buildOutlookEntryFromToken(ctx, a.cfg, tenantID, a.svc, a.logger)
 		if err != nil {
 			return fmt.Errorf("provider-registrar: build outlook entry: %w", err)
 		}
@@ -405,14 +406,18 @@ func (a *providerRegistrarAdapter) RegisterFromToken(ctx context.Context, tenant
 	}
 }
 
-// buildOutlookEntryFromToken constructs a providerEntry using the
-// OAuth token's access token as a static token source. This parallels
-// buildOutlookEntry but uses a pre-acquired token instead of client
-// credentials.
-func buildOutlookEntryFromToken(_ context.Context, cfg *config.Config, tok onboarding.Token, logger *slog.Logger) (*providerEntry, error) {
-	accessToken := tok.AccessToken
-	tokens := outlook.TokenSourceFunc(func(_ context.Context) (string, error) {
-		return accessToken, nil
+// buildOutlookEntryFromToken constructs a providerEntry with a
+// refreshing token source backed by the onboarding service's
+// TokenFor method. Each call to Token() loads the current token
+// from the encrypted store and transparently refreshes it when
+// expired, so the provider entry never goes stale.
+func buildOutlookEntryFromToken(_ context.Context, cfg *config.Config, tenantID string, svc *onboarding.Service, logger *slog.Logger) (*providerEntry, error) {
+	tokens := outlook.TokenSourceFunc(func(ctx context.Context) (string, error) {
+		tok, err := svc.TokenFor(ctx, tenantID, onboarding.ProviderMicrosoft)
+		if err != nil {
+			return "", fmt.Errorf("outlook token refresh: %w", err)
+		}
+		return tok.AccessToken, nil
 	})
 	baseURL := cfg.O365.BaseURL
 	label, err := outlook.New(outlook.Config{
