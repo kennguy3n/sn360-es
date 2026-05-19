@@ -221,39 +221,10 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		app.feedbackSvc = action.NewFeedbackService(logger, app.jwtIssuer, eventBus, nil)
 	}
 
-	// Shared quarantine store — a single instance is used by both the
-	// release-service path and the provider-aware quarantine service so
-	// that writes through one are visible to the other (critical when the
-	// backing store is in-memory rather than Redis).
+	// Quarantine store — a single instance shared by both the quarantine
+	// and release flows. Created here so it's available to the provider-
+	// aware QuarantineService built after providers are registered.
 	qstore := newQuarantineStore(app.redis)
-
-	// Quarantine service + release service.
-	if qencryptor, eerr := buildURLEncryptor(cfg, logger); eerr != nil {
-		logger.Warn("sn360-es: quarantine encryptor init failed", slog.Any("error", eerr))
-	} else {
-		qsvc, qerr := action.NewQuarantineService(action.QuarantineConfig{
-			Logger:    logger,
-			Store:     qstore,
-			Encryptor: qencryptor,
-			Publisher: eventBus,
-		})
-		if qerr != nil {
-			logger.Warn("sn360-es: quarantine service init failed", slog.Any("error", qerr))
-		} else {
-			reevaluator := newLatestVerdictReevaluator(app.repos, logger)
-			rsvc, rerr := action.NewReleaseService(action.ReleaseConfig{
-				Logger:      logger,
-				Quarantine:  qsvc,
-				Reevaluator: reevaluator,
-				Publisher:   eventBus,
-			})
-			if rerr == nil {
-				app.releaseSvc = rsvc
-			} else {
-				logger.Warn("sn360-es: release service init failed", slog.Any("error", rerr))
-			}
-		}
-	}
 
 	// URL rewriter.
 	if app.jwtIssuer != nil && app.redis != nil {
@@ -523,7 +494,12 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		app.labelApplier = action.NewLabelApplier(logger, labelCache, app.providers.labelProviders()...)
 	}
 
-	// Provider-aware quarantine service (reuses the shared qstore).
+	// Quarantine + release services.
+	//
+	// A single QuarantineService is built with providers so that
+	// ReleaseService.Release() can call Provider() to physically
+	// restore messages. Both the quarantine consumer and the release
+	// consumer use this same instance.
 	if qencryptor, eerr := buildURLEncryptor(cfg, logger); eerr == nil && app.providers != nil && app.providers.hasAny() {
 		qsvc, qerr := action.NewQuarantineService(action.QuarantineConfig{
 			Logger:    logger,
@@ -534,8 +510,20 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		})
 		if qerr == nil {
 			app.quarantineSvc = qsvc
+			reevaluator := newLatestVerdictReevaluator(app.repos, logger)
+			rsvc, rerr := action.NewReleaseService(action.ReleaseConfig{
+				Logger:      logger,
+				Quarantine:  qsvc,
+				Reevaluator: reevaluator,
+				Publisher:   eventBus,
+			})
+			if rerr == nil {
+				app.releaseSvc = rsvc
+			} else {
+				logger.Warn("sn360-es: release service init failed", slog.Any("error", rerr))
+			}
 		} else {
-			logger.Warn("sn360-es: provider-aware quarantine service init failed",
+			logger.Warn("sn360-es: quarantine service init failed",
 				slog.Any("error", qerr))
 		}
 	}
