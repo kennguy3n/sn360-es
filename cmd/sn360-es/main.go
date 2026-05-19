@@ -2226,11 +2226,18 @@ func buildMux(app *application) (http.Handler, error) {
 	// Vendor management CRUD.
 	if app.repos != nil && app.repos.Vendors != nil {
 		vendorH := handler.NewVendorHandler(logger, app.repos.Vendors)
-		mux.HandleFunc("/v1/vendors", vendorH.ServeList)
+		mux.HandleFunc("/v1/vendors", func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				vendorH.ServeList(w, r)
+			case http.MethodPost:
+				vendorH.ServeCreate(w, r)
+			default:
+				http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			}
+		})
 		mux.HandleFunc("/v1/vendors/", func(w http.ResponseWriter, r *http.Request) {
 			switch {
-			case r.Method == http.MethodPost && r.URL.Path == "/v1/vendors":
-				vendorH.ServeCreate(w, r)
 			case r.Method == http.MethodDelete:
 				vendorH.ServeDelete(w, r)
 			case strings.HasSuffix(r.URL.Path, "/approve"):

@@ -820,7 +820,11 @@ func (m *memoryBehavioralBaselines) Upsert(_ context.Context, b *UserBehavioralB
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if b.ID == "" {
-		b.ID = "mem-" + hex.EncodeToString(b.UserEmailHash)[:8]
+		h := hex.EncodeToString(b.UserEmailHash)
+		if len(h) > 8 {
+			h = h[:8]
+		}
+		b.ID = "mem-" + h
 	}
 	now := time.Now().UTC()
 	b.UpdatedAt = now
@@ -858,7 +862,11 @@ func (m *memoryOrgGraphs) Upsert(_ context.Context, s *OrgGraphSnapshot) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s.ID == "" {
-		s.ID = "mem-og-" + s.TenantID[:8]
+		id := s.TenantID
+		if len(id) > 8 {
+			id = id[:8]
+		}
+		s.ID = "mem-og-" + id
 	}
 	if s.CreatedAt.IsZero() {
 		s.CreatedAt = time.Now().UTC()

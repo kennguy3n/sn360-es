@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/config"
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
 	"github.com/kennguy3n/sn360-es/pkg/email_provider/gmail"
 )
+
+// gwsHTTPClient is a timeout-bounded client for GWS setup checks.
+var gwsHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
 // gwsSetupChecker implements handler.GWSSetupChecker by validating
 // GWS domain-wide delegation configuration step by step.
@@ -79,7 +83,7 @@ func (c *gwsSetupChecker) CheckGmailAccess(ctx context.Context, _ string) bool {
 		return false
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := gwsHTTPClient.Do(req)
 	if err != nil {
 		c.logger.Warn("gws-setup-check: gmail profile request failed",
 			slog.Any("error", err))

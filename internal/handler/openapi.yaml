@@ -167,7 +167,7 @@ paths:
           required: true
           schema:
             type: string
-            description: One of the SN360-ES categories (e.g. "Phishing", "BEC").
+            description: "One of the SN360-ES risk categories (e.g. LIKELY_PHISHING, BEC_IMPERSONATION, SUSPICIOUS_URL). See README for the full list."
         - in: query
           name: locale
           schema:
