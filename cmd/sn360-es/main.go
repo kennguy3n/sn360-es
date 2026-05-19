@@ -3353,6 +3353,7 @@ func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*ag
 	if app.providers != nil && app.providers.hasAny() && pub != nil {
 		dir := buildDirectoryClient(cfg, logger)
 		labels := buildLabelApplier(app)
+		piiHasher := buildPIIHasher(cfg)
 		if dir != nil && labels != nil {
 			oa, err := agent.NewOnboardingAgent(agent.OnboardingConfig{
 				Directory:             dir,
@@ -3360,8 +3361,8 @@ func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*ag
 				Events:                pub,
 				Audit:                 loggingAuditLog{logger: logger},
 				Logger:                logger,
-				Hasher:                buildPIIHasher(cfg),
-				Persister:             buildUserPersister(app),
+				Hasher:                piiHasher,
+				Persister:             buildUserPersister(app, piiHasher),
 				SensitivityClassifier: buildSensitivityClassifier(cfg, logger),
 				VendorScanner:         buildVendorScanner(app),
 				Config:                newMemoryConfigStore(),
@@ -3693,6 +3694,7 @@ func buildPIIHasher(cfg *config.Config) agent.PIIHasher {
 type userPersisterAdapter struct {
 	users  repository.UserRepository
 	groups repository.GroupRepository
+	hasher agent.PIIHasher
 }
 
 func (p *userPersisterAdapter) PersistDiscoveredUsers(ctx context.Context, tenantID string, users []agent.DiscoveredUser, groups []agent.DiscoveredGroup) error {
@@ -3710,12 +3712,18 @@ func (p *userPersisterAdapter) PersistDiscoveredUsers(ctx context.Context, tenan
 		}
 	}
 	for _, u := range users {
+		var emailHash []byte
+		if p.hasher != nil && u.Email != "" {
+			emailHash = []byte(p.hasher.HashPII(tenantID, u.Email))
+		}
 		if err := p.users.Upsert(ctx, &repository.User{
-			ID:        u.ID,
-			TenantID:  tenantID,
-			Role:      u.JobTitle,
-			CreatedAt: now,
-			UpdatedAt: now,
+			ID:         u.ID,
+			TenantID:   tenantID,
+			EmailHash:  emailHash,
+			Role:       u.JobTitle,
+			Department: u.Department,
+			CreatedAt:  now,
+			UpdatedAt:  now,
 		}); err != nil {
 			return fmt.Errorf("persist user %s: %w", u.ID, err)
 		}
@@ -3723,13 +3731,14 @@ func (p *userPersisterAdapter) PersistDiscoveredUsers(ctx context.Context, tenan
 	return nil
 }
 
-func buildUserPersister(app *application) agent.UserPersister {
+func buildUserPersister(app *application, hasher agent.PIIHasher) agent.UserPersister {
 	if app.repos == nil || app.repos.Users == nil || app.repos.Groups == nil {
 		return nil
 	}
 	return &userPersisterAdapter{
 		users:  app.repos.Users,
 		groups: app.repos.Groups,
+		hasher: hasher,
 	}
 }
 
