@@ -201,7 +201,14 @@ infrastructure is missing.
 | Provider-side action consumers (`es.action.{banner,label,url_rewrite,quarantine}`) | Yes | Yes | Best-effort; degrade to logging when no provider is registered for the tenant |
 | Ingestion polling (Gmail + Outlook MailboxProviders, Redis checkpoint, distributed lock) | Yes | Optional | Requires GWS / O365 credentials; the poller is not constructed when both are unset |
 | AI agents (Onboarding, Tuning, Support) | Yes | Optional | Each is wired only when its inputs (directory client, repos, event bus) are available |
-| Periodic workers (relationship aggregation, vendor discovery, data cleanup) | Yes | Yes | Coordinated via Redis distributed lock so only one replica runs each cycle |
+| Directory sync (delta/incremental, GWS + O365) | Yes | Optional | Requires provider credentials; falls back to full enumeration when no delta token exists |
+| Nested group resolution (O365 transitive memberOf) | Yes | Optional | Enabled via `O365_RESOLVE_NESTED_GROUPS`; falls back to direct memberOf on error |
+| Vendor management API (CRUD) | Yes | Yes | `GET/POST/PUT/DELETE /v1/vendors`; works with both auto-discovered and manual vendors |
+| Org graph persistence + API | Yes | Yes | `GET /v1/org-graph`; PII-redacted; updated by directory sync worker |
+| Per-user behavioral baselines | Yes | Yes | Populated by relationship aggregation worker; used by timing anomaly detection |
+| GWS setup wizard | Yes | Yes | `GET /v1/onboarding/gws-setup-status` validates domain-wide delegation step-by-step |
+| Sensitivity classifier (encoder + Bonsai + multilingual keywords) | Yes | Optional | Bonsai optional via `SENSITIVITY_BONSAI_URL`; keyword fallback covers 6 languages |
+| Periodic workers (relationship aggregation, vendor discovery, directory sync, data cleanup) | Yes | Yes | Coordinated via Redis distributed lock so only one replica runs each cycle |
 | Predict (recipient / open) | Yes | Yes | Tier-based pre-open and recipient warning HTTP endpoints |
 | Education (micro-lessons, simulation, resilience, adaptive) | Yes | Yes | The `/v1/education/lesson/` route + `es.education.lesson.trigger` consumer |
 | Onboarding (OAuth, discovery, agent) | Yes | Optional | Requires `ONBOARDING_STATE_SECRET`, `ONBOARDING_CALLBACK_URL`, and at least one provider credential (GWS or O365) |
@@ -279,7 +286,7 @@ contract.
 | [`scripts/corpus_generator/README.md`](./scripts/corpus_generator/README.md) | How the corpus is generated and which models are targeted |
 | [`benchmarks/README.md`](./benchmarks/README.md) | Benchmark suite, baselines, and how to compare runs |
 | [`deployments/helm/sn360-es/README.md`](./deployments/helm/sn360-es/README.md) | Helm chart values, subcharts, and upgrade notes |
-| [`migrations/README.md`](./migrations/README.md) | Atlas-managed SQL schema evolution |
+| [`migrations/README.md`](./migrations/README.md) | golang-migrate SQL schema evolution |
 
 ## Repository Structure
 
@@ -295,7 +302,7 @@ sn360-es/
 │   ├── addins/
 │   │   ├── outlook/                     # Outlook Office Add-in (Manifest v3)
 │   │   └── gmail/                       # Gmail Add-on (Apps Script)
-│   ├── encoder/                         # Tier 1 encoder service skeleton
+│   ├── encoder/                         # Tier 1 encoder inference service
 │   ├── llm/                             # Tier 2 Ternary-Bonsai-8B SLM deployment
 │   ├── helm/sn360-es/                   # Helm chart (Deployment, Service, HPA, NATS subchart)
 │   └── argocd/                          # ArgoCD Application manifests (dev/qa/uat/prod)
@@ -316,10 +323,11 @@ sn360-es/
 │   │   ├── evaluate/                    # Tier 0/1/2 + score + URL + attachment pre-scan
 │   │   ├── onboarding/                  # OAuth flow + org graph builder
 │   │   ├── predict/                     # Pre-send / pre-open recipient analysis
-│   │   ├── relationship/                # Categories, vulnerability, vendor, timing
+│   │   ├── relationship/                # Categories, vulnerability, vendor, timing, baselines
 │   │   ├── tenant/                      # Tenant CRUD + cryptographic erasure
 │   │   ├── tier0/                       # Pure-CPU classification gates
-│   │   └── tier1/                       # Encoder client + batch orchestration
+│   │   ├── tier1/                       # Encoder client + batch orchestration
+│   │   └── worker/                      # Periodic workers (relationship, directory sync, vendor, cleanup)
 │   ├── docs/                            # Design, architecture, and codebase guide
 │   └── translation/                     # Cross-service i18n bundles (banners/)
 ├── pkg/
