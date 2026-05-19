@@ -418,12 +418,13 @@ by `cmd/sn360-es/main.go` (`buildPoller`, `buildMailboxProviders`).
 
 ### 5.3 Management Domain
 
-- **Domain entities**: Tenants, Users, Groups, Labels, Score Engine, Email Classifications, Vendors, Evaluation Results, Communication History
+- **Domain entities**: Tenants, Users, Groups, Labels, Score Engine, Email Classifications, Vendors, Evaluation Results, Communication History, Sync Checkpoints, User Behavioral Baselines, Org Graph Snapshots
 - **Persistence**: `internal/repository/` exposes one interface per entity backed by both a Postgres (pgx) implementation and an in-memory fixture for tests. The Postgres schema is defined under `migrations/` and applied via `make migrate-up`.
-- **Relationship Aggregation Worker**: Runs every 4h, computes 7d/30d sender→receiver stats, caches in Redis
+- **Relationship Aggregation Worker**: Runs every 4h, computes 7d/30d sender→receiver stats, populates per-user behavioral baselines, caches in Redis
+- **Directory Sync Worker**: Runs every 6h, performs delta/incremental user and group sync from GWS or O365, classifies user sensitivity, builds and persists the org graph snapshot (see Section 5.6)
 - **AI Agent Controller**: Orchestrates auto-tuning, onboarding, support agents
 - **Cleanup Worker**: Stream + data retention enforcement
-- **HTTP routes**: Tenant/user/group/label CRUD, dashboard summary, escalation get/resolve
+- **HTTP routes**: Tenant/user/group/label CRUD, vendor management, org graph, dashboard summary, escalation get/resolve
 
 ### 5.4 Education Domain
 
@@ -442,6 +443,94 @@ by `cmd/sn360-es/main.go` (`buildPoller`, `buildMailboxProviders`).
 - **`pkg/storage/s3/`**: AWS S3 client wrapper for raw-body offload (optional).
 - **`pkg/events/`**: Bus factory that selects between `pkg/events/nats/` (default) and `pkg/events/redis/` based on the `EVENT_BUS_TYPE` config flag.
 - **`internal/translation/banners/`**: Banner i18n bundles re-exported from `internal/service/action/catalogs/` so other domains can reuse the same wording.
+
+### 5.6 Directory Intelligence
+
+Directory intelligence enriches the detection pipeline with organisational
+context — who works where, who reports to whom, which senders are trusted
+vendors, and what "normal" communication looks like for each employee.
+
+#### Delta / Incremental Sync
+
+The `DirectorySyncJob` (`internal/service/worker/directory_sync_worker.go`)
+runs every 6 h per tenant. It auto-detects whether the directory provider
+supports incremental sync via the optional `DeltaSyncCapable` interface
+(`internal/service/agent/types.go`):
+
+| Provider | Delta mechanism | Token format |
+|---|---|---|
+| **O365** | MS Graph `/users/delta` | Opaque `@odata.deltaLink` URL |
+| **GWS** | Admin SDK `updatedMin` filter | RFC 3339 timestamp |
+
+Delta tokens are persisted in the `sync_checkpoints` table
+(`SyncCheckpointRepository`). On first run or when no checkpoint exists,
+the worker falls back to full enumeration.
+
+#### Nested Group Resolution (O365)
+
+After the initial `/users` pagination, the Outlook directory client makes
+a second pass calling `/users/{id}/transitiveMemberOf` per user to resolve
+nested group memberships. Uses bounded concurrency (10 goroutines) and
+falls back to direct `memberOf` on per-user errors. Controlled by
+`O365_RESOLVE_NESTED_GROUPS` (default `true`).
+
+#### User Behavioral Baselines
+
+The relationship aggregation worker populates per-(user, sender-domain)
+baselines during its 4 h cycle:
+
+- Typical send hours (hour-of-day distribution)
+- Device types
+- Average messages per week
+
+Stored in `user_behavioral_baselines` via `UserBehavioralBaselineRepository`.
+The timing anomaly checker (`relationship/timing.go`) compares inbound
+message timing against these baselines to detect send-time deviations.
+
+#### Org Graph Persistence
+
+After upserting directory users and groups, the sync worker builds the org
+graph via `onboarding.Project()` and upserts a JSONB snapshot into
+`org_graphs` via `OrgGraphRepository`. The snapshot includes:
+
+- Employee / group / department counts
+- High-risk user IDs (C-suite, Finance, HR)
+- Full graph structure (serialised as JSON)
+
+Exposed via `GET /v1/org-graph?tenant_id={id}` with PII redaction (hashed
+email identifiers, not raw addresses).
+
+#### Vendor Management
+
+Vendors are auto-discovered by the weekly vendor discovery worker
+(`relationship/vendor_discovery.go`) based on 30-day communication history.
+Admins manage vendors through the HTTP API:
+
+- `GET /v1/vendors?tenant_id={id}` — list all (discovered + manual)
+- `POST /v1/vendors` — add a manual vendor
+- `PUT /v1/vendors/{domain}/approve` — approve
+- `PUT /v1/vendors/{domain}/revoke` — revoke approval
+- `DELETE /v1/vendors/{domain}?tenant_id={id}` — remove
+
+Approved vendors receive Tier 0 bypass (subject to the vendor-compromise
+guard in the classification gate).
+
+#### GWS Setup Wizard
+
+`GET /v1/onboarding/gws-setup-status?tenant_id={id}` returns step-by-step
+validation of the GWS domain-wide delegation setup (service account,
+delegated admin, domain, directory access, Gmail access). Each field is a
+bool, and `steps_remaining` is a human-readable list of what needs
+attention. Reduces admin friction for the most error-prone onboarding step.
+
+#### Sensitivity Classifier
+
+User sensitivity classification (`internal/service/agent/sensitivity_classifier.go`)
+uses a tiered pipeline: Tier 1 encoder → optional Bonsai SLM
+(`SENSITIVITY_BONSAI_URL`) → multilingual keyword fallback. The keyword
+fallback covers executive titles (Max), finance/legal/HR roles (High),
+and procurement/admin roles (Elevated) across English, Japanese, Korean,
+Thai, Vietnamese, and Chinese.
 
 ## 6. Infrastructure
 
@@ -473,7 +562,7 @@ leader via a Redis lock so only one replica runs them at a time.
 
 ### 6.3 API Documentation
 
-- **Spec**: `api/openapi.yaml` (OpenAPI 3.1) documents every public handler, including `/v1/banner/action`, `/v1/education/lesson/{category}`, `/v1/escalation/resolve`, `/v1/dashboard/summary`, `/v1/predict/{recipient,open}`, `/v1/quarantine/release`, and the health / metrics endpoints.
+- **Spec**: `api/openapi.yaml` (OpenAPI 3.1) documents every public handler, including `/v1/banner/action`, `/v1/education/lesson/{category}`, `/v1/escalation/resolve`, `/v1/dashboard/summary`, `/v1/predict/{recipient,open}`, `/v1/quarantine/release`, `/v1/vendors`, `/v1/org-graph`, `/v1/onboarding/gws-setup-status`, and the health / metrics endpoints.
 - **Serving**: `internal/handler/docs.go` exposes Swagger UI at `/docs` (pinned to 5.17.14 for reproducibility) and the raw spec at `/openapi.yaml`.
 
 ### 6.4 Database Migrations
@@ -481,7 +570,7 @@ leader via a Redis lock so only one replica runs them at a time.
 - **Tool**: `golang-migrate/migrate` v4 (PostgreSQL driver).
 - **CLI**: `cmd/sn360-es-migrate/` wraps the library so deployments can run migrations as a Kubernetes Job (template included in the Helm chart).
 - **Make targets**: `make migrate-up`, `make migrate-down`, `make migrate-check` (validates SQL syntax in CI).
-- **Schema**: `migrations/0001_init.{up,down}.sql` provisions all 13 tables (tenants, users, groups, labels, score_engine, email_classifications, vendors, evaluation_results, communication_histories, campaigns, simulation_results, escalation_tickets, audit_logs).
+- **Schema**: `migrations/0001_init.{up,down}.sql` provisions the base 14 tables (tenants, users, groups, group_memberships, labels, score_engine, email_classifications, vendors, evaluation_results, communication_histories, campaigns, simulation_results, escalation_tickets, audit_logs). Subsequent migrations add 5 more: feedback_events (0002), oauth_tokens (0005), sync_checkpoints (0008), user_behavioral_baselines (0009), and org_graphs (0010) — 19 tables total.
 
 ### 6.5 Deployment Artifacts
 
