@@ -305,16 +305,13 @@ def predict_batch(req: BatchRequest) -> BatchResponse:
 # Sensitivity role classification endpoint
 # ---------------------------------------------------------------------------
 
-# Valid sensitivity tiers in priority order (highest first).
-_SENSITIVITY_TIERS = ("critical", "max", "high", "elevated", "default")
-
 # Infrastructure-access keywords that map to "critical" tier. If the
 # encoder model was not fine-tuned on "critical" examples, this
 # post-processing step catches them via keyword match.
 _INFRA_KEYWORDS = {
     "database administrator", "dba", "system administrator", "sysadmin",
     "domain admin", "cloud administrator", "infrastructure engineer",
-    "devops lead", "site reliability", "sre lead", "network administrator",
+    "devops lead", "sre lead", "network administrator",
     "security administrator", "platform engineer", "root access",
     # Japanese
     "データベース管理者", "システム管理者", "インフラエンジニア", "クラウド管理者",
@@ -350,6 +347,29 @@ class RoleClassifyResponse(BaseModel):
     results: List[RoleClassifyResult]
 
 
+# Tier-based keyword matching consistent with the Go sensitivityKeywords map.
+_TIER_KEYWORDS: dict[str, list[str]] = {
+    "max": [
+        "ceo", "cfo", "coo", "cto", "ciso", "founder",
+        "chief executive", "chief financial", "owner",
+        "首席执行官", "首席财务官", "总裁", "创始人", "董事长",
+        "代表取締役", "社長", "대표이사", "창업자",
+    ],
+    "high": [
+        "finance", "treasury", "controller", "human resources",
+        "legal", "compliance", "security engineer", "data engineer",
+        "physician", "pharmacist", "medical director",
+        "research director", "data scientist", "m&a",
+        "corporate development", "investor relations",
+    ],
+    "elevated": [
+        "executive assistant", "procurement", "devops engineer",
+        "devops", "nurse", "paralegal", "sales director",
+        "customer success", "office manager",
+    ],
+}
+
+
 def _classify_role_sensitivity(item: RoleClassifyItem) -> RoleClassifyResult:
     """Classify a single user's sensitivity tier using keyword matching.
 
@@ -372,28 +392,6 @@ def _classify_role_sensitivity(item: RoleClassifyItem) -> RoleClassifyResult:
                 reason=f"infrastructure keyword: {kw}",
             )
 
-    # Fall back to tier-based keyword matching consistent with the Go
-    # sensitivityKeywords map.
-    _TIER_KEYWORDS: dict[str, list[str]] = {
-        "max": [
-            "ceo", "cfo", "coo", "cto", "ciso", "founder",
-            "chief executive", "chief financial", "owner",
-            "首席执行官", "首席财务官", "总裁", "创始人", "董事长",
-            "代表取締役", "社長", "대표이사", "창업자",
-        ],
-        "high": [
-            "finance", "treasury", "controller", "human resources",
-            "legal", "compliance", "security engineer", "data engineer",
-            "physician", "pharmacist", "medical director",
-            "research director", "data scientist", "m&a",
-            "corporate development", "investor relations",
-        ],
-        "elevated": [
-            "executive assistant", "procurement", "devops engineer",
-            "nurse", "paralegal", "sales director",
-            "customer success", "office manager",
-        ],
-    }
     for tier, keywords in _TIER_KEYWORDS.items():
         for kw in keywords:
             if kw in hay:

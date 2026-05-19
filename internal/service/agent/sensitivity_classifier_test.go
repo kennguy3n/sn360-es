@@ -13,12 +13,14 @@ func TestTieredSensitivityClassifier_EncoderOnly(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := encoderResponse{
 			Results: []struct {
+				Index       int     `json:"index"`
 				Sensitivity string  `json:"sensitivity"`
 				Confidence  float64 `json:"confidence"`
+				Reason      string  `json:"reason"`
 			}{
-				{Sensitivity: "max", Confidence: 0.95},
-				{Sensitivity: "high", Confidence: 0.85},
-				{Sensitivity: "default", Confidence: 0.92},
+				{Index: 0, Sensitivity: "max", Confidence: 0.95},
+				{Index: 1, Sensitivity: "high", Confidence: 0.85},
+				{Index: 2, Sensitivity: "default", Confidence: 0.92},
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -110,10 +112,12 @@ func TestTieredSensitivityClassifier_BonsaiEscalation(t *testing.T) {
 	encoderSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := encoderResponse{
 			Results: []struct {
+				Index       int     `json:"index"`
 				Sensitivity string  `json:"sensitivity"`
 				Confidence  float64 `json:"confidence"`
+				Reason      string  `json:"reason"`
 			}{
-				{Sensitivity: "default", Confidence: 0.4},
+				{Index: 0, Sensitivity: "default", Confidence: 0.4},
 			},
 		}
 		_ = json.NewEncoder(w).Encode(resp)
@@ -177,10 +181,12 @@ func TestEncoderSensitivityClassifier_MultilingualTitles(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				resp := encoderResponse{
 					Results: []struct {
+						Index       int     `json:"index"`
 						Sensitivity string  `json:"sensitivity"`
 						Confidence  float64 `json:"confidence"`
+						Reason      string  `json:"reason"`
 					}{
-						{Sensitivity: tt.want.String(), Confidence: 0.92},
+						{Index: 0, Sensitivity: tt.want.String(), Confidence: 0.92},
 					},
 				}
 				_ = json.NewEncoder(w).Encode(resp)

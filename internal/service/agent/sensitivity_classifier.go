@@ -40,7 +40,7 @@ var sensitivityKeywords = map[Sensitivity][]string{
 		// English — Infrastructure access roles
 		"database administrator", "dba", "system administrator", "sysadmin",
 		"domain admin", "cloud administrator", "infrastructure engineer",
-		"devops lead", "site reliability", "sre lead", "network administrator",
+		"devops lead", "sre lead", "network administrator",
 		"security administrator", "platform engineer", "root access",
 		// Japanese
 		"データベース管理者", "システム管理者", "インフラエンジニア", "クラウド管理者",
@@ -73,7 +73,7 @@ var sensitivityKeywords = map[Sensitivity][]string{
 		"human resources", "people ops", "legal", "compliance", "general counsel",
 
 		// English — Technology (sensitive access, not infra-level)
-		"devops", "site reliability engineer", "security engineer", "security analyst",
+		"site reliability engineer", "security engineer", "security analyst",
 		"cloud engineer", "network engineer", "data engineer",
 
 		// English — M&A / Strategy
@@ -134,7 +134,7 @@ var sensitivityKeywords = map[Sensitivity][]string{
 		"procurement", "vendor management", "supplier",
 
 		// English — Technology (supporting roles)
-		"devops engineer", "junior dba", "help desk manager", "it support lead",
+		"devops engineer", "devops", "junior dba", "help desk manager", "it support lead",
 
 		// English — Healthcare (clinical support)
 		"nurse", "lab technician", "radiologist", "physical therapist",
@@ -234,15 +234,24 @@ func NewEncoderSensitivityClassifier(url string, client *http.Client, timeout ti
 	return &EncoderSensitivityClassifier{url: url, client: client, timeout: timeout, logger: logger}
 }
 
-type encoderRequest struct {
-	Texts []string `json:"texts"`
-	Task  string   `json:"task"`
+type encoderRoleItem struct {
+	Index       int      `json:"index"`
+	JobTitle    string   `json:"job_title"`
+	Department  string   `json:"department"`
+	DisplayName string   `json:"display_name"`
+	GroupNames  []string `json:"group_names"`
+}
+
+type encoderRoleRequest struct {
+	Users []encoderRoleItem `json:"users"`
 }
 
 type encoderResponse struct {
 	Results []struct {
+		Index       int     `json:"index"`
 		Sensitivity string  `json:"sensitivity"`
 		Confidence  float64 `json:"confidence"`
+		Reason      string  `json:"reason"`
 	} `json:"results"`
 }
 
@@ -251,11 +260,17 @@ func (c *EncoderSensitivityClassifier) ClassifyBatch(ctx context.Context, users 
 	if len(users) == 0 {
 		return nil, nil
 	}
-	texts := make([]string, len(users))
+	items := make([]encoderRoleItem, len(users))
 	for i, u := range users {
-		texts[i] = buildClassifyText(u)
+		items[i] = encoderRoleItem{
+			Index:       i,
+			JobTitle:    u.JobTitle,
+			Department:  u.Department,
+			DisplayName: u.DisplayName,
+			GroupNames:  u.GroupNames,
+		}
 	}
-	body, err := json.Marshal(encoderRequest{Texts: texts, Task: "role_classify"})
+	body, err := json.Marshal(encoderRoleRequest{Users: items})
 	if err != nil {
 		return nil, fmt.Errorf("sensitivity: marshal request: %w", err)
 	}
@@ -569,36 +584,6 @@ func classifyCacheKey(u UserClassifyInput) string {
 		h.Write([]byte("admin"))
 	}
 	return "sensitivity:classify:" + fmt.Sprintf("%x", h.Sum(nil))
-}
-
-func buildClassifyText(u UserClassifyInput) string {
-	var sb strings.Builder
-	if u.JobTitle != "" {
-		sb.WriteString("Job: ")
-		sb.WriteString(u.JobTitle)
-	}
-	if u.Department != "" {
-		if sb.Len() > 0 {
-			sb.WriteString(", ")
-		}
-		sb.WriteString("Dept: ")
-		sb.WriteString(u.Department)
-	}
-	if u.DisplayName != "" {
-		if sb.Len() > 0 {
-			sb.WriteString(", ")
-		}
-		sb.WriteString("Name: ")
-		sb.WriteString(u.DisplayName)
-	}
-	if len(u.GroupNames) > 0 {
-		if sb.Len() > 0 {
-			sb.WriteString(", ")
-		}
-		sb.WriteString("Groups: ")
-		sb.WriteString(strings.Join(u.GroupNames, "/"))
-	}
-	return sb.String()
 }
 
 func buildBonsaiPrompt(users []UserClassifyInput) string {
