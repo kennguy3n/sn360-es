@@ -1,0 +1,336 @@
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"log/slog"
+	"strings"
+
+	"github.com/kennguy3n/sn360-es/internal/config"
+	"github.com/kennguy3n/sn360-es/internal/service/agent"
+	"github.com/kennguy3n/sn360-es/internal/service/onboarding"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/gmail"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/outlook"
+	"github.com/kennguy3n/sn360-es/pkg/privacy"
+)
+
+// ---------------------------------------------------------------------
+// AI agent wiring.
+// ---------------------------------------------------------------------
+
+func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*agent.OnboardingAgent, *agent.TuningAgent, *agent.SupportAgent) {
+	var onboardA *agent.OnboardingAgent
+	var tuningA *agent.TuningAgent
+	var supportA *agent.SupportAgent
+
+	pub := agentPublisherFromBus(app.eventBus)
+
+	// Support agent.
+	if pub != nil {
+		audit := loggingAuditLog{logger: logger}
+		lookup := evalLookupAdapter{repos: app.repos}
+		sa, err := agent.NewSupportAgent(agent.SupportConfig{
+			Lookup:         lookup,
+			Audit:          audit,
+			Events:         pub,
+			SecOpsSubject:  "es.action.escalation.created",
+			ReleaseSubject: "es.action.quarantine.release",
+			Logger:         logger,
+		})
+		if err != nil {
+			logger.Warn("sn360-es: support agent init failed",
+				slog.Any("error", err))
+		} else {
+			supportA = sa
+			logger.Info("sn360-es: support agent wired")
+		}
+	}
+
+	// Onboarding agent.
+	if app.providers != nil && app.providers.hasAny() && pub != nil {
+		dir := buildDirectoryClient(cfg, logger)
+		labels := buildLabelApplier(app)
+		piiHasher := buildPIIHasher(cfg)
+		if dir != nil && labels != nil {
+			oa, err := agent.NewOnboardingAgent(agent.OnboardingConfig{
+				Directory:             dir,
+				Labels:                labels,
+				Events:                pub,
+				Audit:                 loggingAuditLog{logger: logger},
+				Logger:                logger,
+				Hasher:                piiHasher,
+				Persister:             buildUserPersister(app, piiHasher),
+				SensitivityClassifier: buildSensitivityClassifier(cfg, logger),
+				VendorScanner:         buildVendorScanner(app),
+				Config:                newMemoryConfigStore(),
+			})
+			if err != nil {
+				logger.Warn("sn360-es: onboarding agent init failed",
+					slog.Any("error", err))
+			} else {
+				onboardA = oa
+				logger.Info("sn360-es: onboarding agent wired")
+			}
+		}
+	}
+
+	// Tuning agent.
+	if app.repos != nil && app.repos.FeedbackEvents != nil {
+		results := tuningResultAdapter{repos: app.repos}
+		store := newMemoryConfigStore()
+		ta, err := agent.NewTuningAgent(agent.TuningConfig{
+			Results: results,
+			Config:  store,
+			Audit:   loggingAuditLog{logger: logger},
+			Logger:  logger,
+		})
+		if err != nil {
+			logger.Warn("sn360-es: tuning agent init failed",
+				slog.Any("error", err))
+		} else {
+			tuningA = ta
+			logger.Info("sn360-es: tuning agent wired")
+		}
+	}
+	return onboardA, tuningA, supportA
+}
+
+func buildLabelApplier(app *application) agent.LabelApplier {
+	if app == nil || app.providers == nil {
+		return nil
+	}
+	return registryLabelApplier{registry: app.providers}
+}
+
+func buildDirectoryClient(cfg *config.Config, logger *slog.Logger) agent.DirectoryClient {
+	if cfg.GWS.HasGmail() {
+		sa, err := gmail.LoadServiceAccount(cfg.GWS.ServiceAccountJSON)
+		if err != nil {
+			logger.Warn("sn360-es: directory client (gmail) init failed",
+				slog.Any("error", err))
+			return nil
+		}
+		tokens, terr := gmail.NewJWTBearerSource(gmail.JWTBearerConfig{
+			ServiceAccount:   sa,
+			ImpersonatedUser: cfg.GWS.DelegatedAdmin,
+		})
+		if terr != nil {
+			logger.Warn("sn360-es: directory client (gmail) token init failed",
+				slog.Any("error", terr))
+			return nil
+		}
+		dc, derr := gmail.NewDirectoryClient(gmail.DirectoryClientConfig{
+			TokenSource:  tokens,
+			Domain:       cfg.GWS.Domain,
+			AdminBaseURL: cfg.GWS.AdminBaseURL,
+		})
+		if derr != nil {
+			logger.Warn("sn360-es: directory client (gmail) wire failed",
+				slog.Any("error", derr))
+			return nil
+		}
+		return dc
+	}
+	if cfg.O365.HasOutlook() {
+		tokens, terr := outlook.NewClientCredentialsSource(outlook.ClientCredentialsConfig{
+			TenantID:     cfg.O365.TenantID,
+			ClientID:     cfg.O365.ClientID,
+			ClientSecret: cfg.O365.ClientSecret,
+			TokenURL:     cfg.O365.TokenURL,
+		})
+		if terr != nil {
+			logger.Warn("sn360-es: directory client (outlook) token init failed",
+				slog.Any("error", terr))
+			return nil
+		}
+		dc, derr := outlook.NewDirectoryClient(outlook.DirectoryClientConfig{
+			TokenSource:         tokens,
+			BaseURL:             cfg.O365.BaseURL,
+			TenantID:            cfg.O365.TenantID,
+			ResolveNestedGroups: cfg.O365.ResolveNestedGroups,
+		})
+		if derr != nil {
+			logger.Warn("sn360-es: directory client (outlook) wire failed",
+				slog.Any("error", derr))
+			return nil
+		}
+		return dc
+	}
+	return nil
+}
+
+func buildSensitivityClassifier(cfg *config.Config, logger *slog.Logger) agent.SensitivityClassifier {
+	if cfg.Tier1.URL == "" {
+		return nil
+	}
+	encoder := agent.NewEncoderSensitivityClassifier(cfg.Tier1.URL, nil, cfg.Tier1.Timeout, logger)
+	var bonsai *agent.BonsaiSensitivityClassifier
+	if cfg.SensitivityBonsaiURL != "" {
+		bonsai = agent.NewBonsaiSensitivityClassifier(cfg.SensitivityBonsaiURL, nil, cfg.SensitivityBonsaiTimeout, logger)
+	}
+	return agent.NewTieredSensitivityClassifier(agent.TieredClassifierConfig{
+		Encoder:  encoder,
+		Bonsai:   bonsai,
+		Fallback: agent.KeywordClassifyInput,
+		Logger:   logger,
+	})
+}
+
+func buildPIIHasher(cfg *config.Config) agent.PIIHasher {
+	secret := cfg.Banner.TokenSecret
+	if secret == "" {
+		return nil
+	}
+	return &piiHasherAdapter{
+		pseudo: privacy.NewPseudonymizer("sn360"),
+		secret: secret,
+	}
+}
+
+func buildUserPersister(app *application, hasher agent.PIIHasher) agent.UserPersister {
+	if app.repos == nil || app.repos.Users == nil || app.repos.Groups == nil || hasher == nil {
+		return nil
+	}
+	return &userPersisterAdapter{
+		users:  app.repos.Users,
+		groups: app.repos.Groups,
+		hasher: hasher,
+	}
+}
+
+func buildVendorScanner(app *application) agent.VendorScanner {
+	if app.repos == nil || app.repos.CommunicationHistories == nil {
+		return nil
+	}
+	return &vendorScannerAdapter{histories: app.repos.CommunicationHistories}
+}
+
+// ---------------------------------------------------------------------
+// Onboarding service wiring.
+// ---------------------------------------------------------------------
+
+func buildOnboardingService(cfg *config.Config, logger *slog.Logger, app *application) (*onboarding.Service, error) {
+	signer, err := onboarding.NewStateSigner([]byte(cfg.Onboarding.StateSecret))
+	if err != nil {
+		return nil, fmt.Errorf("state signer: %w", err)
+	}
+
+	if app.pgDB == nil {
+		return nil, fmt.Errorf("onboarding requires PostgreSQL (PG_HOST not set)")
+	}
+	enc, err := buildTokenEncryptor(cfg, logger)
+	if err != nil {
+		return nil, fmt.Errorf("token encryptor: %w", err)
+	}
+	store, err := onboarding.NewPgTokenStore(app.pgDB, enc)
+	if err != nil {
+		return nil, fmt.Errorf("token store: %w", err)
+	}
+
+	var nonces onboarding.NonceStore
+	if app.redis != nil {
+		ns, nerr := onboarding.NewRedisNonceStore(app.redis.Raw(), "")
+		if nerr != nil {
+			logger.Warn("sn360-es: onboarding redis nonce store failed, using in-memory",
+				slog.Any("error", nerr))
+			nonces = onboarding.NewInMemoryNonceStore()
+		} else {
+			nonces = ns
+		}
+	} else {
+		nonces = onboarding.NewInMemoryNonceStore()
+	}
+
+	validator := onboarding.NewHTTPPostConsentValidator(nil, cfg.GWS.Domain)
+	exch := onboarding.NewHTTPExchanger(nil)
+
+	providers := make(map[onboarding.ProviderType]onboarding.ProviderConfig)
+	if cfg.GWS.OAuthClientID != "" && cfg.GWS.OAuthClientSecret != "" {
+		providers[onboarding.ProviderGoogle] = onboarding.ProviderConfig{
+			ClientID:     cfg.GWS.OAuthClientID,
+			ClientSecret: cfg.GWS.OAuthClientSecret,
+			AuthURL:      "https://accounts.google.com/o/oauth2/v2/auth",
+			TokenURL:     "https://oauth2.googleapis.com/token",
+			Scopes:       []string{"https://www.googleapis.com/auth/admin.directory.user.readonly", "https://www.googleapis.com/auth/admin.directory.group.readonly"},
+			RedirectURL:  cfg.Onboarding.CallbackURL,
+		}
+	}
+	if cfg.O365.HasOutlook() {
+		providers[onboarding.ProviderMicrosoft] = onboarding.ProviderConfig{
+			ClientID:     cfg.O365.ClientID,
+			ClientSecret: cfg.O365.ClientSecret,
+			AuthURL:      "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize",
+			TokenURL:     "https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
+			Scopes:       []string{"https://graph.microsoft.com/.default", "offline_access"},
+			RedirectURL:  cfg.Onboarding.CallbackURL,
+		}
+	}
+	if len(providers) == 0 {
+		return nil, fmt.Errorf("at least one provider (GWS or O365) must be configured")
+	}
+
+	var trigger onboarding.PostConsentTrigger
+	if app.onboardAgent != nil {
+		trigger = &onboarding.AgentBridge{
+			Onboarding: app.onboardAgent,
+			Log:        logger,
+			WG:         &app.bgWG,
+			Draining:   &app.draining,
+		}
+	}
+
+	var reg *providerRegistrarAdapter
+	var registrar onboarding.ProviderRegistrar
+	if app.providers != nil {
+		reg = &providerRegistrarAdapter{
+			registry: app.providers,
+			cfg:      cfg,
+			logger:   logger,
+		}
+		registrar = reg
+	}
+
+	svc, svcErr := onboarding.NewService(onboarding.ServiceConfig{
+		Providers: providers,
+		Store:     store,
+		Exch:      exch,
+		State:     signer,
+		Trigger:   trigger,
+		Registrar: registrar,
+		Nonces:    nonces,
+		Validator: validator,
+		Logger:    logger,
+	})
+	if svcErr != nil {
+		return nil, svcErr
+	}
+	if reg != nil {
+		reg.svc = svc
+	}
+	return svc, nil
+}
+
+func buildTokenEncryptor(cfg *config.Config, logger *slog.Logger) (onboarding.TokenEncryptor, error) {
+	if seed := strings.TrimSpace(cfg.Onboarding.TokenKeyHex); seed != "" {
+		decoded, err := hex.DecodeString(seed)
+		if err == nil && len(decoded) == 32 {
+			logger.Info("sn360-es: onboarding token encryptor using ONBOARDING_TOKEN_KEY_HEX")
+			return newAESGCMTokenEncryptor(decoded)
+		}
+		logger.Warn("sn360-es: ONBOARDING_TOKEN_KEY_HEX is set but invalid (must be 64 hex chars encoding 32 bytes); falling back",
+			slog.Bool("hex_error", err != nil), slog.Int("decoded_len", len(decoded)))
+	}
+	if seed := strings.TrimSpace(cfg.AWS.KMSMockKeyHex); seed != "" {
+		decoded, err := hex.DecodeString(seed)
+		if err == nil && len(decoded) == 32 {
+			logger.Info("sn360-es: onboarding token encryptor using KMS_MOCK_KEY_HEX")
+			return newAESGCMTokenEncryptor(decoded)
+		}
+		logger.Warn("sn360-es: KMS_MOCK_KEY_HEX is set but invalid (must be 64 hex chars encoding 32 bytes); falling back",
+			slog.Bool("hex_error", err != nil), slog.Int("decoded_len", len(decoded)))
+	}
+	h := sha256.Sum256([]byte("onboarding-token-encryption:" + cfg.Onboarding.StateSecret))
+	logger.Warn("sn360-es: onboarding token encryptor using derived key from state secret; set ONBOARDING_TOKEN_KEY_HEX for production")
+	return newAESGCMTokenEncryptor(h[:])
+}
