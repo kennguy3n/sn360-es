@@ -140,13 +140,17 @@ func buildMux(app *application) (http.Handler, error) {
 // wrapMiddleware applies the standard middleware chain. Order matters:
 // the outermost wrapper runs first.
 //
-//	telemetry  →  request-logger  →  CORS  →  rate-limit  →  JWT-auth  →  mux
+//	telemetry  →  request-id  →  request-logger  →  CORS  →  rate-limit  →  JWT-auth  →  mux
 //
 // Telemetry runs first so it captures total latency including auth
-// rejections and rate-limit denials. Rate limiting sits OUTSIDE JWT
-// auth so we can shed load before doing the expensive token-verify
-// work — an attacker hammering us with garbage Bearer tokens still
-// gets cut off at the limiter.
+// rejections and rate-limit denials. Request-ID sits between
+// telemetry and the request logger so every log line — including the
+// one emitted by the logger middleware itself — carries the
+// correlation ID, while still being inside telemetry so metric
+// labels can stay low-cardinality and unaffected by it. Rate
+// limiting sits OUTSIDE JWT auth so we can shed load before doing
+// the expensive token-verify work — an attacker hammering us with
+// garbage Bearer tokens still gets cut off at the limiter.
 func wrapMiddleware(mux http.Handler, app *application) (http.Handler, error) {
 	logger := app.logger
 	var h http.Handler = mux
@@ -216,6 +220,14 @@ func wrapMiddleware(mux http.Handler, app *application) (http.Handler, error) {
 
 	// Request logging.
 	h = middleware.NewRequestLogger(h, middleware.RequestLoggerConfig{Logger: logger})
+
+	// Correlation ID: resolved from X-Correlation-ID or generated as
+	// a fresh UUID, attached to the request context, and echoed back
+	// on the response so callers can correlate logs across the hop.
+	// Sits outside the request logger so every emitted log entry
+	// carries the ID, but inside telemetry so high-cardinality IDs
+	// never reach Prometheus labels.
+	h = middleware.NewRequestID(h)
 
 	// Telemetry (counters + latency histograms).
 	h = middleware.NewTelemetry(h, middleware.TelemetryConfig{

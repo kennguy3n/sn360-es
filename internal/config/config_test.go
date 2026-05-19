@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestLoad_RedisFetchBatchSize_DefaultsTo10 verifies the Redis event-bus
@@ -437,5 +438,90 @@ func TestIsLowEntropy_CatchesKnownWeakInputs(t *testing.T) {
 		if !isLowEntropy(s) {
 			t.Fatalf("weak input %d=%q passed isLowEntropy", i, s)
 		}
+	}
+}
+
+// TestValidate_NATSTLSInsecureBlockedInProd pins the production gate
+// for NATS_TLS_INSECURE: a deployment whose TLS verification has been
+// turned off must never boot in UAT or prod. The check runs in
+// validate() so the failure surfaces at config-load and is logged by
+// MustLoad/Load callers in cmd/sn360-es.
+func TestValidate_NATSTLSInsecureBlockedInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.NATS.TLSInsecure = true
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for NATS_TLS_INSECURE=true in prod")
+	}
+}
+
+// TestValidate_NATSTLSInsecureAllowedInDev keeps the dev ergonomics
+// the gate is meant to preserve: a local laptop without a CA bundle
+// must still be able to talk to a NATS container.
+func TestValidate_NATSTLSInsecureAllowedInDev(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Environment = EnvironmentDev
+	cfg.NATS.TLSInsecure = true
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("NATS_TLS_INSECURE should be allowed in dev: %v", err)
+	}
+}
+
+// TestValidate_SMTPSkipVerifyBlockedInProd pins the production gate
+// for SMTP_SKIP_VERIFY. Simulation emails carry user-targeted phishing
+// content — silently ignoring the SMTP server's certificate is a real
+// data-exfiltration risk and is refused at boot.
+func TestValidate_SMTPSkipVerifyBlockedInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.SMTP.SkipVerify = true
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for SMTP_SKIP_VERIFY=true in prod")
+	}
+}
+
+// TestValidate_SMTPSkipVerifyAllowedInDev mirrors the NATS dev case —
+// dev rigs frequently use self-signed mail relays.
+func TestValidate_SMTPSkipVerifyAllowedInDev(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Environment = EnvironmentDev
+	cfg.SMTP.SkipVerify = true
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("SMTP_SKIP_VERIFY should be allowed in dev: %v", err)
+	}
+}
+
+// TestLoad_ReadHeaderTimeout_DefaultsTo5s pins the documented default
+// (5s) for HTTP_READ_HEADER_TIMEOUT. The default is deliberately
+// shorter than HTTP_READ_TIMEOUT (15s) so Slowloris-style header
+// dripping is cut off before the request body even starts streaming.
+func TestLoad_ReadHeaderTimeout_DefaultsTo5s(t *testing.T) {
+	withEnv(t, map[string]string{
+		"APP_NAME":    "sn360-es-test",
+		"ENVIRONMENT": "local",
+	})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.HTTP.ReadHeaderTimeout != 5*time.Second {
+		t.Fatalf("HTTP.ReadHeaderTimeout = %v, want 5s", cfg.HTTP.ReadHeaderTimeout)
+	}
+}
+
+// TestLoad_ReadHeaderTimeout_ReadsEnv proves the env-var override
+// reaches the field. Pairs with the default-value test above so a
+// future refactor that breaks the wiring fails loudly here rather
+// than silently keeping the 5s default.
+func TestLoad_ReadHeaderTimeout_ReadsEnv(t *testing.T) {
+	withEnv(t, map[string]string{
+		"APP_NAME":                 "sn360-es-test",
+		"ENVIRONMENT":              "local",
+		"HTTP_READ_HEADER_TIMEOUT": "750ms",
+	})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.HTTP.ReadHeaderTimeout != 750*time.Millisecond {
+		t.Fatalf("HTTP.ReadHeaderTimeout = %v, want 750ms", cfg.HTTP.ReadHeaderTimeout)
 	}
 }

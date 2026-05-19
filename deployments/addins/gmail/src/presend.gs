@@ -43,9 +43,9 @@ function sn360PreSendTrigger(e) {
       // signal" and suppresses unusual_external_recipient for this
       // caller; sending false here would instead cause the backend
       // to emit unusual_external_recipient on every external
-      // recipient (low-signal noise). When a server-side contact
-      // store is wired up later (currently TODO), this client can
-      // keep omitting the field and let the server enrich.
+      // recipient (low-signal noise). Server-side contact-store
+      // enrichment is planned; until then, omitting the field is
+      // the correct behaviour.
       return {
         user_hash: sha256Hex_(tenantId + "|" + (r || "").toLowerCase()),
         domain: domainOf_(r),

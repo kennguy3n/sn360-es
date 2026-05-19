@@ -54,7 +54,7 @@ func run() error {
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTP.Port),
 		Handler:           httpHandler,
-		ReadHeaderTimeout: cfg.HTTP.ReadTimeout,
+		ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout,
 		ReadTimeout:       cfg.HTTP.ReadTimeout,
 		WriteTimeout:      cfg.HTTP.WriteTimeout,
 	}

@@ -2,6 +2,8 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,11 +13,13 @@ import (
 )
 
 // PushWebhookHandler handles POST callbacks from Gmail Pub/Sub and
-// Microsoft Graph Change Notifications. It dispatches to the
-// PushManager for processing.
+// Microsoft Graph Change Notifications. It authenticates the caller
+// via SignatureVerifier (provider-specific) before dispatching to
+// the PushManager for processing.
 type PushWebhookHandler struct {
-	Manager *ingestion.PushManager
-	Logger  *slog.Logger
+	Manager           *ingestion.PushManager
+	Logger            *slog.Logger
+	SignatureVerifier PushSignatureVerifier
 }
 
 // ServeHTTP handles POST /v1/push/{provider}/{tenant}.
@@ -39,12 +43,21 @@ func (h *PushWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Microsoft Graph sends a validation request with a
-	// validationToken query param that must be echoed back.
+	// Microsoft Graph sends a one-shot validation request with a
+	// validationToken query param that must be echoed back as
+	// text/plain. Sanitise the value before reflecting it: the
+	// Content-Type is text/plain, but defense-in-depth requires
+	// HTML-escaping the response in case a downstream caller (a
+	// browser opened directly to this URL, a misconfigured proxy)
+	// renders the body as HTML. We also set X-Content-Type-Options
+	// to nosniff so an attacker cannot trick a downstream
+	// content-sniffer into treating the response as HTML.
 	if vt := r.URL.Query().Get("validationToken"); vt != "" {
-		w.Header().Set("Content-Type", "text/plain")
+		sanitized := html.EscapeString(vt)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(vt))
+		_, _ = w.Write([]byte(sanitized))
 		return
 	}
 
@@ -52,6 +65,40 @@ func (h *PushWebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.Logger.Warn("push_webhook: read body failed", slog.Any("error", err))
 		http.Error(w, "read body failed", http.StatusBadRequest)
+		return
+	}
+
+	// Authenticate the caller BEFORE dispatching to the push
+	// manager. This stops unauthenticated traffic from triggering
+	// expensive provider fetches and from polluting tenant state
+	// with attacker-controlled payloads.
+	if h.SignatureVerifier == nil {
+		// Mis-wired deployment: refuse rather than implicitly
+		// trusting the caller. Local-dev wiring should pass an
+		// explicit "accept" verifier (PushSignatureRouter with a
+		// nil entry) so this branch only fires on real
+		// mis-configuration.
+		h.Logger.Warn("push_webhook: signature verifier not configured",
+			slog.String("provider", provider),
+			slog.String("tenant", tenantID))
+		http.Error(w, "push verifier not configured", http.StatusInternalServerError)
+		return
+	}
+	if verr := h.SignatureVerifier.VerifyPush(r.Context(), provider, tenantID, r, body); verr != nil {
+		// Treat all verification failures as 401 to avoid
+		// distinguishing "missing" from "invalid" in the wire
+		// response (which would give an attacker free oracle
+		// bits). The provider/tenant identifiers are logged at
+		// Warn so on-call can correlate failures.
+		h.Logger.Warn("push_webhook: signature verification failed",
+			slog.String("provider", provider),
+			slog.String("tenant", tenantID),
+			slog.Any("error", verr))
+		status := http.StatusUnauthorized
+		if errors.Is(verr, ErrPushProviderUnknown) {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, "unauthorized", status)
 		return
 	}
 

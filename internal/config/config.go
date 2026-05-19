@@ -106,10 +106,18 @@ type Log struct {
 
 // HTTP holds the HTTP server config.
 type HTTP struct {
-	Host         string
-	Port         int
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
+	Host string
+	Port int
+	// ReadTimeout caps the total time the server spends reading
+	// each request, including its body. Mapped to http.Server.ReadTimeout.
+	ReadTimeout time.Duration
+	// ReadHeaderTimeout caps the time the server spends reading
+	// just the request headers, defending against Slowloris-style
+	// header-stuffing attacks independent of body upload speed.
+	// Mapped to http.Server.ReadHeaderTimeout. Typically shorter
+	// than ReadTimeout.
+	ReadHeaderTimeout time.Duration
+	WriteTimeout      time.Duration
 }
 
 // Addr returns the listen address (host:port).
@@ -357,6 +365,13 @@ type Ingestion struct {
 	// InitialBackfill is how far back to look on first poll (when no
 	// checkpoint exists yet). Default 1h.
 	InitialBackfill time.Duration
+	// PushGoogleAudience is the expected `aud` claim on Google
+	// Pub/Sub OIDC bearer tokens accompanying push deliveries.
+	// Typically the absolute push endpoint URL configured on the
+	// subscription (e.g. "https://api.sn360.example.com/v1/push/gws").
+	// When empty, the Google push verifier rejects all callbacks —
+	// preserving the closed-by-default invariant.
+	PushGoogleAudience string
 }
 
 // Worker holds the periodic-worker tuning knobs.
@@ -451,10 +466,11 @@ func Load() (Config, error) {
 			Format: getStr("LOG_FORMAT", "json"),
 		},
 		HTTP: HTTP{
-			Host:         getStr("HTTP_HOST", "0.0.0.0"),
-			Port:         getInt("HTTP_PORT", 8080),
-			ReadTimeout:  getDuration("HTTP_READ_TIMEOUT", 15*time.Second),
-			WriteTimeout: getDuration("HTTP_WRITE_TIMEOUT", 30*time.Second),
+			Host:              getStr("HTTP_HOST", "0.0.0.0"),
+			Port:              getInt("HTTP_PORT", 8080),
+			ReadTimeout:       getDuration("HTTP_READ_TIMEOUT", 15*time.Second),
+			ReadHeaderTimeout: getDuration("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
+			WriteTimeout:      getDuration("HTTP_WRITE_TIMEOUT", 30*time.Second),
 		},
 		EventBus: EventBusType(strings.ToLower(getStr("EVENT_BUS_TYPE", string(EventBusNATS)))),
 		NATS: NATS{
@@ -619,12 +635,13 @@ func Load() (Config, error) {
 			ResolveNestedGroups: getBool("O365_RESOLVE_NESTED_GROUPS", true),
 		},
 		Ingestion: Ingestion{
-			Enabled:         getBool("INGESTION_ENABLED", false),
-			Interval:        getDuration("INGESTION_INTERVAL", 30*time.Second),
-			BatchSize:       getInt("INGESTION_BATCH_SIZE", 50),
-			Concurrency:     getInt("INGESTION_CONCURRENCY", 10),
-			LockTTL:         getDuration("INGESTION_LOCK_TTL", 45*time.Second),
-			InitialBackfill: getDuration("INGESTION_INITIAL_BACKFILL", time.Hour),
+			Enabled:            getBool("INGESTION_ENABLED", false),
+			Interval:           getDuration("INGESTION_INTERVAL", 30*time.Second),
+			BatchSize:          getInt("INGESTION_BATCH_SIZE", 50),
+			Concurrency:        getInt("INGESTION_CONCURRENCY", 10),
+			LockTTL:            getDuration("INGESTION_LOCK_TTL", 45*time.Second),
+			InitialBackfill:    getDuration("INGESTION_INITIAL_BACKFILL", time.Hour),
+			PushGoogleAudience: strings.TrimSpace(getStr("INGESTION_PUSH_GOOGLE_AUDIENCE", "")),
 		},
 		Worker: Worker{
 			RelationshipInterval:    getDuration("WORKER_RELATIONSHIP_INTERVAL", 4*time.Hour),
@@ -683,6 +700,16 @@ func (c Config) validate() error {
 	if c.Environment.IsProduction() {
 		if c.AWS.KMSUseMock {
 			return errors.New("KMS_USE_MOCK=true is not allowed in production environments (UAT/prod); current: " + string(c.Environment))
+		}
+		// Transport-security skips never belong in prod. Refusing
+		// here at config-load gives operators a hard, immediate
+		// signal at boot rather than a silent compromise of the
+		// trust chain.
+		if c.NATS.TLSInsecure {
+			return errors.New("NATS_TLS_INSECURE=true is not allowed in production environments (UAT/prod)")
+		}
+		if c.SMTP.SkipVerify {
+			return errors.New("SMTP_SKIP_VERIFY=true is not allowed in production environments (UAT/prod)")
 		}
 		secret := c.Banner.TokenSecret
 		if secret != "" {
