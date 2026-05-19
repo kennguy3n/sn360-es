@@ -31,6 +31,40 @@ type UserClassifyInput struct {
 	IsAdmin     bool
 }
 
+// KeywordClassifyInput applies the same keyword-based heuristic as
+// ClassifyUserSensitivity but works with the batch-oriented
+// UserClassifyInput shape. Suitable as the Fallback in
+// TieredClassifierConfig for low-confidence encoder results.
+func KeywordClassifyInput(u UserClassifyInput) Sensitivity {
+	hay := strings.ToLower(u.JobTitle + " " + u.Department + " " + u.DisplayName)
+	for _, g := range u.GroupNames {
+		hay += " " + strings.ToLower(g)
+	}
+	switch {
+	case containsAnyInput(hay, "ceo", "cfo", "coo", "cto", "ciso", "founder", "chief executive", "chief financial", "owner"):
+		return SensitivityMax
+	case containsAnyInput(hay, "finance", "treasury", "accounts payable", "accounts receivable", "controller", "bookkeep"):
+		return SensitivityHigh
+	case containsAnyInput(hay, "human resources", "people ops", "legal", "compliance", "general counsel"):
+		return SensitivityHigh
+	case containsAnyInput(hay, "executive assistant", "admin assistant", "office manager"):
+		return SensitivityElevated
+	case containsAnyInput(hay, "procurement", "vendor management", "supplier"):
+		return SensitivityElevated
+	default:
+		return SensitivityDefault
+	}
+}
+
+func containsAnyInput(haystack string, needles ...string) bool {
+	for _, n := range needles {
+		if strings.Contains(haystack, n) {
+			return true
+		}
+	}
+	return false
+}
+
 // ClassifyResult is the output of sensitivity classification.
 type ClassifyResult struct {
 	Sensitivity Sensitivity

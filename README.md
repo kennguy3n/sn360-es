@@ -204,7 +204,7 @@ infrastructure is missing.
 | Periodic workers (relationship aggregation, vendor discovery, data cleanup) | Yes | Yes | Coordinated via Redis distributed lock so only one replica runs each cycle |
 | Predict (recipient / open) | Yes | Yes | Tier-based pre-open and recipient warning HTTP endpoints |
 | Education (micro-lessons, simulation, resilience, adaptive) | Yes | Yes | The `/v1/education/lesson/` route + `es.education.lesson.trigger` consumer |
-| Onboarding (OAuth, discovery, agent) | Yes | Optional | Requires provider OAuth credentials |
+| Onboarding (OAuth, discovery, agent) | Yes | Optional | Requires `ONBOARDING_STATE_SECRET`, `ONBOARDING_CALLBACK_URL`, and at least one provider credential (GWS or O365) |
 | Dashboard generator | Yes | Optional | 503 when generator is not configured |
 | Escalation (resolve + get) | Yes | Yes | In-memory or PG-backed ticket store |
 | PostgreSQL repositories (Atlas-managed) | Yes | Optional | Degraded mode (503 on PG-backed routes) when DSN is unset |

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -22,10 +23,10 @@ type SupportConfig struct {
 	// ExplainVerdict and DefaultSuggestion fall back to hardcoded English.
 	Explanations *ExplanationCatalog
 	// SecOpsSubject is the NATS subject for low-confidence escalations
-	// (default "es.action.escalate.secops").
+	// (default "es.action.escalation.created").
 	SecOpsSubject string
 	// ReleaseSubject is the NATS subject emitted when a user requests
-	// quarantine release (default "es.action.release.request").
+	// quarantine release (default "es.action.quarantine.release").
 	ReleaseSubject string
 	// EscalationConfidence is the lower bound of the verdict confidence
 	// below which the support agent escalates rather than answering.
@@ -49,10 +50,10 @@ func NewSupportAgent(cfg SupportConfig) (*SupportAgent, error) {
 		return nil, errors.New("agent: support requires Lookup")
 	}
 	if cfg.SecOpsSubject == "" {
-		cfg.SecOpsSubject = "es.action.escalate.secops"
+		cfg.SecOpsSubject = "es.action.escalation.created"
 	}
 	if cfg.ReleaseSubject == "" {
-		cfg.ReleaseSubject = "es.action.release.request"
+		cfg.ReleaseSubject = "es.action.quarantine.release"
 	}
 	if cfg.EscalationConfidence <= 0 {
 		cfg.EscalationConfidence = 0.45
@@ -150,9 +151,23 @@ func (a *SupportAgent) release(ctx context.Context, q SupportQuery, v dto.Evalua
 	if a.cfg.Events == nil {
 		return SupportReply{}, errors.New("support: events publisher required for release")
 	}
-	payload := fmt.Sprintf(`{"tenant_id":%q,"message_id":%q,"user":%q,"requested_at":%q}`,
-		q.TenantID, q.MessageID, q.UserEmail, time.Now().UTC().Format(time.RFC3339))
-	if err := a.cfg.Events.Publish(ctx, a.cfg.ReleaseSubject, []byte(payload)); err != nil {
+	// The consumer (handleQuarantineRelease) expects "pseudonymized_message_id"
+	// and "requested_by". The MessageID here comes from the verdict lookup which
+	// already stores the pseudonymised form, so the mapping is correct.
+	releasePayload := struct {
+		TenantID             string `json:"tenant_id"`
+		PseudonymizedMessage string `json:"pseudonymized_message_id"`
+		RequestedBy          string `json:"requested_by"`
+	}{
+		TenantID:             q.TenantID,
+		PseudonymizedMessage: q.MessageID,
+		RequestedBy:          q.UserEmail,
+	}
+	payload, err := json.Marshal(releasePayload)
+	if err != nil {
+		return SupportReply{}, fmt.Errorf("support: marshal release: %w", err)
+	}
+	if err := a.cfg.Events.Publish(ctx, a.cfg.ReleaseSubject, payload); err != nil {
 		return SupportReply{}, fmt.Errorf("support: emit release: %w", err)
 	}
 	cat := a.cfg.Explanations
@@ -185,9 +200,40 @@ func (a *SupportAgent) escalate(ctx context.Context, q SupportQuery, v dto.Evalu
 	if a.cfg.Events == nil {
 		return SupportReply{Escalated: true, Suggestion: escSuggestion}, nil
 	}
-	payload := fmt.Sprintf(`{"tenant_id":%q,"message_id":%q,"user":%q,"reason":%q,"verdict_tier":%q,"verdict_score":%d,"requested_at":%q}`,
-		q.TenantID, q.MessageID, q.UserEmail, reason, v.Tier, v.Score, time.Now().UTC().Format(time.RFC3339))
-	if err := a.cfg.Events.Publish(ctx, a.cfg.SecOpsSubject, []byte(payload)); err != nil {
+	var escReason dto.EscalationReason
+	switch reason {
+	case "low_confidence":
+		escReason = dto.EscalationReasonLowConfidence
+	case string(dto.EscalationReasonUserRequested):
+		escReason = dto.EscalationReasonUserRequested
+	default:
+		r := dto.EscalationReason(reason)
+		if r.Valid() {
+			escReason = r
+		} else {
+			escReason = dto.EscalationReasonUserRequested
+		}
+	}
+	envelope := struct {
+		TenantID string               `json:"tenant_id"`
+		Incident dto.EscalationIncident `json:"incident"`
+	}{
+		TenantID: q.TenantID,
+		Incident: dto.EscalationIncident{
+			PseudoMessageID: q.MessageID,
+			Tier:            string(v.Tier),
+			Category:        string(v.Primary),
+			Reason:          escReason,
+			Score:           float64(v.Score),
+			AISummary:       reason,
+			DetectedAt:      time.Now().UTC(),
+		},
+	}
+	payload, err := json.Marshal(envelope)
+	if err != nil {
+		return SupportReply{}, fmt.Errorf("support: marshal escalation: %w", err)
+	}
+	if err := a.cfg.Events.Publish(ctx, a.cfg.SecOpsSubject, payload); err != nil {
 		return SupportReply{}, fmt.Errorf("support: emit escalate: %w", err)
 	}
 	return SupportReply{

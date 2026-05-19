@@ -240,14 +240,21 @@ a runnable binary:
     logs each failed message. It is best-effort: a failure to
     init or start the processor is logged and the binary keeps
     running without it.
-  - The other subjects called out in earlier drafts of this
-    document (`es.evaluate.request`, `es.education.simulation.*`,
-    `es.action.banner` / `.label` / `.quarantine`,
-    `es.onboarding.>`, `es.action.feedback.>`) are NOT yet wired
-    in `StartConsumers`. Their handlers are implemented in the
-    relevant service packages and can be plugged in via
-    `eventBus.Subscribe`, but the management binary does not do
-    that today — see the [`README.md`](../../README.md#project-status)
+  - `es.onboarding.>` — dispatches `.tenant.created` to the
+    onboarding agent, logs `.user.created`, `.user.deleted`, and
+    `.vendor.seeded` (informational downstream events).
+  - `es.action.escalation.>` — SecOps escalation events from the
+    support agent.
+  - `es.action.quarantine.release` — quarantine release events
+    with `pseudonymized_message_id` field.
+  - `es.action.feedback.>` — user feedback events from banner
+    actions.
+  - The following subjects called out in earlier drafts of this
+    document (`es.evaluate.request`, `es.education.simulation.*`)
+    are NOT yet wired in `StartConsumers`. Their handlers are
+    implemented in the relevant service packages and can be plugged
+    in via `eventBus.Subscribe`, but the management binary does not
+    do that today — see the [`README.md`](../../README.md#project-status)
     project-status matrix.
 - Graceful shutdown closes all subscriptions and the DLQ processor
   before HTTP `Shutdown`, then the event bus / Redis / PG `defer`s
@@ -314,10 +321,23 @@ they are not:
 - **Health checks** — `/readyz` reports informational status for
   the provider registry, the ingestion poller, and the configured
   periodic workers in addition to the existing event-bus / Postgres
-  / Redis / Tier 1 probes.
+  / Redis / Tier 1 probes. The provider registry check now returns
+  an error (degraded) when no tenants are registered.
 - **Metrics** — `pkg/telemetry/metrics.go` adds counters and
   histograms for ingestion, actions, and worker cycles (see
   PROGRESS.md changelog for the 2026-05-18 entry).
+- **Onboarding service** — `internal/service/onboarding/` is wired
+  into the application when `ONBOARDING_STATE_SECRET` and
+  `ONBOARDING_CALLBACK_URL` are set plus at least one provider
+  credential (GWS or O365). HTTP routes at `/v1/onboarding/{start,
+  callback, status, revoke}` delegate to the service via an adapter
+  that bridges `handler.OnboardingService` (including the `Status`
+  method backed by PostgreSQL user/group counts). The onboarding
+  agent receives `es.onboarding.tenant.created` events to kick off
+  directory discovery + sensitivity classification + vendor scanning.
+  Tokens are encrypted at rest with AES-256-GCM and a
+  `ProviderRegistrar` adapter registers runtime Outlook providers
+  from OAuth tokens.
 
 ## Cross-Cutting Tracks (additions)
 

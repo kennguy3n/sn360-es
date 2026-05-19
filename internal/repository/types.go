@@ -213,6 +213,7 @@ type UserRepository interface {
 	Upsert(ctx context.Context, u *User) error
 	GetByHash(ctx context.Context, tenantID string, emailHash []byte) (*User, error)
 	List(ctx context.Context, tenantID string, limit int) ([]User, error)
+	Count(ctx context.Context, tenantID string) (int, error)
 }
 
 // GroupRepository persists Group rows.
@@ -221,6 +222,7 @@ type GroupRepository interface {
 	Upsert(ctx context.Context, g *Group) error
 	GetByName(ctx context.Context, tenantID, name string) (*Group, error)
 	List(ctx context.Context, tenantID string) ([]Group, error)
+	Count(ctx context.Context, tenantID string) (int, error)
 }
 
 // LabelRepository persists Label rows.
@@ -311,6 +313,7 @@ type CommunicationHistoryRepository interface {
 type FeedbackEventRepository interface {
 	Create(ctx context.Context, e *FeedbackEvent) error
 	Counts(ctx context.Context, tenantID string, start, end time.Time) (FeedbackCounts, error)
+	ListSince(ctx context.Context, tenantID string, since time.Time) ([]FeedbackEvent, error)
 }
 
 // GroupMembership is a join-table row linking a user to a group.

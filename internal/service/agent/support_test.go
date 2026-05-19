@@ -50,10 +50,10 @@ func TestNewSupportAgent_AppliesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSupportAgent: %v", err)
 	}
-	if a.cfg.SecOpsSubject != "es.action.escalate.secops" {
+	if a.cfg.SecOpsSubject != "es.action.escalation.created" {
 		t.Fatalf("SecOpsSubject default: %q", a.cfg.SecOpsSubject)
 	}
-	if a.cfg.ReleaseSubject != "es.action.release.request" {
+	if a.cfg.ReleaseSubject != "es.action.quarantine.release" {
 		t.Fatalf("ReleaseSubject default: %q", a.cfg.ReleaseSubject)
 	}
 	if a.cfg.EscalationConfidence != 0.45 {
@@ -145,7 +145,7 @@ func TestSupportAgent_Answer_LowConfidence_AutoEscalates(t *testing.T) {
 	if !rep.Escalated {
 		t.Fatal("expected auto-escalation for low confidence")
 	}
-	if len(pub.subjects) != 1 || pub.subjects[0] != "es.action.escalate.secops" {
+	if len(pub.subjects) != 1 || pub.subjects[0] != "es.action.escalation.created" {
 		t.Fatalf("subjects: %+v", pub.subjects)
 	}
 	if !strings.Contains(pub.bodies[0], "low_confidence") {
@@ -175,14 +175,14 @@ func TestSupportAgent_Answer_Release_PublishesAndOptimistic(t *testing.T) {
 	if rep.ReleasedAt == nil {
 		t.Fatal("expected ReleasedAt set")
 	}
-	if len(pub.subjects) != 1 || pub.subjects[0] != "es.action.release.request" {
+	if len(pub.subjects) != 1 || pub.subjects[0] != "es.action.quarantine.release" {
 		t.Fatalf("subjects: %+v", pub.subjects)
 	}
 	if !strings.Contains(pub.bodies[0], `"tenant_id":"acme"`) {
 		t.Fatalf("body missing tenant_id: %q", pub.bodies[0])
 	}
-	if !strings.Contains(pub.bodies[0], `"message_id":"pmid-1"`) {
-		t.Fatalf("body missing message_id: %q", pub.bodies[0])
+	if !strings.Contains(pub.bodies[0], `"pseudonymized_message_id":"pmid-1"`) {
+		t.Fatalf("body missing pseudonymized_message_id: %q", pub.bodies[0])
 	}
 }
 
@@ -220,7 +220,7 @@ func TestSupportAgent_Answer_Escalate_PublishesWithReason(t *testing.T) {
 	if !rep.Escalated {
 		t.Fatal("expected Escalated true")
 	}
-	if len(pub.subjects) != 1 || pub.subjects[0] != "es.action.escalate.secops" {
+	if len(pub.subjects) != 1 || pub.subjects[0] != "es.action.escalation.created" {
 		t.Fatalf("subjects: %+v", pub.subjects)
 	}
 	if !strings.Contains(pub.bodies[0], "user_requested") {

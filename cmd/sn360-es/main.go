@@ -5,6 +5,9 @@ package main
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +19,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -33,6 +37,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/education"
 	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
 	"github.com/kennguy3n/sn360-es/internal/service/ingestion"
+	"github.com/kennguy3n/sn360-es/internal/service/onboarding"
 	"github.com/kennguy3n/sn360-es/internal/service/predict"
 	"github.com/kennguy3n/sn360-es/internal/service/relationship"
 	"github.com/kennguy3n/sn360-es/internal/service/tier0"
@@ -122,18 +127,27 @@ func run() error {
 	// messages can ack cleanly.
 	app.StopConsumers(logger)
 
-	// Drain background goroutines (poller, periodic workers, label
-	// cache janitor) BEFORE we tear down the HTTP server and the
-	// bus / database connections in app.Close. Without this, a
-	// poll cycle in flight at SIGTERM would publish to a closed
-	// bus or write to a torn-down *sql.DB.
-	app.WaitBackground()
-
+	// Shut down the HTTP server so no new requests are accepted.
+	// In-flight handlers run to completion before Shutdown returns,
+	// so any bgWG.Add(1) calls from HTTP handlers (e.g. AgentBridge
+	// post-consent trigger) are guaranteed to execute before we
+	// reach WaitBackground below.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("sn360-es: http shutdown error", slog.Any("error", err))
 	}
+
+	// Belt-and-suspenders: set draining after HTTP shutdown so any
+	// future non-HTTP paths that call bgWG.Add also get rejected.
+	app.draining.Store(true)
+
+	// Drain background goroutines (poller, periodic workers, label
+	// cache janitor, in-flight onboarding) AFTER the HTTP server
+	// and consumers are both shut down. No new bgWG.Add(1) calls
+	// can arrive, so Wait() is safe.
+	app.WaitBackground()
+
 	return nil
 }
 
@@ -212,9 +226,10 @@ type application struct {
 	// services in-product queries. All three are optional — they
 	// degrade gracefully when their inputs (directory client, repos)
 	// are not wired.
-	onboardAgent *agent.OnboardingAgent
-	tuningAgent  *agent.TuningAgent
-	supportAgent *agent.SupportAgent
+	onboardAgent  *agent.OnboardingAgent
+	tuningAgent   *agent.TuningAgent
+	supportAgent  *agent.SupportAgent
+	onboardingSvc *onboarding.Service
 
 	// In-process caches that own a janitor goroutine. We keep a
 	// typed reference (separate from the action.LabelCache interface
@@ -233,7 +248,8 @@ type application struct {
 	// process exits. Each goroutine MUST `defer a.bgWG.Done()` and
 	// the matching `a.bgWG.Add(1)` MUST run on the calling
 	// goroutine (not inside the spawned one) to avoid a Wait race.
-	bgWG sync.WaitGroup
+	bgWG     sync.WaitGroup
+	draining atomic.Bool
 }
 
 // newApplication wires every component the binary needs. Required
@@ -802,6 +818,24 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	// follow-up events on the bus; the tuning agent persists
 	// updated weights/thresholds via the repository layer.
 	app.onboardAgent, app.tuningAgent, app.supportAgent = buildAgents(cfg, logger, app)
+
+	// Onboarding service — the OAuth consent + post-consent discovery
+	// flow. Only constructed when both state secret and callback URL are
+	// configured so dev-mode binaries stay bootable without onboarding
+	// credentials. The AgentBridge depends on onboardAgent, which is why
+	// this block sits after buildAgents.
+	if cfg.Onboarding.StateSecret != "" && cfg.Onboarding.CallbackURL != "" {
+		obSvc, obErr := buildOnboardingService(cfg, logger, app)
+		if obErr != nil {
+			logger.Warn("sn360-es: onboarding service init failed", slog.Any("error", obErr))
+		} else {
+			app.onboardingSvc = obSvc
+			logger.Info("sn360-es: onboarding service wired",
+				slog.String("callback_url", cfg.Onboarding.CallbackURL))
+		}
+	} else {
+		logger.Info("sn360-es: onboarding service disabled (ONBOARDING_STATE_SECRET or ONBOARDING_CALLBACK_URL not set)")
+	}
 
 	return app, nil
 }
@@ -1867,9 +1901,54 @@ func (a *application) handleSimulationResult(ctx context.Context, msg events.Mes
 func (a *application) handleOnboarding(ctx context.Context, msg events.Message) error {
 	subject := msg.Subject()
 	switch {
+	case strings.HasSuffix(subject, ".tenant.created"):
+		if a.onboardAgent != nil {
+			var env struct {
+				TenantID string `json:"tenant_id"`
+				Provider string `json:"provider"`
+			}
+			if err := json.Unmarshal(msg.Data(), &env); err != nil {
+				a.logger.WarnContext(ctx, "sn360-es: onboarding.tenant.created unmarshal failed",
+					slog.Any("error", err))
+				return nil
+			}
+			if env.TenantID == "" {
+				return nil
+			}
+			p := agent.Provider(env.Provider)
+			if !p.Valid() || p == agent.ProviderUnknown {
+				a.logger.WarnContext(ctx, "sn360-es: onboarding.tenant.created unknown provider, skipping",
+					slog.String("tenant_id", env.TenantID),
+					slog.String("provider", env.Provider))
+				return nil
+			}
+			tctx := agent.TenantContext{
+				TenantID:  env.TenantID,
+				Provider:  p,
+				StartedAt: time.Now().UTC(),
+			}
+			if a.draining.Load() {
+				a.logger.WarnContext(ctx, "sn360-es: onboarding.tenant.created rejected (draining)",
+					slog.String("tenant_id", env.TenantID))
+				return nil
+			}
+			a.bgWG.Add(1)
+			go func() {
+				defer a.bgWG.Done()
+				bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
+				defer cancel()
+				if _, err := a.onboardAgent.Onboard(bgCtx, tctx); err != nil {
+					a.logger.Error("sn360-es: onboarding agent failed",
+						slog.String("tenant_id", env.TenantID),
+						slog.Any("error", err))
+				}
+			}()
+		} else {
+			a.logger.InfoContext(ctx, "sn360-es: onboarding event received (agent not wired)",
+				slog.String("subject", subject))
+		}
 	case strings.HasSuffix(subject, ".user.created"),
 		strings.HasSuffix(subject, ".user.deleted"),
-		strings.HasSuffix(subject, ".tenant.created"),
 		strings.HasSuffix(subject, ".vendor.seeded"):
 		a.logger.InfoContext(ctx, "sn360-es: onboarding event received",
 			slog.String("subject", subject),
@@ -2117,6 +2196,19 @@ func buildMux(app *application) (http.Handler, error) {
 		mux.Handle("/l/", interstitialH)
 	}
 
+	// Onboarding OAuth consent flow.
+	if app.onboardingSvc != nil {
+		adapter := &onboardingServiceAdapter{
+			svc:   app.onboardingSvc,
+			repos: app.repos,
+		}
+		onboardingH := handler.NewOnboardingHandler(logger, adapter)
+		mux.HandleFunc("/v1/onboarding/start", onboardingH.ServeStart)
+		mux.HandleFunc("/v1/onboarding/callback", onboardingH.ServeCallback)
+		mux.HandleFunc("/v1/onboarding/status", onboardingH.ServeStatus)
+		mux.HandleFunc("/v1/onboarding/revoke", onboardingH.ServeRevoke)
+	}
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		logger.Debug("http: unmatched route", slog.String("path", r.URL.Path))
 		w.WriteHeader(http.StatusNotFound)
@@ -2190,6 +2282,9 @@ func defaultAuthSkipPaths() []string {
 		// only returns static localised copy, so skipping auth
 		// here is safe — no tenant scoping is needed.
 		"/v1/education/lesson/",
+		// OAuth callback is hit by the IdP redirect — the browser
+		// will not carry a Bearer JWT.
+		"/v1/onboarding/callback",
 	}
 }
 
@@ -3255,8 +3350,8 @@ func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*ag
 			Lookup:         lookup,
 			Audit:          audit,
 			Events:         pub,
-			SecOpsSubject:  "es.escalation.create",
-			ReleaseSubject: "es.quarantine.release",
+			SecOpsSubject:  "es.action.escalation.created",
+			ReleaseSubject: "es.action.quarantine.release",
 			Logger:         logger,
 		})
 		if err != nil {
@@ -3274,13 +3369,19 @@ func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*ag
 	if app.providers != nil && app.providers.hasAny() && pub != nil {
 		dir := buildDirectoryClient(cfg, logger)
 		labels := buildLabelApplier(app)
+		piiHasher := buildPIIHasher(cfg)
 		if dir != nil && labels != nil {
 			oa, err := agent.NewOnboardingAgent(agent.OnboardingConfig{
-				Directory: dir,
-				Labels:    labels,
-				Events:    pub,
-				Audit:     loggingAuditLog{logger: logger},
-				Logger:    logger,
+				Directory:             dir,
+				Labels:                labels,
+				Events:                pub,
+				Audit:                 loggingAuditLog{logger: logger},
+				Logger:                logger,
+				Hasher:                piiHasher,
+				Persister:             buildUserPersister(app, piiHasher),
+				SensitivityClassifier: buildSensitivityClassifier(cfg, logger),
+				VendorScanner:         buildVendorScanner(app),
+				Config:                newMemoryConfigStore(),
 			})
 			if err != nil {
 				logger.Warn("sn360-es: onboarding agent init failed",
@@ -3493,13 +3594,24 @@ type tuningResultAdapter struct {
 }
 
 func (a tuningResultAdapter) RecentFeedback(ctx context.Context, tenantID string, since time.Time) ([]agent.Feedback, error) {
-	// We don't expose a per-tenant feedback timeline yet — return
-	// an empty slice so the tuning agent has nothing new to act
-	// on. The slot is here so the call site is type-correct.
-	_ = ctx
-	_ = tenantID
-	_ = since
-	return nil, nil
+	if a.repos == nil || a.repos.FeedbackEvents == nil {
+		return nil, nil
+	}
+	rows, err := a.repos.FeedbackEvents.ListSince(ctx, tenantID, since)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]agent.Feedback, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, agent.Feedback{
+			TenantID:   r.TenantID,
+			MessageID:  r.PseudoMessageID,
+			Action:     agent.FeedbackKind(r.Action),
+			PriorTier:  constant.Tier(r.Tier),
+			OccurredAt: r.OccurredAt,
+		})
+	}
+	return out, nil
 }
 
 func (a tuningResultAdapter) CurrentWeights(ctx context.Context, tenantID string) (agent.ScoreWeights, error) {
@@ -3564,6 +3676,147 @@ func (s *memoryConfigStore) UpdateThresholds(_ context.Context, tenantID string,
 	defer s.mu.Unlock()
 	s.thresholds[tenantID] = t
 	return nil
+}
+
+// ---------------------------------------------------------------------
+// Onboarding agent smart-dependency builders.
+// ---------------------------------------------------------------------
+
+// piiHasherAdapter implements agent.PIIHasher by wrapping
+// privacy.Pseudonymizer with a deterministic tenant key derivation.
+type piiHasherAdapter struct {
+	pseudo privacy.Pseudonymizer
+	secret string
+}
+
+func (h *piiHasherAdapter) HashPII(tenantID string, input string) string {
+	key := sha256.Sum256([]byte(h.secret + ":" + tenantID))
+	return h.pseudo.HashOrEmpty(key[:], input)
+}
+
+func buildPIIHasher(cfg *config.Config) agent.PIIHasher {
+	secret := cfg.Banner.TokenSecret
+	if secret == "" {
+		return nil
+	}
+	return &piiHasherAdapter{
+		pseudo: privacy.NewPseudonymizer("sn360"),
+		secret: secret,
+	}
+}
+
+// userPersisterAdapter implements agent.UserPersister by upserting
+// discovered users and groups into the Postgres repositories.
+type userPersisterAdapter struct {
+	users  repository.UserRepository
+	groups repository.GroupRepository
+	hasher agent.PIIHasher
+}
+
+func (p *userPersisterAdapter) PersistDiscoveredUsers(ctx context.Context, tenantID string, users []agent.DiscoveredUser, groups []agent.DiscoveredGroup) error {
+	now := time.Now().UTC()
+	for _, g := range groups {
+		if err := p.groups.Upsert(ctx, &repository.Group{
+			ID:          g.ID,
+			TenantID:    tenantID,
+			Name:        g.Name,
+			Description: g.Description,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}); err != nil {
+			return fmt.Errorf("persist group %s: %w", g.ID, err)
+		}
+	}
+	for _, u := range users {
+		if u.Email == "" {
+			continue
+		}
+		var emailHash []byte
+		if p.hasher != nil {
+			emailHash = []byte(p.hasher.HashPII(tenantID, u.Email))
+		}
+		if err := p.users.Upsert(ctx, &repository.User{
+			ID:              u.ID,
+			TenantID:        tenantID,
+			EmailHash:       emailHash,
+			Role:            u.JobTitle,
+			Department:      u.Department,
+			SensitivityTier: u.SensitivityHint.DBTier(),
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}); err != nil {
+			return fmt.Errorf("persist user %s: %w", u.ID, err)
+		}
+	}
+	return nil
+}
+
+func buildUserPersister(app *application, hasher agent.PIIHasher) agent.UserPersister {
+	if app.repos == nil || app.repos.Users == nil || app.repos.Groups == nil || hasher == nil {
+		return nil
+	}
+	return &userPersisterAdapter{
+		users:  app.repos.Users,
+		groups: app.repos.Groups,
+		hasher: hasher,
+	}
+}
+
+func buildSensitivityClassifier(cfg *config.Config, logger *slog.Logger) agent.SensitivityClassifier {
+	if cfg.Tier1.URL == "" {
+		return nil
+	}
+	encoder := agent.NewEncoderSensitivityClassifier(cfg.Tier1.URL, nil, cfg.Tier1.Timeout, logger)
+	return agent.NewTieredSensitivityClassifier(agent.TieredClassifierConfig{
+		Encoder:  encoder,
+		Fallback: agent.KeywordClassifyInput,
+		Logger:   logger,
+	})
+}
+
+// vendorScannerAdapter implements agent.VendorScanner using the
+// communication-history repository.
+type vendorScannerAdapter struct {
+	histories repository.CommunicationHistoryRepository
+}
+
+func (v *vendorScannerAdapter) ScanRecentSenders(ctx context.Context, tenantID string, since time.Time) ([]agent.VendorCandidate, error) {
+	histories, err := v.histories.ListByTenant(ctx, tenantID, since, 0)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []agent.VendorCandidate
+	for _, h := range histories {
+		count := h.Count30d
+		candidates = append(candidates, agent.VendorCandidate{
+			Domain:     h.SenderDomain,
+			SeenCount:  count,
+			Confidence: vendorConfidence(count),
+		})
+	}
+	return candidates, nil
+}
+
+func vendorConfidence(count int) float64 {
+	switch {
+	case count >= 50:
+		return 0.95
+	case count >= 20:
+		return 0.85
+	case count >= 10:
+		return 0.75
+	case count >= 5:
+		return 0.65
+	default:
+		return 0.5
+	}
+}
+
+func buildVendorScanner(app *application) agent.VendorScanner {
+	if app.repos == nil || app.repos.CommunicationHistories == nil {
+		return nil
+	}
+	return &vendorScannerAdapter{histories: app.repos.CommunicationHistories}
 }
 
 // ---------------------------------------------------------------------
@@ -3641,4 +3894,237 @@ func (a *application) spawn(ctx context.Context, name string, fn func(ctx contex
 // forever.
 func (a *application) WaitBackground() {
 	a.bgWG.Wait()
+}
+
+// ---------------------------------------------------------------------------
+// Onboarding service wiring
+// ---------------------------------------------------------------------------
+
+// buildOnboardingService constructs the OAuth consent + post-consent
+// discovery service. The caller has already validated that
+// cfg.Onboarding.StateSecret and cfg.Onboarding.CallbackURL are set.
+func buildOnboardingService(cfg *config.Config, logger *slog.Logger, app *application) (*onboarding.Service, error) {
+	signer, err := onboarding.NewStateSigner([]byte(cfg.Onboarding.StateSecret))
+	if err != nil {
+		return nil, fmt.Errorf("state signer: %w", err)
+	}
+
+	// Token store — PgTokenStore requires Postgres + an encryptor.
+	if app.pgDB == nil {
+		return nil, fmt.Errorf("onboarding requires PostgreSQL (PG_HOST not set)")
+	}
+	enc, err := buildTokenEncryptor(cfg, logger)
+	if err != nil {
+		return nil, fmt.Errorf("token encryptor: %w", err)
+	}
+	store, err := onboarding.NewPgTokenStore(app.pgDB, enc)
+	if err != nil {
+		return nil, fmt.Errorf("token store: %w", err)
+	}
+
+	// Nonce store — Redis when available, in-memory fallback.
+	var nonces onboarding.NonceStore
+	if app.redis != nil {
+		ns, nerr := onboarding.NewRedisNonceStore(app.redis.Raw(), "")
+		if nerr != nil {
+			logger.Warn("sn360-es: onboarding redis nonce store failed, using in-memory",
+				slog.Any("error", nerr))
+			nonces = onboarding.NewInMemoryNonceStore()
+		} else {
+			nonces = ns
+		}
+	} else {
+		nonces = onboarding.NewInMemoryNonceStore()
+	}
+
+	validator := onboarding.NewHTTPPostConsentValidator(nil, cfg.GWS.Domain)
+	exch := onboarding.NewHTTPExchanger(nil)
+
+	// Provider configs.
+	providers := make(map[onboarding.ProviderType]onboarding.ProviderConfig)
+	if cfg.GWS.OAuthClientID != "" && cfg.GWS.OAuthClientSecret != "" {
+		providers[onboarding.ProviderGoogle] = onboarding.ProviderConfig{
+			ClientID:     cfg.GWS.OAuthClientID,
+			ClientSecret: cfg.GWS.OAuthClientSecret,
+			AuthURL:      "https://accounts.google.com/o/oauth2/v2/auth",
+			TokenURL:     "https://oauth2.googleapis.com/token",
+			Scopes:       []string{"https://www.googleapis.com/auth/admin.directory.user.readonly", "https://www.googleapis.com/auth/admin.directory.group.readonly"},
+			RedirectURL:  cfg.Onboarding.CallbackURL,
+		}
+	}
+	if cfg.O365.HasOutlook() {
+		providers[onboarding.ProviderMicrosoft] = onboarding.ProviderConfig{
+			ClientID:     cfg.O365.ClientID,
+			ClientSecret: cfg.O365.ClientSecret,
+			AuthURL:      "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize",
+			TokenURL:     "https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
+			Scopes:       []string{"https://graph.microsoft.com/.default", "offline_access"},
+			RedirectURL:  cfg.Onboarding.CallbackURL,
+		}
+	}
+	if len(providers) == 0 {
+		return nil, fmt.Errorf("at least one provider (GWS or O365) must be configured")
+	}
+
+	// Post-consent trigger (agent bridge).
+	var trigger onboarding.PostConsentTrigger
+	if app.onboardAgent != nil {
+		trigger = &onboarding.AgentBridge{
+			Onboarding: app.onboardAgent,
+			Log:        logger,
+			WG:         &app.bgWG,
+			Draining:   &app.draining,
+		}
+	}
+
+	// Provider registrar — holds a pointer to the service which is
+	// set below after NewService returns. RegisterFromToken is only
+	// called post-construction (from the callback handler), so the
+	// pointer is always populated before first use.
+	var reg *providerRegistrarAdapter
+	var registrar onboarding.ProviderRegistrar
+	if app.providers != nil {
+		reg = &providerRegistrarAdapter{
+			registry: app.providers,
+			cfg:      cfg,
+			logger:   logger,
+		}
+		registrar = reg
+	}
+
+	svc, svcErr := onboarding.NewService(onboarding.ServiceConfig{
+		Providers: providers,
+		Store:     store,
+		Exch:      exch,
+		State:     signer,
+		Trigger:   trigger,
+		Registrar: registrar,
+		Nonces:    nonces,
+		Validator: validator,
+		Logger:    logger,
+	})
+	if svcErr != nil {
+		return nil, svcErr
+	}
+	if reg != nil {
+		reg.svc = svc
+	}
+	return svc, nil
+}
+
+// aesGCMTokenEncryptor implements onboarding.TokenEncryptor using
+// AES-256-GCM. Used to encrypt OAuth tokens at rest in Postgres.
+type aesGCMTokenEncryptor struct {
+	aead cipher.AEAD
+}
+
+func newAESGCMTokenEncryptor(key []byte) (*aesGCMTokenEncryptor, error) {
+	if len(key) != 32 {
+		return nil, fmt.Errorf("token encryptor: key must be 32 bytes (got %d)", len(key))
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("token encryptor: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("token encryptor: %w", err)
+	}
+	return &aesGCMTokenEncryptor{aead: aead}, nil
+}
+
+func (e *aesGCMTokenEncryptor) Encrypt(plaintext []byte) ([]byte, error) {
+	nonce := make([]byte, e.aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	return e.aead.Seal(nonce, nonce, plaintext, nil), nil
+}
+
+func (e *aesGCMTokenEncryptor) Decrypt(ciphertext []byte) ([]byte, error) {
+	ns := e.aead.NonceSize()
+	if len(ciphertext) < ns+e.aead.Overhead() {
+		return nil, fmt.Errorf("token encryptor: ciphertext too short")
+	}
+	return e.aead.Open(nil, ciphertext[:ns], ciphertext[ns:], nil)
+}
+
+// buildTokenEncryptor returns an onboarding.TokenEncryptor for the
+// PgTokenStore. Priority: ONBOARDING_TOKEN_KEY_HEX (dedicated) →
+// KMS_MOCK_KEY_HEX (shared) → derived from StateSecret (fallback).
+func buildTokenEncryptor(cfg *config.Config, logger *slog.Logger) (onboarding.TokenEncryptor, error) {
+	if seed := strings.TrimSpace(cfg.Onboarding.TokenKeyHex); seed != "" {
+		decoded, err := hex.DecodeString(seed)
+		if err == nil && len(decoded) == 32 {
+			logger.Info("sn360-es: onboarding token encryptor using ONBOARDING_TOKEN_KEY_HEX")
+			return newAESGCMTokenEncryptor(decoded)
+		}
+		logger.Warn("sn360-es: ONBOARDING_TOKEN_KEY_HEX is set but invalid (must be 64 hex chars encoding 32 bytes); falling back",
+			slog.Bool("hex_error", err != nil), slog.Int("decoded_len", len(decoded)))
+	}
+	if seed := strings.TrimSpace(cfg.AWS.KMSMockKeyHex); seed != "" {
+		decoded, err := hex.DecodeString(seed)
+		if err == nil && len(decoded) == 32 {
+			logger.Info("sn360-es: onboarding token encryptor using KMS_MOCK_KEY_HEX")
+			return newAESGCMTokenEncryptor(decoded)
+		}
+		logger.Warn("sn360-es: KMS_MOCK_KEY_HEX is set but invalid (must be 64 hex chars encoding 32 bytes); falling back",
+			slog.Bool("hex_error", err != nil), slog.Int("decoded_len", len(decoded)))
+	}
+	h := sha256.Sum256([]byte("onboarding-token-encryption:" + cfg.Onboarding.StateSecret))
+	logger.Warn("sn360-es: onboarding token encryptor using derived key from state secret; set ONBOARDING_TOKEN_KEY_HEX for production")
+	return newAESGCMTokenEncryptor(h[:])
+}
+
+// onboardingServiceAdapter wraps *onboarding.Service to implement
+// handler.OnboardingService by adding the Status method backed by
+// the repository layer.
+type onboardingServiceAdapter struct {
+	svc   *onboarding.Service
+	repos *repository.Registry
+}
+
+func (a *onboardingServiceAdapter) AuthURL(provider onboarding.ProviderType, tenantID string) (string, error) {
+	return a.svc.AuthURL(provider, tenantID)
+}
+
+func (a *onboardingServiceAdapter) HandleCallback(ctx context.Context, stateTok, code string) (string, onboarding.ProviderType, error) {
+	return a.svc.HandleCallback(ctx, stateTok, code)
+}
+
+func (a *onboardingServiceAdapter) Revoke(ctx context.Context, tenantID string, provider onboarding.ProviderType) error {
+	return a.svc.Revoke(ctx, tenantID, provider)
+}
+
+func (a *onboardingServiceAdapter) Status(ctx context.Context, tenantID string) (handler.OnboardingStatus, error) {
+	status := handler.OnboardingStatus{TenantID: tenantID, Status: "not_started"}
+	if a.repos == nil {
+		return status, nil
+	}
+	if a.repos.Users != nil {
+		n, err := a.repos.Users.Count(ctx, tenantID)
+		if err == nil {
+			status.UsersDiscovered = n
+		}
+	}
+	if a.repos.Groups != nil {
+		n, err := a.repos.Groups.Count(ctx, tenantID)
+		if err == nil {
+			status.GroupsDiscovered = n
+		}
+	}
+	switch {
+	case status.UsersDiscovered > 0 || status.GroupsDiscovered > 0:
+		status.Status = "completed"
+	case a.svc != nil:
+		// Token exists but no users/groups discovered yet → in_progress.
+		// HasToken is a pure read (no refresh side-effect).
+		for _, p := range []onboarding.ProviderType{onboarding.ProviderGoogle, onboarding.ProviderMicrosoft} {
+			if a.svc.HasToken(ctx, tenantID, p) {
+				status.Status = "in_progress"
+				break
+			}
+		}
+	}
+	return status, nil
 }
