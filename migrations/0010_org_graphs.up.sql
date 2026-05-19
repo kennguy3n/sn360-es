@@ -1,3 +1,10 @@
+-- 0010_org_graphs.up.sql
+-- Persists the per-tenant org graph snapshot built by the directory
+-- sync worker. Stores the full graph as JSONB alongside aggregate
+-- statistics for fast dashboard queries.
+
+BEGIN;
+
 CREATE TABLE org_graphs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id),
@@ -10,3 +17,5 @@ CREATE TABLE org_graphs (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(tenant_id)
 );
+
+COMMIT;

@@ -1,3 +1,10 @@
+-- 0009_user_behavioral_baselines.up.sql
+-- Per-(user, sender-domain) behavioral profiles used for timing anomaly
+-- detection. Populated by the relationship aggregation worker during
+-- its 4h cycle.
+
+BEGIN;
+
 CREATE TABLE user_behavioral_baselines (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id),
@@ -11,3 +18,5 @@ CREATE TABLE user_behavioral_baselines (
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(tenant_id, user_email_hash, sender_domain_hash)
 );
+
+COMMIT;

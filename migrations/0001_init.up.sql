@@ -1,6 +1,7 @@
 -- 0001_init.up.sql
 -- Initial SN360-ES schema. Tables are derived from `internal/dto/`,
--- `internal/service/` repository interfaces, and ARCHITECTURE.md §5.3.
+-- `internal/service/` repository interfaces, and the Management Domain
+-- section of ARCHITECTURE.md.
 --
 -- All sensitive columns are stored as Blake2-hashed pseudonyms or
 -- AES-256-GCM-encrypted ciphertext per the privacy layer; this schema
