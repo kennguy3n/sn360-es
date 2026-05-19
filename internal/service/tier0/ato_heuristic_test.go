@@ -162,6 +162,103 @@ func TestGate_CleanInternalStillBypasses(t *testing.T) {
 	}
 }
 
+func TestATOHeuristic_HighPrivilegeToFreemail(t *testing.T) {
+	h := NewATOHeuristic(DefaultATOHeuristicConfig())
+	req := dto.EvaluateRequest{
+		Sender: "dba@company.com",
+		Signals: dto.RiskSignals{
+			IsInternal:        true,
+			SenderDomain:      "company.com",
+			SenderSensitivity: "critical",
+			IsFreeDomain:      true,
+			IsExternal:        false,
+		},
+	}
+	r := h.Check(req)
+	if !contains(r.Reasons, "high_privilege_to_freemail") {
+		t.Errorf("expected high_privilege_to_freemail, got %v", r.Reasons)
+	}
+}
+
+func TestATOHeuristic_HighPrivilegeExternalAttachment(t *testing.T) {
+	h := NewATOHeuristic(DefaultATOHeuristicConfig())
+	req := dto.EvaluateRequest{
+		Sender: "ceo@company.com",
+		Signals: dto.RiskSignals{
+			IsInternal:        true,
+			SenderDomain:      "company.com",
+			SenderSensitivity: "max",
+			HasAttachment:     true,
+			IsExternal:        true,
+		},
+	}
+	r := h.Check(req)
+	if !contains(r.Reasons, "high_privilege_external_attachment") {
+		t.Errorf("expected high_privilege_external_attachment, got %v", r.Reasons)
+	}
+}
+
+func TestATOHeuristic_HighPrivilegeLowerThreshold(t *testing.T) {
+	h := NewATOHeuristic(DefaultATOHeuristicConfig())
+	// A critical sender with timing unusual (0.15) + freemail (0.3) =
+	// 0.45 total. This exceeds the lowered 0.4 threshold for critical
+	// senders but would NOT exceed the default 0.5 threshold.
+	req := dto.EvaluateRequest{
+		Sender: "sysadmin@company.com",
+		Signals: dto.RiskSignals{
+			IsInternal:             true,
+			SenderDomain:           "company.com",
+			SenderSensitivity:      "critical",
+			IsFreeDomain:           true,
+			CommunicationFrequency: 20,
+			TypicalSendHour:        10,
+			CurrentHourUTC:         5, // 5 hours off → timing_unusual (0.15)
+		},
+	}
+	r := h.Check(req)
+	if !r.Flagged {
+		t.Errorf("critical sender with timing unusual + freemail should be flagged at lower threshold, score=%.2f reasons=%v", r.Score, r.Reasons)
+	}
+}
+
+func TestATOHeuristic_NormalUserNotFlaggedAtSameScore(t *testing.T) {
+	h := NewATOHeuristic(DefaultATOHeuristicConfig())
+	// A default-sensitivity sender with same timing anomaly (0.35) should
+	// NOT be flagged because the default threshold is 0.5.
+	req := dto.EvaluateRequest{
+		Sender: "engineer@company.com",
+		Signals: dto.RiskSignals{
+			IsInternal:             true,
+			SenderDomain:           "company.com",
+			SenderSensitivity:      "default",
+			CommunicationFrequency: 20,
+			TypicalSendHour:        10,
+			CurrentHourUTC:         2,
+		},
+	}
+	r := h.Check(req)
+	if r.Flagged {
+		t.Errorf("default sender with only timing anomaly should not be flagged at default threshold, score=%.2f", r.Score)
+	}
+}
+
+func TestATOHeuristic_DisposableDomainHighPrivilege(t *testing.T) {
+	h := NewATOHeuristic(DefaultATOHeuristicConfig())
+	req := dto.EvaluateRequest{
+		Sender: "admin@company.com",
+		Signals: dto.RiskSignals{
+			IsInternal:         true,
+			SenderDomain:       "company.com",
+			SenderSensitivity:  "critical",
+			IsDisposableDomain: true,
+		},
+	}
+	r := h.Check(req)
+	if !contains(r.Reasons, "high_privilege_to_freemail") {
+		t.Errorf("expected high_privilege_to_freemail for disposable domain, got %v", r.Reasons)
+	}
+}
+
 func contains(ss []string, s string) bool {
 	for _, v := range ss {
 		if v == s {

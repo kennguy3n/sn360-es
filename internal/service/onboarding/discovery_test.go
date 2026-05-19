@@ -129,25 +129,69 @@ func TestProject_SkipsUnknownManager(t *testing.T) {
 }
 
 func TestIsHighRiskGroupName(t *testing.T) {
-	cases := map[string]bool{
-		"Finance Team":       true,
-		"Executive Officers": true,
-		"C-Suite":            true,
-		"Leadership":         true,
-		"hr team":            true,
-		"People Ops":         true,
-		"Legal":              true,
-		"IT Admins":          true,
-		"SysAdmin":           true,
-		"Security":           true,
-		"Marketing":          false,
-		"Engineering":        false,
-		"":                   false,
+	cases := []struct {
+		name string
+		want bool
+	}{
+		// Existing — should still pass
+		{"Finance Team", true},
+		{"Executive Officers", true},
+		{"C-Suite", true},
+		{"Leadership", true},
+		{"hr team", true},
+		{"People Ops", true},
+		{"Legal", true},
+		{"IT Admins", true},
+		{"SysAdmin", true},
+		{"Security", true},
+
+		// Technology
+		{"DevOps Team", true},
+		{"Site Reliability Engineering", true},
+		{"SRE On-Call", true},
+		{"Database Administrators", true},
+		{"DBA Team", true},
+		{"Cloud Admin Group", true},
+		{"Infrastructure Team", true},
+		{"Platform Engineers", true},
+		{"Network Ops", true},
+		{"SecOps", true},
+		{"DevSecOps", true},
+
+		// M&A / Strategy
+		{"M&A Working Group", true},
+		{"Mergers Committee", true},
+		{"Corporate Development", true},
+		{"Corp Dev", true},
+		{"Investor Relations", true},
+		{"Board of Directors", true},
+
+		// Healthcare
+		{"Medical Staff", true},
+		{"Clinical Staff", true},
+		{"Pharmacy Team", true},
+		{"Physician Group", true},
+		{"Nursing Department", true},
+		{"Health Information Management", true},
+
+		// R&D
+		{"Research and Development", true},
+		{"R&D Lab", true},
+		{"Patent Review Committee", true},
+		{"Intellectual Property Team", true},
+
+		// Non high-risk — should remain false
+		{"Marketing", false},
+		{"Sales Team", false},
+		{"Customer Support", false},
+		{"", false},
 	}
-	for in, want := range cases {
-		if got := IsHighRiskGroupName(in); got != want {
-			t.Fatalf("IsHighRiskGroupName(%q)=%v want %v", in, got, want)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsHighRiskGroupName(tc.name); got != tc.want {
+				t.Fatalf("IsHighRiskGroupName(%q)=%v want %v", tc.name, got, tc.want)
+			}
+		})
 	}
 }
 

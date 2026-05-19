@@ -388,9 +388,9 @@ sequenceDiagram
     Agent->>Discovery: Build org graph
     Discovery->>Discovery: Identify high-risk groups
     Discovery->>Discovery: Map reporting hierarchy
-    Discovery->>Discovery: Classify roles (C-suite, Finance, HR)
+    Discovery->>Discovery: Classify roles (Critical/Max/High/Elevated/Default)
     Agent->>Agent: Configure default detection policy
-    Agent->>Agent: Set per-group sensitivity thresholds
+    Agent->>Agent: Set per-user sensitivity thresholds (5-tier model)
     Agent->>Agent: Generate initial vendor list from email history
     Agent-->>UI: Onboarding complete, N users protected
 ```
@@ -426,6 +426,41 @@ graph LR
     Tuning --> Weights["Score engine weights"]
     Tuning --> Education["Education campaign difficulty"]
 ```
+
+### Industry-Aware Sensitivity Classification
+
+SN360-ES classifies every user into a 5-tier sensitivity model during
+onboarding. Classification is fully automatic — no admin configuration
+required — and works across six languages (English, Japanese, Korean,
+Thai, Vietnamese, Chinese).
+
+| Tier | Value | Typical roles |
+|---|---|---|
+| **Default** | 0 | Software Engineer, Marketing, Sales |
+| **Elevated** | 1 | DevOps Engineer, Nurse, Paralegal, Sales Director |
+| **High** | 2 | VP Finance, Security Engineer, Physician, Data Scientist, M&A Analyst |
+| **Max** | 3 | CEO, CFO, CTO, Board Member, Founder |
+| **Critical** | 4 | DBA, System Admin, Cloud Admin, SRE Lead, Network Admin |
+
+The Critical tier represents users with infrastructure-level access to
+production systems. A compromised DBA account can exfiltrate an entire
+database; a compromised cloud admin can modify IAM policies. These users
+receive the strictest monitoring:
+
+- **Lower ATO thresholds**: Suspicious behaviour triggers alerts at a
+  lower score (0.4 vs 0.5 default).
+- **Outbound freemail flagging**: Any email from a Critical/Max user to
+  a freemail or disposable domain is flagged as an insider-threat signal.
+- **Higher vulnerability score**: Infrastructure access maps to the
+  highest weight in per-user risk scoring.
+- **Tighter volume anomaly**: 2σ threshold instead of 3σ.
+
+Industry verticals are detected automatically from directory signals
+(job titles, department names, group memberships). The classifier
+recognises roles across Technology, Healthcare, M&A/Strategy, R&D,
+Finance, Legal, HR, and IT verticals, mapping groups to risk classes
+(`engineering`, `medical`, `strategy`, `research`, `finance`, `legal`,
+`hr`, `it`) stored in the `groups.risk_class` column.
 
 ---
 

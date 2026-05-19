@@ -326,28 +326,80 @@ func indexGroups(groups []DiscoveredGroup) map[string]DiscoveredGroup {
 //
 // Sensitivity matrix (in priority order):
 //
+//   - Infrastructure admins (DBA, SysAdmin, Cloud Admin) → Critical
 //   - C-suite, founders, owners → Max
 //   - Finance, treasury, AP/AR → High
 //   - HR, legal, compliance → High
+//   - Technology (DevOps, SecEng, DataEng) → High
+//   - M&A, corporate development, investor relations → High
+//   - Healthcare (Doctor, Pharmacist, Medical Director) → High
+//   - R&D (Research Director, Data Scientist) → High
+//   - DevOps Engineer, Nurse, Paralegal, Sales Director → Elevated
 //   - Admin assistants, executive assistants → Elevated
 //   - Procurement, vendor management → Elevated
 //   - Everyone else → Default
 func ClassifyUserSensitivity(u DiscoveredUser, groups map[string]DiscoveredGroup) Sensitivity {
-	hay := strings.ToLower(u.JobTitle + " " + u.Department + " " + u.DisplayName)
+	// Pad with spaces so word-boundary checks (e.g. " cto") work at
+	// the start/end of the string without special-casing.
+	hay := " " + strings.ToLower(u.JobTitle+" "+u.Department+" "+u.DisplayName) + " "
 	for _, gID := range u.GroupIDs {
 		if g, ok := groups[gID]; ok {
-			hay += " " + strings.ToLower(g.Name)
+			hay += strings.ToLower(g.Name) + " "
 		}
 	}
 	switch {
-	case containsAny(hay, "ceo", "cfo", "coo", "cto", "ciso", "founder", "chief executive", "chief financial", "owner"):
+	// Critical — Infrastructure-level access roles (highest priority).
+	// "dba " with trailing space avoids false positives like "feedback".
+	case containsAny(hay, "database administrator", "dba ", "domain admin", "sysadmin",
+		"system administrator", "cloud administrator", "infrastructure lead", "sre lead",
+		"security administrator", "platform engineer", "network administrator"):
+		return SensitivityCritical
+	// Max — C-suite, board members, founders.
+	// " cto" / " coo" use leading-space to avoid matching inside
+	// "director" / "coordinator".
+	case containsAny(hay, "ceo", "cfo", " coo", " cto", "ciso", "founder", "chief executive", "chief financial", "owner"):
 		return SensitivityMax
+	// High — Finance, treasury.
 	case containsAny(hay, "finance", "treasury", "accounts payable", "accounts receivable", "controller", "bookkeep"):
 		return SensitivityHigh
-	case containsAny(hay, "human resources", "people ops", "legal", "compliance", "general counsel"):
+	// High — HR, legal, compliance.
+	// " legal" avoids matching inside "paralegal".
+	case containsAny(hay, "human resources", "people ops", " legal", "compliance", "general counsel"):
 		return SensitivityHigh
+	// High — Technology (sensitive access, not infra-level).
+	case containsAny(hay, "security engineer", "security analyst", "cloud engineer",
+		"network engineer", "data engineer", "site reliability engineer"):
+		return SensitivityHigh
+	// High — M&A / Strategy.
+	case containsAny(hay, "mergers and acquisitions", "m&a", "corporate development",
+		"corp dev", "investor relations", "board secretary", "corporate strategy"):
+		return SensitivityHigh
+	// High — Healthcare / Medical.
+	case containsAny(hay, "doctor", "physician", "surgeon", "medical director", "chief medical",
+		"pharmacist", "clinical director", "medical records", "health information",
+		"chief nursing", "nurse manager"):
+		return SensitivityHigh
+	// High — R&D / Intellectual Property.
+	case containsAny(hay, "research director", "r&d", "patent", "intellectual property",
+		"chief scientist", "chief technology", "data scientist", "ml engineer"):
+		return SensitivityHigh
+	// Elevated — Technology supporting roles.
+	case containsAny(hay, "devops engineer", "devops", "junior dba", "help desk manager", "it support lead"):
+		return SensitivityElevated
+	// Elevated — Healthcare clinical support.
+	case containsAny(hay, "nurse", "lab technician", "radiologist", "physical therapist",
+		"clinical research", "clinical coordinator"):
+		return SensitivityElevated
+	// Elevated — Legal extended.
+	case containsAny(hay, "paralegal", "litigation support", "privacy officer", "data protection officer"):
+		return SensitivityElevated
+	// Elevated — Sales (customer data access).
+	case containsAny(hay, "sales director", "account executive", "customer success", "customer data"):
+		return SensitivityElevated
+	// Elevated — Executive / Admin assistants (existing).
 	case containsAny(hay, "executive assistant", "admin assistant", "office manager"):
 		return SensitivityElevated
+	// Elevated — Procurement (existing).
 	case containsAny(hay, "procurement", "vendor management", "supplier"):
 		return SensitivityElevated
 	default:

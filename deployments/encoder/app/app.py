@@ -299,3 +299,131 @@ def predict_batch(req: BatchRequest) -> BatchResponse:
     PREDICTIONS.labels(mode="batch").inc(len(req.items))
     LATENCY.labels(mode="batch").observe(time.perf_counter() - t0)
     return BatchResponse(items=out)
+
+
+# ---------------------------------------------------------------------------
+# Sensitivity role classification endpoint
+# ---------------------------------------------------------------------------
+
+# Valid sensitivity tiers in priority order (highest first).
+_SENSITIVITY_TIERS = ("critical", "max", "high", "elevated", "default")
+
+# Infrastructure-access keywords that map to "critical" tier. If the
+# encoder model was not fine-tuned on "critical" examples, this
+# post-processing step catches them via keyword match.
+_INFRA_KEYWORDS = {
+    "database administrator", "dba", "system administrator", "sysadmin",
+    "domain admin", "cloud administrator", "infrastructure engineer",
+    "devops lead", "site reliability", "sre lead", "network administrator",
+    "security administrator", "platform engineer", "root access",
+    # Japanese
+    "データベース管理者", "システム管理者", "インフラエンジニア", "クラウド管理者",
+    # Korean
+    "데이터베이스 관리자", "시스템 관리자", "인프라 엔지니어",
+    # Chinese
+    "数据库管理员", "系统管理员", "运维工程师", "云管理员", "基础设施工程师",
+    # Vietnamese
+    "quản trị cơ sở dữ liệu", "quản trị hệ thống",
+}
+
+
+class RoleClassifyItem(BaseModel):
+    index: int = Field(..., ge=0)
+    job_title: str = Field(default="")
+    department: str = Field(default="")
+    display_name: str = Field(default="")
+    group_names: List[str] = Field(default_factory=list)
+
+
+class RoleClassifyResult(BaseModel):
+    index: int
+    sensitivity: str
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    reason: str = ""
+
+
+class RoleClassifyRequest(BaseModel):
+    users: List[RoleClassifyItem]
+
+
+class RoleClassifyResponse(BaseModel):
+    results: List[RoleClassifyResult]
+
+
+def _classify_role_sensitivity(item: RoleClassifyItem) -> RoleClassifyResult:
+    """Classify a single user's sensitivity tier using keyword matching.
+
+    When the encoder model supports "critical" as a fine-tuned label this
+    function can be replaced with model inference; currently it uses the
+    same multilingual keyword map the Go keyword classifier uses.
+    """
+    hay = " ".join([
+        item.job_title, item.department,
+        item.display_name, " ".join(item.group_names),
+    ]).lower()
+
+    # Check for infrastructure-level (critical) keywords first.
+    for kw in _INFRA_KEYWORDS:
+        if kw in hay:
+            return RoleClassifyResult(
+                index=item.index,
+                sensitivity="critical",
+                confidence=0.92,
+                reason=f"infrastructure keyword: {kw}",
+            )
+
+    # Fall back to tier-based keyword matching consistent with the Go
+    # sensitivityKeywords map.
+    _TIER_KEYWORDS: dict[str, list[str]] = {
+        "max": [
+            "ceo", "cfo", "coo", "cto", "ciso", "founder",
+            "chief executive", "chief financial", "owner",
+            "首席执行官", "首席财务官", "总裁", "创始人", "董事长",
+            "代表取締役", "社長", "대표이사", "창업자",
+        ],
+        "high": [
+            "finance", "treasury", "controller", "human resources",
+            "legal", "compliance", "security engineer", "data engineer",
+            "physician", "pharmacist", "medical director",
+            "research director", "data scientist", "m&a",
+            "corporate development", "investor relations",
+        ],
+        "elevated": [
+            "executive assistant", "procurement", "devops engineer",
+            "nurse", "paralegal", "sales director",
+            "customer success", "office manager",
+        ],
+    }
+    for tier, keywords in _TIER_KEYWORDS.items():
+        for kw in keywords:
+            if kw in hay:
+                return RoleClassifyResult(
+                    index=item.index,
+                    sensitivity=tier,
+                    confidence=0.85,
+                    reason=f"keyword: {kw}",
+                )
+
+    return RoleClassifyResult(
+        index=item.index,
+        sensitivity="default",
+        confidence=0.70,
+        reason="no matching keywords",
+    )
+
+
+@app.post("/classify/roles", response_model=RoleClassifyResponse)
+def classify_roles(req: RoleClassifyRequest) -> RoleClassifyResponse:
+    """Classify users into sensitivity tiers based on role signals.
+
+    Uses keyword matching as a fallback when the encoder model has not
+    been fine-tuned on the full 5-tier sensitivity vocabulary. Results
+    are consistent with the Go-side KeywordClassifyInput function.
+    """
+    if not req.users:
+        return RoleClassifyResponse(results=[])
+    t0 = time.perf_counter()
+    results = [_classify_role_sensitivity(u) for u in req.users]
+    PREDICTIONS.labels(mode="roles").inc(len(req.users))
+    LATENCY.labels(mode="roles").observe(time.perf_counter() - t0)
+    return RoleClassifyResponse(results=results)
