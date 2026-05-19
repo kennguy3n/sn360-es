@@ -64,15 +64,15 @@ func (c TenantContext) Validate() error {
 // struct so downstream consumers (label applier, role classifier) need
 // only handle one type.
 type DiscoveredUser struct {
-	ID          string
-	Email       string
-	DisplayName string
-	Department  string
-	JobTitle    string
-	IsAdmin     bool
-	IsSuspended bool
-	GroupIDs    []string
-	ManagerID   string
+	ID               string
+	Email            string
+	DisplayName      string
+	Department       string
+	JobTitle         string
+	IsAdmin          bool
+	IsSuspended      bool
+	GroupIDs         []string
+	ManagerID        string
 	Aliases          []string // email aliases
 	IsSharedMailbox  bool     // shared/resource mailbox (O365 mailboxType)
 	IsServiceAccount bool     // service account / app user

@@ -203,7 +203,7 @@ func TestEncoderSensitivityClassifier_MultilingualTitles(t *testing.T) {
 
 func TestKeywordClassifyInput_MultilingualFallback(t *testing.T) {
 	tests := []struct {
-		name string
+		name  string
 		input UserClassifyInput
 		want  Sensitivity
 	}{

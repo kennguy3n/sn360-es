@@ -41,9 +41,9 @@ type EnhancedMetrics interface {
 // EnhancedDashboardSummary extends DashboardSummary with the new metrics.
 type EnhancedDashboardSummary struct {
 	dto.DashboardSummary
-	TopTargetedUsers    []UserThreatCount  `json:"top_targeted_users,omitempty"`
-	TimeToDetection     LatencyPercentiles `json:"time_to_detection"`
-	TimeToRemediation   LatencyPercentiles `json:"time_to_remediation"`
+	TopTargetedUsers  []UserThreatCount  `json:"top_targeted_users,omitempty"`
+	TimeToDetection   LatencyPercentiles `json:"time_to_detection"`
+	TimeToRemediation LatencyPercentiles `json:"time_to_remediation"`
 }
 
 // EnhancedGeneratorConfig wires the enhanced dashboard generator.
@@ -58,9 +58,9 @@ type EnhancedGeneratorConfig struct {
 
 // EnhancedGenerator extends DashboardGenerator with the new metrics.
 type EnhancedGenerator struct {
-	base      *DashboardGenerator
-	esrc      EnhancedMetrics
-	topLimit  int
+	base     *DashboardGenerator
+	esrc     EnhancedMetrics
+	topLimit int
 }
 
 // NewEnhancedGenerator constructs the enhanced generator.

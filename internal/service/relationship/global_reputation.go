@@ -10,25 +10,25 @@ import (
 
 // GlobalReputationConfig wires the cross-tenant sender reputation service.
 type GlobalReputationConfig struct {
-	Logger          *slog.Logger
-	Clock           func() time.Time
+	Logger *slog.Logger
+	Clock  func() time.Time
 	// WindowDays is the trailing window for reputation aggregation.
 	// Defaults to 30.
-	WindowDays      int
+	WindowDays int
 	// FlagThreshold is the fraction of tenants flagging a domain
 	// above which it is considered suspicious. Defaults to 0.10 (10%).
-	FlagThreshold   float64
+	FlagThreshold float64
 }
 
 // DomainReputation is the anonymized cross-tenant reputation for a
 // sender domain.
 type DomainReputation struct {
-	Domain           string  `json:"domain"`
-	Score            float64 `json:"score"` // 0.0 (clean) to 1.0 (malicious)
-	TenantsFlagged   int     `json:"tenants_flagged"`
-	TenantsTotal     int     `json:"tenants_total"`
-	FlaggedFraction  float64 `json:"flagged_fraction"`
-	LastUpdated      time.Time `json:"last_updated"`
+	Domain          string    `json:"domain"`
+	Score           float64   `json:"score"` // 0.0 (clean) to 1.0 (malicious)
+	TenantsFlagged  int       `json:"tenants_flagged"`
+	TenantsTotal    int       `json:"tenants_total"`
+	FlaggedFraction float64   `json:"flagged_fraction"`
+	LastUpdated     time.Time `json:"last_updated"`
 }
 
 // ReputationStore persists cross-tenant reputation data. All methods

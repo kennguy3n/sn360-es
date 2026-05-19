@@ -48,11 +48,11 @@ func (b *tokenBucket) allow(now time.Time) bool {
 // messages are nacked with a backoff so the broker re-delivers them
 // after the bucket refills.
 type RateLimitedEventService struct {
-	inner EventService
-	cfg   RateLimitConfig
-	log   *slog.Logger
-	now   func() time.Time
-	mu    sync.Mutex
+	inner   EventService
+	cfg     RateLimitConfig
+	log     *slog.Logger
+	now     func() time.Time
+	mu      sync.Mutex
 	buckets map[string]*tokenBucket
 }
 
@@ -128,5 +128,3 @@ func (s *RateLimitedEventService) allow(tenantID string) bool {
 
 // compile-time assertion
 var _ EventService = (*RateLimitedEventService)(nil)
-
-

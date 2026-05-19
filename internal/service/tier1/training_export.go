@@ -28,19 +28,19 @@ const (
 // architecture compliance).
 type TrainingSample struct {
 	// Pseudonymized fields only.
-	MessageHash    string        `json:"message_hash"`
-	SubjectTokens  []string      `json:"subject_tokens"`
-	SenderDomain   string        `json:"sender_domain"`
-	EncoderScore   int           `json:"encoder_score"`
-	FinalScore     int           `json:"final_score"`
-	FinalTier      string        `json:"final_tier"`
-	Category       string        `json:"category"`
-	ReasonCodes    []string      `json:"reason_codes,omitempty"`
-	SignalFlags    SignalFlags    `json:"signal_flags"`
-	HumanLabel     TrainingLabel `json:"human_label"`
-	FeedbackAt     time.Time     `json:"feedback_at"`
-	Language       string        `json:"language,omitempty"`
-	ModelTag       string        `json:"model_tag,omitempty"`
+	MessageHash   string        `json:"message_hash"`
+	SubjectTokens []string      `json:"subject_tokens"`
+	SenderDomain  string        `json:"sender_domain"`
+	EncoderScore  int           `json:"encoder_score"`
+	FinalScore    int           `json:"final_score"`
+	FinalTier     string        `json:"final_tier"`
+	Category      string        `json:"category"`
+	ReasonCodes   []string      `json:"reason_codes,omitempty"`
+	SignalFlags   SignalFlags   `json:"signal_flags"`
+	HumanLabel    TrainingLabel `json:"human_label"`
+	FeedbackAt    time.Time     `json:"feedback_at"`
+	Language      string        `json:"language,omitempty"`
+	ModelTag      string        `json:"model_tag,omitempty"`
 }
 
 // SignalFlags are the boolean risk signals for training.
@@ -168,9 +168,9 @@ func (e *TrainingExporter) Export(ctx context.Context, since, until time.Time) (
 	if err := e.store.Put(ctx, key, []byte(buf.String()),
 		s3.WithContentType("application/x-ndjson"),
 		s3.WithMetadata(map[string]string{
-			"records":    fmt.Sprintf("%d", len(records)),
-			"since":      since.Format(time.RFC3339),
-			"until":      until.Format(time.RFC3339),
+			"records":     fmt.Sprintf("%d", len(records)),
+			"since":       since.Format(time.RFC3339),
+			"until":       until.Format(time.RFC3339),
 			"exported_at": e.now().Format(time.RFC3339),
 		}),
 	); err != nil {

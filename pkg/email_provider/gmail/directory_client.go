@@ -97,8 +97,8 @@ type directoryUser struct {
 		Value string `json:"value"`
 		Type  string `json:"type"`
 	} `json:"relations"`
-	Aliases []string `json:"aliases"`
-	OrgUnitPath string `json:"orgUnitPath"`
+	Aliases     []string `json:"aliases"`
+	OrgUnitPath string   `json:"orgUnitPath"`
 }
 
 type directoryUserList struct {

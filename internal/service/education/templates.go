@@ -21,9 +21,9 @@ import (
 // iteration. When a requested locale has no templates, the library falls
 // back to the "en" locale.
 type TemplateLibrary struct {
-	mu        sync.RWMutex
-	byID      map[string]dto.SimulationTemplate
-	byAttack  map[dto.AttackType]map[dto.DifficultyLevel][]string
+	mu       sync.RWMutex
+	byID     map[string]dto.SimulationTemplate
+	byAttack map[dto.AttackType]map[dto.DifficultyLevel][]string
 	// byLocale indexes template IDs by (locale, attack_type, difficulty).
 	byLocale  map[string]map[dto.AttackType]map[dto.DifficultyLevel][]string
 	templates map[string]*template.Template // subject+body parsed

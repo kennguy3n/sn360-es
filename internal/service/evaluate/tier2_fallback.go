@@ -57,10 +57,10 @@ type Tier2FallbackClient struct {
 	threshold int
 	timeout   time.Duration
 
-	mu              sync.Mutex
-	state           circuitState
+	mu               sync.Mutex
+	state            circuitState
 	consecutiveFails int
-	openedAt        time.Time
+	openedAt         time.Time
 
 	primaryCalls  atomic.Uint64
 	fallbackCalls atomic.Uint64

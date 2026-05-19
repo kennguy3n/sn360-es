@@ -227,9 +227,9 @@ func NewBonsaiSensitivityClassifier(url string, client *http.Client, timeout tim
 }
 
 type bonsaiRequest struct {
-	Model       string        `json:"model"`
-	Messages    []bonsaiMsg   `json:"messages"`
-	Temperature float64       `json:"temperature"`
+	Model       string      `json:"model"`
+	Messages    []bonsaiMsg `json:"messages"`
+	Temperature float64     `json:"temperature"`
 }
 
 type bonsaiMsg struct {
@@ -313,12 +313,12 @@ func (c *BonsaiSensitivityClassifier) ClassifyBatch(ctx context.Context, users [
 // TieredSensitivityClassifier combines encoder + Bonsai + fallback
 // in a tiered architecture matching the detection pipeline pattern.
 type TieredSensitivityClassifier struct {
-	encoder         *EncoderSensitivityClassifier
-	bonsai          *BonsaiSensitivityClassifier
-	fallback        func(UserClassifyInput) Sensitivity
-	cache           redis.Cmdable
-	escalateBelow   float64
-	logger          *slog.Logger
+	encoder       *EncoderSensitivityClassifier
+	bonsai        *BonsaiSensitivityClassifier
+	fallback      func(UserClassifyInput) Sensitivity
+	cache         redis.Cmdable
+	escalateBelow float64
+	logger        *slog.Logger
 }
 
 // TieredClassifierConfig configures the tiered classifier.

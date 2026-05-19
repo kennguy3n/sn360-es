@@ -10,10 +10,10 @@ import (
 
 // URLRecheckResult captures a single URL re-check outcome.
 type URLRecheckResult struct {
-	URL       string `json:"url"`
-	OldScore  int    `json:"old_score"`
-	NewScore  int    `json:"new_score"`
-	Upgraded  bool   `json:"upgraded"`
+	URL      string `json:"url"`
+	OldScore int    `json:"old_score"`
+	NewScore int    `json:"new_score"`
+	Upgraded bool   `json:"upgraded"`
 }
 
 // URLIntelChecker is the interface the pre-open URL re-checker uses.
@@ -30,10 +30,10 @@ type MessageURLLookup interface {
 
 // URLRecheckConfig wires the pre-open URL re-check service.
 type URLRecheckConfig struct {
-	Scanner  URLIntelChecker
-	URLs     MessageURLLookup
-	Logger   *slog.Logger
-	Clock    func() time.Time
+	Scanner URLIntelChecker
+	URLs    MessageURLLookup
+	Logger  *slog.Logger
+	Clock   func() time.Time
 	// UpgradeThreshold is the score above which a URL is considered
 	// newly malicious. Defaults to 60.
 	UpgradeThreshold int
@@ -160,8 +160,8 @@ type EnhancedOpenServiceConfig struct {
 
 // EnhancedOpenService wraps OpenService with URL re-check at pre-open.
 type EnhancedOpenService struct {
-	base     *OpenService
-	recheck  *URLRecheckService
+	base    *OpenService
+	recheck *URLRecheckService
 }
 
 // NewEnhancedOpenService constructs the enhanced service.

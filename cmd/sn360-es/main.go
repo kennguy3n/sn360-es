@@ -217,10 +217,10 @@ type application struct {
 	// interval; nil when the underlying dependency (postgres, the
 	// relationship aggregator, etc.) is missing. Run() starts them
 	// after the consumers come online.
-	relationshipRunner   *worker.Runner
-	vendorRunner         *worker.Runner
-	cleanupRunner        *worker.Runner
-	directorySyncRunner  *worker.Runner
+	relationshipRunner  *worker.Runner
+	vendorRunner        *worker.Runner
+	cleanupRunner       *worker.Runner
+	directorySyncRunner *worker.Runner
 
 	// AI agents. The onboarding agent fires on directory discovery,
 	// the tuning agent runs on a schedule, the support agent

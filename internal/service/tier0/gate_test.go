@@ -37,7 +37,7 @@ func TestGateVendorCompromiseBlocksBypass(t *testing.T) {
 
 	// Vendor with no compromise signal should get bypass.
 	clean := g.Apply(dto.EvaluateRequest{Signals: dto.RiskSignals{
-		IsFromVendor:            true,
+		IsFromVendor:              true,
 		LooksLikeVendorCompromise: false,
 	}})
 	if !clean.Bypass || !clean.SkipML {
@@ -52,7 +52,7 @@ func TestGateVendorCompromiseBlocksBypass(t *testing.T) {
 
 	// Vendor with compromise signal should NOT bypass.
 	compromised := g.Apply(dto.EvaluateRequest{Signals: dto.RiskSignals{
-		IsFromVendor:            true,
+		IsFromVendor:              true,
 		LooksLikeVendorCompromise: true,
 	}})
 	if compromised.Bypass {

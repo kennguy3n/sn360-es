@@ -69,31 +69,31 @@ type Config struct {
 	Environment Environment
 	AppName     string
 
-	Log        Log
-	HTTP       HTTP
-	EventBus   EventBusType
-	NATS       NATS
-	Redis      Redis
-	Postgres   Postgres
-	AWS        AWS
-	Rspamd     Rspamd
-	AI         AI
+	Log                      Log
+	HTTP                     HTTP
+	EventBus                 EventBusType
+	NATS                     NATS
+	Redis                    Redis
+	Postgres                 Postgres
+	AWS                      AWS
+	Rspamd                   Rspamd
+	AI                       AI
 	Tier1                    Tier1
 	Tier0                    Tier0
 	SensitivityBonsaiURL     string
 	SensitivityBonsaiTimeout time.Duration
-	CB         CircuitBreaker
-	Privacy    Privacy
-	Banner     Banner
-	Score      ScoreThresholds
-	URLRewrite URLRewrite
-	CORS       CORS
-	SMTP       SMTP
-	GWS        GWS
-	O365       O365
-	Ingestion  Ingestion
-	Worker     Worker
-	Onboarding Onboarding
+	CB                       CircuitBreaker
+	Privacy                  Privacy
+	Banner                   Banner
+	Score                    ScoreThresholds
+	URLRewrite               URLRewrite
+	CORS                     CORS
+	SMTP                     SMTP
+	GWS                      GWS
+	O365                     O365
+	Ingestion                Ingestion
+	Worker                   Worker
+	Onboarding               Onboarding
 }
 
 // Log carries structured-logging configuration.

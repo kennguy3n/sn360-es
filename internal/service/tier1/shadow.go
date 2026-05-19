@@ -27,20 +27,20 @@ type ShadowConfig struct {
 // ShadowResult captures the comparison between production and shadow
 // encoder outputs.
 type ShadowResult struct {
-	ProductionScore int
-	ShadowScore     int
-	Agreement       bool
+	ProductionScore   int
+	ShadowScore       int
+	Agreement         bool
 	ProductionVerdict Verdict
 	ShadowVerdict     Verdict
-	Latency         time.Duration
+	Latency           time.Duration
 }
 
 // ShadowMetrics tracks agreement statistics between production and
 // shadow models.
 type ShadowMetrics struct {
-	Total     int64
-	Agreed    int64
-	Diverged  int64
+	Total        int64
+	Agreed       int64
+	Diverged     int64
 	ShadowErrors int64
 }
 
