@@ -189,28 +189,28 @@ func (s *StateSigner) Verify(token string) (StatePayload, error) {
 // callbacks, exchanges codes, persists tokens, and kicks off the
 // onboarding agent.
 type Service struct {
-	providers  map[ProviderType]ProviderConfig
-	store      TokenStore
-	exch       TokenExchanger
-	state      *StateSigner
-	trigger    PostConsentTrigger
-	registrar  ProviderRegistrar
-	nonces     NonceStore
-	validator  PostConsentValidator
-	log        *slog.Logger
+	providers map[ProviderType]ProviderConfig
+	store     TokenStore
+	exch      TokenExchanger
+	state     *StateSigner
+	trigger   PostConsentTrigger
+	registrar ProviderRegistrar
+	nonces    NonceStore
+	validator PostConsentValidator
+	log       *slog.Logger
 }
 
 // ServiceConfig bundles the inputs to NewService.
 type ServiceConfig struct {
-	Providers  map[ProviderType]ProviderConfig
-	Store      TokenStore
-	Exch       TokenExchanger
-	State      *StateSigner
-	Trigger    PostConsentTrigger
-	Registrar  ProviderRegistrar
-	Nonces     NonceStore
-	Validator  PostConsentValidator
-	Logger     *slog.Logger
+	Providers map[ProviderType]ProviderConfig
+	Store     TokenStore
+	Exch      TokenExchanger
+	State     *StateSigner
+	Trigger   PostConsentTrigger
+	Registrar ProviderRegistrar
+	Nonces    NonceStore
+	Validator PostConsentValidator
+	Logger    *slog.Logger
 }
 
 // NewService validates cfg and returns a Service.
@@ -236,15 +236,15 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 		cfg.Logger = slog.Default()
 	}
 	return &Service{
-		providers:  cfg.Providers,
-		store:      cfg.Store,
-		exch:       cfg.Exch,
-		state:      cfg.State,
-		trigger:    cfg.Trigger,
-		registrar:  cfg.Registrar,
-		nonces:     cfg.Nonces,
-		validator:  cfg.Validator,
-		log:        cfg.Logger,
+		providers: cfg.Providers,
+		store:     cfg.Store,
+		exch:      cfg.Exch,
+		state:     cfg.State,
+		trigger:   cfg.Trigger,
+		registrar: cfg.Registrar,
+		nonces:    cfg.Nonces,
+		validator: cfg.Validator,
+		log:       cfg.Logger,
 	}, nil
 }
 

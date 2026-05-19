@@ -22,18 +22,18 @@ const (
 
 // VendorAuthRecord is the per-domain authentication health record.
 type VendorAuthRecord struct {
-	Domain      string     `json:"domain"`
-	TenantID    string     `json:"tenant_id"`
-	DMARC       AuthStatus `json:"dmarc"`
-	SPF         AuthStatus `json:"spf"`
-	DKIM        AuthStatus `json:"dkim"`
+	Domain        string     `json:"domain"`
+	TenantID      string     `json:"tenant_id"`
+	DMARC         AuthStatus `json:"dmarc"`
+	SPF           AuthStatus `json:"spf"`
+	DKIM          AuthStatus `json:"dkim"`
 	OverallStatus AuthStatus `json:"overall_status"`
-	PassCount   int        `json:"pass_count"`
-	FailCount   int        `json:"fail_count"`
-	TotalCount  int        `json:"total_count"`
-	LastChecked time.Time  `json:"last_checked"`
-	LastPassed  time.Time  `json:"last_passed,omitempty"`
-	LastFailed  time.Time  `json:"last_failed,omitempty"`
+	PassCount     int        `json:"pass_count"`
+	FailCount     int        `json:"fail_count"`
+	TotalCount    int        `json:"total_count"`
+	LastChecked   time.Time  `json:"last_checked"`
+	LastPassed    time.Time  `json:"last_passed,omitempty"`
+	LastFailed    time.Time  `json:"last_failed,omitempty"`
 }
 
 // VendorAuthStore persists per-domain auth health records.
@@ -103,12 +103,12 @@ type VendorAuthMonitorConfig struct {
 // domains. When authentication degrades beyond the threshold, it
 // immediately revokes trusted status and emits an event.
 type VendorAuthMonitor struct {
-	store     VendorAuthStore
-	pub       events.EventService
-	log       *slog.Logger
-	now       func() time.Time
-	failTh    float64
-	revokeTh  float64
+	store    VendorAuthStore
+	pub      events.EventService
+	log      *slog.Logger
+	now      func() time.Time
+	failTh   float64
+	revokeTh float64
 }
 
 // NewVendorAuthMonitor constructs the monitor.

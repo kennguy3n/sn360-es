@@ -14,16 +14,18 @@ import (
 // DirectorySyncJobConfig holds all dependencies for the directory
 // sync worker.
 type DirectorySyncJobConfig struct {
-	Interval    time.Duration
-	Tenants     TenantLister
-	Directory   agent.DirectoryClient
-	Users       repository.UserRepository
-	Groups      repository.GroupRepository
-	Memberships repository.GroupMembershipRepository
-	Classifier  agent.SensitivityClassifier
-	Events      agent.EventPublisher
-	Hasher      func(tenantID, input string) ([]byte, error)
-	Logger      *slog.Logger
+	Interval        time.Duration
+	Tenants         TenantLister
+	Directory       agent.DirectoryClient
+	Users           repository.UserRepository
+	Groups          repository.GroupRepository
+	Memberships     repository.GroupMembershipRepository
+	Classifier      agent.SensitivityClassifier
+	Events          agent.EventPublisher
+	Hasher          func(tenantID, input string) ([]byte, error)
+	Logger          *slog.Logger
+	SyncCheckpoints repository.SyncCheckpointRepository
+	OrgGraphs       repository.OrgGraphRepository
 }
 
 // DirectorySyncJob implements the Job interface for periodic
@@ -87,7 +89,7 @@ func (j *DirectorySyncJob) Run(ctx context.Context) error {
 }
 
 func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) error {
-	users, err := j.cfg.Directory.ListUsers(ctx, tenantID)
+	users, err := j.fetchUsers(ctx, tenantID)
 	if err != nil {
 		return fmt.Errorf("list users: %w", err)
 	}
@@ -252,9 +254,92 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 		}
 	}
 
+	// Persist org graph snapshot when the repository is wired.
+	if j.cfg.OrgGraphs != nil {
+		highRisk := make([]string, 0)
+		deptSet := make(map[string]struct{})
+		for i, u := range users {
+			if u.Department != "" {
+				deptSet[u.Department] = struct{}{}
+			}
+			if i < len(classResults) && classResults[i].Sensitivity >= agent.SensitivityHigh {
+				if h, hErr := j.cfg.Hasher(tenantID, u.Email); hErr == nil {
+					highRisk = append(highRisk, fmt.Sprintf("%x", h))
+				}
+			}
+		}
+		graphData, _ := json.Marshal(map[string]any{
+			"employees":   len(users),
+			"groups":      len(groups),
+			"departments": len(deptSet),
+			"high_risk":   len(highRisk),
+		})
+		snap := &repository.OrgGraphSnapshot{
+			TenantID:        tenantID,
+			BuiltAt:         time.Now().UTC(),
+			GraphJSON:       graphData,
+			HighRiskIDs:     highRisk,
+			DepartmentCount: len(deptSet),
+			EmployeeCount:   len(users),
+			GroupCount:      len(groups),
+		}
+		if gErr := j.cfg.OrgGraphs.Upsert(ctx, snap); gErr != nil {
+			j.cfg.Logger.Warn("directory sync: org graph upsert failed",
+				slog.String("tenant_id", tenantID),
+				slog.String("err", gErr.Error()))
+		}
+	}
+
 	j.cfg.Logger.Info("directory sync: completed",
 		slog.String("tenant_id", tenantID),
 		slog.Int("users", len(users)),
 		slog.Int("groups", len(groups)))
 	return nil
+}
+
+// fetchUsers attempts incremental delta sync when the directory client
+// supports it and a checkpoint repository is configured; otherwise
+// falls back to a full ListUsers call.
+func (j *DirectorySyncJob) fetchUsers(ctx context.Context, tenantID string) ([]agent.DiscoveredUser, error) {
+	dc, ok := j.cfg.Directory.(agent.DeltaSyncCapable)
+	if !ok || j.cfg.SyncCheckpoints == nil {
+		return j.cfg.Directory.ListUsers(ctx, tenantID)
+	}
+
+	// Determine provider name for checkpoint key.
+	provider := "unknown"
+	switch j.cfg.Directory.(type) {
+	case interface{ Kind() string }:
+		provider = j.cfg.Directory.(interface{ Kind() string }).Kind()
+	default:
+		// Heuristic: package path would distinguish, but using a
+		// simple type name suffix for now.
+		provider = fmt.Sprintf("%T", j.cfg.Directory)
+	}
+
+	var deltaToken string
+	cp, err := j.cfg.SyncCheckpoints.Get(ctx, tenantID, provider)
+	if err == nil {
+		deltaToken = cp.DeltaToken
+	}
+
+	users, newToken, err := dc.ListUsersDelta(ctx, tenantID, deltaToken)
+	if err != nil {
+		// Delta failed — fall back to full sync.
+		j.cfg.Logger.Warn("directory sync: delta sync failed, falling back to full",
+			slog.String("tenant_id", tenantID),
+			slog.String("err", err.Error()))
+		return j.cfg.Directory.ListUsers(ctx, tenantID)
+	}
+
+	// Persist the new delta token.
+	if newToken != "" {
+		_ = j.cfg.SyncCheckpoints.Upsert(ctx, &repository.SyncCheckpoint{
+			TenantID:   tenantID,
+			Provider:   provider,
+			DeltaToken: newToken,
+		})
+	}
+
+	return users, nil
 }

@@ -217,9 +217,10 @@ type application struct {
 	// interval; nil when the underlying dependency (postgres, the
 	// relationship aggregator, etc.) is missing. Run() starts them
 	// after the consumers come online.
-	relationshipRunner *worker.Runner
-	vendorRunner       *worker.Runner
-	cleanupRunner      *worker.Runner
+	relationshipRunner  *worker.Runner
+	vendorRunner        *worker.Runner
+	cleanupRunner       *worker.Runner
+	directorySyncRunner *worker.Runner
 
 	// AI agents. The onboarding agent fires on directory discovery,
 	// the tuning agent runs on a schedule, the support agent
@@ -811,7 +812,7 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	app.poller = buildPoller(ctx, cfg, logger, app)
 
 	// Periodic workers.
-	app.relationshipRunner, app.vendorRunner, app.cleanupRunner = buildWorkers(cfg, logger, app)
+	app.relationshipRunner, app.vendorRunner, app.cleanupRunner, app.directorySyncRunner = buildWorkers(cfg, logger, app)
 
 	// AI agents. Wiring is best-effort: each agent skips when its
 	// inputs are missing. The onboarding + support agents publish
@@ -2138,6 +2139,11 @@ func buildMux(app *application) (http.Handler, error) {
 			return nil
 		}})
 	}
+	if app.directorySyncRunner != nil {
+		checkers = append(checkers, handler.HealthCheckerFunc{N: "worker_directory_sync", F: func(_ context.Context) error {
+			return nil
+		}})
+	}
 	if app.tuningAgent != nil {
 		checkers = append(checkers, handler.HealthCheckerFunc{N: "agent_tuning", F: func(_ context.Context) error {
 			return nil
@@ -2207,6 +2213,48 @@ func buildMux(app *application) (http.Handler, error) {
 		mux.HandleFunc("/v1/onboarding/callback", onboardingH.ServeCallback)
 		mux.HandleFunc("/v1/onboarding/status", onboardingH.ServeStatus)
 		mux.HandleFunc("/v1/onboarding/revoke", onboardingH.ServeRevoke)
+	}
+
+	// GWS setup wizard — always registered so tenants can check
+	// configuration status even before onboarding is complete.
+	wizardH := handler.NewOnboardingWizardHandler(logger, &gwsSetupChecker{
+		cfg:    app.cfg,
+		logger: logger,
+	})
+	mux.HandleFunc("/v1/onboarding/gws-setup-status", wizardH.ServeGWSSetupStatus)
+
+	// Vendor management CRUD.
+	if app.repos != nil && app.repos.Vendors != nil {
+		vendorH := handler.NewVendorHandler(logger, app.repos.Vendors)
+		mux.HandleFunc("/v1/vendors", func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				vendorH.ServeList(w, r)
+			case http.MethodPost:
+				vendorH.ServeCreate(w, r)
+			default:
+				http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			}
+		})
+		mux.HandleFunc("/v1/vendors/", func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodDelete:
+				vendorH.ServeDelete(w, r)
+			case strings.HasSuffix(r.URL.Path, "/approve"):
+				vendorH.ServeApprove(w, r)
+			case strings.HasSuffix(r.URL.Path, "/revoke"):
+				vendorH.ServeRevoke(w, r)
+			default:
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error":"not found"}`))
+			}
+		})
+	}
+
+	if app.repos != nil && app.repos.OrgGraphs != nil {
+		orgGraphH := handler.NewOrgGraphHandler(logger, app.repos.OrgGraphs)
+		mux.Handle("/v1/org-graph", orgGraphH)
 	}
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -3067,10 +3115,10 @@ func (a ingestionLockAdapter) Release(ctx context.Context) error {
 // aggregation, vendor discovery, retention cleanup). Each returned
 // runner is nil when its dependencies are missing so Run() can
 // start only the ones that have a chance of running successfully.
-func buildWorkers(cfg *config.Config, logger *slog.Logger, app *application) (*worker.Runner, *worker.Runner, *worker.Runner) {
+func buildWorkers(cfg *config.Config, logger *slog.Logger, app *application) (*worker.Runner, *worker.Runner, *worker.Runner, *worker.Runner) {
 	if app.repos == nil {
 		logger.Info("sn360-es: periodic workers skipped; repository registry not wired")
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	lockFactory := buildWorkerLockFactory(cfg, logger, app)
@@ -3081,8 +3129,9 @@ func buildWorkers(cfg *config.Config, logger *slog.Logger, app *application) (*w
 	relRunner := buildRelationshipRunner(cfg, logger, app, lockFactory, metricsRec)
 	vendorRunner := buildVendorRunner(cfg, logger, app, lockFactory, metricsRec)
 	cleanupRunner := buildCleanupRunner(cfg, logger, app, lockFactory, metricsRec)
+	dirSyncRunner := buildDirectorySyncRunner(cfg, logger, app, lockFactory, metricsRec)
 
-	return relRunner, vendorRunner, cleanupRunner
+	return relRunner, vendorRunner, cleanupRunner, dirSyncRunner
 }
 
 func buildWorkerLockFactory(cfg *config.Config, logger *slog.Logger, app *application) worker.LockFactory {
@@ -3222,6 +3271,57 @@ func buildCleanupRunner(cfg *config.Config, logger *slog.Logger, app *applicatio
 		slog.Int("pruners", len(pruners)),
 		slog.Duration("interval", cfg.Worker.CleanupInterval),
 		slog.Int("retention_days", cfg.Worker.RetentionDays))
+	return runner
+}
+
+func buildDirectorySyncRunner(cfg *config.Config, logger *slog.Logger, app *application, locks worker.LockFactory, metrics worker.MetricsRecorder) *worker.Runner {
+	if app.repos.Tenants == nil || app.repos.Users == nil || app.repos.Groups == nil {
+		return nil
+	}
+	dir := buildDirectoryClient(cfg, logger)
+	if dir == nil {
+		logger.Info("sn360-es: directory sync worker skipped; no directory client")
+		return nil
+	}
+	piiHasher := buildPIIHasher(cfg)
+	var hasherFn func(string, string) ([]byte, error)
+	if piiHasher != nil {
+		hasherFn = func(tenantID, input string) ([]byte, error) {
+			return []byte(piiHasher.HashPII(tenantID, input)), nil
+		}
+	}
+	job, err := worker.NewDirectorySyncJob(worker.DirectorySyncJobConfig{
+		Interval:        cfg.Worker.DirectorySyncInterval,
+		Tenants:         app.repos.Tenants,
+		Directory:       dir,
+		Users:           app.repos.Users,
+		Groups:          app.repos.Groups,
+		Memberships:     app.repos.GroupMemberships,
+		Classifier:      buildSensitivityClassifier(cfg, logger),
+		Events:          agentPublisherFromBus(app.eventBus),
+		Hasher:          hasherFn,
+		Logger:          logger,
+		SyncCheckpoints: app.repos.SyncCheckpoints,
+		OrgGraphs:       app.repos.OrgGraphs,
+	})
+	if err != nil {
+		logger.Warn("sn360-es: directory sync worker init failed",
+			slog.Any("error", err))
+		return nil
+	}
+	runner, rerr := worker.NewRunner(worker.RunnerConfig{
+		Job:     job,
+		Logger:  logger,
+		Locks:   locks,
+		Metrics: metrics,
+	})
+	if rerr != nil {
+		logger.Warn("sn360-es: directory sync runner init failed",
+			slog.Any("error", rerr))
+		return nil
+	}
+	logger.Info("sn360-es: directory sync worker wired",
+		slog.Duration("interval", cfg.Worker.DirectorySyncInterval))
 	return runner
 }
 
@@ -3529,9 +3629,10 @@ func buildDirectoryClient(cfg *config.Config, logger *slog.Logger) agent.Directo
 			return nil
 		}
 		dc, derr := outlook.NewDirectoryClient(outlook.DirectoryClientConfig{
-			TokenSource: tokens,
-			BaseURL:     cfg.O365.BaseURL,
-			TenantID:    cfg.O365.TenantID,
+			TokenSource:         tokens,
+			BaseURL:             cfg.O365.BaseURL,
+			TenantID:            cfg.O365.TenantID,
+			ResolveNestedGroups: cfg.O365.ResolveNestedGroups,
 		})
 		if derr != nil {
 			logger.Warn("sn360-es: directory client (outlook) wire failed",
@@ -3767,8 +3868,13 @@ func buildSensitivityClassifier(cfg *config.Config, logger *slog.Logger) agent.S
 		return nil
 	}
 	encoder := agent.NewEncoderSensitivityClassifier(cfg.Tier1.URL, nil, cfg.Tier1.Timeout, logger)
+	var bonsai *agent.BonsaiSensitivityClassifier
+	if cfg.SensitivityBonsaiURL != "" {
+		bonsai = agent.NewBonsaiSensitivityClassifier(cfg.SensitivityBonsaiURL, nil, cfg.SensitivityBonsaiTimeout, logger)
+	}
 	return agent.NewTieredSensitivityClassifier(agent.TieredClassifierConfig{
 		Encoder:  encoder,
+		Bonsai:   bonsai,
 		Fallback: agent.KeywordClassifyInput,
 		Logger:   logger,
 	})
@@ -3858,6 +3964,12 @@ func (a *application) StartBackground(ctx context.Context) {
 			return nil
 		}
 		return a.cleanupRunner.Run(ctx)
+	})
+	a.spawn(ctx, "directory sync worker", func(ctx context.Context) error {
+		if a.directorySyncRunner == nil {
+			return nil
+		}
+		return a.directorySyncRunner.Run(ctx)
 	})
 	a.spawn(ctx, "memoryLabelCache janitor", func(ctx context.Context) error {
 		if a.memLabelCache == nil {

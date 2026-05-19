@@ -70,10 +70,10 @@ type PushSubscription struct {
 // PushManager manages push notification subscriptions and processes
 // incoming notifications. It is the push counterpart to the Poller.
 type PushManager struct {
-	cfg   PushConfig
-	mu    sync.RWMutex
-	subs  map[string]*PushSubscription // keyed by provider:tenant
-	log   *slog.Logger
+	cfg  PushConfig
+	mu   sync.RWMutex
+	subs map[string]*PushSubscription // keyed by provider:tenant
+	log  *slog.Logger
 }
 
 // NewPushManager creates a PushManager and validates the config.

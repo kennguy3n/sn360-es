@@ -28,6 +28,9 @@ func NewInMemoryRegistry() *Registry {
 		CommunicationHistories: newMemoryCommHistory(),
 		FeedbackEvents:         newMemoryFeedbackEvents(),
 		AuditLogs:              NewMemoryAuditLogs(),
+		SyncCheckpoints:        newMemorySyncCheckpoints(),
+		BehavioralBaselines:    newMemoryBehavioralBaselines(),
+		OrgGraphs:              newMemoryOrgGraphs(),
 	}
 }
 
@@ -420,6 +423,29 @@ func (m *memoryVendors) ListApproved(_ context.Context, tenantID string) ([]Vend
 	return out, nil
 }
 
+func (m *memoryVendors) List(_ context.Context, tenantID string, limit int) ([]Vendor, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]Vendor, 0)
+	for _, v := range m.rows {
+		if v.TenantID == tenantID {
+			out = append(out, v)
+			if limit > 0 && len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func (m *memoryVendors) Delete(_ context.Context, tenantID, domain string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := tenantID + ":" + domain
+	delete(m.rows, key)
+	return nil
+}
+
 // --- evaluation results -------------------------------------------------
 
 type memoryEvalResults struct {
@@ -744,4 +770,117 @@ func (m *memoryGroupMemberships) ReplaceForGroup(_ context.Context, groupID stri
 	}
 	m.rows = filtered
 	return nil
+}
+
+// --- sync checkpoints ---------------------------------------------------
+
+type memorySyncCheckpoints struct {
+	mu   sync.RWMutex
+	rows map[string]SyncCheckpoint // key: tenantID+":"+provider
+}
+
+func newMemorySyncCheckpoints() *memorySyncCheckpoints {
+	return &memorySyncCheckpoints{rows: map[string]SyncCheckpoint{}}
+}
+
+func (m *memorySyncCheckpoints) Get(_ context.Context, tenantID, provider string) (*SyncCheckpoint, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	cp, ok := m.rows[tenantID+":"+provider]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return &cp, nil
+}
+
+func (m *memorySyncCheckpoints) Upsert(_ context.Context, cp *SyncCheckpoint) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp.UpdatedAt = time.Now().UTC()
+	m.rows[cp.TenantID+":"+cp.Provider] = *cp
+	return nil
+}
+
+// --- user behavioral baselines ------------------------------------------
+
+type memoryBehavioralBaselines struct {
+	mu   sync.RWMutex
+	rows map[string]UserBehavioralBaseline // key: tenantID+":"+hex(userHash)+":"+hex(senderHash)
+}
+
+func newMemoryBehavioralBaselines() *memoryBehavioralBaselines {
+	return &memoryBehavioralBaselines{rows: map[string]UserBehavioralBaseline{}}
+}
+
+func baselineKey(tenantID string, userHash, senderHash []byte) string {
+	return tenantID + ":" + hex.EncodeToString(userHash) + ":" + hex.EncodeToString(senderHash)
+}
+
+func (m *memoryBehavioralBaselines) Upsert(_ context.Context, b *UserBehavioralBaseline) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if b.ID == "" {
+		h := hex.EncodeToString(b.UserEmailHash)
+		if len(h) > 8 {
+			h = h[:8]
+		}
+		b.ID = "mem-" + h
+	}
+	now := time.Now().UTC()
+	b.UpdatedAt = now
+	if b.CreatedAt.IsZero() {
+		b.CreatedAt = now
+	}
+	key := baselineKey(b.TenantID, b.UserEmailHash, b.SenderDomainHash)
+	m.rows[key] = *b
+	return nil
+}
+
+func (m *memoryBehavioralBaselines) Get(_ context.Context, tenantID string, userHash, senderDomainHash []byte) (*UserBehavioralBaseline, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	key := baselineKey(tenantID, userHash, senderDomainHash)
+	b, ok := m.rows[key]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return &b, nil
+}
+
+// --- org graphs -------------------------------------------------------------
+
+type memoryOrgGraphs struct {
+	mu   sync.RWMutex
+	rows map[string]OrgGraphSnapshot // keyed by tenant_id
+}
+
+func newMemoryOrgGraphs() *memoryOrgGraphs {
+	return &memoryOrgGraphs{rows: map[string]OrgGraphSnapshot{}}
+}
+
+func (m *memoryOrgGraphs) Upsert(_ context.Context, s *OrgGraphSnapshot) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s.ID == "" {
+		id := s.TenantID
+		if len(id) > 8 {
+			id = id[:8]
+		}
+		s.ID = "mem-og-" + id
+	}
+	if s.CreatedAt.IsZero() {
+		s.CreatedAt = time.Now().UTC()
+	}
+	m.rows[s.TenantID] = *s
+	return nil
+}
+
+func (m *memoryOrgGraphs) GetByTenant(_ context.Context, tenantID string) (*OrgGraphSnapshot, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	s, ok := m.rows[tenantID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return &s, nil
 }

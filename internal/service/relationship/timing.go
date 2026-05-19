@@ -178,6 +178,57 @@ func hourDistance(a, b int) int {
 	return d
 }
 
+// BaselineAnomalyCheck compares the current send hour against the
+// stored per-user behavioral baseline. Returns a TimingSignal
+// indicating whether the message timing is anomalous relative to the
+// user-sender-domain pair's historical pattern. The typicalHours slice
+// comes from UserBehavioralBaseline.TypicalSendHours.
+func BaselineAnomalyCheck(currentHour int, typicalHours []int, threshold float64) TimingSignal {
+	if len(typicalHours) == 0 {
+		return TimingSignal{Reason: "no_baseline_hours"}
+	}
+	if threshold <= 0 {
+		threshold = 0.7
+	}
+
+	// Build a histogram from stored typical hours.
+	var hist TimingHistogram
+	for _, h := range typicalHours {
+		if h >= 0 && h < 24 {
+			hist.HourCounts[h]++
+			hist.Total++
+		}
+	}
+	if hist.Total == 0 {
+		return TimingSignal{Reason: "no_valid_baseline_hours"}
+	}
+
+	prob := float64(hist.HourCounts[currentHour]) / float64(hist.Total)
+	peakHour, _ := hist.PeakHour()
+	d := hourDistance(currentHour, peakHour)
+	dist := float64(d) / 12.0
+	freq := 1 - math.Min(prob*8.0, 1.0)
+	score := 0.6*dist + 0.4*freq
+	if score < 0 {
+		score = 0
+	}
+	if score > 1 {
+		score = 1
+	}
+
+	sig := TimingSignal{
+		Score:     score,
+		BaselineN: hist.Total,
+	}
+	if score >= threshold {
+		sig.IsAnomalous = true
+		sig.Reason = "outside_baseline_window"
+	} else {
+		sig.Reason = "within_baseline_window"
+	}
+	return sig
+}
+
 // --- Memory store -----------------------------------------------------------
 
 // MemoryTimingStore is a goroutine-safe in-memory TimingStore.

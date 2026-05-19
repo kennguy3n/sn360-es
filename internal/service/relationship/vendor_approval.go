@@ -104,10 +104,10 @@ func (s *MemoryVendorApprovalStore) Update(_ context.Context, tenantID, domain s
 // through a human approval workflow when confidence is above the
 // auto-approve threshold but the gate is enabled.
 type VendorApprovalGate struct {
-	Discovery  *VendorDiscovery
-	Store      VendorApprovalStore
-	Publisher  events.EventService
-	Logger     *slog.Logger
+	Discovery   *VendorDiscovery
+	Store       VendorApprovalStore
+	Publisher   events.EventService
+	Logger      *slog.Logger
 	RequireGate bool // when true, proposals emit pending_approval instead of auto-approving
 }
 

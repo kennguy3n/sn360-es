@@ -23,13 +23,13 @@ const (
 // TuningProposal holds a proposed weight/threshold change that
 // requires admin approval before being applied.
 type TuningProposal struct {
-	ID            string               `json:"id"`
-	TenantID      string               `json:"tenant_id"`
-	Status        TuningApprovalStatus `json:"status"`
-	Decision      TuningDecision       `json:"decision"`
-	ProposedAt    time.Time            `json:"proposed_at"`
-	ReviewedAt    *time.Time           `json:"reviewed_at,omitempty"`
-	ReviewedBy    string               `json:"reviewed_by,omitempty"`
+	ID         string               `json:"id"`
+	TenantID   string               `json:"tenant_id"`
+	Status     TuningApprovalStatus `json:"status"`
+	Decision   TuningDecision       `json:"decision"`
+	ProposedAt time.Time            `json:"proposed_at"`
+	ReviewedAt *time.Time           `json:"reviewed_at,omitempty"`
+	ReviewedBy string               `json:"reviewed_by,omitempty"`
 }
 
 // TuningProposalStore persists tuning proposals.
@@ -117,13 +117,13 @@ type ApprovalGatedTuningConfig struct {
 
 // ApprovalGatedTuningAgent wraps TuningAgent with an approval gate.
 type ApprovalGatedTuningAgent struct {
-	inner    *TuningAgent
-	cfg      ApprovalGatedTuningConfig
-	store    TuningProposalStore
-	pub      events.EventService
-	log      *slog.Logger
-	counter  uint64
-	mu       sync.Mutex
+	inner   *TuningAgent
+	cfg     ApprovalGatedTuningConfig
+	store   TuningProposalStore
+	pub     events.EventService
+	log     *slog.Logger
+	counter uint64
+	mu      sync.Mutex
 }
 
 // NewApprovalGatedTuningAgent constructs the gated agent.

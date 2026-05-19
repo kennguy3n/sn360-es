@@ -31,29 +31,77 @@ type UserClassifyInput struct {
 	IsAdmin     bool
 }
 
+// sensitivityKeywords maps sensitivity tiers to multilingual keyword
+// lists. This is a best-effort fallback — the encoder (Tier 1) handles
+// multilingual classification properly, and this only activates when
+// ML is unavailable.
+var sensitivityKeywords = map[Sensitivity][]string{
+	SensitivityMax: {
+		// English
+		"ceo", "cfo", "coo", "cto", "ciso", "founder", "chief executive", "chief financial", "owner",
+		// Japanese
+		"最高経営責任者", "最高財務責任者", "代表取締役", "社長", "創業者",
+		// Korean
+		"최고경영자", "최고재무책임자", "대표이사", "창업자",
+		// Thai
+		"ประธานเจ้าหน้าที่บริหาร", "ประธานเจ้าหน้าที่การเงิน",
+		// Vietnamese
+		"giám đốc điều hành", "giám đốc tài chính", "tổng giám đốc", "chủ tịch",
+		// Chinese
+		"首席执行官", "首席财务官", "总裁", "创始人", "董事长",
+	},
+	SensitivityHigh: {
+		// English
+		"finance", "treasury", "accounts payable", "accounts receivable", "controller", "bookkeep",
+		"human resources", "people ops", "legal", "compliance", "general counsel",
+		// Japanese
+		"財務", "経理", "人事", "法務", "コンプライアンス",
+		// Korean
+		"재무", "회계", "인사", "법무", "컴플라이언스",
+		// Thai
+		"การเงิน", "บัญชี", "ทรัพยากรบุคคล", "กฎหมาย",
+		// Vietnamese
+		"tài chính", "kế toán", "nhân sự", "pháp lý",
+		// Chinese
+		"财务", "会计", "人力资源", "法务", "合规",
+	},
+	SensitivityElevated: {
+		// English
+		"executive assistant", "admin assistant", "office manager",
+		"procurement", "vendor management", "supplier",
+		// Japanese
+		"秘書", "調達", "購買", "事務長",
+		// Korean
+		"비서", "조달", "사무장",
+		// Thai
+		"ผู้ช่วยผู้บริหาร", "จัดซื้อ",
+		// Vietnamese
+		"trợ lý giám đốc", "mua sắm", "quản lý nhà cung cấp",
+		// Chinese
+		"行政助理", "采购", "供应商管理", "办公室经理",
+	},
+}
+
 // KeywordClassifyInput applies the same keyword-based heuristic as
 // ClassifyUserSensitivity but works with the batch-oriented
 // UserClassifyInput shape. Suitable as the Fallback in
 // TieredClassifierConfig for low-confidence encoder results.
+// Iterates the multilingual sensitivityKeywords map in tier-priority
+// order (Max → High → Elevated) and returns the first match.
 func KeywordClassifyInput(u UserClassifyInput) Sensitivity {
 	hay := strings.ToLower(u.JobTitle + " " + u.Department + " " + u.DisplayName)
 	for _, g := range u.GroupNames {
 		hay += " " + strings.ToLower(g)
 	}
-	switch {
-	case containsAnyInput(hay, "ceo", "cfo", "coo", "cto", "ciso", "founder", "chief executive", "chief financial", "owner"):
-		return SensitivityMax
-	case containsAnyInput(hay, "finance", "treasury", "accounts payable", "accounts receivable", "controller", "bookkeep"):
-		return SensitivityHigh
-	case containsAnyInput(hay, "human resources", "people ops", "legal", "compliance", "general counsel"):
-		return SensitivityHigh
-	case containsAnyInput(hay, "executive assistant", "admin assistant", "office manager"):
-		return SensitivityElevated
-	case containsAnyInput(hay, "procurement", "vendor management", "supplier"):
-		return SensitivityElevated
-	default:
-		return SensitivityDefault
+	// Check tiers in descending priority order.
+	for _, tier := range []Sensitivity{SensitivityMax, SensitivityHigh, SensitivityElevated} {
+		for _, kw := range sensitivityKeywords[tier] {
+			if strings.Contains(hay, strings.ToLower(kw)) {
+				return tier
+			}
+		}
 	}
+	return SensitivityDefault
 }
 
 func containsAnyInput(haystack string, needles ...string) bool {
@@ -179,9 +227,9 @@ func NewBonsaiSensitivityClassifier(url string, client *http.Client, timeout tim
 }
 
 type bonsaiRequest struct {
-	Model       string        `json:"model"`
-	Messages    []bonsaiMsg   `json:"messages"`
-	Temperature float64       `json:"temperature"`
+	Model       string      `json:"model"`
+	Messages    []bonsaiMsg `json:"messages"`
+	Temperature float64     `json:"temperature"`
 }
 
 type bonsaiMsg struct {
@@ -265,12 +313,12 @@ func (c *BonsaiSensitivityClassifier) ClassifyBatch(ctx context.Context, users [
 // TieredSensitivityClassifier combines encoder + Bonsai + fallback
 // in a tiered architecture matching the detection pipeline pattern.
 type TieredSensitivityClassifier struct {
-	encoder         *EncoderSensitivityClassifier
-	bonsai          *BonsaiSensitivityClassifier
-	fallback        func(UserClassifyInput) Sensitivity
-	cache           redis.Cmdable
-	escalateBelow   float64
-	logger          *slog.Logger
+	encoder       *EncoderSensitivityClassifier
+	bonsai        *BonsaiSensitivityClassifier
+	fallback      func(UserClassifyInput) Sensitivity
+	cache         redis.Cmdable
+	escalateBelow float64
+	logger        *slog.Logger
 }
 
 // TieredClassifierConfig configures the tiered classifier.

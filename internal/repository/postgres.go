@@ -34,6 +34,9 @@ func NewPostgresRegistry(db *postgres.DB) *Registry {
 		CommunicationHistories: &pgCommHistory{db: db},
 		FeedbackEvents:         &pgFeedbackEvents{db: db},
 		AuditLogs:              NewPgAuditLogs(db),
+		SyncCheckpoints:        &pgSyncCheckpoints{db: db},
+		BehavioralBaselines:    &pgBehavioralBaselines{db: db},
+		OrgGraphs:              &pgOrgGraphs{db: db},
 	}
 }
 
@@ -447,6 +450,36 @@ SELECT id,tenant_id,domain,COALESCE(display_name,''),approved,auto_discovered,co
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+func (p *pgVendors) List(ctx context.Context, tenantID string, limit int) ([]Vendor, error) {
+	q := `
+SELECT id,tenant_id,domain,COALESCE(display_name,''),approved,auto_discovered,confidence,
+       COALESCE(last_seen_at,'epoch'::timestamptz),created_at,updated_at
+  FROM vendors WHERE tenant_id=$1 ORDER BY domain`
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := p.db.QueryContext(ctx, q, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Vendor
+	for rows.Next() {
+		var v Vendor
+		if err := rows.Scan(&v.ID, &v.TenantID, &v.Domain, &v.DisplayName, &v.Approved, &v.AutoDiscovered,
+			&v.Confidence, &v.LastSeenAt, &v.CreatedAt, &v.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (p *pgVendors) Delete(ctx context.Context, tenantID, domain string) error {
+	_, err := p.db.ExecContext(ctx, `DELETE FROM vendors WHERE tenant_id=$1 AND domain=$2`, tenantID, domain)
+	return err
 }
 
 // --- evaluation results -------------------------------------------------
@@ -871,6 +904,127 @@ func nullableTime(t interface{}) interface{} {
 		return nil
 	}
 	return t
+}
+
+// --- sync checkpoints ---------------------------------------------------
+
+type pgSyncCheckpoints struct{ db *postgres.DB }
+
+func (p *pgSyncCheckpoints) Get(ctx context.Context, tenantID, provider string) (*SyncCheckpoint, error) {
+	row := p.db.QueryRowContext(ctx, `
+SELECT tenant_id, provider, delta_token, updated_at
+  FROM sync_checkpoints WHERE tenant_id=$1 AND provider=$2`, tenantID, provider)
+	var cp SyncCheckpoint
+	err := row.Scan(&cp.TenantID, &cp.Provider, &cp.DeltaToken, &cp.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return &cp, err
+}
+
+func (p *pgSyncCheckpoints) Upsert(ctx context.Context, cp *SyncCheckpoint) error {
+	_, err := p.db.ExecContext(ctx, `
+INSERT INTO sync_checkpoints (tenant_id, provider, delta_token, updated_at)
+VALUES ($1,$2,$3,NOW())
+ON CONFLICT (tenant_id, provider) DO UPDATE SET
+    delta_token=EXCLUDED.delta_token,
+    updated_at=NOW()
+`, cp.TenantID, cp.Provider, cp.DeltaToken)
+	return err
+}
+
+// --- user behavioral baselines ------------------------------------------
+
+type pgBehavioralBaselines struct{ db *postgres.DB }
+
+func (p *pgBehavioralBaselines) Upsert(ctx context.Context, b *UserBehavioralBaseline) error {
+	if b.ID == "" {
+		b.ID = uuid.NewString()
+	}
+	_, err := p.db.ExecContext(ctx, `
+INSERT INTO user_behavioral_baselines
+    (id, tenant_id, user_email_hash, sender_domain_hash,
+     typical_send_hours, typical_device_types, avg_messages_per_week,
+     last_seen_at, created_at, updated_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())
+ON CONFLICT (tenant_id, user_email_hash, sender_domain_hash) DO UPDATE SET
+    typical_send_hours=EXCLUDED.typical_send_hours,
+    typical_device_types=EXCLUDED.typical_device_types,
+    avg_messages_per_week=EXCLUDED.avg_messages_per_week,
+    last_seen_at=EXCLUDED.last_seen_at,
+    updated_at=NOW()
+`, b.ID, b.TenantID, b.UserEmailHash, b.SenderDomainHash,
+		pq.Array(b.TypicalSendHours), pq.Array(b.TypicalDeviceTypes),
+		b.AvgMessagesPerWeek, sql.NullTime{Time: b.LastSeenAt, Valid: !b.LastSeenAt.IsZero()})
+	return err
+}
+
+func (p *pgBehavioralBaselines) Get(ctx context.Context, tenantID string, userHash, senderDomainHash []byte) (*UserBehavioralBaseline, error) {
+	row := p.db.QueryRowContext(ctx, `
+SELECT id, tenant_id, user_email_hash, sender_domain_hash,
+       typical_send_hours, typical_device_types, avg_messages_per_week,
+       last_seen_at, created_at, updated_at
+  FROM user_behavioral_baselines
+ WHERE tenant_id=$1 AND user_email_hash=$2 AND sender_domain_hash=$3`,
+		tenantID, userHash, senderDomainHash)
+	var b UserBehavioralBaseline
+	var lastSeen sql.NullTime
+	err := row.Scan(&b.ID, &b.TenantID, &b.UserEmailHash, &b.SenderDomainHash,
+		pq.Array(&b.TypicalSendHours), pq.Array(&b.TypicalDeviceTypes),
+		&b.AvgMessagesPerWeek, &lastSeen, &b.CreatedAt, &b.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if lastSeen.Valid {
+		b.LastSeenAt = lastSeen.Time
+	}
+	return &b, nil
+}
+
+// --- org graphs -------------------------------------------------------------
+
+type pgOrgGraphs struct{ db *postgres.DB }
+
+func (p *pgOrgGraphs) Upsert(ctx context.Context, s *OrgGraphSnapshot) error {
+	if s.ID == "" {
+		s.ID = uuid.NewString()
+	}
+	_, err := p.db.ExecContext(ctx, `
+INSERT INTO org_graphs
+    (id, tenant_id, built_at, graph_json, high_risk_user_ids,
+     department_count, employee_count, group_count, created_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+ON CONFLICT (tenant_id) DO UPDATE SET
+    built_at=EXCLUDED.built_at,
+    graph_json=EXCLUDED.graph_json,
+    high_risk_user_ids=EXCLUDED.high_risk_user_ids,
+    department_count=EXCLUDED.department_count,
+    employee_count=EXCLUDED.employee_count,
+    group_count=EXCLUDED.group_count
+`, s.ID, s.TenantID, s.BuiltAt, s.GraphJSON,
+		pq.Array(s.HighRiskIDs), s.DepartmentCount, s.EmployeeCount, s.GroupCount)
+	return err
+}
+
+func (p *pgOrgGraphs) GetByTenant(ctx context.Context, tenantID string) (*OrgGraphSnapshot, error) {
+	row := p.db.QueryRowContext(ctx, `
+SELECT id, tenant_id, built_at, graph_json, high_risk_user_ids,
+       department_count, employee_count, group_count, created_at
+  FROM org_graphs WHERE tenant_id=$1`, tenantID)
+	var s OrgGraphSnapshot
+	err := row.Scan(&s.ID, &s.TenantID, &s.BuiltAt, &s.GraphJSON,
+		pq.Array(&s.HighRiskIDs), &s.DepartmentCount, &s.EmployeeCount,
+		&s.GroupCount, &s.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
 }
 
 func stringOrEmpty(b []byte) string {

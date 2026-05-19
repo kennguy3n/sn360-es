@@ -39,13 +39,13 @@ type DLQAlert struct {
 // DLQAlertService monitors per-tenant DLQ counts and fires alerts
 // when the threshold is exceeded.
 type DLQAlertService struct {
-	cfg        DLQAlertConfig
-	log        *slog.Logger
-	now        func() time.Time
-	mu         sync.Mutex
-	counts     map[string]*tenantDLQCounter
-	lastAlert  map[string]time.Time
-	alertSem   chan struct{} // bounds concurrent webhook goroutines
+	cfg       DLQAlertConfig
+	log       *slog.Logger
+	now       func() time.Time
+	mu        sync.Mutex
+	counts    map[string]*tenantDLQCounter
+	lastAlert map[string]time.Time
+	alertSem  chan struct{} // bounds concurrent webhook goroutines
 }
 
 type tenantDLQCounter struct {

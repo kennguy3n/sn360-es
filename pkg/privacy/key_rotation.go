@@ -10,16 +10,16 @@ import (
 
 // RotationConfig wires the key rotation worker.
 type RotationConfig struct {
-	KMS           KMSClient
-	Encryptor     Encryptor
-	AuditLog      RotationAuditLog
-	Logger        *slog.Logger
-	Clock         func() time.Time
+	KMS       KMSClient
+	Encryptor Encryptor
+	AuditLog  RotationAuditLog
+	Logger    *slog.Logger
+	Clock     func() time.Time
 	// Interval between rotation cycles. Defaults to 90 days.
-	Interval      time.Duration
+	Interval time.Duration
 	// KeyIDFor returns the KMS key alias for a tenant. Defaults to
 	// "sn360-tenant-<tenantID>".
-	KeyIDFor      func(tenantID string) string
+	KeyIDFor func(tenantID string) string
 }
 
 // RotationAuditLog records key rotation events for compliance.
@@ -29,11 +29,11 @@ type RotationAuditLog interface {
 
 // RotationEvent is the audit record for a key rotation.
 type RotationEvent struct {
-	TenantID    string    `json:"tenant_id"`
-	KeyID       string    `json:"key_id"`
-	RotatedAt   time.Time `json:"rotated_at"`
-	Status      string    `json:"status"` // "success" or "failed"
-	Error       string    `json:"error,omitempty"`
+	TenantID  string    `json:"tenant_id"`
+	KeyID     string    `json:"key_id"`
+	RotatedAt time.Time `json:"rotated_at"`
+	Status    string    `json:"status"` // "success" or "failed"
+	Error     string    `json:"error,omitempty"`
 }
 
 // RotationResult summarises a rotation run.
@@ -204,5 +204,3 @@ func (l *MemoryRotationAuditLog) Events() []RotationEvent {
 	copy(out, l.events)
 	return out
 }
-
-

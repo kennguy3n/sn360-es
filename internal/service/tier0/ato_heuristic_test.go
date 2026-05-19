@@ -90,7 +90,7 @@ func TestATOHeuristic_LinkHeavy(t *testing.T) {
 		Sender: "alice@company.com",
 		Body:   "Click https://evil.com/1 and https://evil.com/2 and https://evil.com/3",
 		Signals: dto.RiskSignals{
-			IsInternal:      true,
+			IsInternal:       true,
 			HasSuspiciousURL: true,
 		},
 	}

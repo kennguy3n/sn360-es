@@ -177,9 +177,9 @@ func (g *GmailPushReceiver) fetchMessage(ctx context.Context, email, messageID s
 		g.baseURL(), url.PathEscape(email), url.PathEscape(messageID))
 
 	var resp struct {
-		ID       string `json:"id"`
-		Snippet  string `json:"snippet"`
-		Payload  struct {
+		ID      string `json:"id"`
+		Snippet string `json:"snippet"`
+		Payload struct {
 			Headers []struct {
 				Name  string `json:"name"`
 				Value string `json:"value"`

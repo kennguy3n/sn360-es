@@ -248,6 +248,8 @@ type VendorRepository interface {
 	Upsert(ctx context.Context, v *Vendor) error
 	GetByDomain(ctx context.Context, tenantID, domain string) (*Vendor, error)
 	ListApproved(ctx context.Context, tenantID string) ([]Vendor, error)
+	List(ctx context.Context, tenantID string, limit int) ([]Vendor, error)
+	Delete(ctx context.Context, tenantID, domain string) error
 }
 
 // EvaluationResultRepository persists EvaluationResult rows.
@@ -332,6 +334,61 @@ type GroupMembershipRepository interface {
 	ReplaceForGroup(ctx context.Context, groupID string, userIDs []string) error
 }
 
+// SyncCheckpoint stores delta-sync tokens for incremental directory
+// synchronization (MS Graph delta queries, GWS updatedMin timestamps).
+type SyncCheckpoint struct {
+	TenantID   string
+	Provider   string // "outlook" or "gmail"
+	DeltaToken string
+	UpdatedAt  time.Time
+}
+
+// SyncCheckpointRepository persists delta-sync checkpoints.
+type SyncCheckpointRepository interface {
+	Get(ctx context.Context, tenantID, provider string) (*SyncCheckpoint, error)
+	Upsert(ctx context.Context, cp *SyncCheckpoint) error
+}
+
+// UserBehavioralBaseline tracks per-user-sender-domain communication
+// patterns for anomaly detection.
+type UserBehavioralBaseline struct {
+	ID                 string
+	TenantID           string
+	UserEmailHash      []byte
+	SenderDomainHash   []byte
+	TypicalSendHours   []int
+	TypicalDeviceTypes []string
+	AvgMessagesPerWeek float64
+	LastSeenAt         time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+// UserBehavioralBaselineRepository persists per-user behavioral baselines.
+type UserBehavioralBaselineRepository interface {
+	Upsert(ctx context.Context, b *UserBehavioralBaseline) error
+	Get(ctx context.Context, tenantID string, userHash, senderDomainHash []byte) (*UserBehavioralBaseline, error)
+}
+
+// OrgGraphSnapshot is the persisted output of onboarding.Project().
+type OrgGraphSnapshot struct {
+	ID              string
+	TenantID        string
+	BuiltAt         time.Time
+	GraphJSON       []byte
+	HighRiskIDs     []string
+	DepartmentCount int
+	EmployeeCount   int
+	GroupCount      int
+	CreatedAt       time.Time
+}
+
+// OrgGraphRepository persists org graph snapshots.
+type OrgGraphRepository interface {
+	Upsert(ctx context.Context, s *OrgGraphSnapshot) error
+	GetByTenant(ctx context.Context, tenantID string) (*OrgGraphSnapshot, error)
+}
+
 // Registry bundles all repositories for convenient wiring.
 type Registry struct {
 	Tenants                TenantRepository
@@ -346,4 +403,7 @@ type Registry struct {
 	CommunicationHistories CommunicationHistoryRepository
 	FeedbackEvents         FeedbackEventRepository
 	AuditLogs              AuditLogRepository
+	SyncCheckpoints        SyncCheckpointRepository
+	BehavioralBaselines    UserBehavioralBaselineRepository
+	OrgGraphs              OrgGraphRepository
 }

@@ -201,6 +201,58 @@ func TestEncoderSensitivityClassifier_MultilingualTitles(t *testing.T) {
 	}
 }
 
+func TestKeywordClassifyInput_MultilingualFallback(t *testing.T) {
+	tests := []struct {
+		name  string
+		input UserClassifyInput
+		want  Sensitivity
+	}{
+		// Japanese
+		{"Japanese CEO", UserClassifyInput{JobTitle: "代表取締役"}, SensitivityMax},
+		{"Japanese CFO", UserClassifyInput{JobTitle: "最高財務責任者"}, SensitivityMax},
+		{"Japanese Finance", UserClassifyInput{Department: "財務部"}, SensitivityHigh},
+		{"Japanese HR", UserClassifyInput{Department: "人事"}, SensitivityHigh},
+		{"Japanese Secretary", UserClassifyInput{JobTitle: "秘書"}, SensitivityElevated},
+		// Korean
+		{"Korean CEO", UserClassifyInput{JobTitle: "대표이사"}, SensitivityMax},
+		{"Korean CFO", UserClassifyInput{JobTitle: "최고재무책임자"}, SensitivityMax},
+		{"Korean Finance", UserClassifyInput{Department: "재무"}, SensitivityHigh},
+		{"Korean Legal", UserClassifyInput{Department: "법무"}, SensitivityHigh},
+		{"Korean Secretary", UserClassifyInput{JobTitle: "비서"}, SensitivityElevated},
+		// Thai
+		{"Thai CEO", UserClassifyInput{JobTitle: "ประธานเจ้าหน้าที่บริหาร"}, SensitivityMax},
+		{"Thai Finance", UserClassifyInput{Department: "การเงิน"}, SensitivityHigh},
+		{"Thai Procurement", UserClassifyInput{JobTitle: "จัดซื้อ"}, SensitivityElevated},
+		// Vietnamese
+		{"Vietnamese CEO", UserClassifyInput{JobTitle: "giám đốc điều hành"}, SensitivityMax},
+		{"Vietnamese CFO", UserClassifyInput{JobTitle: "giám đốc tài chính"}, SensitivityMax},
+		{"Vietnamese Finance", UserClassifyInput{Department: "tài chính"}, SensitivityHigh},
+		{"Vietnamese HR", UserClassifyInput{Department: "nhân sự"}, SensitivityHigh},
+		{"Vietnamese EA", UserClassifyInput{JobTitle: "trợ lý giám đốc"}, SensitivityElevated},
+		// Chinese
+		{"Chinese CEO", UserClassifyInput{JobTitle: "首席执行官"}, SensitivityMax},
+		{"Chinese CFO", UserClassifyInput{JobTitle: "首席财务官"}, SensitivityMax},
+		{"Chinese Chairman", UserClassifyInput{JobTitle: "董事长"}, SensitivityMax},
+		{"Chinese Finance", UserClassifyInput{Department: "财务"}, SensitivityHigh},
+		{"Chinese HR", UserClassifyInput{Department: "人力资源"}, SensitivityHigh},
+		{"Chinese Compliance", UserClassifyInput{Department: "合规"}, SensitivityHigh},
+		{"Chinese EA", UserClassifyInput{JobTitle: "行政助理"}, SensitivityElevated},
+		{"Chinese Procurement", UserClassifyInput{JobTitle: "采购"}, SensitivityElevated},
+		// English fallback still works
+		{"English CEO", UserClassifyInput{JobTitle: "CEO"}, SensitivityMax},
+		{"English Finance", UserClassifyInput{Department: "Finance"}, SensitivityHigh},
+		{"English Default", UserClassifyInput{JobTitle: "Software Engineer"}, SensitivityDefault},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := KeywordClassifyInput(tt.input)
+			if got != tt.want {
+				t.Errorf("KeywordClassifyInput(%+v) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseSensitivityString(t *testing.T) {
 	tests := []struct {
 		input string

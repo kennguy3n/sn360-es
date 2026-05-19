@@ -35,9 +35,9 @@ func DefaultATOHeuristicConfig() ATOHeuristicConfig {
 
 // ATOHeuristicResult is the output of CheckATO.
 type ATOHeuristicResult struct {
-	Flagged  bool
-	Score    float64
-	Reasons  []string
+	Flagged bool
+	Score   float64
+	Reasons []string
 }
 
 // ATOHeuristic performs a lightweight account-takeover check on

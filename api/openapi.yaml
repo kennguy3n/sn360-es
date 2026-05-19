@@ -35,6 +35,7 @@ tags:
   - name: dashboard
   - name: predict
   - name: onboarding
+  - name: vendor
   - name: system
 
 paths:
@@ -392,6 +393,181 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
 
+  /v1/vendors:
+    get:
+      tags: [vendor]
+      summary: List vendors
+      parameters:
+        - in: query
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Vendor list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Vendor"
+    post:
+      tags: [vendor]
+      summary: Add a manual vendor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VendorCreateRequest"
+      responses:
+        "201":
+          description: Vendor created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vendor"
+        "400":
+          $ref: "#/components/responses/Error"
+
+  /v1/vendors/{domain}/approve:
+    put:
+      tags: [vendor]
+      summary: Approve a vendor
+      parameters:
+        - in: path
+          name: domain
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tenant_id]
+              properties:
+                tenant_id:
+                  type: string
+      responses:
+        "200":
+          description: Vendor approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vendor"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /v1/vendors/{domain}/revoke:
+    put:
+      tags: [vendor]
+      summary: Revoke a vendor
+      parameters:
+        - in: path
+          name: domain
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tenant_id]
+              properties:
+                tenant_id:
+                  type: string
+      responses:
+        "200":
+          description: Vendor revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Vendor"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /v1/vendors/{domain}:
+    delete:
+      tags: [vendor]
+      summary: Delete a vendor
+      parameters:
+        - in: path
+          name: domain
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Vendor deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+        "400":
+          $ref: "#/components/responses/Error"
+
+  /v1/onboarding/gws-setup-status:
+    get:
+      tags: [onboarding]
+      summary: GWS domain-wide delegation setup status
+      description: |
+        Returns step-by-step validation of the GWS domain-wide delegation
+        configuration. Checks whether the service account, delegated admin,
+        and domain are set, and optionally tests live Directory and Gmail
+        API connectivity.
+      parameters:
+        - in: query
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Setup status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GWSSetupStatus"
+        "400":
+          $ref: "#/components/responses/Error"
+
+  /v1/org-graph:
+    get:
+      tags: [directory]
+      summary: Get persisted org graph snapshot
+      description: |
+        Returns the latest org graph snapshot for the given tenant.
+        The graph is rebuilt after each directory sync cycle. PII fields
+        are stored as hashes, not raw emails.
+      parameters:
+        - in: query
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Org graph snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgGraphSnapshot"
+        "404":
+          $ref: "#/components/responses/Error"
+
 components:
   responses:
     Error:
@@ -587,4 +763,80 @@ components:
         groups_discovered:
           type: integer
         needs_review_count:
+          type: integer
+
+    GWSSetupStatus:
+      type: object
+      properties:
+        service_account_configured:
+          type: boolean
+        delegated_admin_configured:
+          type: boolean
+        domain_configured:
+          type: boolean
+        directory_access_ok:
+          type: boolean
+        gmail_access_ok:
+          type: boolean
+        steps_remaining:
+          type: array
+          items:
+            type: string
+
+    Vendor:
+      type: object
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        domain:
+          type: string
+        display_name:
+          type: string
+        approved:
+          type: boolean
+        auto_discovered:
+          type: boolean
+        confidence:
+          type: number
+        last_seen_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    VendorCreateRequest:
+      type: object
+      required: [tenant_id, domain]
+      properties:
+        tenant_id:
+          type: string
+        domain:
+          type: string
+        display_name:
+          type: string
+
+    OrgGraphSnapshot:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+        built_at:
+          type: string
+          format: date-time
+        graph:
+          type: object
+          description: JSON blob of the org graph structure
+        high_risk_count:
+          type: integer
+        department_count:
+          type: integer
+        employee_count:
+          type: integer
+        group_count:
           type: integer

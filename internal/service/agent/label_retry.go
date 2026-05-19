@@ -22,11 +22,11 @@ var ErrRetryNotReady = errors.New("label retry: not ready for retry yet")
 // on the event bus). ProcessRetry decrypts it before calling the
 // label applier.
 type LabelRetryEvent struct {
-	TenantID            string   `json:"tenant_id"`
-	MailboxCiphertext   string   `json:"mailbox_ct"`
-	LabelsMissing       []string `json:"labels_missing"`
-	Attempt             int      `json:"attempt"`
-	NextRetryAt         time.Time `json:"next_retry_at"`
+	TenantID          string    `json:"tenant_id"`
+	MailboxCiphertext string    `json:"mailbox_ct"`
+	LabelsMissing     []string  `json:"labels_missing"`
+	Attempt           int       `json:"attempt"`
+	NextRetryAt       time.Time `json:"next_retry_at"`
 }
 
 // MailboxEncryptor handles encryption/decryption of the mailbox

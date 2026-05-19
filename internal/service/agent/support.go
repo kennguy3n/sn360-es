@@ -215,7 +215,7 @@ func (a *SupportAgent) escalate(ctx context.Context, q SupportQuery, v dto.Evalu
 		}
 	}
 	envelope := struct {
-		TenantID string               `json:"tenant_id"`
+		TenantID string                 `json:"tenant_id"`
 		Incident dto.EscalationIncident `json:"incident"`
 	}{
 		TenantID: q.TenantID,

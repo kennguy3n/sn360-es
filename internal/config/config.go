@@ -69,29 +69,31 @@ type Config struct {
 	Environment Environment
 	AppName     string
 
-	Log        Log
-	HTTP       HTTP
-	EventBus   EventBusType
-	NATS       NATS
-	Redis      Redis
-	Postgres   Postgres
-	AWS        AWS
-	Rspamd     Rspamd
-	AI         AI
-	Tier1      Tier1
-	Tier0      Tier0
-	CB         CircuitBreaker
-	Privacy    Privacy
-	Banner     Banner
-	Score      ScoreThresholds
-	URLRewrite URLRewrite
-	CORS       CORS
-	SMTP       SMTP
-	GWS        GWS
-	O365       O365
-	Ingestion  Ingestion
-	Worker     Worker
-	Onboarding Onboarding
+	Log                      Log
+	HTTP                     HTTP
+	EventBus                 EventBusType
+	NATS                     NATS
+	Redis                    Redis
+	Postgres                 Postgres
+	AWS                      AWS
+	Rspamd                   Rspamd
+	AI                       AI
+	Tier1                    Tier1
+	Tier0                    Tier0
+	SensitivityBonsaiURL     string
+	SensitivityBonsaiTimeout time.Duration
+	CB                       CircuitBreaker
+	Privacy                  Privacy
+	Banner                   Banner
+	Score                    ScoreThresholds
+	URLRewrite               URLRewrite
+	CORS                     CORS
+	SMTP                     SMTP
+	GWS                      GWS
+	O365                     O365
+	Ingestion                Ingestion
+	Worker                   Worker
+	Onboarding               Onboarding
 }
 
 // Log carries structured-logging configuration.
@@ -313,6 +315,9 @@ type O365 struct {
 	// TokenURL overrides https://login.microsoftonline.com when the
 	// caller needs to point at a mock OAuth server.
 	TokenURL string
+	// ResolveNestedGroups enables transitiveMemberOf queries so
+	// users inherit parent-group memberships.
+	ResolveNestedGroups bool
 }
 
 // HasGmail reports whether enough fields are set to build a Gmail
@@ -499,6 +504,8 @@ func Load() (Config, error) {
 			FlagThreshold: getInt("TIER1_FLAG_THRESHOLD", 60),
 			BatchEnabled:  getBool("TIER1_BATCH_ENABLED", false),
 		},
+		SensitivityBonsaiURL:     getStr("SENSITIVITY_BONSAI_URL", ""),
+		SensitivityBonsaiTimeout: getDuration("SENSITIVITY_BONSAI_TIMEOUT", 30*time.Second),
 		Tier0: Tier0{
 			SkipInternal:         getBool("TIER0_SKIP_INTERNAL", true),
 			SkipVendor:           getBool("TIER0_SKIP_VENDOR", true),
@@ -571,9 +578,10 @@ func Load() (Config, error) {
 			ClientSecret: getStr("O365_CLIENT_SECRET", ""),
 			// TenantID has the same registry-key invariant as
 			// GWS.Domain above — trim at the source.
-			TenantID: strings.TrimSpace(getStr("O365_TENANT_ID", "")),
-			BaseURL:  getStr("O365_BASE_URL", ""),
-			TokenURL: getStr("O365_TOKEN_URL", ""),
+			TenantID:            strings.TrimSpace(getStr("O365_TENANT_ID", "")),
+			BaseURL:             getStr("O365_BASE_URL", ""),
+			TokenURL:            getStr("O365_TOKEN_URL", ""),
+			ResolveNestedGroups: getBool("O365_RESOLVE_NESTED_GROUPS", true),
 		},
 		Ingestion: Ingestion{
 			Enabled:         getBool("INGESTION_ENABLED", false),

@@ -64,15 +64,15 @@ func (c TenantContext) Validate() error {
 // struct so downstream consumers (label applier, role classifier) need
 // only handle one type.
 type DiscoveredUser struct {
-	ID          string
-	Email       string
-	DisplayName string
-	Department  string
-	JobTitle    string
-	IsAdmin     bool
-	IsSuspended bool
-	GroupIDs    []string
-	ManagerID   string
+	ID               string
+	Email            string
+	DisplayName      string
+	Department       string
+	JobTitle         string
+	IsAdmin          bool
+	IsSuspended      bool
+	GroupIDs         []string
+	ManagerID        string
 	Aliases          []string // email aliases
 	IsSharedMailbox  bool     // shared/resource mailbox (O365 mailboxType)
 	IsServiceAccount bool     // service account / app user
@@ -224,6 +224,14 @@ type Agent interface {
 type DirectoryClient interface {
 	ListUsers(ctx context.Context, tenantID string) ([]DiscoveredUser, error)
 	ListGroups(ctx context.Context, tenantID string) ([]DiscoveredGroup, error)
+}
+
+// DeltaSyncCapable is an optional interface that DirectoryClient
+// implementations can satisfy to enable incremental sync. When the
+// delta token is empty the implementation performs an initial full
+// sync; subsequent calls with the returned token fetch only changes.
+type DeltaSyncCapable interface {
+	ListUsersDelta(ctx context.Context, tenantID string, deltaToken string) ([]DiscoveredUser, string, error)
 }
 
 // VendorScanner discovers vendor candidates from the tenant's recent

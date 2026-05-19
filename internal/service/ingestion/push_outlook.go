@@ -171,9 +171,9 @@ func (o *OutlookPushReceiver) fetchMessage(ctx context.Context, email, messageID
 		o.baseURL(), url.PathEscape(email), url.PathEscape(messageID))
 
 	var resp struct {
-		ID          string `json:"id"`
-		Subject     string `json:"subject"`
-		From        struct {
+		ID      string `json:"id"`
+		Subject string `json:"subject"`
+		From    struct {
 			EmailAddress struct {
 				Address string `json:"address"`
 			} `json:"emailAddress"`
