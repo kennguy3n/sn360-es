@@ -83,7 +83,7 @@ Raw output is in
 
 ## Classification quality (1 000-email corpus, seed = 42)
 
-| Metric                              | Value         | Target (PROPOSAL §6) |
+| Metric                              | Value         | Target               |
 | ----------------------------------- | ------------- | -------------------- |
 | Overall precision (threat class)    | **1.0000**    | ≥ 0.85               |
 | Overall recall (threat class)       | **0.9807**    | ≥ 0.85               |
