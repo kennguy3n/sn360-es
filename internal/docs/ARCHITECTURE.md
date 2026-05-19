@@ -57,7 +57,7 @@ graph TD
         end
 
         subgraph "Heuristic Engine"
-            Rspamd["Rspamd v3.14.2"]
+            Rspamd["Rspamd v3.14"]
             Unbound["Unbound DNS"]
         end
 
@@ -110,7 +110,7 @@ graph TD
 NATS JetStream is the primary inter-domain event bus. A Redis Streams
 implementation behind the same `events.EventService` interface
 (`pkg/events/`) remains available as a fallback selected via
-`EVENT_BUS=nats|redis`. Redis is otherwise used exclusively for
+`EVENT_BUS_TYPE=nats|redis`. Redis is otherwise used exclusively for
 caching and distributed locking.
 
 ### Stream Architecture
@@ -121,7 +121,7 @@ caching and distributed locking.
 | `ES_ONBOARDING` | `es.onboarding.>` | WorkQueue | File | User/tenant lifecycle events |
 | `ES_EDUCATION` | `es.education.>` | Limits | File | Education campaign events (retained for analytics) |
 | `ES_ACTION` | `es.action.>` | WorkQueue | File | Post-evaluation remediation actions |
-| `ES_DLQ` | `es.*.dlq` | Limits | File | Dead-letter queue for failed processing |
+| `ES_DLQ` | `["es.evaluate.dlq", "es.action.dlq"]` | Limits | File | Dead-letter queue for failed processing |
 
 ### Message Flow
 
@@ -440,7 +440,7 @@ by `cmd/sn360-es/main.go` (`buildPoller`, `buildMailboxProviders`).
 - **`pkg/storage/postgres/`**: pgx-based PostgreSQL connection helper with structured `Config` and `Open` / `Close` / `Ping` / `Driver` accessors.
 - **`pkg/storage/redis/`**: Redis pipeline wrapper, scan / prefix helpers, and JSON serialization helpers used by the `internal/service/cache/` AI + Rspamd caches and the action-token cache.
 - **`pkg/storage/s3/`**: AWS S3 client wrapper for raw-body offload (optional).
-- **`pkg/events/`**: Bus factory that selects between `pkg/events/nats/` (default) and `pkg/events/redis/` based on the `EVENT_BUS` config flag.
+- **`pkg/events/`**: Bus factory that selects between `pkg/events/nats/` (default) and `pkg/events/redis/` based on the `EVENT_BUS_TYPE` config flag.
 - **`internal/translation/banners/`**: Banner i18n bundles re-exported from `internal/service/action/catalogs/` so other domains can reuse the same wording.
 
 ## 6. Infrastructure

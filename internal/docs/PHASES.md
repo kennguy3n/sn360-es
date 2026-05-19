@@ -16,7 +16,7 @@ consumers are wired today.
   `ES_DLQ`), durable consumers, dedup window, file storage, replicas.
 - **`EventService` interface** — `pkg/events/interface.go` with NATS
   and Redis Streams implementations selected at runtime by the
-  `EVENT_BUS` config flag (`pkg/events/factory.go`).
+  `EVENT_BUS_TYPE` config flag (`pkg/events/factory.go`).
 - **Dead-letter routing** — `pkg/events/nats/dlq.go` and
   `internal/service/dlq_processor.go`.
 
