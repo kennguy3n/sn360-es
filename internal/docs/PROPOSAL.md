@@ -34,7 +34,7 @@ binary.
 Both buses share the same `events.EventService` interface
 (`pkg/events/`). NATS JetStream is the production transport; Redis
 Streams remains as a fallback for environments without NATS. Selection
-is via `EVENT_BUS=nats|redis`.
+is via `EVENT_BUS_TYPE=nats|redis`.
 
 ### JetStream Subject Design
 
@@ -56,6 +56,10 @@ es.action.>                           # Post-evaluation actions
 es.action.banner                      # Banner injection
 es.action.label                       # Label application
 es.action.quarantine                  # Quarantine action
+es.action.url_rewrite                 # Body URL rewriting
+es.action.quarantine.release          # Quarantine release flow
+es.action.escalation.>                # SecOps escalation
+es.action.feedback.*                  # User feedback actions
 ```
 
 ### JetStream Stream Configuration
@@ -84,6 +88,13 @@ streams:
     retention: Limits              # Keep history for analytics
     storage: File
     max_age: 90d
+    num_replicas: 3
+
+  ES_ACTION:
+    subjects: ["es.action.>"]
+    retention: WorkQueue
+    storage: File
+    max_age: 24h
     num_replicas: 3
 
   ES_DLQ:
@@ -116,14 +127,14 @@ consumers:
     max_deliver: 3
     ack_wait: 30s
     max_ack_pending: 50
-    deliver_group: "ingestion-svc"
+    deliver_group: "ingestion-action"
 ```
 
 ### Implementation Notes
 
 - `pkg/events/` provides a `Factory` selecting between the NATS
   JetStream client (`pkg/events/nats/`) and the Redis Streams client
-  (`pkg/events/redis/`) based on `EVENT_BUS`.
+  (`pkg/events/redis/`) based on `EVENT_BUS_TYPE`.
 - Both implementations satisfy the same `EventService` interface so
   consumers and publishers in `cmd/sn360-es/main.go` are bus-agnostic.
 - Redis remains in the deployment for caching (score weights,

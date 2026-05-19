@@ -392,11 +392,9 @@ type Onboarding struct {
 // AllowedOrigins is read from the CORS_ALLOWED_ORIGINS environment
 // variable as a comma-separated list. A single "*" entry means
 // "echo any origin"; other entries must match the request's Origin
-// header exactly (case-insensitive). In development/local builds the
-// list defaults to "*" so the dev server stays usable without any
-// extra wiring; in non-development environments the list defaults to
-// empty so a production deployment that forgets to set the variable
-// fails closed instead of silently letting any origin in.
+// header exactly (case-insensitive). Defaults to empty. Set
+// CORS_ALLOWED_ORIGINS to a comma-separated list of allowed origins,
+// or "*" to allow all.
 type CORS struct {
 	AllowedOrigins []string
 }

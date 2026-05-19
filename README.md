@@ -95,7 +95,7 @@ they subscribe to and which HTTP routes they own.
 |---|---|---|---|---|
 | **Tier 0** | Rule-based classification | <1ms | ~$0 | Every email — skips ML for internal, vendor, newsletter |
 | **Tier 1** | XLM-RoBERTa encoder (self-hosted) | 50-200ms | ~$0.00005 | External unknown emails surviving Tier 0 |
-| **Tier 2** | Ternary-Bonsai-8B (self-hosted SLM) | 2-5s | ~$0.001-0.005 | Ambiguous emails from Tier 1 (10-20% of Tier 1 input) |
+| **Tier 2** | Ternary-Bonsai-8B (self-hosted SLM) | 2-10s | ~$0.001-0.005 | Ambiguous emails from Tier 1 (10-20% of Tier 1 input) |
 | **Rspamd** | Heuristics (SPF/DKIM/DMARC/RBL) | 100-500ms | ~$0 | Always-on, parallel with ML tiers |
 
 The Tier 2 deployment manifests live in [`deployments/llm/`](./deployments/llm/);
@@ -191,7 +191,7 @@ infrastructure is missing.
 |---|---|---|---|
 | HTTP server, health, metrics, OpenAPI/docs | Yes | Yes | Always on |
 | Middleware (telemetry, request logger, CORS, JWT auth) | Yes | Yes | JWT skips `/healthz`, `/readyz`, `/metrics`, `/docs`, `/openapi.yaml` |
-| Event bus (NATS JetStream + Redis Streams fallback + factory) | Yes | Yes | Selected via `EVENT_BUS=nats\|redis` |
+| Event bus (NATS JetStream + Redis Streams fallback + factory) | Yes | Yes | Selected via `EVENT_BUS_TYPE=nats\|redis` |
 | Tier 0 classification gate | Yes | Yes | Pure CPU, in-process |
 | Tier 1 encoder client | Yes | Optional | Requires the encoder service from [`deployments/encoder/`](./deployments/encoder/) |
 | Tier 2 SLM (Ternary-Bonsai-8B) client | Yes | Optional | Requires the deployment from [`deployments/llm/`](./deployments/llm/) |
@@ -207,7 +207,7 @@ infrastructure is missing.
 | Onboarding (OAuth, discovery, agent) | Yes | Optional | Requires `ONBOARDING_STATE_SECRET`, `ONBOARDING_CALLBACK_URL`, and at least one provider credential (GWS or O365) |
 | Dashboard generator | Yes | Optional | 503 when generator is not configured |
 | Escalation (resolve + get) | Yes | Yes | In-memory or PG-backed ticket store |
-| PostgreSQL repositories (Atlas-managed) | Yes | Optional | Degraded mode (503 on PG-backed routes) when DSN is unset |
+| PostgreSQL repositories (golang-migrate-managed) | Yes | Optional | Degraded mode (503 on PG-backed routes) when DSN is unset |
 | Privacy primitives (Blake2 hashing, AES-GCM, JWT, KMS adapter) | Yes | Yes | KMS adapter is pluggable; falls back to a local key in dev |
 | Tier 1 / Tier 2 deployments | Manifests only | Out of scope | See `deployments/encoder/` and `deployments/llm/` |
 | Benchmark + accuracy harness | Yes | N/A | Build-tagged `//go:build benchmark`; see [`benchmarks/`](./benchmarks/) |
@@ -221,7 +221,7 @@ than crashing the process.
 
 Prerequisites:
 
-- Go 1.22+ (matches `go.mod`)
+- Go 1.25+ (matches `go.mod`)
 - Docker / Docker Compose for the local NATS + PostgreSQL + Redis + Rspamd stack
 - Optional: a running Tier 1 encoder ([`deployments/encoder/`](./deployments/encoder/))
   and Tier 2 SLM ([`deployments/llm/`](./deployments/llm/)) for end-to-end ML;
@@ -230,7 +230,7 @@ Prerequisites:
 ```bash
 cp .env.example .env
 docker-compose up -d        # NATS, Redis, PostgreSQL, Rspamd
-make migrate-up             # Apply database migrations (Atlas via cmd/sn360-es-migrate)
+make migrate-up             # Apply database migrations (golang-migrate via cmd/sn360-es-migrate)
 make test                   # Unit tests
 make run                    # Start sn360-es
 ```
@@ -251,7 +251,8 @@ make bench-all          # Run the full suite (corpus + micro + accuracy + profil
 make bench              # Go microbenchmarks (ns/op, B/op, allocs/op)
 make bench-accuracy     # Classification accuracy / precision / recall / F1 / confusion matrix
 make bench-profile      # Resource utilisation (p50/p95/p99 latency, GC, peak memory, throughput)
-make gen-corpus         # Regenerate the labelled 1 000-email corpus (seed 42)
+make generate-corpus        # Regenerate the labelled 1,000-email evaluation corpus (seed 42)
+make gen-corpus             # Generate a benchmark corpus (configurable size/seed)
 ```
 
 All artefacts land under [`benchmarks/`](./benchmarks/) with a UTC

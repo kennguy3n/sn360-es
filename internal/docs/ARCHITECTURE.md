@@ -57,7 +57,7 @@ graph TD
         end
 
         subgraph "Heuristic Engine"
-            Rspamd["Rspamd v3.14.2"]
+            Rspamd["Rspamd v3.14"]
             Unbound["Unbound DNS"]
         end
 
@@ -110,7 +110,7 @@ graph TD
 NATS JetStream is the primary inter-domain event bus. A Redis Streams
 implementation behind the same `events.EventService` interface
 (`pkg/events/`) remains available as a fallback selected via
-`EVENT_BUS=nats|redis`. Redis is otherwise used exclusively for
+`EVENT_BUS_TYPE=nats|redis`. Redis is otherwise used exclusively for
 caching and distributed locking.
 
 ### Stream Architecture
@@ -121,7 +121,7 @@ caching and distributed locking.
 | `ES_ONBOARDING` | `es.onboarding.>` | WorkQueue | File | User/tenant lifecycle events |
 | `ES_EDUCATION` | `es.education.>` | Limits | File | Education campaign events (retained for analytics) |
 | `ES_ACTION` | `es.action.>` | WorkQueue | File | Post-evaluation remediation actions |
-| `ES_DLQ` | `es.*.dlq` | Limits | File | Dead-letter queue for failed processing |
+| `ES_DLQ` | `["es.evaluate.dlq", "es.action.dlq"]` | Limits | File | Dead-letter queue for failed processing |
 
 ### Message Flow
 
