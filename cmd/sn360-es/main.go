@@ -1927,6 +1927,11 @@ func (a *application) handleOnboarding(ctx context.Context, msg events.Message) 
 				Provider:  p,
 				StartedAt: time.Now().UTC(),
 			}
+			if a.draining.Load() {
+				a.logger.WarnContext(ctx, "sn360-es: onboarding.tenant.created rejected (draining)",
+					slog.String("tenant_id", env.TenantID))
+				return nil
+			}
 			a.bgWG.Add(1)
 			go func() {
 				defer a.bgWG.Done()

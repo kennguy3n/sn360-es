@@ -645,6 +645,7 @@ func (m *memoryFeedbackEvents) Counts(_ context.Context, tenantID string, start,
 func (m *memoryFeedbackEvents) ListSince(_ context.Context, tenantID string, since time.Time) ([]FeedbackEvent, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	const limit = 10000
 	var out []FeedbackEvent
 	for _, r := range m.rows {
 		if r.TenantID != tenantID {
@@ -654,6 +655,9 @@ func (m *memoryFeedbackEvents) ListSince(_ context.Context, tenantID string, sin
 			continue
 		}
 		out = append(out, r)
+		if len(out) >= limit {
+			break
+		}
 	}
 	return out, nil
 }
