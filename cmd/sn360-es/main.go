@@ -1904,9 +1904,16 @@ func (a *application) handleOnboarding(ctx context.Context, msg events.Message) 
 			if env.TenantID == "" {
 				return nil
 			}
+			p := agent.Provider(env.Provider)
+			if !p.Valid() {
+				a.logger.WarnContext(ctx, "sn360-es: onboarding.tenant.created unknown provider, skipping",
+					slog.String("tenant_id", env.TenantID),
+					slog.String("provider", env.Provider))
+				return nil
+			}
 			tctx := agent.TenantContext{
 				TenantID:  env.TenantID,
-				Provider:  agent.Provider(env.Provider),
+				Provider:  p,
 				StartedAt: time.Now().UTC(),
 			}
 			a.bgWG.Add(1)
@@ -2259,10 +2266,8 @@ func defaultAuthSkipPaths() []string {
 		// here is safe — no tenant scoping is needed.
 		"/v1/education/lesson/",
 		// OAuth callback is hit by the IdP redirect — the browser
-		// will not carry a Bearer JWT. Start also needs to be
-		// reachable for the initial consent redirect.
+		// will not carry a Bearer JWT.
 		"/v1/onboarding/callback",
-		"/v1/onboarding/start",
 	}
 }
 
@@ -3581,9 +3586,10 @@ func (a tuningResultAdapter) RecentFeedback(ctx context.Context, tenantID string
 	out := make([]agent.Feedback, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, agent.Feedback{
-			TenantID:  r.TenantID,
-			MessageID: r.PseudoMessageID,
-			Action:    agent.FeedbackKind(r.Action),
+			TenantID:   r.TenantID,
+			MessageID:  r.PseudoMessageID,
+			Action:     agent.FeedbackKind(r.Action),
+			PriorTier:  constant.Tier(r.Tier),
 			OccurredAt: r.OccurredAt,
 		})
 	}

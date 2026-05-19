@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -22,10 +23,10 @@ type SupportConfig struct {
 	// ExplainVerdict and DefaultSuggestion fall back to hardcoded English.
 	Explanations *ExplanationCatalog
 	// SecOpsSubject is the NATS subject for low-confidence escalations
-	// (default "es.action.escalate.secops").
+	// (default "es.action.escalation.created").
 	SecOpsSubject string
 	// ReleaseSubject is the NATS subject emitted when a user requests
-	// quarantine release (default "es.action.release.request").
+	// quarantine release (default "es.action.quarantine.release").
 	ReleaseSubject string
 	// EscalationConfidence is the lower bound of the verdict confidence
 	// below which the support agent escalates rather than answering.
@@ -188,9 +189,26 @@ func (a *SupportAgent) escalate(ctx context.Context, q SupportQuery, v dto.Evalu
 	if a.cfg.Events == nil {
 		return SupportReply{Escalated: true, Suggestion: escSuggestion}, nil
 	}
-	payload := fmt.Sprintf(`{"tenant_id":%q,"message_id":%q,"user":%q,"reason":%q,"verdict_tier":%q,"verdict_score":%d,"requested_at":%q}`,
-		q.TenantID, q.MessageID, q.UserEmail, reason, v.Tier, v.Score, time.Now().UTC().Format(time.RFC3339))
-	if err := a.cfg.Events.Publish(ctx, a.cfg.SecOpsSubject, []byte(payload)); err != nil {
+	envelope := struct {
+		TenantID string               `json:"tenant_id"`
+		Incident dto.EscalationIncident `json:"incident"`
+	}{
+		TenantID: q.TenantID,
+		Incident: dto.EscalationIncident{
+			PseudoMessageID: q.MessageID,
+			Tier:            string(v.Tier),
+			Category:        string(v.Primary),
+			Reason:          dto.EscalationReasonUserRequested,
+			Score:           float64(v.Score),
+			AISummary:       reason,
+			DetectedAt:      time.Now().UTC(),
+		},
+	}
+	payload, err := json.Marshal(envelope)
+	if err != nil {
+		return SupportReply{}, fmt.Errorf("support: marshal escalation: %w", err)
+	}
+	if err := a.cfg.Events.Publish(ctx, a.cfg.SecOpsSubject, payload); err != nil {
 		return SupportReply{}, fmt.Errorf("support: emit escalate: %w", err)
 	}
 	return SupportReply{
