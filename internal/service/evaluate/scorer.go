@@ -48,32 +48,10 @@ type Components struct {
 }
 
 // FromResult derives Components from a partial EvaluateResult so that the
-// caller doesn't have to remember the mapping rules.
+// caller doesn't have to remember the mapping rules. Implemented in terms
+// of FromResultEx so the field-extraction logic lives in one place.
 func FromResult(r *dto.EvaluateResult) Components {
-	c := Components{}
-	if r == nil {
-		return c
-	}
-	if r.Tier2 != nil {
-		if r.Tier2.Score > c.AI {
-			c.AI = r.Tier2.Score
-		}
-	}
-	if r.Tier1 != nil {
-		if r.Tier1.Score > c.AI {
-			c.AI = r.Tier1.Score
-		}
-	}
-	if r.Rspamd != nil {
-		c.Rspamd = normaliseRspamd(r.Rspamd.Score, r.Rspamd.Threshold)
-	}
-	if r.LinkScore != nil {
-		c.Links = *r.LinkScore
-	}
-	if r.AttachmentScore != nil {
-		c.Attachments = *r.AttachmentScore
-	}
-	return c
+	return FromResultEx(r).Components
 }
 
 // EffectiveWeights returns weights adjusted for component availability.

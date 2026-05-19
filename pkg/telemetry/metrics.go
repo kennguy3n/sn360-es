@@ -57,6 +57,7 @@ type Metrics struct {
 	// --- HTTP server ----------------------------------------------
 	HTTPRequests       *prometheus.CounterVec
 	HTTPRequestLatency *prometheus.HistogramVec
+	RateLimitedTotal   *prometheus.CounterVec
 
 	// --- Ingestion polling ----------------------------------------
 	IngestionPolled      *prometheus.CounterVec
@@ -191,6 +192,9 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		HTTPRequests: b.counterVec("http_requests_total",
 			"HTTP requests served, partitioned by method/route/status.",
 			[]string{"method", "route", "status"}),
+		RateLimitedTotal: b.counterVec("http_rate_limited_total",
+			"HTTP requests rejected by the per-IP rate limiter, partitioned by path.",
+			[]string{"path"}),
 		HTTPRequestLatency: b.histogramVec("http_request_latency_seconds",
 			"HTTP request latency in seconds, partitioned by method/route.",
 			latencyBuckets(),

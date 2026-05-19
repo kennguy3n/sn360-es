@@ -55,7 +55,7 @@ func TestLatencyDistribution(t *testing.T) {
 	var maxLatency time.Duration
 	for _, e := range emails {
 		t0 := time.Now()
-		if _, err := ev.Evaluate(ctx, e.Request); err != nil {
+		if _, err := ev.Evaluate(ctx, e.Request, e.Request.Signals); err != nil {
 			t.Fatalf("evaluate: %v", err)
 		}
 		d := time.Since(t0)

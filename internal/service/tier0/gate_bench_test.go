@@ -23,7 +23,7 @@ func BenchmarkGate_InternalBypass(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = g.Apply(req)
+		_ = g.Apply(req, req.Signals)
 	}
 }
 
@@ -44,7 +44,7 @@ func BenchmarkGate_VendorBypass(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = g.Apply(req)
+		_ = g.Apply(req, req.Signals)
 	}
 }
 
@@ -68,7 +68,7 @@ func BenchmarkGate_ExternalFullPath(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = g.Apply(req)
+		_ = g.Apply(req, req.Signals)
 	}
 }
 
@@ -89,6 +89,6 @@ func BenchmarkGate_HighVolumeRspamdOnly(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = g.Apply(req)
+		_ = g.Apply(req, req.Signals)
 	}
 }

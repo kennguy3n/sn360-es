@@ -24,12 +24,21 @@ type BatchTier1Client interface {
 
 // Tier0BatchGate is the (optional) Tier 0 stage applied per-message
 // inside the batch. The concrete tier0.Gate satisfies it.
-type Tier0BatchGate interface {
-	Apply(req dto.EvaluateRequest, signals dto.RiskSignals) (dto.EvaluateResult, bool)
-}
+//
+// This is intentionally an alias for Tier0Gate: the batch path and the
+// per-message path now share an identical Tier 0 entry signature. The
+// orchestrator owns the Tier0Outcome → EvaluateResult translation
+// locally (see tier0BypassResult) rather than delegating it to a
+// wrapper adapter, so the gate itself doesn't need to know whether it
+// is being invoked from a batch loop or a per-message handler.
+type Tier0BatchGate = Tier0Gate
 
 // MessageEvaluator is the slow path used when Tier 0 doesn't short
 // circuit a message. The evaluate.Evaluator satisfies it.
+//
+// The signature mirrors *Evaluator.Evaluate exactly so the batch
+// orchestrator can drop a *Evaluator straight in without going through
+// a per-call adapter that mutated req.Signals before delegation.
 type MessageEvaluator interface {
 	Evaluate(ctx context.Context, req dto.EvaluateRequest, signals dto.RiskSignals) (dto.EvaluateResult, error)
 }
@@ -279,8 +288,15 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 		}
 		p := pending{msg: m, req: bm.Request, sig: bm.Signals}
 		if o.cfg.Tier0 != nil {
-			if res, hit := o.cfg.Tier0.Apply(bm.Request, bm.Signals); hit {
-				p.tier0 = res
+			outcome := o.cfg.Tier0.Apply(bm.Request, bm.Signals)
+			if outcome.Bypass {
+				// Tier 0 short-circuit: build the published
+				// EvaluateResult here (rather than via an
+				// adapter wrapper) so the batch path owns the
+				// same Tier0Outcome → EvaluateResult shape the
+				// per-message evaluator produces in its bypass
+				// branch.
+				p.tier0 = tier0BypassResult(bm.Request, outcome)
 				p.hit0 = true
 			}
 		}
@@ -466,5 +482,34 @@ func (o *BatchOrchestrator) publishResult(ctx context.Context, res dto.EvaluateR
 		// event-type sees the same `evaluate.result` value on
 		// batch-emitted verdicts as on single-message ones.
 		events.WithEventType("evaluate.result"),
+		// Propagate the W3C trace context from the batch handler's
+		// span so a request that fans out to a Tier 1 batch sees an
+		// unbroken trace across publish → consume.
+		events.WithTraceContext(ctx),
 	)
+}
+
+// tier0BypassResult converts a Tier 0 bypass outcome into the published
+// EvaluateResult shape. It is the batch-path counterpart to the
+// per-message evaluator's bypass branch (evaluator.go: case
+// tier0.Bypass), so verdicts emitted by either path carry identical
+// MessageID / Tenant / Primary / Tier / Tier0 / ReasonCodes for the
+// same input. Used to live inside cmd/sn360-es/adapters.go as the
+// tier0BatchAdapter wrapper; pulling it back into the evaluate
+// package removes the adapter and keeps the bypass formatting logic
+// alongside the evaluator that defines it.
+func tier0BypassResult(req dto.EvaluateRequest, outcome dto.Tier0Outcome) dto.EvaluateResult {
+	res := dto.EvaluateResult{
+		TenantID:      req.TenantID,
+		MessageID:     req.MessageID,
+		CorrelationID: req.CorrelationID,
+		EvaluatedAt:   time.Now().UTC(),
+		Primary:       outcome.ForcedCategory,
+		Tier:          ForcedTierFor(outcome.ForcedCategory),
+		Tier0:         &outcome,
+	}
+	if outcome.Reason != "" {
+		res.ReasonCodes = append(res.ReasonCodes, outcome.Reason)
+	}
+	return res
 }

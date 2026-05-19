@@ -135,7 +135,7 @@ func TestGate_InternalATOBlocksBypass(t *testing.T) {
 			HasFailedAuth: true,
 		},
 	}
-	out := g.Apply(req)
+	out := g.Apply(req, req.Signals)
 	if out.Bypass {
 		t.Error("ATO-flagged internal message should NOT bypass")
 	}
@@ -153,7 +153,7 @@ func TestGate_CleanInternalStillBypasses(t *testing.T) {
 		Sender:  "alice@company.com",
 		Signals: dto.RiskSignals{IsInternal: true},
 	}
-	out := g.Apply(req)
+	out := g.Apply(req, req.Signals)
 	if !out.Bypass {
 		t.Error("clean internal should still bypass")
 	}

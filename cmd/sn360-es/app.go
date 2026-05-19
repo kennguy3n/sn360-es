@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -126,6 +127,16 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	app.closers = append(app.closers, func() error {
 		return bus.CloseWithTimeout(eventBus, 5*time.Second)
 	})
+
+	// Wire the EventLagSeconds gauge to the NATS service if that's
+	// the backing implementation. Other backends (Redis, in-memory)
+	// silently no-op — the gauge is intended for the production bus.
+	if natsSvc, ok := eventBus.(*natsbus.Service); ok && app.metrics != nil && app.metrics.EventLagSeconds != nil {
+		gauge := app.metrics.EventLagSeconds
+		natsSvc.SetMessageObserver(func(stream, _ string, lag time.Duration) {
+			gauge.WithLabelValues("nats", stream).Set(lag.Seconds())
+		})
+	}
 
 	// Postgres is optional but strongly preferred.
 	if cfg.Postgres.Host != "" && cfg.Postgres.Database != "" {
@@ -458,13 +469,25 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 				orch, oerr := evaluate.NewBatchOrchestrator(evaluate.BatchOrchestratorConfig{
 					JS:        natsSvc.Client(),
 					BatchSize: cfg.Tier1.BatchSize,
-					Tier0:     tier0BatchAdapter{gate: app.tier0Gate},
-					Tier1:     app.tier1Raw,
+					// Tier0BatchGate is now an alias of
+					// evaluate.Tier0Gate, and *tier0.Gate
+					// satisfies it directly because Apply
+					// takes (req, signals) on both sides.
+					// The previous tier0BatchAdapter only
+					// existed to bridge two different gate
+					// signatures.
+					Tier0: app.tier0Gate,
+					Tier1: app.tier1Raw,
 					Thresholds: tier1.Thresholds{
 						PassBelow: cfg.Tier1.PassThreshold,
 						FlagAbove: cfg.Tier1.FlagThreshold,
 					},
-					Fallback:      fallbackEvaluatorAdapter{eval: app.evaluator},
+					// *evaluate.Evaluator now matches
+					// evaluate.MessageEvaluator directly
+					// (Evaluate takes req + signals), so
+					// the fallbackEvaluatorAdapter wrapper
+					// is no longer required.
+					Fallback:      app.evaluator,
 					Categorizer:   categorizer,
 					TierDecider:   tierDeciderAdapt,
 					Weights:       weights,
@@ -551,7 +574,87 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		logger.Info("sn360-es: onboarding service disabled (ONBOARDING_STATE_SECRET or ONBOARDING_CALLBACK_URL not set)")
 	}
 
+	if err := assertProductionDurableStores(cfg, app, logger); err != nil {
+		return nil, err
+	}
+
 	return app, nil
+}
+
+// assertProductionDurableStores refuses to boot in production (UAT or
+// prod) when any service that owns durable state is backed by an
+// in-memory store. The matching persistent backends — Postgres for
+// ticket state, Redis for quarantine — are both already optional at
+// startup; this check is the safety belt that turns "silently
+// degraded" into "fail fast at boot" when running in an environment
+// where data loss would constitute an incident.
+//
+// In non-production environments this still logs each in-memory
+// fallback at warn level so operators see what's running with what
+// backend without blocking the binary.
+func assertProductionDurableStores(cfg *config.Config, app *application, logger *slog.Logger) error {
+	type memStore struct {
+		name    string
+		fix     string
+		blocker bool
+	}
+	var inMemory []memStore
+
+	if app.escalationSvc != nil && app.pgDB == nil {
+		inMemory = append(inMemory, memStore{
+			name:    "escalation ticket store",
+			fix:     "configure PG_HOST/PG_DATABASE so escalation tickets survive a restart",
+			blocker: true,
+		})
+	}
+	if app.quarantineSvc != nil && app.redis == nil {
+		inMemory = append(inMemory, memStore{
+			name:    "quarantine envelope store",
+			fix:     "configure REDIS_ADDR so quarantined messages aren't lost on restart",
+			blocker: true,
+		})
+	}
+	// Simulation engine + tracker have no persistent backend implemented
+	// yet, so we surface the data-loss exposure as a non-blocking warning
+	// even in production rather than refusing boot. Replacing these with
+	// durable stores is tracked in internal/docs/DEGRADATION_MODES.md.
+	if app.simulationEng != nil {
+		inMemory = append(inMemory, memStore{
+			name: "simulation campaign store",
+			fix:  "no persistent backend implemented yet; tracked in DEGRADATION_MODES.md",
+		})
+	}
+	if app.simulationTracker != nil {
+		inMemory = append(inMemory, memStore{
+			name: "simulation interaction store",
+			fix:  "no persistent backend implemented yet; tracked in DEGRADATION_MODES.md",
+		})
+	}
+
+	if len(inMemory) == 0 {
+		return nil
+	}
+
+	prod := cfg.Environment.IsProduction()
+	var blockerMsgs []string
+	for _, s := range inMemory {
+		level := slog.LevelWarn
+		if prod && s.blocker {
+			level = slog.LevelError
+			blockerMsgs = append(blockerMsgs, s.name+" ("+s.fix+")")
+		}
+		logger.Log(context.Background(), level,
+			"sn360-es: in-memory store in use — data lost on restart",
+			slog.String("store", s.name),
+			slog.String("fix", s.fix),
+			slog.String("environment", string(cfg.Environment)),
+		)
+	}
+	if len(blockerMsgs) > 0 {
+		return fmt.Errorf("refusing to boot in %s: in-memory stores would lose data on restart: %s",
+			cfg.Environment, strings.Join(blockerMsgs, "; "))
+	}
+	return nil
 }
 
 // Close runs every registered closer in reverse order.

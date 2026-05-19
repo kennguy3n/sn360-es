@@ -152,7 +152,7 @@ func TestPipelineIntegration_EvaluateRequestProducesBannerAction(t *testing.T) {
 			if err := json.Unmarshal(m.Data(), &req); err != nil {
 				return err
 			}
-			res, err := evaluator.Evaluate(c, req)
+			res, err := evaluator.Evaluate(c, req, req.Signals)
 			if err != nil {
 				return err
 			}
@@ -259,7 +259,7 @@ func TestPipelineIntegration_Tier0BypassShortCircuits(t *testing.T) {
 		func(c context.Context, m events.Message) error {
 			var req dto.EvaluateRequest
 			_ = json.Unmarshal(m.Data(), &req)
-			res, _ := evaluator.Evaluate(c, req)
+			res, _ := evaluator.Evaluate(c, req, req.Signals)
 			out <- res
 			return nil
 		},

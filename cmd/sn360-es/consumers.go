@@ -416,7 +416,14 @@ func (a *application) handleEvaluateRequest(ctx context.Context, msg events.Mess
 			slog.String("message_id", req.MessageID))
 		return nil
 	}
-	result, err := a.evaluator.Evaluate(ctx, req)
+	// Pass req.Signals as the explicit signals argument so the
+	// per-message and batch paths now share the same evaluator entry
+	// signature. The per-message handler keeps signals on the request
+	// (they were computed by the ingestion / prefilter pipeline that
+	// emitted es.evaluate.request); the batch handler reads them from
+	// the BatchMessage envelope. Both call sites converge on
+	// Evaluate(ctx, req, signals).
+	result, err := a.evaluator.Evaluate(ctx, req, req.Signals)
 	if err != nil {
 		return fmt.Errorf("evaluate: %w", err)
 	}
@@ -432,6 +439,7 @@ func (a *application) handleEvaluateRequest(ctx context.Context, msg events.Mess
 		events.WithCorrelationID(req.CorrelationID),
 		events.WithTenantID(req.TenantID),
 		events.WithEventType("evaluate.result"),
+		events.WithTraceContext(ctx),
 	); err != nil {
 		return fmt.Errorf("publish evaluate.result: %w", err)
 	}
@@ -727,6 +735,7 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 					events.WithTenantID(res.TenantID),
 					events.WithCorrelationID(res.CorrelationID),
 					events.WithEventType("action.banner"),
+					events.WithTraceContext(ctx),
 				); perr != nil {
 					a.logger.WarnContext(ctx, "sn360-es: ingestion-action: publish banner failed",
 						slog.Any("error", perr))
@@ -749,6 +758,7 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 				events.WithTenantID(res.TenantID),
 				events.WithCorrelationID(res.CorrelationID),
 				events.WithEventType("action.url_rewrite"),
+				events.WithTraceContext(ctx),
 			); perr != nil {
 				a.logger.WarnContext(ctx, "sn360-es: ingestion-action: publish url_rewrite signal failed",
 					slog.Any("error", perr))
@@ -772,6 +782,7 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 				events.WithTenantID(res.TenantID),
 				events.WithCorrelationID(res.CorrelationID),
 				events.WithEventType("action.quarantine"),
+				events.WithTraceContext(ctx),
 			); perr != nil {
 				a.logger.WarnContext(ctx, "sn360-es: ingestion-action: publish quarantine signal failed",
 					slog.Any("error", perr))
@@ -794,6 +805,7 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 				events.WithTenantID(res.TenantID),
 				events.WithCorrelationID(res.CorrelationID),
 				events.WithEventType("action.label"),
+				events.WithTraceContext(ctx),
 			); perr != nil {
 				a.logger.WarnContext(ctx, "sn360-es: ingestion-action: publish label signal failed",
 					slog.Any("error", perr))

@@ -85,7 +85,7 @@ func TestResourceProfile(t *testing.T) {
 	start := time.Now()
 	for _, e := range emails {
 		t0 := time.Now()
-		if _, err := ev.Evaluate(ctx, e.Request); err != nil {
+		if _, err := ev.Evaluate(ctx, e.Request, e.Request.Signals); err != nil {
 			t.Fatalf("evaluate %s: %v", e.Request.MessageID, err)
 		}
 		latencies = append(latencies, time.Since(t0))

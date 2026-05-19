@@ -102,11 +102,13 @@ func (h *QuarantineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		CorrelationID:        correlationID,
 	})
 	if err != nil {
+		status, public := classifyReleaseError(err)
 		h.logger.WarnContext(r.Context(), "quarantine release failed",
 			slog.String("tenant_id", claims.TenantID),
+			slog.Int("status", status),
 			slog.Any("error", err),
 		)
-		writeError(w, http.StatusInternalServerError, "release failed")
+		writeError(w, status, public)
 		return
 	}
 	resp := quarantineReleaseResponse{
@@ -127,4 +129,24 @@ func (h *QuarantineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusAccepted
 	}
 	writeJSON(w, status, resp)
+}
+
+// classifyReleaseError maps a ReleaseService error to an HTTP status
+// code + a public error message that hides internal details. The
+// sentinel errors (action.ErrInvalidInput, action.ErrNotFound,
+// action.ErrProviderUnavailable) are tested with errors.Is so wrapped
+// errors classify correctly. Any unrecognised error falls through to
+// 500 / "release failed" — the original error is still logged at the
+// call site.
+func classifyReleaseError(err error) (int, string) {
+	switch {
+	case errors.Is(err, action.ErrInvalidInput):
+		return http.StatusBadRequest, "invalid release request"
+	case errors.Is(err, action.ErrNotFound):
+		return http.StatusNotFound, "quarantine record not found"
+	case errors.Is(err, action.ErrProviderUnavailable):
+		return http.StatusServiceUnavailable, "release temporarily unavailable"
+	default:
+		return http.StatusInternalServerError, "release failed"
+	}
 }

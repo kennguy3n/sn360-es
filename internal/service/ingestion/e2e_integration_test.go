@@ -181,7 +181,7 @@ func TestE2E_IngestionToEvaluateToAction(t *testing.T) {
 			if err := json.Unmarshal(m.Data(), &req); err != nil {
 				return err
 			}
-			res := eval.Evaluate(c, req)
+			res := eval.Evaluate(c, req, req.Signals)
 			body, _ := json.Marshal(res)
 			for _, action := range []string{
 				"es.action.label",

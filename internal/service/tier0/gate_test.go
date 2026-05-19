@@ -9,7 +9,7 @@ import (
 
 func TestGateInternalBypass(t *testing.T) {
 	g := NewGate(DefaultGateConfig(), nil)
-	out := g.Apply(dto.EvaluateRequest{Signals: dto.RiskSignals{IsInternal: true}})
+	out := g.Apply(dto.EvaluateRequest{}, dto.RiskSignals{IsInternal: true})
 	if !out.Bypass || !out.SkipML {
 		t.Errorf("expected internal bypass, got %+v", out)
 	}
@@ -23,7 +23,7 @@ func TestGateInternalBypass(t *testing.T) {
 
 func TestGateVendorBypass(t *testing.T) {
 	g := NewGate(DefaultGateConfig(), nil)
-	out := g.Apply(dto.EvaluateRequest{Signals: dto.RiskSignals{IsFromVendor: true}})
+	out := g.Apply(dto.EvaluateRequest{}, dto.RiskSignals{IsFromVendor: true})
 	if !out.Bypass || !out.SkipML {
 		t.Errorf("expected vendor bypass, got %+v", out)
 	}
@@ -36,10 +36,10 @@ func TestGateVendorCompromiseBlocksBypass(t *testing.T) {
 	g := NewGate(DefaultGateConfig(), nil)
 
 	// Vendor with no compromise signal should get bypass.
-	clean := g.Apply(dto.EvaluateRequest{Signals: dto.RiskSignals{
+	clean := g.Apply(dto.EvaluateRequest{}, dto.RiskSignals{
 		IsFromVendor:              true,
 		LooksLikeVendorCompromise: false,
-	}})
+	})
 	if !clean.Bypass || !clean.SkipML {
 		t.Errorf("clean vendor should bypass, got %+v", clean)
 	}
@@ -51,10 +51,10 @@ func TestGateVendorCompromiseBlocksBypass(t *testing.T) {
 	}
 
 	// Vendor with compromise signal should NOT bypass.
-	compromised := g.Apply(dto.EvaluateRequest{Signals: dto.RiskSignals{
+	compromised := g.Apply(dto.EvaluateRequest{}, dto.RiskSignals{
 		IsFromVendor:              true,
 		LooksLikeVendorCompromise: true,
-	}})
+	})
 	if compromised.Bypass {
 		t.Errorf("compromised vendor should NOT bypass, got %+v", compromised)
 	}
@@ -75,7 +75,7 @@ func TestGateRecurringDetectionViaSender(t *testing.T) {
 		"mailer-daemon@bounces.example.com",
 	}
 	for _, s := range cases {
-		out := g.Apply(dto.EvaluateRequest{Sender: s})
+		out := g.Apply(dto.EvaluateRequest{Sender: s}, dto.RiskSignals{})
 		if !out.Bypass || out.ForcedCategory != constant.CategoryNewsletter {
 			t.Errorf("sender %q should be flagged recurring, got %+v", s, out)
 		}
@@ -84,7 +84,7 @@ func TestGateRecurringDetectionViaSender(t *testing.T) {
 
 func TestGateHighVolumeRoutesToRspamdOnly(t *testing.T) {
 	g := NewGate(DefaultGateConfig(), nil)
-	out := g.Apply(dto.EvaluateRequest{Signals: dto.RiskSignals{IsHighVolumeSender: true}})
+	out := g.Apply(dto.EvaluateRequest{}, dto.RiskSignals{IsHighVolumeSender: true})
 	if out.Bypass {
 		t.Errorf("high-volume sender must not bypass, got %+v", out)
 	}
@@ -95,10 +95,10 @@ func TestGateHighVolumeRoutesToRspamdOnly(t *testing.T) {
 
 func TestGateFirstContactForcesEscalation(t *testing.T) {
 	g := NewGate(DefaultGateConfig(), nil)
-	out := g.Apply(dto.EvaluateRequest{Signals: dto.RiskSignals{
+	out := g.Apply(dto.EvaluateRequest{}, dto.RiskSignals{
 		IsExternal:           true,
 		RelationshipCategory: dto.RelationshipFirstTimeExternal,
-	}})
+	})
 	if !out.ForceEscalate {
 		t.Errorf("first-time external should force escalation, got %+v", out)
 	}
@@ -106,10 +106,10 @@ func TestGateFirstContactForcesEscalation(t *testing.T) {
 
 func TestGatePartnerLowersTier1Threshold(t *testing.T) {
 	g := NewGate(DefaultGateConfig(), nil)
-	out := g.Apply(dto.EvaluateRequest{Signals: dto.RiskSignals{
+	out := g.Apply(dto.EvaluateRequest{}, dto.RiskSignals{
 		IsExternal:           true,
 		RelationshipCategory: dto.RelationshipPartner,
-	}})
+	})
 	if out.Tier1ThresholdOverride == 0 {
 		t.Errorf("partner relationship should set Tier1 threshold override, got %+v", out)
 	}
@@ -118,12 +118,12 @@ func TestGatePartnerLowersTier1Threshold(t *testing.T) {
 func TestGateDisabledFlags(t *testing.T) {
 	cfg := GateConfig{} // every short-circuit disabled
 	g := NewGate(cfg, nil)
-	out := g.Apply(dto.EvaluateRequest{Signals: dto.RiskSignals{
+	out := g.Apply(dto.EvaluateRequest{}, dto.RiskSignals{
 		IsInternal:         true,
 		IsFromVendor:       true,
 		IsRecurringService: true,
 		IsHighVolumeSender: true,
-	}})
+	})
 	if out.Bypass || out.SkipML || out.RspamdOnly {
 		t.Errorf("all gates disabled — outcome should be zero-value, got %+v", out)
 	}

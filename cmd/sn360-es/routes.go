@@ -140,11 +140,13 @@ func buildMux(app *application) (http.Handler, error) {
 // wrapMiddleware applies the standard middleware chain. Order matters:
 // the outermost wrapper runs first.
 //
-//	telemetry  →  request-logger  →  CORS  →  JWT-auth  →  mux
+//	telemetry  →  request-logger  →  CORS  →  rate-limit  →  JWT-auth  →  mux
 //
 // Telemetry runs first so it captures total latency including auth
-// rejections. JWT auth sits closest to the mux so request logging
-// covers 401s.
+// rejections and rate-limit denials. Rate limiting sits OUTSIDE JWT
+// auth so we can shed load before doing the expensive token-verify
+// work — an attacker hammering us with garbage Bearer tokens still
+// gets cut off at the limiter.
 func wrapMiddleware(mux http.Handler, app *application) http.Handler {
 	logger := app.logger
 	var h http.Handler = mux
@@ -156,6 +158,35 @@ func wrapMiddleware(mux http.Handler, app *application) http.Handler {
 			Issuer:    app.jwtIssuer,
 			SkipPaths: defaultAuthSkipPaths(),
 		})
+	}
+
+	// Per-IP token-bucket rate limiter. The /healthz, /readyz,
+	// /metrics and /docs paths bypass the limiter so liveness probes
+	// and Prometheus scrapes never get 429'd. The limiter shares
+	// app.metrics so 429 counts surface alongside other HTTP
+	// telemetry.
+	if app.cfg.RateLimit.Enabled {
+		rl := middleware.NewRateLimiter(h, middleware.RateLimitConfig{
+			Rate:            app.cfg.RateLimit.Rate,
+			Burst:           app.cfg.RateLimit.Burst,
+			CleanupInterval: app.cfg.RateLimit.CleanupInterval,
+			IdleTTL:         app.cfg.RateLimit.IdleTTL,
+			SkipPaths:       defaultRateLimitSkipPaths(),
+			OnLimited: func(ip, path string) {
+				if app.metrics != nil {
+					app.metrics.RateLimitedTotal.WithLabelValues(path).Inc()
+				}
+				logger.Debug("http: rate limit exceeded",
+					slog.String("ip", ip),
+					slog.String("path", path),
+				)
+			},
+		})
+		app.closers = append(app.closers, func() error {
+			rl.Stop()
+			return nil
+		})
+		h = rl
 	}
 
 	// CORS. The override argument is left nil so NewCORSFromConfig
@@ -175,6 +206,20 @@ func wrapMiddleware(mux http.Handler, app *application) http.Handler {
 	})
 
 	return h
+}
+
+// defaultRateLimitSkipPaths returns the paths that bypass the rate
+// limiter entirely. These are mostly probes and docs the operator
+// always needs to be able to hit.
+func defaultRateLimitSkipPaths() []string {
+	return []string{
+		"/healthz",
+		"/readyz",
+		"/metrics",
+		"/docs",
+		"/docs/",
+		"/openapi.yaml",
+	}
 }
 
 // defaultAuthSkipPaths returns the paths that bypass JWT auth.

@@ -14,8 +14,15 @@ import (
 
 // Tier0Gate is the contract the orchestrator expects from the Tier 0
 // classifier. internal/service/tier0.Gate satisfies it.
+//
+// Signals are passed as a separate parameter (rather than via
+// req.Signals) so the per-message and batch evaluation paths share
+// the same call shape. The previous wiring used a per-call adapter
+// to copy signals onto req before invoking the gate; threading them
+// explicitly removes that adapter and makes signal provenance
+// visible at every call site.
 type Tier0Gate interface {
-	Apply(req dto.EvaluateRequest) dto.Tier0Outcome
+	Apply(req dto.EvaluateRequest, signals dto.RiskSignals) dto.Tier0Outcome
 }
 
 // Tier1Client invokes the Tier 1 (encoder) inference service. The actual
@@ -87,6 +94,23 @@ type BreakerSet struct {
 	Rspamd *CircuitBreaker
 }
 
+// tier1ChanResult and rspamdChanResult are the messages each fan-out
+// goroutine writes to its 1-buffered channel. Carrying the outcome
+// alongside the latency and error means the main goroutine has
+// everything it needs to publish onto the result struct, emit metrics,
+// and decide degraded status without taking a mutex.
+type tier1ChanResult struct {
+	outcome dto.Tier1Outcome
+	latency time.Duration
+	err     error
+}
+
+type rspamdChanResult struct {
+	outcome dto.RspamdOutcome
+	latency time.Duration
+	err     error
+}
+
 // Evaluator is the multi-tier evaluation orchestrator. It is safe for
 // concurrent use; the only mutable state is via the circuit breakers.
 type Evaluator struct {
@@ -125,10 +149,18 @@ func NewEvaluator(cfg Config) *Evaluator {
 	return &Evaluator{cfg: cfg, log: cfg.Logger}
 }
 
-// Evaluate runs the full pipeline on req. The returned EvaluateResult is
-// always populated, even when downstream services fail — Degraded reports
-// whether any service was unavailable.
-func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.EvaluateResult, error) {
+// Evaluate runs the full pipeline on req with the supplied risk
+// signals. The returned EvaluateResult is always populated, even when
+// downstream services fail — Degraded reports whether any service was
+// unavailable.
+//
+// Signals are an explicit parameter (not read from req.Signals) so the
+// per-message and batch evaluation paths share an identical entry
+// signature. The previous wiring required a fallbackEvaluatorAdapter
+// to copy signals onto req before invoking Evaluate; threading them
+// directly removes that adapter and makes the signal source visible
+// at every call site.
+func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest, signals dto.RiskSignals) (dto.EvaluateResult, error) {
 	evalStart := time.Now()
 	res := dto.EvaluateResult{
 		MessageID:     req.MessageID,
@@ -144,7 +176,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 	if e.cfg.Tier0 == nil {
 		return res, errors.New("evaluate: Tier0 gate is required")
 	}
-	tier0 := e.cfg.Tier0.Apply(req)
+	tier0 := e.cfg.Tier0.Apply(req, signals)
 	res.Tier0 = &tier0
 	if tier0.Bypass || tier0.SkipML || tier0.RspamdOnly {
 		reason := tier0.Reason
@@ -174,17 +206,18 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 		return res, nil
 	}
 
-	// 2. Fan-out: run downstreams in parallel.
+	// 2. Fan-out: run downstreams in parallel. Each goroutine writes its
+	// outcome to a 1-buffered channel and the main goroutine merges them
+	// into `res` sequentially after wg.Wait(). Channels replace the prior
+	// shared-mutex pattern so there is no longer any concurrent write
+	// to the result struct, regardless of which downstream goroutines
+	// fan out today or tomorrow.
+	var wg sync.WaitGroup
 	var (
-		wg       sync.WaitGroup
-		mu       sync.Mutex
-		degraded []string
+		tier1Ch  = make(chan tier1ChanResult, 1)
+		rspamdCh = make(chan rspamdChanResult, 1)
 	)
-	markDegraded := func(svc string) {
-		mu.Lock()
-		degraded = append(degraded, svc)
-		mu.Unlock()
-	}
+	var degraded []string
 
 	// Rspamd runs on every non-bypassed message.
 	if e.cfg.Rspamd != nil {
@@ -195,18 +228,10 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 			defer cancel()
 			start := time.Now()
 			outcome, err := e.runRspamd(cctx, req)
-			if err != nil {
-				markDegraded("rspamd")
-				e.cfg.Observer.ObserveRspamd("error", time.Since(start))
-				e.cfg.Observer.ObserveDegraded("rspamd")
-				e.log.Warn("evaluate: rspamd unavailable",
-					slog.String("message_id", req.MessageID),
-					slog.Any("error", err))
-				return
-			}
-			e.cfg.Observer.ObserveRspamd("ok", time.Since(start))
-			res.Rspamd = &outcome
+			rspamdCh <- rspamdChanResult{outcome: outcome, latency: time.Since(start), err: err}
 		}()
+	} else {
+		close(rspamdCh)
 	}
 
 	// Tier 1 only runs if Tier 0 did not say "RspamdOnly" or "SkipML".
@@ -219,16 +244,43 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 			defer cancel()
 			start := time.Now()
 			outcome, err := e.runTier1(cctx, req)
-			if err != nil {
-				markDegraded("tier1")
-				e.cfg.Observer.ObserveTier1("error", time.Since(start))
-				e.cfg.Observer.ObserveDegraded("tier1")
-				e.log.Warn("evaluate: tier1 unavailable",
-					slog.String("message_id", req.MessageID),
-					slog.Any("error", err))
-				return
-			}
-			// Apply pass/flag thresholds.
+			tier1Ch <- tier1ChanResult{outcome: outcome, latency: time.Since(start), err: err}
+		}()
+	} else {
+		close(tier1Ch)
+	}
+	wg.Wait()
+
+	// Drain Rspamd channel. A nil-out channel (closed because Rspamd was
+	// not configured) yields the zero value, which we detect via the
+	// receive-ok form.
+	if rs, ok := <-rspamdCh; ok {
+		if rs.err != nil {
+			degraded = append(degraded, "rspamd")
+			e.cfg.Observer.ObserveRspamd("error", rs.latency)
+			e.cfg.Observer.ObserveDegraded("rspamd")
+			e.log.Warn("evaluate: rspamd unavailable",
+				slog.String("message_id", req.MessageID),
+				slog.Any("error", rs.err))
+		} else {
+			e.cfg.Observer.ObserveRspamd("ok", rs.latency)
+			outcome := rs.outcome
+			res.Rspamd = &outcome
+		}
+	}
+
+	// Drain Tier 1 channel and apply pass/flag thresholds before
+	// publishing the outcome onto res.
+	if t1, ok := <-tier1Ch; ok {
+		if t1.err != nil {
+			degraded = append(degraded, "tier1")
+			e.cfg.Observer.ObserveTier1("error", t1.latency)
+			e.cfg.Observer.ObserveDegraded("tier1")
+			e.log.Warn("evaluate: tier1 unavailable",
+				slog.String("message_id", req.MessageID),
+				slog.Any("error", t1.err))
+		} else {
+			outcome := t1.outcome
 			pass := e.cfg.Tier1PassThreshold
 			if tier0.Tier1ThresholdOverride > 0 {
 				pass = tier0.Tier1ThresholdOverride
@@ -244,37 +296,21 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 			case outcome.Flag:
 				verdict = "flag"
 			}
-			e.cfg.Observer.ObserveTier1(verdict, time.Since(start))
+			e.cfg.Observer.ObserveTier1(verdict, t1.latency)
 			// Surface the encoder's reason codes on the top-level
 			// result so the Categorizer can rule on them (its
-			// keyword weights look at res.ReasonCodes) and so audit
-			// / banner / dashboard consumers see the full set, not
-			// just the categoriser-derived ones. The batch path
-			// does the equivalent at batch.go:327; without this
-			// copy the per-message path produced verdicts with
-			// strictly fewer reason codes than the batch path for
-			// the same encoder response.
-			//
-			// RACE SAFETY: today the Rspamd goroutine only writes
-			// res.Rspamd (a distinct struct field) and never touches
-			// res.ReasonCodes, so this append is technically race-
-			// free under Go's struct-field-write model. But that
-			// invariant is fragile — if anyone later adds a second
-			// writer (e.g. Rspamd surfacing its own symbol names as
-			// reason codes) the race becomes silent and corrupting.
-			// Re-use the existing `mu` mutex (it already guards
-			// `degraded`) to make the write explicit. The cost is
-			// negligible: at most one uncontended Lock/Unlock per
-			// evaluation.
+			// keyword weights look at res.ReasonCodes) and so
+			// audit / banner / dashboard consumers see the full
+			// set, not just the categoriser-derived ones. The
+			// batch path does the equivalent at batch.go:327.
+			// Now that this runs on the main goroutine after the
+			// fan-out completes, the append needs no mutex.
 			if len(outcome.ReasonCodes) > 0 {
-				mu.Lock()
 				res.ReasonCodes = append(res.ReasonCodes, outcome.ReasonCodes...)
-				mu.Unlock()
 			}
 			res.Tier1 = &outcome
-		}()
+		}
 	}
-	wg.Wait()
 
 	// 3. Tier 2 escalation. We run Tier 2 sequentially after Tier 1 because
 	//    its decision depends on Tier 1's verdict (escalate vs pass vs flag)
@@ -289,7 +325,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 		outcome, err := e.runTier2(cctx, req, hint)
 		cancel()
 		if err != nil {
-			markDegraded("tier2")
+			degraded = append(degraded, "tier2")
 			e.cfg.Observer.ObserveTier2("error", time.Since(start))
 			e.cfg.Observer.ObserveDegraded("tier2")
 			e.log.Warn("evaluate: tier2 unavailable",
@@ -304,13 +340,13 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest) (dto.
 	// 4. Aggregate.
 	res.Score = ScoreWithAvailability(FromResultEx(&res), e.cfg.Weights)
 	if e.cfg.Categorizer != nil {
-		primary, secondary, reasons := e.cfg.Categorizer.Categorise(res, req.Signals)
+		primary, secondary, reasons := e.cfg.Categorizer.Categorise(res, signals)
 		res.Primary = primary
 		res.Secondary = secondary
 		res.ReasonCodes = append(res.ReasonCodes, reasons...)
 	}
 	if e.cfg.TierDecider != nil {
-		res.Tier = e.cfg.TierDecider.Decide(res.Score, res.Primary, req.Signals)
+		res.Tier = e.cfg.TierDecider.Decide(res.Score, res.Primary, signals)
 	}
 
 	if len(degraded) > 0 {

@@ -157,3 +157,73 @@ func TestValidate_BannerTokenSecretEmptyAllowedInProd(t *testing.T) {
 		t.Fatalf("empty BANNER_TOKEN_SECRET should be allowed (banners just suppress CTAs): %v", err)
 	}
 }
+
+func TestValidate_BannerTokenSecretLowEntropyRejected(t *testing.T) {
+	cases := map[string]string{
+		"all-same":            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"sequential":          "abcdefghijklmnopqrstuvwxyzABCDEF",
+		"two-byte-repeat":     "ababababababababababababababababab",
+		"eight-byte-repeat":   "passwordpasswordpasswordpassword",
+		"sixteen-byte-repeat": "abcdefghijklmnopabcdefghijklmnop",
+	}
+	for name, secret := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := validProdConfig()
+			cfg.Banner.TokenSecret = secret
+			if err := cfg.validate(); err == nil {
+				t.Fatalf("expected low-entropy secret %q (%d bytes) to be rejected", secret, len(secret))
+			}
+		})
+	}
+}
+
+func TestValidate_BannerTokenSecretHighEntropyAccepted(t *testing.T) {
+	// Real openssl-rand-style output: not all-same, not sequential,
+	// not a short repeat. Must pass.
+	cfg := validProdConfig()
+	cfg.Banner.TokenSecret = "Z9p/+kK4mQwT2cVbN7sA1yLrXgEoUjF6"
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("high-entropy BANNER_TOKEN_SECRET rejected: %v", err)
+	}
+}
+
+func TestValidate_OnboardingStateSecretLowEntropyRejected(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Onboarding.StateSecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected low-entropy ONBOARDING_STATE_SECRET to be rejected in prod")
+	}
+}
+
+func TestIsLowEntropy(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"empty", "", false},
+		{"single-char-allsame", "aaaaaa", true},
+		{"sequential-letters", "abcdefghij", true},
+		{"sequential-digits", "0123456789", true},
+		{"two-byte-period", "abababab", true},
+		{"four-byte-period", "abcdabcd", true},
+		// "abcabcabcab" — 3 distinct chars over 11 bytes —
+		// Shannon ≈ 1.58 bits/byte, well below the 3.0 threshold.
+		// The function is intentionally aggressive on tiny alphabets
+		// because real openssl-rand secrets have ≥ 30+ distinct bytes.
+		{"non-divisor-period-low-alphabet", "abcabcabcab", true},
+		{"real-random-base64", "Z9p/+kK4mQwT2cVbN7sA1yLrXgEoUjF6", false},
+		// Below 16 bytes the function will sometimes fire on benign
+		// short strings; that's fine because production validation
+		// only invokes it on secrets ≥ 32 bytes. We still pin the
+		// behaviour so future refactors don't regress it.
+		{"three-char-sequential", "xyz", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isLowEntropy(tc.in); got != tc.want {
+				t.Fatalf("isLowEntropy(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
