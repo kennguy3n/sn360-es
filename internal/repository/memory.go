@@ -30,6 +30,7 @@ func NewInMemoryRegistry() *Registry {
 		AuditLogs:              NewMemoryAuditLogs(),
 		SyncCheckpoints:        newMemorySyncCheckpoints(),
 		BehavioralBaselines:    newMemoryBehavioralBaselines(),
+		OrgGraphs:              newMemoryOrgGraphs(),
 	}
 }
 
@@ -840,4 +841,38 @@ func (m *memoryBehavioralBaselines) Get(_ context.Context, tenantID string, user
 		return nil, ErrNotFound
 	}
 	return &b, nil
+}
+
+// --- org graphs -------------------------------------------------------------
+
+type memoryOrgGraphs struct {
+	mu   sync.RWMutex
+	rows map[string]OrgGraphSnapshot // keyed by tenant_id
+}
+
+func newMemoryOrgGraphs() *memoryOrgGraphs {
+	return &memoryOrgGraphs{rows: map[string]OrgGraphSnapshot{}}
+}
+
+func (m *memoryOrgGraphs) Upsert(_ context.Context, s *OrgGraphSnapshot) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s.ID == "" {
+		s.ID = "mem-og-" + s.TenantID[:8]
+	}
+	if s.CreatedAt.IsZero() {
+		s.CreatedAt = time.Now().UTC()
+	}
+	m.rows[s.TenantID] = *s
+	return nil
+}
+
+func (m *memoryOrgGraphs) GetByTenant(_ context.Context, tenantID string) (*OrgGraphSnapshot, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	s, ok := m.rows[tenantID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return &s, nil
 }

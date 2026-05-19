@@ -544,6 +544,30 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
 
+  /v1/org-graph:
+    get:
+      tags: [directory]
+      summary: Get persisted org graph snapshot
+      description: |
+        Returns the latest org graph snapshot for the given tenant.
+        The graph is rebuilt after each directory sync cycle. PII fields
+        are stored as hashes, not raw emails.
+      parameters:
+        - in: query
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Org graph snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgGraphSnapshot"
+        "404":
+          $ref: "#/components/responses/Error"
+
 components:
   responses:
     Error:
@@ -796,3 +820,23 @@ components:
           type: string
         display_name:
           type: string
+
+    OrgGraphSnapshot:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+        built_at:
+          type: string
+          format: date-time
+        graph:
+          type: object
+          description: JSON blob of the org graph structure
+        high_risk_count:
+          type: integer
+        department_count:
+          type: integer
+        employee_count:
+          type: integer
+        group_count:
+          type: integer

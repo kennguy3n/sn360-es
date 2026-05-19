@@ -25,6 +25,7 @@ type DirectorySyncJobConfig struct {
 	Hasher          func(tenantID, input string) ([]byte, error)
 	Logger          *slog.Logger
 	SyncCheckpoints repository.SyncCheckpointRepository
+	OrgGraphs       repository.OrgGraphRepository
 }
 
 // DirectorySyncJob implements the Job interface for periodic
@@ -250,6 +251,42 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 					slog.String("group_id", dbGroupID),
 					slog.String("err", err.Error()))
 			}
+		}
+	}
+
+	// Persist org graph snapshot when the repository is wired.
+	if j.cfg.OrgGraphs != nil {
+		highRisk := make([]string, 0)
+		deptSet := make(map[string]struct{})
+		for i, u := range users {
+			if u.Department != "" {
+				deptSet[u.Department] = struct{}{}
+			}
+			if i < len(classResults) && classResults[i].Sensitivity >= agent.SensitivityHigh {
+				if h, hErr := j.cfg.Hasher(tenantID, u.Email); hErr == nil {
+					highRisk = append(highRisk, fmt.Sprintf("%x", h))
+				}
+			}
+		}
+		graphData, _ := json.Marshal(map[string]any{
+			"employees":   len(users),
+			"groups":      len(groups),
+			"departments": len(deptSet),
+			"high_risk":   len(highRisk),
+		})
+		snap := &repository.OrgGraphSnapshot{
+			TenantID:        tenantID,
+			BuiltAt:         time.Now().UTC(),
+			GraphJSON:       graphData,
+			HighRiskIDs:     highRisk,
+			DepartmentCount: len(deptSet),
+			EmployeeCount:   len(users),
+			GroupCount:      len(groups),
+		}
+		if gErr := j.cfg.OrgGraphs.Upsert(ctx, snap); gErr != nil {
+			j.cfg.Logger.Warn("directory sync: org graph upsert failed",
+				slog.String("tenant_id", tenantID),
+				slog.String("err", gErr.Error()))
 		}
 	}
 

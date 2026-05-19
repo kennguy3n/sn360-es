@@ -2245,6 +2245,11 @@ func buildMux(app *application) (http.Handler, error) {
 		})
 	}
 
+	if app.repos.OrgGraphs != nil {
+		orgGraphH := handler.NewOrgGraphHandler(logger, app.repos.OrgGraphs)
+		mux.Handle("/v1/org-graph", orgGraphH)
+	}
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		logger.Debug("http: unmatched route", slog.String("path", r.URL.Path))
 		w.WriteHeader(http.StatusNotFound)
@@ -3290,6 +3295,7 @@ func buildDirectorySyncRunner(cfg *config.Config, logger *slog.Logger, app *appl
 		Hasher:          hasherFn,
 		Logger:          logger,
 		SyncCheckpoints: app.repos.SyncCheckpoints,
+		OrgGraphs:       app.repos.OrgGraphs,
 	})
 	if err != nil {
 		logger.Warn("sn360-es: directory sync worker init failed",

@@ -370,6 +370,25 @@ type UserBehavioralBaselineRepository interface {
 	Get(ctx context.Context, tenantID string, userHash, senderDomainHash []byte) (*UserBehavioralBaseline, error)
 }
 
+// OrgGraphSnapshot is the persisted output of onboarding.Project().
+type OrgGraphSnapshot struct {
+	ID              string
+	TenantID        string
+	BuiltAt         time.Time
+	GraphJSON       []byte
+	HighRiskIDs     []string
+	DepartmentCount int
+	EmployeeCount   int
+	GroupCount      int
+	CreatedAt       time.Time
+}
+
+// OrgGraphRepository persists org graph snapshots.
+type OrgGraphRepository interface {
+	Upsert(ctx context.Context, s *OrgGraphSnapshot) error
+	GetByTenant(ctx context.Context, tenantID string) (*OrgGraphSnapshot, error)
+}
+
 // Registry bundles all repositories for convenient wiring.
 type Registry struct {
 	Tenants                TenantRepository
@@ -386,4 +405,5 @@ type Registry struct {
 	AuditLogs              AuditLogRepository
 	SyncCheckpoints        SyncCheckpointRepository
 	BehavioralBaselines    UserBehavioralBaselineRepository
+	OrgGraphs              OrgGraphRepository
 }

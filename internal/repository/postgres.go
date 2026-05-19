@@ -36,6 +36,7 @@ func NewPostgresRegistry(db *postgres.DB) *Registry {
 		AuditLogs:              NewPgAuditLogs(db),
 		SyncCheckpoints:        &pgSyncCheckpoints{db: db},
 		BehavioralBaselines:    &pgBehavioralBaselines{db: db},
+		OrgGraphs:              &pgOrgGraphs{db: db},
 	}
 }
 
@@ -981,6 +982,49 @@ SELECT id, tenant_id, user_email_hash, sender_domain_hash,
 		b.LastSeenAt = lastSeen.Time
 	}
 	return &b, nil
+}
+
+// --- org graphs -------------------------------------------------------------
+
+type pgOrgGraphs struct{ db *postgres.DB }
+
+func (p *pgOrgGraphs) Upsert(ctx context.Context, s *OrgGraphSnapshot) error {
+	if s.ID == "" {
+		s.ID = uuid.NewString()
+	}
+	_, err := p.db.ExecContext(ctx, `
+INSERT INTO org_graphs
+    (id, tenant_id, built_at, graph_json, high_risk_user_ids,
+     department_count, employee_count, group_count, created_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+ON CONFLICT (tenant_id) DO UPDATE SET
+    built_at=EXCLUDED.built_at,
+    graph_json=EXCLUDED.graph_json,
+    high_risk_user_ids=EXCLUDED.high_risk_user_ids,
+    department_count=EXCLUDED.department_count,
+    employee_count=EXCLUDED.employee_count,
+    group_count=EXCLUDED.group_count
+`, s.ID, s.TenantID, s.BuiltAt, s.GraphJSON,
+		pq.Array(s.HighRiskIDs), s.DepartmentCount, s.EmployeeCount, s.GroupCount)
+	return err
+}
+
+func (p *pgOrgGraphs) GetByTenant(ctx context.Context, tenantID string) (*OrgGraphSnapshot, error) {
+	row := p.db.QueryRowContext(ctx, `
+SELECT id, tenant_id, built_at, graph_json, high_risk_user_ids,
+       department_count, employee_count, group_count, created_at
+  FROM org_graphs WHERE tenant_id=$1`, tenantID)
+	var s OrgGraphSnapshot
+	err := row.Scan(&s.ID, &s.TenantID, &s.BuiltAt, &s.GraphJSON,
+		pq.Array(&s.HighRiskIDs), &s.DepartmentCount, &s.EmployeeCount,
+		&s.GroupCount, &s.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
 }
 
 func stringOrEmpty(b []byte) string {
