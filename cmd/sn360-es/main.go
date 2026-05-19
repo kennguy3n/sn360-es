@@ -3616,9 +3616,10 @@ func buildDirectoryClient(cfg *config.Config, logger *slog.Logger) agent.Directo
 			return nil
 		}
 		dc, derr := outlook.NewDirectoryClient(outlook.DirectoryClientConfig{
-			TokenSource: tokens,
-			BaseURL:     cfg.O365.BaseURL,
-			TenantID:    cfg.O365.TenantID,
+			TokenSource:         tokens,
+			BaseURL:             cfg.O365.BaseURL,
+			TenantID:            cfg.O365.TenantID,
+			ResolveNestedGroups: cfg.O365.ResolveNestedGroups,
 		})
 		if derr != nil {
 			logger.Warn("sn360-es: directory client (outlook) wire failed",

@@ -315,6 +315,9 @@ type O365 struct {
 	// TokenURL overrides https://login.microsoftonline.com when the
 	// caller needs to point at a mock OAuth server.
 	TokenURL string
+	// ResolveNestedGroups enables transitiveMemberOf queries so
+	// users inherit parent-group memberships.
+	ResolveNestedGroups bool
 }
 
 // HasGmail reports whether enough fields are set to build a Gmail
@@ -575,9 +578,10 @@ func Load() (Config, error) {
 			ClientSecret: getStr("O365_CLIENT_SECRET", ""),
 			// TenantID has the same registry-key invariant as
 			// GWS.Domain above — trim at the source.
-			TenantID: strings.TrimSpace(getStr("O365_TENANT_ID", "")),
-			BaseURL:  getStr("O365_BASE_URL", ""),
-			TokenURL: getStr("O365_TOKEN_URL", ""),
+			TenantID:            strings.TrimSpace(getStr("O365_TENANT_ID", "")),
+			BaseURL:             getStr("O365_BASE_URL", ""),
+			TokenURL:            getStr("O365_TOKEN_URL", ""),
+			ResolveNestedGroups: getBool("O365_RESOLVE_NESTED_GROUPS", true),
 		},
 		Ingestion: Ingestion{
 			Enabled:         getBool("INGESTION_ENABLED", false),

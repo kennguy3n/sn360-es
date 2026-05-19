@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
 )
@@ -24,19 +25,21 @@ import (
 // DirectoryClientConfig configures a DirectoryClient. BaseURL
 // defaults to https://graph.microsoft.com/v1.0 when blank.
 type DirectoryClientConfig struct {
-	TokenSource TokenSource
-	HTTPClient  *http.Client
-	BaseURL     string
-	TenantID    string
+	TokenSource         TokenSource
+	HTTPClient          *http.Client
+	BaseURL             string
+	TenantID            string
+	ResolveNestedGroups bool // use transitiveMemberOf instead of memberOf
 }
 
 // DirectoryClient implements agent.DirectoryClient against Microsoft
 // Graph.
 type DirectoryClient struct {
-	http     *http.Client
-	tokens   TokenSource
-	baseURL  string
-	tenantID string
+	http                *http.Client
+	tokens              TokenSource
+	baseURL             string
+	tenantID            string
+	resolveNestedGroups bool
 }
 
 // NewDirectoryClient builds a DirectoryClient. Requires a token
@@ -53,10 +56,11 @@ func NewDirectoryClient(cfg DirectoryClientConfig) (*DirectoryClient, error) {
 		base = "https://graph.microsoft.com/v1.0"
 	}
 	return &DirectoryClient{
-		http:     cfg.HTTPClient,
-		tokens:   cfg.TokenSource,
-		baseURL:  base,
-		tenantID: cfg.TenantID,
+		http:                cfg.HTTPClient,
+		tokens:              cfg.TokenSource,
+		baseURL:             base,
+		tenantID:            cfg.TenantID,
+		resolveNestedGroups: cfg.ResolveNestedGroups,
 	}, nil
 }
 
@@ -187,7 +191,84 @@ func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]age
 		}
 		endpoint = list.NextLink
 	}
+
+	// Resolve transitive (nested) group memberships when enabled.
+	if c.resolveNestedGroups {
+		c.resolveTransitiveGroups(ctx, out)
+	}
+
 	return out, nil
+}
+
+// transitiveGroupMember is the response element for transitiveMemberOf.
+type transitiveGroupMember struct {
+	ODataType   string `json:"@odata.type"`
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+}
+
+type transitiveGroupList struct {
+	Value    []transitiveGroupMember `json:"value"`
+	NextLink string                  `json:"@odata.nextLink,omitempty"`
+}
+
+// resolveTransitiveGroups replaces each user's GroupIDs with the full
+// transitive set from GET /users/{id}/transitiveMemberOf. Uses bounded
+// concurrency (10 goroutines) to avoid N+1 latency.
+func (c *DirectoryClient) resolveTransitiveGroups(ctx context.Context, users []agent.DiscoveredUser) {
+	sem := make(chan struct{}, 10)
+	var wg sync.WaitGroup
+
+	type result struct {
+		idx      int
+		groupIDs []string
+	}
+	results := make([]result, len(users))
+
+	for i := range users {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			groups, err := c.fetchTransitiveGroups(ctx, users[idx].ID)
+			if err != nil {
+				return // keep existing direct groups on failure
+			}
+			results[idx] = result{idx: idx, groupIDs: groups}
+		}(i)
+	}
+	wg.Wait()
+
+	for _, r := range results {
+		if r.groupIDs != nil {
+			users[r.idx].GroupIDs = r.groupIDs
+		}
+	}
+}
+
+// fetchTransitiveGroups fetches all transitive group memberships for a user.
+func (c *DirectoryClient) fetchTransitiveGroups(ctx context.Context, userID string) ([]string, error) {
+	endpoint := c.baseURL + "/users/" + url.PathEscape(userID) + "/transitiveMemberOf?" + url.Values{
+		"$select": []string{"id,displayName,@odata.type"},
+		"$top":    []string{"200"},
+	}.Encode()
+
+	var groupIDs []string
+	for endpoint != "" {
+		var list transitiveGroupList
+		if err := c.do(ctx, http.MethodGet, endpoint, &list); err != nil {
+			return nil, fmt.Errorf("outlook: transitiveMemberOf: %w", err)
+		}
+		for _, m := range list.Value {
+			if m.ODataType == "#microsoft.graph.group" {
+				groupIDs = append(groupIDs, m.ID)
+			}
+		}
+		endpoint = list.NextLink
+	}
+	return groupIDs, nil
 }
 
 // graphDeltaUserList is the response shape for /users/delta queries.
