@@ -107,7 +107,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	// es.evaluate.result → ingestion-action chain: render the banner,
 	// apply the native tier label, rewrite URLs for risky tiers, and
 	// quarantine on Blocked.
-	if a.bannerRenderer != nil || a.urlRewriter != nil || a.releaseSvc != nil {
+	if a.bannerRenderer != nil || a.urlRewriter != nil || a.quarantineSvc != nil || a.labelApplier != nil {
 		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.result", a.handleIngestionAction,
 			events.WithDurable("ingestion-action"),
 			events.WithMaxDeliver(3))
@@ -314,6 +314,9 @@ func (a *application) handleEvaluateResult(ctx context.Context, msg events.Messa
 		return nil
 	}
 	row := evaluateResultRow(res, msg)
+	if a.repos.EvaluationResults == nil {
+		return nil
+	}
 	if err := a.repos.EvaluationResults.Create(ctx, row); err != nil {
 		return fmt.Errorf("persist evaluate.result: %w", err)
 	}
