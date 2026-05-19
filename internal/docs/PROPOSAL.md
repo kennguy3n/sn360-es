@@ -781,19 +781,18 @@ Employee Vulnerability Score = f(
 
 ---
 
-## 9. Development Phases
+## 9. Implementation Scope
 
-| Phase | Scope |
+| Area | Scope |
 |---|---|
-| **Phase 1** | Tier 0 gates + graceful degradation + NATS JetStream |
-| **Phase 2** | Privacy layer (`pkg/privacy/`), PII stripping, per-tenant encryption |
-| **Phase 3** | Tier 1 encoder client + micro-batching |
-| **Phase 4** | Zero-admin AI agents (onboarding, tuning, support) |
-| **Phase 5** | Tiered banner + native label UX (Section 6) + URL rewriting |
-| **Phase 6** | Email education platform (simulations, micro-lessons, resilience scoring) |
-| **Phase 7** | Enriched onboarding (org graph, vulnerability scoring, expanded relationships) |
-| **Phase 8** | Pre-send / pre-open add-ins + admin dashboard + quarantine + user-reported phishing |
+| **Event Bus + Detection** | Tier 0 gates + graceful degradation + NATS JetStream |
+| **Privacy** | Privacy layer (`pkg/privacy/`), PII stripping, per-tenant encryption |
+| **Tier 1 Encoder** | Tier 1 encoder client + micro-batching |
+| **AI Agents** | Zero-admin AI agents (onboarding, tuning, support) |
+| **Tiered UX** | Tiered banner + native label UX (Section 6) + URL rewriting |
+| **Education** | Email education platform (simulations, micro-lessons, resilience scoring) |
+| **Relationship Intelligence** | Org graph, vulnerability scoring, expanded relationships |
+| **Add-Ins + Dashboard** | Pre-send / pre-open add-ins + admin dashboard + quarantine + user-reported phishing |
 
-Detailed development history with code pointers is tracked in
-[`PHASES.md`](./PHASES.md); a per-task changelog is kept in
-[`PROGRESS.md`](./PROGRESS.md).
+Code pointers for every package are documented in
+[`PHASES.md`](./PHASES.md).

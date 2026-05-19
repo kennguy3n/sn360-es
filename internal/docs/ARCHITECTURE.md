@@ -522,9 +522,10 @@ and allows using a smaller, cheaper Redis instance.
 
 ## 8. End-User Label & Banner Architecture
 
-This section is the architectural complement to `PROPOSAL.md` Section 6
-("End-User Label & Banner UX"). It defines how the tiered banner + native
-label system is implemented across packages.
+This section defines how the tiered banner + native label system is
+implemented across packages. For the design rationale and UX
+specification, see the banner section in
+[`PROPOSAL.md`](./PROPOSAL.md).
 
 ### 8.1 Action Pipeline
 
