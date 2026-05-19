@@ -78,6 +78,7 @@ func run() error {
 		return fmt.Errorf("http server: %w", err)
 	}
 
+	app.draining.Store(true)
 	app.StopConsumers(logger)
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -85,8 +86,6 @@ func run() error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("sn360-es: http shutdown error", slog.Any("error", err))
 	}
-
-	app.draining.Store(true)
 
 	app.WaitBackground()
 

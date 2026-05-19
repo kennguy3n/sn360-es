@@ -221,11 +221,16 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		app.feedbackSvc = action.NewFeedbackService(logger, app.jwtIssuer, eventBus, nil)
 	}
 
+	// Shared quarantine store — a single instance is used by both the
+	// release-service path and the provider-aware quarantine service so
+	// that writes through one are visible to the other (critical when the
+	// backing store is in-memory rather than Redis).
+	qstore := newQuarantineStore(app.redis)
+
 	// Quarantine service + release service.
 	if qencryptor, eerr := buildURLEncryptor(cfg, logger); eerr != nil {
 		logger.Warn("sn360-es: quarantine encryptor init failed", slog.Any("error", eerr))
 	} else {
-		qstore := newQuarantineStore(app.redis)
 		qsvc, qerr := action.NewQuarantineService(action.QuarantineConfig{
 			Logger:    logger,
 			Store:     qstore,
@@ -518,9 +523,8 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		app.labelApplier = action.NewLabelApplier(logger, labelCache, app.providers.labelProviders()...)
 	}
 
-	// Provider-aware quarantine service.
+	// Provider-aware quarantine service (reuses the shared qstore).
 	if qencryptor, eerr := buildURLEncryptor(cfg, logger); eerr == nil && app.providers != nil && app.providers.hasAny() {
-		qstore := newQuarantineStore(app.redis)
 		qsvc, qerr := action.NewQuarantineService(action.QuarantineConfig{
 			Logger:    logger,
 			Providers: app.providers.quarantineProviders(),
