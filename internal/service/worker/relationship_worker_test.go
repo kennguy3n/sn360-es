@@ -78,6 +78,12 @@ func (f *fakeVendorRepo) GetByDomain(_ context.Context, _, _ string) (*repositor
 func (f *fakeVendorRepo) ListApproved(_ context.Context, _ string) ([]repository.Vendor, error) {
 	return nil, nil
 }
+func (f *fakeVendorRepo) List(_ context.Context, _ string, _ int) ([]repository.Vendor, error) {
+	return nil, nil
+}
+func (f *fakeVendorRepo) Delete(_ context.Context, _, _ string) error {
+	return nil
+}
 func (f *fakeVendorRepo) Upsert(_ context.Context, v *repository.Vendor) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
