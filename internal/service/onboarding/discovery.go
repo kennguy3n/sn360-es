@@ -238,7 +238,7 @@ func IsHighRiskGroupName(name string) bool {
 		// Existing
 		"finance", "exec", "c-suite", "leadership", "hr ", "people ops", "legal", "it admin", "sysadmin", "security",
 		// Technology
-		"devops", "site reliability", "sre", "database admin", "dba", "cloud admin",
+		"devops", "site reliability", "sre", "database admin", "dba ", "cloud admin",
 		"infrastructure", "platform engineer", "network ops", "secops", "devsecops",
 		// M&A / Strategy
 		"m&a", "mergers", "corporate development", "corp dev", "investor relation", "board of",

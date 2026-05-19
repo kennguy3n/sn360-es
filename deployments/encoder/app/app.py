@@ -356,16 +356,65 @@ _TIER_KEYWORDS: dict[str, list[str]] = {
         "代表取締役", "社長", "대표이사", "창업자",
     ],
     "high": [
+        # English — Finance / HR / Legal
         "finance", "treasury", "controller", "human resources",
-        " legal", "compliance", "security engineer", "data engineer",
-        "physician", "pharmacist", "medical director",
-        "research director", "data scientist", "m&a",
-        "corporate development", "investor relations",
+        " legal", "compliance", "general counsel",
+        # English — Technology
+        "site reliability engineer", "security engineer", "security analyst",
+        "cloud engineer", "network engineer", "data engineer",
+        # English — M&A / Strategy
+        "m&a", "corporate development", "investor relations",
+        "board secretary", "corporate strategy",
+        # English — Healthcare
+        "physician", "pharmacist", "medical director", "chief medical",
+        "clinical director", "surgeon",
+        # English — R&D
+        "research director", "data scientist", "ml engineer", "patent",
+        # Japanese
+        "財務", "経理", "人事", "法務", "コンプライアンス",
+        "データベースエンジニア", "セキュリティエンジニア", "クラウドエンジニア",
+        "医師", "薬剤師", "看護師長", "医療情報",
+        "経営企画", "事業開発", "投資家向け広報",
+        # Korean
+        "재무", "회계", "인사", "법무", "컴플라이언스",
+        "보안 엔지니어", "클라우드 엔지니어", "데이터 엔지니어",
+        "의사", "약사", "간호부장",
+        "경영기획", "사업개발", "투자자 관계",
+        # Thai
+        "การเงิน", "บัญชี", "ทรัพยากรบุคคล", "กฎหมาย",
+        "แพทย์", "เภสัชกร", "หัวหน้าพยาบาล",
+        # Vietnamese
+        "tài chính", "kế toán", "nhân sự", "pháp lý",
+        "bác sĩ", "dược sĩ", "trưởng phòng y tế",
+        "phát triển doanh nghiệp", "quan hệ nhà đầu tư",
+        # Chinese
+        "财务", "会计", "人力资源", "法务", "合规",
+        "安全工程师", "云工程师", "数据工程师",
+        "医生", "药剂师", "护士长", "医疗信息",
+        "企业发展", "并购", "投资者关系", "董事会秘书",
     ],
     "elevated": [
-        "executive assistant", "procurement", "devops engineer",
-        "devops", "nurse", "paralegal", "sales director",
-        "customer success", "office manager",
+        # English
+        "executive assistant", "admin assistant", "office manager",
+        "procurement", "vendor management",
+        "devops engineer", "devops", "junior dba", "help desk manager",
+        "nurse", "lab technician", "radiologist",
+        "paralegal", "privacy officer", "data protection officer",
+        "sales director", "customer success",
+        # Japanese
+        "秘書", "調達", "購買", "事務長",
+        "看護師", "検査技師", "パラリーガル",
+        # Korean
+        "비서", "조달", "사무장",
+        "간호사", "검사기사", "법률보조원",
+        # Thai
+        "ผู้ช่วยผู้บริหาร", "จัดซื้อ", "พยาบาล",
+        # Vietnamese
+        "trợ lý giám đốc", "mua sắm",
+        "y tá", "kỹ thuật viên xét nghiệm",
+        # Chinese
+        "行政助理", "采购", "供应商管理", "办公室经理",
+        "护士", "检验技师", "法律助理",
     ],
 }
 
@@ -407,7 +456,7 @@ def _classify_role_sensitivity(item: RoleClassifyItem) -> RoleClassifyResult:
     return RoleClassifyResult(
         index=item.index,
         sensitivity="default",
-        confidence=0.70,
+        confidence=0.50,
         reason="no matching keywords",
     )
 
