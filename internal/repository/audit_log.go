@@ -64,16 +64,19 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 }
 
 // ListByTenant returns audit entries for a tenant since the given time.
+//
+// LIMIT NULLIF($3, 0) treats limit=0 as "no limit" by collapsing the
+// parameter to NULL (PostgreSQL accepts NULL as an unbounded LIMIT).
+// Keeps the query fully parameterized so the planner can cache one
+// prepared plan instead of one per distinct limit value.
 func (p *pgAuditLogs) ListByTenant(ctx context.Context, tenantID string, since time.Time, limit int) ([]AuditEntry, error) {
-	query := `
+	const query = `
 SELECT id, tenant_id, actor, action, target_type, target_hash, correlation_id, metadata, created_at
 FROM audit_logs
 WHERE tenant_id=$1 AND created_at >= $2
-ORDER BY created_at DESC`
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
-	}
-	rows, err := p.db.QueryContext(ctx, query, tenantID, since)
+ORDER BY created_at DESC
+LIMIT NULLIF($3, 0)`
+	rows, err := p.db.QueryContext(ctx, query, tenantID, since, limit)
 	if err != nil {
 		return nil, fmt.Errorf("audit_log: list: %w", err)
 	}

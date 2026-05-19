@@ -63,6 +63,16 @@ type CircuitBreaker struct {
 	consecutiveSuccess  int
 	openedAt            time.Time
 
+	// halfOpenProbe gates the single trial request that the breaker
+	// permits in StateHalfOpen. The first caller that wins the
+	// compare-and-swap from false → true gets to call the
+	// (presumably-recovered) downstream; every concurrent caller
+	// receives ErrCircuitOpen instead of stampeding the dependency
+	// that just came back from an outage. The slot is released by
+	// onSuccess / onFailure (or by a transition that leaves
+	// StateHalfOpen).
+	halfOpenProbe atomic.Bool
+
 	// totals are atomics so metrics can be sampled without taking the lock.
 	totalSuccess      atomic.Uint64
 	totalFailure      atomic.Uint64
@@ -122,14 +132,21 @@ func (cb *CircuitBreaker) allow() bool {
 	case StateClosed:
 		return true
 	case StateHalfOpen:
-		// Allow exactly one trial at a time. We don't track in-flight
-		// counters; the half-open state itself acts as the gate because
-		// onSuccess / onFailure transitions immediately.
-		return true
+		// Exactly one probe in flight at a time. Concurrent callers
+		// race on a single-slot CAS — whoever wins flips the slot
+		// from false→true and gets to call the downstream; everyone
+		// else is short-circuited so a recovering service isn't
+		// re-flooded the instant the open window expires.
+		return cb.halfOpenProbe.CompareAndSwap(false, true)
 	case StateOpen:
 		if time.Since(cb.openedAt) >= cb.cfg.OpenTimeout {
 			cb.transition(StateHalfOpen)
-			return true
+			// We're the first caller to discover the timer elapsed
+			// and we hold the mutex — claim the probe slot before
+			// any concurrent caller can. transition() has already
+			// reset the slot to false, so this CAS is guaranteed
+			// to succeed.
+			return cb.halfOpenProbe.CompareAndSwap(false, true)
 		}
 		return false
 	default:
@@ -146,6 +163,11 @@ func (cb *CircuitBreaker) onSuccess() {
 		cb.consecutiveSuccess++
 		if cb.consecutiveSuccess >= cb.cfg.SuccessThreshold {
 			cb.transition(StateClosed)
+		} else {
+			// Release the probe slot so the next half-open trial
+			// can run while we wait for the success-threshold count
+			// to be reached.
+			cb.halfOpenProbe.Store(false)
 		}
 	case StateClosed:
 		cb.consecutiveFailures = 0
@@ -163,7 +185,8 @@ func (cb *CircuitBreaker) onFailure() {
 			cb.transition(StateOpen)
 		}
 	case StateHalfOpen:
-		// A single half-open failure trips back to open.
+		// A single half-open failure trips back to open; transition()
+		// resets the probe slot for the next half-open window.
 		cb.transition(StateOpen)
 	}
 }
@@ -176,6 +199,12 @@ func (cb *CircuitBreaker) transition(to State) {
 	if to == StateOpen {
 		cb.openedAt = time.Now()
 	}
+	// Reset the probe slot on every state change. Entering half-open
+	// opens a fresh slot for the next trial; leaving half-open
+	// (either back to open after a failure, or into closed after
+	// enough successes) releases the slot so a future re-entry into
+	// half-open starts clean.
+	cb.halfOpenProbe.Store(false)
 	if cb.cfg.OnStateChange != nil && from != to {
 		cb.cfg.OnStateChange(from, to)
 	}

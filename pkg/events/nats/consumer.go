@@ -14,6 +14,15 @@ import (
 	"github.com/kennguy3n/sn360-es/pkg/events"
 )
 
+// MessageObserver receives per-delivery observability hooks. It is
+// invoked by the Consumer after a message is decoded but before the
+// handler runs, so the callback can emit consumer-lag metrics, log
+// structured delivery records, etc.
+//
+// Implementations must be safe for concurrent use and must not block
+// (the consumer dispatch loop runs synchronously).
+type MessageObserver func(stream, subject string, lag time.Duration)
+
 // Consumer wraps a JetStream durable consumer plus a long-running goroutine
 // that drives a MessageHandler. It implements events.Subscription.
 type Consumer struct {
@@ -25,6 +34,16 @@ type Consumer struct {
 	handler     events.MessageHandler
 	dlqProducer DLQProducer
 	logger      *slog.Logger
+
+	// parentCtx is the long-lived root context used to derive each
+	// handler invocation. It is cancelled by Close so in-flight
+	// handlers can observe shutdown and abort cleanly. Distinct from
+	// the short-lived ctx passed to NewConsumer (which only governs
+	// the CreateOrUpdateConsumer setup call).
+	parentCtx    context.Context
+	parentCancel context.CancelFunc
+
+	observer MessageObserver
 
 	cons jetstream.Consumer
 	cc   jetstream.ConsumeContext
@@ -44,6 +63,9 @@ type DLQProducer interface {
 //
 // The subject must already be covered by a stream (see EnsureStream). The
 // caller passes the resolved options struct; defaults are not re-applied.
+//
+// To attach an observer (e.g. for consumer-lag metrics), use
+// NewConsumerWithObserver instead.
 func NewConsumer(
 	ctx context.Context,
 	client *Client,
@@ -53,6 +75,23 @@ func NewConsumer(
 	dlq DLQProducer,
 	resolved events.SubscribeOptions,
 	logger *slog.Logger,
+) (*Consumer, error) {
+	return NewConsumerWithObserver(ctx, client, stream, subject, handler, dlq, resolved, logger, nil)
+}
+
+// NewConsumerWithObserver is like NewConsumer but also wires a
+// MessageObserver invoked on every successful dispatch. A nil
+// observer is equivalent to NewConsumer.
+func NewConsumerWithObserver(
+	ctx context.Context,
+	client *Client,
+	stream string,
+	subject string,
+	handler events.MessageHandler,
+	dlq DLQProducer,
+	resolved events.SubscribeOptions,
+	logger *slog.Logger,
+	observer MessageObserver,
 ) (*Consumer, error) {
 	if client == nil {
 		return nil, errors.New("nats: client is required")
@@ -95,16 +134,24 @@ func NewConsumer(
 		return nil, fmt.Errorf("nats: create consumer %s on %s: %w", resolved.Durable, stream, err)
 	}
 
+	// Build a dedicated parent context for dispatch. It deliberately
+	// does NOT chain off `ctx` because callers cancel ctx after
+	// NewConsumer returns; the dispatch loop must outlive that.
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+
 	c := &Consumer{
-		client:      client,
-		stream:      stream,
-		subject:     subject,
-		durable:     resolved.Durable,
-		opts:        resolved,
-		handler:     handler,
-		dlqProducer: dlq,
-		logger:      logger.With(slog.String("stream", stream), slog.String("durable", resolved.Durable)),
-		cons:        cons,
+		client:       client,
+		stream:       stream,
+		subject:      subject,
+		durable:      resolved.Durable,
+		opts:         resolved,
+		handler:      handler,
+		dlqProducer:  dlq,
+		logger:       logger.With(slog.String("stream", stream), slog.String("durable", resolved.Durable)),
+		parentCtx:    parentCtx,
+		parentCancel: parentCancel,
+		observer:     observer,
+		cons:         cons,
 	}
 
 	cc, err := cons.Consume(c.dispatch,
@@ -131,6 +178,14 @@ func pickFilter(subject, override string) string {
 func (c *Consumer) Subject() string { return c.subject }
 
 // Close stops delivery and waits for in-flight handlers.
+//
+// Order is significant: cc.Stop() first prevents the JetStream
+// library from dispatching new messages, then parentCancel signals
+// to in-flight handlers that the consumer is shutting down, then
+// wg.Wait() blocks until they return. Cancelling parentCtx before
+// Stop would race against handlers that were already on the
+// dispatch goroutine but had not yet returned from the channel
+// receive.
 func (c *Consumer) Close() error {
 	c.mu.Lock()
 	if c.closed {
@@ -142,6 +197,9 @@ func (c *Consumer) Close() error {
 
 	if c.cc != nil {
 		c.cc.Stop()
+	}
+	if c.parentCancel != nil {
+		c.parentCancel()
 	}
 	c.wg.Wait()
 	return nil
@@ -159,11 +217,21 @@ func (c *Consumer) dispatch(jm jetstream.Msg) {
 	// an additional listener and complicate testing).
 	meta, _ := jm.Metadata()
 	delivery := uint64(0)
+	var msgTimestamp time.Time
 	if meta != nil {
 		delivery = meta.NumDelivered
+		msgTimestamp = meta.Timestamp
 	}
 
-	ctx := contextFromMessage(msg)
+	// Consumer-lag observation: how long the message was sitting on the
+	// stream before this consumer picked it up. Emitted before the
+	// handler runs so the metric reflects bus latency, not handler
+	// latency.
+	if c.observer != nil && !msgTimestamp.IsZero() {
+		c.observer(c.stream, jm.Subject(), time.Since(msgTimestamp))
+	}
+
+	ctx := c.contextFromMessage(msg)
 	err := c.handler(ctx, msg)
 	if err == nil {
 		// Handler is responsible for explicit Ack inside, but most handlers
@@ -252,11 +320,46 @@ func splitFirstSegment(subject string) string {
 	return ""
 }
 
-// contextFromMessage embeds the message's correlation ID etc. into a context
-// used by the handler. Right now we just pass through the background ctx;
-// future telemetry middleware will replace this.
-func contextFromMessage(_ events.Message) context.Context {
-	return context.Background()
+// contextFromMessage derives a per-delivery context from the
+// Consumer's parent context, then attaches the well-known bus
+// identifiers (correlation, tenant, message, event-type) and the
+// W3C Trace Context propagated through traceparent/tracestate
+// headers. Handlers can therefore:
+//
+//  1. Observe shutdown via ctx.Done() because the context chains off
+//     c.parentCtx, which Close cancels.
+//  2. Read identifiers via events.CorrelationIDFromContext etc.
+//     without re-parsing headers on every call site.
+//  3. Start child spans that link back to the publisher's span,
+//     completing distributed traces across the bus.
+//
+// If the message has no traceparent header, the returned context is
+// effectively just parentCtx + value bag — no synthetic span is
+// fabricated.
+func (c *Consumer) contextFromMessage(msg events.Message) context.Context {
+	parent := c.parentCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	headers := msg.Headers()
+
+	ctx := parent
+	if v := headers[events.HeaderCorrelationID]; v != "" {
+		ctx = events.WithCorrelationIDContext(ctx, v)
+	}
+	if v := headers[events.HeaderTenantID]; v != "" {
+		ctx = events.WithTenantIDContext(ctx, v)
+	}
+	if v := headers[events.HeaderMessageID]; v != "" {
+		ctx = events.WithMessageIDContext(ctx, v)
+	}
+	if v := headers[events.HeaderEventType]; v != "" {
+		ctx = events.WithEventTypeContext(ctx, v)
+	}
+	// Reconstruct the W3C trace context (if any) on top of the
+	// values we just stamped. Returns parent unchanged when
+	// headers carry no traceparent.
+	return events.ExtractTraceContext(ctx, headers)
 }
 
 // --- message adapter --------------------------------------------------------

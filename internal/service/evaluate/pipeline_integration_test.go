@@ -26,10 +26,12 @@ import (
 // fakeTier0 returns a non-bypassing outcome by default; tests can override
 // individual fields via the closure below.
 type fakeTier0 struct {
-	apply func(dto.EvaluateRequest) dto.Tier0Outcome
+	apply func(dto.EvaluateRequest, dto.RiskSignals) dto.Tier0Outcome
 }
 
-func (f fakeTier0) Apply(req dto.EvaluateRequest) dto.Tier0Outcome { return f.apply(req) }
+func (f fakeTier0) Apply(req dto.EvaluateRequest, signals dto.RiskSignals) dto.Tier0Outcome {
+	return f.apply(req, signals)
+}
 
 type fakeTier1 struct {
 	score      int
@@ -131,7 +133,7 @@ func TestPipelineIntegration_EvaluateRequestProducesBannerAction(t *testing.T) {
 	svc := startNATSService(t)
 
 	evaluator := evaluate.NewEvaluator(evaluate.Config{
-		Tier0: fakeTier0{apply: func(_ dto.EvaluateRequest) dto.Tier0Outcome {
+		Tier0: fakeTier0{apply: func(_ dto.EvaluateRequest, _ dto.RiskSignals) dto.Tier0Outcome {
 			return dto.Tier0Outcome{}
 		}},
 		Tier1:       fakeTier1{score: 90, confidence: 0.9},
@@ -152,7 +154,7 @@ func TestPipelineIntegration_EvaluateRequestProducesBannerAction(t *testing.T) {
 			if err := json.Unmarshal(m.Data(), &req); err != nil {
 				return err
 			}
-			res, err := evaluator.Evaluate(c, req)
+			res, err := evaluator.Evaluate(c, req, req.Signals)
 			if err != nil {
 				return err
 			}
@@ -232,7 +234,7 @@ func TestPipelineIntegration_Tier0BypassShortCircuits(t *testing.T) {
 
 	var tier1Called atomic.Int32
 	evaluator := evaluate.NewEvaluator(evaluate.Config{
-		Tier0: fakeTier0{apply: func(_ dto.EvaluateRequest) dto.Tier0Outcome {
+		Tier0: fakeTier0{apply: func(_ dto.EvaluateRequest, _ dto.RiskSignals) dto.Tier0Outcome {
 			return dto.Tier0Outcome{
 				Bypass:         true,
 				Reason:         "internal_trusted",
@@ -259,7 +261,7 @@ func TestPipelineIntegration_Tier0BypassShortCircuits(t *testing.T) {
 		func(c context.Context, m events.Message) error {
 			var req dto.EvaluateRequest
 			_ = json.Unmarshal(m.Data(), &req)
-			res, _ := evaluator.Evaluate(c, req)
+			res, _ := evaluator.Evaluate(c, req, req.Signals)
 			out <- res
 			return nil
 		},

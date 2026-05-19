@@ -46,7 +46,7 @@ func TestAccuracy_FullPipeline(t *testing.T) {
 
 	start := time.Now()
 	for _, e := range emails {
-		res, err := evaluator.Evaluate(ctx, e.Request)
+		res, err := evaluator.Evaluate(ctx, e.Request, e.Request.Signals)
 		if err != nil {
 			t.Fatalf("evaluate %s: %v", e.Request.MessageID, err)
 		}
@@ -437,7 +437,7 @@ func TestAccuracy_ConfusionMatrixSumsToCorpus(t *testing.T) {
 	report := evaluate.NewAccuracyReport(len(emails), 41)
 	ctx := context.Background()
 	for _, e := range emails {
-		res, err := evaluator.Evaluate(ctx, e.Request)
+		res, err := evaluator.Evaluate(ctx, e.Request, e.Request.Signals)
 		if err != nil {
 			t.Fatalf("evaluate: %v", err)
 		}

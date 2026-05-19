@@ -28,7 +28,91 @@ const (
 	HeaderError         = "error"
 	HeaderOriginSubject = "origin-subject"
 	HeaderEnqueuedAt    = "enqueued-at"
+	// HeaderTraceparent / HeaderTracestate carry W3C Trace Context across
+	// the bus. They are populated by WithTraceContext on the publish side
+	// and consumed by the consumer to reconstruct the trace span on the
+	// receiving end. Names match the W3C spec exactly so other producers
+	// /consumers — including non-Go services — interoperate without
+	// translation.
+	HeaderTraceparent = "traceparent"
+	HeaderTracestate  = "tracestate"
 )
+
+// busCtxKey is the unexported key type for context values that the bus
+// adapters inject so handler code can read well-known identifiers
+// (correlation, tenant, message) directly off ctx instead of poking
+// into Message.Headers() on every call.
+type busCtxKey string
+
+const (
+	ctxKeyCorrelationID busCtxKey = "events.correlation_id"
+	ctxKeyTenantID      busCtxKey = "events.tenant_id"
+	ctxKeyMessageID     busCtxKey = "events.message_id"
+	ctxKeyEventType     busCtxKey = "events.event_type"
+)
+
+// WithCorrelationIDContext returns ctx with the given correlation ID
+// attached. Used by bus adapters before invoking the handler so that
+// downstream code (log fields, outbound HTTP, child publishes) can pull
+// it back via CorrelationIDFromContext.
+func WithCorrelationIDContext(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyCorrelationID, id)
+}
+
+// CorrelationIDFromContext returns the correlation ID attached via
+// WithCorrelationIDContext, or "" if none is set.
+func CorrelationIDFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyCorrelationID).(string)
+	return v
+}
+
+// WithTenantIDContext returns ctx with the tenant ID attached.
+func WithTenantIDContext(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyTenantID, id)
+}
+
+// TenantIDFromContext returns the tenant ID attached via
+// WithTenantIDContext, or "" if none is set.
+func TenantIDFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyTenantID).(string)
+	return v
+}
+
+// WithMessageIDContext returns ctx with the bus message ID attached.
+func WithMessageIDContext(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyMessageID, id)
+}
+
+// MessageIDFromContext returns the message ID attached via
+// WithMessageIDContext, or "" if none is set.
+func MessageIDFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyMessageID).(string)
+	return v
+}
+
+// WithEventTypeContext returns ctx with the event type attached.
+func WithEventTypeContext(ctx context.Context, t string) context.Context {
+	if t == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyEventType, t)
+}
+
+// EventTypeFromContext returns the event type attached via
+// WithEventTypeContext, or "" if none is set.
+func EventTypeFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyEventType).(string)
+	return v
+}
 
 // ErrSubscriptionClosed is returned by a [Subscription] after [Subscription.Close]
 // has been called.

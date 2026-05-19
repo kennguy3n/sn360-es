@@ -453,14 +453,16 @@ SELECT id,tenant_id,domain,COALESCE(display_name,''),approved,auto_discovered,co
 }
 
 func (p *pgVendors) List(ctx context.Context, tenantID string, limit int) ([]Vendor, error) {
-	q := `
+	// LIMIT NULLIF($2, 0) treats limit=0 as "no limit" by collapsing
+	// the parameter to NULL (which PostgreSQL accepts as unbounded
+	// LIMIT). Keeps the query fully parameterized — no fmt.Sprintf'd
+	// SQL fragments — so the planner can cache one plan and pgx can
+	// type-check the argument.
+	const q = `
 SELECT id,tenant_id,domain,COALESCE(display_name,''),approved,auto_discovered,confidence,
        COALESCE(last_seen_at,'epoch'::timestamptz),created_at,updated_at
-  FROM vendors WHERE tenant_id=$1 ORDER BY domain`
-	if limit > 0 {
-		q += fmt.Sprintf(" LIMIT %d", limit)
-	}
-	rows, err := p.db.QueryContext(ctx, q, tenantID)
+  FROM vendors WHERE tenant_id=$1 ORDER BY domain LIMIT NULLIF($2, 0)`
+	rows, err := p.db.QueryContext(ctx, q, tenantID, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -32,6 +32,49 @@ func TestTelemetry_RecordsRequest(t *testing.T) {
 	}
 }
 
+func TestNormaliseRoute(t *testing.T) {
+	patterns := []RoutePattern{
+		{Prefix: "/v1/escalation/", Label: "/v1/escalation/:id"},
+		{Prefix: "/l/", Label: "/l/:token"},
+	}
+	cases := []struct {
+		name        string
+		path        string
+		wantLabel   string
+		wantMatched bool
+	}{
+		// Prefix match collapses arbitrary suffix.
+		{"escalation id", "/v1/escalation/abc123", "/v1/escalation/:id", true},
+		// Bare-prefix-without-trailing-slash form ("/l") also matches
+		// the "/l/" prefix so callers can hit either form without
+		// blowing up cardinality.
+		{"bare prefix without slash", "/l", "/l/:token", true},
+		{"l token", "/l/sometoken", "/l/:token", true},
+		// Non-matching path is passed through verbatim with matched=false.
+		{"no match", "/v1/predict/open", "/v1/predict/open", false},
+		// Critically: a path that LOOKS LIKE one of the prefixes but
+		// extends past the slash boundary must NOT collide (`/longer`
+		// is not the `/l/` prefix family).
+		{"prefix bleed guard", "/longer-path", "/longer-path", false},
+		// Empty patterns slice never matches.
+		{"empty patterns", "/v1/anything", "/v1/anything", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			label, matched := NormaliseRoute(patterns, tc.path)
+			if label != tc.wantLabel || matched != tc.wantMatched {
+				t.Fatalf("NormaliseRoute(%q) = (%q, %v); want (%q, %v)",
+					tc.path, label, matched, tc.wantLabel, tc.wantMatched)
+			}
+		})
+	}
+
+	// Empty-patterns slice still returns matched=false consistently.
+	if label, matched := NormaliseRoute(nil, "/x"); label != "/x" || matched {
+		t.Fatalf("nil patterns: got (%q, %v); want (\"/x\", false)", label, matched)
+	}
+}
+
 func TestTelemetry_NilMetricsPasses(t *testing.T) {
 	called := false
 	mw := NewTelemetry(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -11,6 +11,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -88,6 +89,7 @@ type Config struct {
 	Score                    ScoreThresholds
 	URLRewrite               URLRewrite
 	CORS                     CORS
+	RateLimit                RateLimit
 	SMTP                     SMTP
 	GWS                      GWS
 	O365                     O365
@@ -404,6 +406,31 @@ type CORS struct {
 	AllowedOrigins []string
 }
 
+// RateLimit configures the per-IP token-bucket rate limiter that
+// wraps the HTTP mux. Defaults are tuned for typical action-banner
+// click traffic (30 req/s, burst 60). Operators tighten via
+// RATE_LIMIT_RATE / RATE_LIMIT_BURST when sitting behind a CDN that
+// already coalesces traffic, and disable entirely by setting
+// RATE_LIMIT_ENABLED=false (e.g. when a dedicated WAF handles it).
+type RateLimit struct {
+	Enabled         bool
+	Rate            float64
+	Burst           int
+	CleanupInterval time.Duration
+	IdleTTL         time.Duration
+	// TrustedProxies is the raw comma-separated list of reverse-proxy
+	// CIDR ranges from RATE_LIMIT_TRUSTED_PROXIES. Parsing happens at
+	// the wiring layer so a malformed entry fails boot fast rather
+	// than silently widening (or narrowing) the trust set.
+	//
+	// When empty, the limiter buckets on r.RemoteAddr only and
+	// ignores X-Forwarded-For / X-Real-IP entirely. Operators
+	// deploying behind a single ALB should set e.g.
+	// RATE_LIMIT_TRUSTED_PROXIES=10.0.0.0/8 so the limiter picks the
+	// real client IP from the ALB-appended XFF.
+	TrustedProxies string
+}
+
 // Load reads configuration from the environment.
 //
 // It loads ".env" if present in the working directory (best-effort) and
@@ -538,6 +565,14 @@ func Load() (Config, error) {
 		CORS: CORS{
 			AllowedOrigins: parseCSV(getStr("CORS_ALLOWED_ORIGINS", "")),
 		},
+		RateLimit: RateLimit{
+			Enabled:         getBool("RATE_LIMIT_ENABLED", true),
+			Rate:            getFloat("RATE_LIMIT_RATE", 30),
+			Burst:           getInt("RATE_LIMIT_BURST", 60),
+			CleanupInterval: getDuration("RATE_LIMIT_CLEANUP_INTERVAL", time.Minute),
+			IdleTTL:         getDuration("RATE_LIMIT_IDLE_TTL", 5*time.Minute),
+			TrustedProxies:  getStr("RATE_LIMIT_TRUSTED_PROXIES", ""),
+		},
 		SMTP: SMTP{
 			Host:       getStr("SMTP_HOST", ""),
 			Port:       getInt("SMTP_PORT", 587),
@@ -650,11 +685,106 @@ func (c Config) validate() error {
 			return errors.New("KMS_USE_MOCK=true is not allowed in production environments (UAT/prod); current: " + string(c.Environment))
 		}
 		secret := c.Banner.TokenSecret
-		if secret != "" && (len(secret) < 32 || secret == "replace-me-with-a-strong-secret") {
-			return errors.New("BANNER_TOKEN_SECRET must be at least 32 bytes and not the default placeholder in production environments (UAT/prod)")
+		if secret != "" {
+			if len(secret) < 32 {
+				return errors.New("BANNER_TOKEN_SECRET must be at least 32 bytes in production environments (UAT/prod)")
+			}
+			if secret == "replace-me-with-a-strong-secret" {
+				return errors.New("BANNER_TOKEN_SECRET must not be the default placeholder in production environments (UAT/prod)")
+			}
+			if isLowEntropy(secret) {
+				return errors.New("BANNER_TOKEN_SECRET has low entropy (all-same character, sequential bytes, or repeated short pattern); generate one with: openssl rand -base64 48")
+			}
+		}
+		if c.Onboarding.StateSecret != "" && isLowEntropy(c.Onboarding.StateSecret) {
+			return errors.New("ONBOARDING_STATE_SECRET has low entropy (all-same character, sequential bytes, or repeated short pattern); generate one with: openssl rand -base64 48")
 		}
 	}
 	return nil
+}
+
+// isLowEntropy reports whether s is so obviously non-random that we
+// refuse to accept it as a secret. The detector combines three
+// cheap, complementary signals:
+//
+//  1. Shannon entropy over the byte alphabet — catches all-same-byte
+//     ("aaaa…") and short-period repeats ("passwordpassword…",
+//     "1234123412341234"), which both compress to a tiny effective
+//     alphabet.
+//  2. Long contiguous monotone runs — catches "abcdefghij…" style
+//     keyboard-walk secrets that Shannon would happily score at >4
+//     bits because their byte diversity is high.
+//  3. Repeated short pattern — catches periodic strings whose period
+//     evenly divides len(s) ("abababab…"). Shannon also catches
+//     these for short periods but starts failing once the period is
+//     longer than the length divided by the alphabet size; the
+//     structural check is a strict superset there.
+//
+// The Shannon threshold (3.0 bits/byte) is well below the ~5.8
+// bits/byte you'd expect from base64-encoded crypto-random output
+// but well above the ~1.5 bits/byte you get from a typical human
+// "passwordpasswordpassword" mistake.
+func isLowEntropy(s string) bool {
+	if s == "" {
+		return false
+	}
+	// (1) Shannon entropy.
+	counts := [256]int{}
+	for i := 0; i < len(s); i++ {
+		counts[s[i]]++
+	}
+	n := float64(len(s))
+	var entropy float64
+	for _, c := range counts {
+		if c == 0 {
+			continue
+		}
+		p := float64(c) / n
+		entropy -= p * math.Log2(p)
+	}
+	// Tuned threshold: < 3.0 bits/byte means the message could be
+	// described in ≤ 3·n bits of payload, which any random-quality
+	// secret of length ≥ 16 should comfortably exceed.
+	if entropy < 3.0 {
+		return true
+	}
+	// (2) Long monotone run: ≥ ceil(len(s)/2) consecutive bytes where
+	// each differs from its predecessor by exactly +1 (covers
+	// "abc…xyz" style walks even when they wrap around or contain
+	// non-monotone tail bytes).
+	threshold := (len(s) + 1) / 2
+	run := 1
+	maxRun := 1
+	for i := 1; i < len(s); i++ {
+		if int(s[i])-int(s[i-1]) == 1 {
+			run++
+			if run > maxRun {
+				maxRun = run
+			}
+		} else {
+			run = 1
+		}
+	}
+	if maxRun >= threshold {
+		return true
+	}
+	// (3) Repeated short pattern that exactly tiles the string.
+	for period := 2; period <= len(s)/2; period++ {
+		if len(s)%period != 0 {
+			continue
+		}
+		repeats := true
+		for i := period; i < len(s); i++ {
+			if s[i] != s[i%period] {
+				repeats = false
+				break
+			}
+		}
+		if repeats {
+			return true
+		}
+	}
+	return false
 }
 
 // --- env helpers ------------------------------------------------------------
@@ -681,6 +811,16 @@ func getBool(key string, def bool) bool {
 		b, err := strconv.ParseBool(v)
 		if err == nil {
 			return b
+		}
+	}
+	return def
+}
+
+func getFloat(key string, def float64) float64 {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
+		f, err := strconv.ParseFloat(v, 64)
+		if err == nil {
+			return f
 		}
 	}
 	return def

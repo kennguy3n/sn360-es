@@ -19,9 +19,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/action"
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
 	"github.com/kennguy3n/sn360-es/internal/service/dashboard"
-	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
 	"github.com/kennguy3n/sn360-es/internal/service/onboarding"
-	"github.com/kennguy3n/sn360-es/internal/service/tier0"
 	"github.com/kennguy3n/sn360-es/pkg/events"
 	"github.com/kennguy3n/sn360-es/pkg/privacy"
 	"github.com/kennguy3n/sn360-es/pkg/storage/redis"
@@ -343,45 +341,15 @@ func (a escalationPublisherAdapter) Publish(ctx context.Context, subject string,
 	return a.bus.Publish(ctx, subject, data, opts...)
 }
 
-// tier0BatchAdapter adapts tier0.Gate to the evaluate.Tier0BatchGate
-// interface used by BatchOrchestrator.
-type tier0BatchAdapter struct{ gate *tier0.Gate }
-
-func (a tier0BatchAdapter) Apply(req dto.EvaluateRequest, signals dto.RiskSignals) (dto.EvaluateResult, bool) {
-	if a.gate == nil {
-		return dto.EvaluateResult{}, false
-	}
-	req.Signals = signals
-	out := a.gate.Apply(req)
-	if !out.Bypass {
-		return dto.EvaluateResult{}, false
-	}
-	res := dto.EvaluateResult{
-		TenantID:      req.TenantID,
-		MessageID:     req.MessageID,
-		CorrelationID: req.CorrelationID,
-		EvaluatedAt:   time.Now().UTC(),
-		Primary:       out.ForcedCategory,
-		Tier:          evaluate.ForcedTierFor(out.ForcedCategory),
-		Tier0:         &out,
-	}
-	if out.Reason != "" {
-		res.ReasonCodes = append(res.ReasonCodes, out.Reason)
-	}
-	return res, true
-}
-
-// fallbackEvaluatorAdapter adapts *evaluate.Evaluator to
-// evaluate.MessageEvaluator.
-type fallbackEvaluatorAdapter struct{ eval *evaluate.Evaluator }
-
-func (a fallbackEvaluatorAdapter) Evaluate(ctx context.Context, req dto.EvaluateRequest, signals dto.RiskSignals) (dto.EvaluateResult, error) {
-	if a.eval == nil {
-		return dto.EvaluateResult{}, errors.New("evaluate: fallback evaluator unavailable")
-	}
-	req.Signals = signals
-	return a.eval.Evaluate(ctx, req)
-}
+// Tier 0 and Fallback adapters used to live here. After Group 1b
+// unified the gate / evaluator signatures (Apply(req, signals) →
+// Tier0Outcome and Evaluate(ctx, req, signals) → EvaluateResult),
+// *tier0.Gate satisfies evaluate.Tier0BatchGate directly and
+// *evaluate.Evaluator satisfies evaluate.MessageEvaluator directly,
+// so no wrapper types are needed here. The Tier 0 bypass →
+// EvaluateResult translation moved into evaluate.tier0BypassResult
+// so the batch path owns the same outcome shape the per-message
+// evaluator produces.
 
 // loggingAuditLog implements agent.AuditLog by emitting structured
 // log lines.

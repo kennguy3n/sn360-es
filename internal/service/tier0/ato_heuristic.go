@@ -53,7 +53,14 @@ func NewATOHeuristic(cfg ATOHeuristicConfig) *ATOHeuristic {
 
 // Check evaluates the ATO heuristic against an internal-origin message.
 // The caller should only invoke this when the message has already been
-// identified as internal (IsInternal = true).
+// identified as internal (signals.IsInternal == true).
+//
+// signals is passed explicitly rather than read from req.Signals so the
+// batch and per-message paths share one calling convention. The batch
+// orchestrator stores signals on [evaluate.BatchMessage] as a separate
+// field from the EvaluateRequest envelope — passing them positionally
+// here lets every sub-check read from the authoritative source
+// regardless of whether req.Signals has been populated by the caller.
 //
 // Signals checked:
 //   - Timing anomaly: message sent far outside the sender's normal window.
@@ -62,7 +69,7 @@ func NewATOHeuristic(cfg ATOHeuristicConfig) *ATOHeuristic {
 //     is link-heavy.
 //   - Auth failure on an internal sender (should never happen legitimately).
 //   - High-privilege outbound: Critical/Max sender emailing freemail/disposable.
-func (h *ATOHeuristic) Check(req dto.EvaluateRequest) ATOHeuristicResult {
+func (h *ATOHeuristic) Check(req dto.EvaluateRequest, signals dto.RiskSignals) ATOHeuristicResult {
 	if !h.cfg.Enabled {
 		return ATOHeuristicResult{}
 	}
@@ -71,27 +78,27 @@ func (h *ATOHeuristic) Check(req dto.EvaluateRequest) ATOHeuristicResult {
 	var reasons []string
 
 	// 1. Timing anomaly: use the pre-computed signals.
-	score += h.checkTimingAnomaly(req, &reasons)
+	score += h.checkTimingAnomaly(signals, &reasons)
 
 	// 2. External recipients on an internal-origin message.
-	score += h.checkExternalRecipients(req, &reasons)
+	score += h.checkExternalRecipients(req, signals, &reasons)
 
 	// 3. Link-heavy body from text-only sender.
-	score += h.checkLinkHeavy(req, &reasons)
+	score += h.checkLinkHeavy(req, signals, &reasons)
 
 	// 4. Auth failure on internal sender.
-	score += h.checkAuthFailure(req, &reasons)
+	score += h.checkAuthFailure(signals, &reasons)
 
 	// 5. High-privilege outbound: Critical/Max user sending to freemail
 	// or disposable domains is an insider-threat signal regardless of
 	// content.
-	score += h.checkHighPrivilegeOutbound(req, &reasons)
+	score += h.checkHighPrivilegeOutbound(signals, &reasons)
 
 	// Apply sensitivity-based threshold adjustment: Critical/Max users
 	// use a lower threshold (0.4 instead of default) so suspicious
 	// behaviour triggers alerts more easily.
 	threshold := h.cfg.ScoreThreshold
-	if isHighPrivilegeSender(req) {
+	if isHighPrivilegeSender(signals) {
 		if threshold > 0.4 {
 			threshold = 0.4
 		}
@@ -111,14 +118,14 @@ func (h *ATOHeuristic) Check(req dto.EvaluateRequest) ATOHeuristicResult {
 // checkTimingAnomaly inspects whether the send time is anomalous
 // relative to the sender's historical pattern. We use pre-computed
 // signals: TypicalSendHour and CurrentHourUTC.
-func (h *ATOHeuristic) checkTimingAnomaly(req dto.EvaluateRequest, reasons *[]string) float64 {
-	if req.Signals.TypicalSendHour == 0 && req.Signals.CommunicationFrequency == 0 {
+func (h *ATOHeuristic) checkTimingAnomaly(signals dto.RiskSignals, reasons *[]string) float64 {
+	if signals.TypicalSendHour == 0 && signals.CommunicationFrequency == 0 {
 		return 0 // No baseline data available.
 	}
-	if req.Signals.CommunicationFrequency < h.cfg.MinTimingHistorySize {
+	if signals.CommunicationFrequency < h.cfg.MinTimingHistorySize {
 		return 0 // Insufficient history.
 	}
-	hourDist := hourDistance(req.Signals.CurrentHourUTC, req.Signals.TypicalSendHour)
+	hourDist := hourDistance(signals.CurrentHourUTC, signals.TypicalSendHour)
 	if hourDist >= 8 {
 		*reasons = append(*reasons, "timing_anomaly")
 		return 0.35
@@ -132,11 +139,11 @@ func (h *ATOHeuristic) checkTimingAnomaly(req dto.EvaluateRequest, reasons *[]st
 
 // checkExternalRecipients detects internal-origin messages with external
 // CC recipients — a common ATO exfiltration pattern.
-func (h *ATOHeuristic) checkExternalRecipients(req dto.EvaluateRequest, reasons *[]string) float64 {
+func (h *ATOHeuristic) checkExternalRecipients(req dto.EvaluateRequest, signals dto.RiskSignals, reasons *[]string) float64 {
 	if len(req.CC) == 0 {
 		return 0
 	}
-	senderDomain := req.Signals.SenderDomain
+	senderDomain := signals.SenderDomain
 	if senderDomain == "" {
 		return 0
 	}
@@ -158,8 +165,8 @@ func (h *ATOHeuristic) checkExternalRecipients(req dto.EvaluateRequest, reasons 
 }
 
 // checkLinkHeavy detects internal messages with unusually many URLs.
-func (h *ATOHeuristic) checkLinkHeavy(req dto.EvaluateRequest, reasons *[]string) float64 {
-	if !req.Signals.HasSuspiciousURL {
+func (h *ATOHeuristic) checkLinkHeavy(req dto.EvaluateRequest, signals dto.RiskSignals, reasons *[]string) float64 {
+	if !signals.HasSuspiciousURL {
 		return 0
 	}
 	linkCount := countLinks(req.Body)
@@ -172,8 +179,8 @@ func (h *ATOHeuristic) checkLinkHeavy(req dto.EvaluateRequest, reasons *[]string
 
 // checkAuthFailure flags internal senders with failed authentication
 // — should never happen for legitimate internal mail.
-func (h *ATOHeuristic) checkAuthFailure(req dto.EvaluateRequest, reasons *[]string) float64 {
-	if req.Signals.AnyAuthFailed() {
+func (h *ATOHeuristic) checkAuthFailure(signals dto.RiskSignals, reasons *[]string) float64 {
+	if signals.AnyAuthFailed() {
 		*reasons = append(*reasons, "internal_auth_failed")
 		// Auth failure on internal mail is highly suspicious — it should
 		// never happen legitimately. Score high enough to flag on its own.
@@ -217,14 +224,14 @@ func hourDistance(a, b int) int {
 // sends email to freemail or disposable domains. The combination of
 // high-privilege sender + personal email recipient is an insider-threat
 // signal even without suspicious content.
-func (h *ATOHeuristic) checkHighPrivilegeOutbound(req dto.EvaluateRequest, reasons *[]string) float64 {
-	if !isHighPrivilegeSender(req) {
+func (h *ATOHeuristic) checkHighPrivilegeOutbound(signals dto.RiskSignals, reasons *[]string) float64 {
+	if !isHighPrivilegeSender(signals) {
 		return 0
 	}
 	var score float64
 
 	// Freemail / disposable recipient.
-	if req.Signals.RecipientIsFreeDomain || req.Signals.RecipientIsDisposableDomain {
+	if signals.RecipientIsFreeDomain || signals.RecipientIsDisposableDomain {
 		*reasons = append(*reasons, "high_privilege_to_freemail")
 		score += 0.3
 	}
@@ -232,10 +239,10 @@ func (h *ATOHeuristic) checkHighPrivilegeOutbound(req dto.EvaluateRequest, reaso
 	// Attachment to non-internal recipient. RecipientIsFreeDomain and
 	// RecipientIsDisposableDomain are populated by the normalizer from
 	// the recipient's domain, not the sender's.
-	recipientIsExternal := req.Signals.RecipientIsFreeDomain || req.Signals.RecipientIsDisposableDomain ||
-		(!req.Signals.IsFromVendor && req.Signals.RecipientDomain != "" &&
-			!strings.EqualFold(req.Signals.RecipientDomain, req.Signals.SenderDomain))
-	if req.Signals.HasAttachment && recipientIsExternal {
+	recipientIsExternal := signals.RecipientIsFreeDomain || signals.RecipientIsDisposableDomain ||
+		(!signals.IsFromVendor && signals.RecipientDomain != "" &&
+			!strings.EqualFold(signals.RecipientDomain, signals.SenderDomain))
+	if signals.HasAttachment && recipientIsExternal {
 		*reasons = append(*reasons, "high_privilege_external_attachment")
 		score += 0.2
 	}
@@ -246,8 +253,8 @@ func (h *ATOHeuristic) checkHighPrivilegeOutbound(req dto.EvaluateRequest, reaso
 // isHighPrivilegeSender returns true when the sender's sensitivity tier
 // is "critical" or "max", indicating infrastructure-level or C-suite
 // access.
-func isHighPrivilegeSender(req dto.EvaluateRequest) bool {
-	s := strings.ToLower(req.Signals.SenderSensitivity)
+func isHighPrivilegeSender(signals dto.RiskSignals) bool {
+	s := strings.ToLower(signals.SenderSensitivity)
 	return s == "critical" || s == "max"
 }
 

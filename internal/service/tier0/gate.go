@@ -63,15 +63,24 @@ func NewGateWithATO(cfg GateConfig, recurring *RecurringDetector, ato *ATOHeuris
 	return g
 }
 
-// Apply runs the gate on req and returns the structured Tier0Outcome. It
-// does not mutate req. The outcome's Bypass field is the canonical signal
-// to skip downstream ML.
-func (g *Gate) Apply(req dto.EvaluateRequest) dto.Tier0Outcome {
+// Apply runs the gate on req using the supplied signals and returns
+// the structured Tier0Outcome. It does not mutate req. The outcome's
+// Bypass field is the canonical signal to skip downstream ML.
+//
+// Signals are passed in explicitly (rather than read from req.Signals)
+// so the batch and per-message paths share the same call shape: both
+// callers compute signals once (cheap stuff in the per-message path,
+// pulled from the batch envelope in the batch path) and then thread
+// them through every layer of the evaluator without writing back into
+// req. This eliminates the prior tier0BatchAdapter / fallbackEvaluator
+// adapter pair, whose only job was to mutate req.Signals before
+// calling the gate.
+func (g *Gate) Apply(req dto.EvaluateRequest, signals dto.RiskSignals) dto.Tier0Outcome {
 	out := dto.Tier0Outcome{}
 
 	// 1. Internal-trusted bypass — guarded by ATO heuristic.
-	if g.cfg.SkipInternal && req.Signals.IsInternal {
-		atoResult := g.ato.Check(req)
+	if g.cfg.SkipInternal && signals.IsInternal {
+		atoResult := g.ato.Check(req, signals)
 		if atoResult.Flagged {
 			out.Bypass = false
 			out.ForceEscalate = true
@@ -86,8 +95,8 @@ func (g *Gate) Apply(req dto.EvaluateRequest) dto.Tier0Outcome {
 	}
 
 	// 2. Vendor-trusted bypass — guarded by vendor-compromise heuristic.
-	if g.cfg.SkipVendor && req.Signals.IsFromVendor {
-		if req.Signals.LooksLikeVendorCompromise {
+	if g.cfg.SkipVendor && signals.IsFromVendor {
+		if signals.LooksLikeVendorCompromise {
 			out.Bypass = false
 			out.ForceEscalate = true
 			out.Reason = "vendor_compromise_suspected"
@@ -102,7 +111,7 @@ func (g *Gate) Apply(req dto.EvaluateRequest) dto.Tier0Outcome {
 
 	// 3. Recurring service bypass — either signalled by the prefilter or
 	//    detected by pattern-match here.
-	if g.cfg.SkipRecurring && (req.Signals.IsRecurringService || g.recurring.IsRecurring(req.Sender)) {
+	if g.cfg.SkipRecurring && (signals.IsRecurringService || g.recurring.IsRecurring(req.Sender)) {
 		out.Bypass = true
 		out.SkipML = true
 		out.Reason = "recurring_service"
@@ -111,7 +120,7 @@ func (g *Gate) Apply(req dto.EvaluateRequest) dto.Tier0Outcome {
 	}
 
 	// 4. High-volume sender — skip ML, defer to Rspamd-only path.
-	if g.cfg.HighVolumeRspamdOnly && req.Signals.IsHighVolumeSender {
+	if g.cfg.HighVolumeRspamdOnly && signals.IsHighVolumeSender {
 		out.SkipML = true
 		out.RspamdOnly = true
 		out.Reason = "high_volume_sender"
@@ -123,16 +132,16 @@ func (g *Gate) Apply(req dto.EvaluateRequest) dto.Tier0Outcome {
 	//    relationship category so audit logs and metrics keep the
 	//    correct escalation cause (FirstTimeExternal vs LapsedContact
 	//    are both ATO-relevant but for different reasons).
-	if req.Signals.ForceEscalate() {
+	if signals.ForceEscalate() {
 		out.ForceEscalate = true
-		switch req.Signals.RelationshipCategory {
+		switch signals.RelationshipCategory {
 		case dto.RelationshipLapsedContact:
 			out.Reason = "lapsed_contact"
 		default:
 			out.Reason = "first_time_external"
 		}
 	}
-	if req.Signals.LowerTier1Threshold() && g.cfg.Tier1PartnerThreshold > 0 {
+	if signals.LowerTier1Threshold() && g.cfg.Tier1PartnerThreshold > 0 {
 		out.Tier1ThresholdOverride = g.cfg.Tier1PartnerThreshold
 		if out.Reason == "" {
 			out.Reason = "partner_or_customer"

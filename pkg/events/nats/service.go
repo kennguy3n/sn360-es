@@ -18,14 +18,26 @@ type Service struct {
 	publisher *Publisher
 	logger    *slog.Logger
 
-	mu   sync.Mutex
-	subs []*Consumer
+	mu       sync.Mutex
+	subs     []*Consumer
+	observer MessageObserver
 
 	// streamFor maps a published subject to its target stream. The map is
 	// derived from the StreamSpecs at construction time so the service does
 	// not need a JetStream round-trip to figure out which stream owns a
 	// subscription.
 	streamFor map[string]string
+}
+
+// SetMessageObserver registers a per-delivery observer used by every
+// consumer subsequently returned from Subscribe. Calling it after
+// subscriptions are already active does not retroactively patch
+// existing consumers — wire the observer before starting consumers
+// during application boot.
+func (s *Service) SetMessageObserver(observer MessageObserver) {
+	s.mu.Lock()
+	s.observer = observer
+	s.mu.Unlock()
 }
 
 // NewService builds a Service from a Config. It creates the connection,
@@ -121,7 +133,11 @@ func (s *Service) Subscribe(ctx context.Context, subject string, handler events.
 		return nil, fmt.Errorf("nats: no stream matches subject %q", subject)
 	}
 
-	cons, err := NewConsumer(ctx, s.client, stream, subject, handler, s.publisher, resolved, s.logger)
+	s.mu.Lock()
+	observer := s.observer
+	s.mu.Unlock()
+
+	cons, err := NewConsumerWithObserver(ctx, s.client, stream, subject, handler, s.publisher, resolved, s.logger, observer)
 	if err != nil {
 		return nil, err
 	}

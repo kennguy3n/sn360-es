@@ -153,12 +153,12 @@ func NewReleaseService(cfg ReleaseConfig) (*ReleaseService, error) {
 // published on the release subject (best-effort).
 func (s *ReleaseService) Release(ctx context.Context, req ReleaseRequest) (ReleaseOutcome, error) {
 	if req.TenantID == "" || req.PseudonymizedMessage == "" {
-		return ReleaseOutcome{}, errors.New("release: tenant and pseudonymized_message are required")
+		return ReleaseOutcome{}, fmt.Errorf("%w: tenant and pseudonymized_message are required", ErrInvalidInput)
 	}
 
 	rec, found, err := s.quarantine.LookupReference(ctx, req.TenantID, req.PseudonymizedMessage)
 	if err != nil {
-		return ReleaseOutcome{}, fmt.Errorf("release: lookup reference: %w", err)
+		return ReleaseOutcome{}, fmt.Errorf("release: lookup reference: %w: %w", ErrProviderUnavailable, err)
 	}
 	if !found {
 		outcome := ReleaseOutcome{
@@ -171,7 +171,7 @@ func (s *ReleaseService) Release(ctx context.Context, req ReleaseRequest) (Relea
 
 	verdict, err := s.reevaluator.Reevaluate(ctx, req.TenantID, req.PseudonymizedMessage)
 	if err != nil {
-		return ReleaseOutcome{}, fmt.Errorf("release: re-evaluate: %w", err)
+		return ReleaseOutcome{}, fmt.Errorf("release: re-evaluate: %w: %w", ErrProviderUnavailable, err)
 	}
 
 	outcome := ReleaseOutcome{
@@ -196,14 +196,14 @@ func (s *ReleaseService) Release(ctx context.Context, req ReleaseRequest) (Relea
 	// Verdict cleared; restore the message.
 	prov, ok := s.quarantine.Provider(rec.Provider)
 	if !ok {
-		return outcome, fmt.Errorf("release: no provider registered for %q", rec.Provider)
+		return outcome, fmt.Errorf("release: no provider registered for %q: %w", rec.Provider, ErrNotFound)
 	}
 	body := req.RestoredBody
 	if body == "" {
 		body = defaultRestoredBody(verdict)
 	}
 	if err := prov.RestoreFromQuarantine(ctx, rec.Email, rec.MessageID, rec.LabelID, body); err != nil {
-		return outcome, fmt.Errorf("release: restore: %w", err)
+		return outcome, fmt.Errorf("release: restore: %w: %w", ErrProviderUnavailable, err)
 	}
 	if err := s.quarantine.ClearReference(ctx, req.TenantID, req.PseudonymizedMessage); err != nil {
 		// Restored already; clearing the reference is best-effort.

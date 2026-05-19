@@ -24,7 +24,7 @@ func BenchmarkEvaluator_SingleMessage(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := ev.Evaluate(ctx, req)
+		_, err := ev.Evaluate(ctx, req, req.Signals)
 		if err != nil {
 			b.Fatalf("evaluate: %v", err)
 		}
@@ -43,7 +43,7 @@ func BenchmarkEvaluator_BatchOf64(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		req := emails[i%len(emails)].Request
-		if _, err := ev.Evaluate(ctx, req); err != nil {
+		if _, err := ev.Evaluate(ctx, req, req.Signals); err != nil {
 			b.Fatalf("evaluate: %v", err)
 		}
 	}
@@ -70,7 +70,7 @@ func BenchmarkEvaluator_Tier0Bypass(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := ev.Evaluate(ctx, req); err != nil {
+		if _, err := ev.Evaluate(ctx, req, req.Signals); err != nil {
 			b.Fatalf("evaluate: %v", err)
 		}
 	}
@@ -107,7 +107,7 @@ func BenchmarkEvaluator_FullEscalation(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := ev.Evaluate(ctx, req); err != nil {
+		if _, err := ev.Evaluate(ctx, req, req.Signals); err != nil {
 			b.Fatalf("evaluate: %v", err)
 		}
 	}

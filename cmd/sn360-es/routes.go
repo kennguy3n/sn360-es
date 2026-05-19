@@ -140,12 +140,14 @@ func buildMux(app *application) (http.Handler, error) {
 // wrapMiddleware applies the standard middleware chain. Order matters:
 // the outermost wrapper runs first.
 //
-//	telemetry  →  request-logger  →  CORS  →  JWT-auth  →  mux
+//	telemetry  →  request-logger  →  CORS  →  rate-limit  →  JWT-auth  →  mux
 //
 // Telemetry runs first so it captures total latency including auth
-// rejections. JWT auth sits closest to the mux so request logging
-// covers 401s.
-func wrapMiddleware(mux http.Handler, app *application) http.Handler {
+// rejections and rate-limit denials. Rate limiting sits OUTSIDE JWT
+// auth so we can shed load before doing the expensive token-verify
+// work — an attacker hammering us with garbage Bearer tokens still
+// gets cut off at the limiter.
+func wrapMiddleware(mux http.Handler, app *application) (http.Handler, error) {
 	logger := app.logger
 	var h http.Handler = mux
 
@@ -158,6 +160,56 @@ func wrapMiddleware(mux http.Handler, app *application) http.Handler {
 		})
 	}
 
+	routeTemplates := defaultRouteTemplates()
+	knownExactRoutes := defaultKnownExactRoutes()
+
+	// Per-IP token-bucket rate limiter. The /healthz, /readyz,
+	// /metrics and /docs paths bypass the limiter so liveness probes
+	// and Prometheus scrapes never get 429'd. The limiter shares
+	// app.metrics so 429 counts surface alongside other HTTP
+	// telemetry.
+	if app.cfg.RateLimit.Enabled {
+		// Parsing trusted-proxy CIDRs here (not in config.Load)
+		// keeps boot-time fatal errors next to the wiring that
+		// actually relies on them. An empty / unset value yields a
+		// nil slice, which the middleware interprets as the secure
+		// default: bucket on r.RemoteAddr only, ignore XFF.
+		trusted, perr := middleware.ParseTrustedProxies(app.cfg.RateLimit.TrustedProxies)
+		if perr != nil {
+			return nil, fmt.Errorf("rate-limit trusted proxies: %w", perr)
+		}
+		rl := middleware.NewRateLimiter(h, middleware.RateLimitConfig{
+			Rate:            app.cfg.RateLimit.Rate,
+			Burst:           app.cfg.RateLimit.Burst,
+			CleanupInterval: app.cfg.RateLimit.CleanupInterval,
+			IdleTTL:         app.cfg.RateLimit.IdleTTL,
+			TrustedProxies:  trusted, // boot-time-validated, may be nil
+			SkipPaths:       defaultRateLimitSkipPaths(),
+			OnLimited: func(ip, path string) {
+				if app.metrics != nil {
+					// Bucket the path into a bounded set
+					// before stamping it on a Prometheus
+					// label. Attackers spraying random URLs
+					// would otherwise explode the
+					// http_rate_limited_total series count;
+					// see Devin Review self-audit / the
+					// rationale on Metrics.RateLimitedTotal.
+					route := rateLimitRouteLabel(path, routeTemplates, knownExactRoutes)
+					app.metrics.RateLimitedTotal.WithLabelValues(route).Inc()
+				}
+				logger.Debug("http: rate limit exceeded",
+					slog.String("ip", ip),
+					slog.String("path", path),
+				)
+			},
+		})
+		app.closers = append(app.closers, func() error {
+			rl.Stop()
+			return nil
+		})
+		h = rl
+	}
+
 	// CORS. The override argument is left nil so NewCORSFromConfig
 	// reads from app.cfg.CORS.AllowedOrigins.
 	h = middleware.NewCORSFromConfig(h, *app.cfg, nil)
@@ -167,14 +219,83 @@ func wrapMiddleware(mux http.Handler, app *application) http.Handler {
 
 	// Telemetry (counters + latency histograms).
 	h = middleware.NewTelemetry(h, middleware.TelemetryConfig{
-		Metrics: app.metrics,
-		RoutePatterns: []middleware.RoutePattern{
-			{Prefix: "/v1/escalation/", Label: "/v1/escalation/:id"},
-			{Prefix: "/l/", Label: "/l/:token"},
-		},
+		Metrics:       app.metrics,
+		RoutePatterns: routeTemplates,
 	})
 
-	return h
+	return h, nil
+}
+
+// defaultRouteTemplates lists the high-cardinality route prefixes the
+// HTTP layer collapses into stable Prometheus labels. Shared by the
+// telemetry middleware and the rate-limit metrics callback so
+// http_requests_total and http_rate_limited_total stay consistent.
+func defaultRouteTemplates() []middleware.RoutePattern {
+	return []middleware.RoutePattern{
+		{Prefix: "/v1/escalation/", Label: "/v1/escalation/:id"},
+		{Prefix: "/l/", Label: "/l/:token"},
+		{Prefix: "/v1/education/lesson/", Label: "/v1/education/lesson/:id"},
+		{Prefix: "/v1/vendors/", Label: "/v1/vendors/:id"},
+	}
+}
+
+// defaultKnownExactRoutes is the bounded allowlist of literal paths
+// the rate-limit callback uses to label legitimate-but-unmatched
+// routes (i.e. paths registered on the mux that have no path
+// parameters). Anything outside this set + the route templates is
+// reported under the "/other" label so attacker traffic spraying
+// random URLs cannot drive Prometheus series count up unbounded.
+func defaultKnownExactRoutes() map[string]struct{} {
+	return map[string]struct{}{
+		"/v1/banner/action":                  {},
+		"/v1/dashboard/summary":              {},
+		"/v1/predict/recipient":              {},
+		"/v1/predict/open":                   {},
+		"/v1/quarantine/release":             {},
+		"/v1/escalation/resolve":             {},
+		"/v1/onboarding/start":               {},
+		"/v1/onboarding/callback":            {},
+		"/v1/onboarding/status":              {},
+		"/v1/onboarding/revoke":              {},
+		"/v1/onboarding/gws-setup-status":    {},
+		"/v1/vendors":                        {},
+		"/v1/org-graph":                      {},
+	}
+}
+
+// rateLimitRouteLabel maps an arbitrary request path onto the bounded
+// label set used by the http_rate_limited_total Prometheus counter.
+//
+// Priority order: known exact path → route-template match → "/other".
+//
+// The known-exact allowlist is checked FIRST so endpoints whose
+// stable form happens to look like the bare prefix of a parameterized
+// sibling (e.g. POST /v1/escalation/resolve versus GET
+// /v1/escalation/<id>, GET /v1/vendors versus GET /v1/vendors/<id>)
+// keep their authoritative label instead of being silently collapsed
+// onto the parameterized template.
+func rateLimitRouteLabel(path string, patterns []middleware.RoutePattern, knownExact map[string]struct{}) string {
+	if _, ok := knownExact[path]; ok {
+		return path
+	}
+	if label, ok := middleware.NormaliseRoute(patterns, path); ok {
+		return label
+	}
+	return "/other"
+}
+
+// defaultRateLimitSkipPaths returns the paths that bypass the rate
+// limiter entirely. These are mostly probes and docs the operator
+// always needs to be able to hit.
+func defaultRateLimitSkipPaths() []string {
+	return []string{
+		"/healthz",
+		"/readyz",
+		"/metrics",
+		"/docs",
+		"/docs/",
+		"/openapi.yaml",
+	}
 }
 
 // defaultAuthSkipPaths returns the paths that bypass JWT auth.
