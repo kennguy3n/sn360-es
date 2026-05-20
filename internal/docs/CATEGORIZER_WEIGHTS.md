@@ -24,9 +24,9 @@ The pipeline runs every message through three stages:
    produces:
      * a **primary** `constant.Category` — the single most likely
        category, used for tiering and reporting,
-     * a slice of **secondary** categories — every other category whose
-       bucket exceeded `secondaryThreshold` (currently `1.0` in
-       `categorizer.go`),
+     * a slice of up to **two secondary** categories — the next two
+       non-benign categories after the primary, ordered by descending
+       score,
      * a flat list of **reason codes** — the keywords the rule engine
        matched on; surfaced to operators and used by the banner
        renderer.
@@ -35,19 +35,27 @@ The mechanics are:
 
 * Every signal contributes to one or more **category buckets**.
 * Buckets accumulate the configured weights (additive, not max).
-* The bucket with the highest total wins the **primary** slot, with
-  ties broken alphabetically by category name (deterministic).
-* Any bucket above the secondary threshold (excluding the primary) is
-  surfaced as a secondary.
+* The bucket with the highest total wins the **primary** slot. Ties
+  are broken deterministically by
+  [`constant.AllCategories`](../constant/categories.go) declaration
+  order (not alphabetical) so the output is stable and matches the
+  reporting-table ordering used everywhere else in the codebase.
+* The two highest-scoring non-benign buckets (excluding the primary)
+  are surfaced as secondaries. Buckets that score zero are dropped
+  before sorting; categories marked benign by `Category.IsBenign()`
+  (`InternalTrusted`, `VendorTrusted`, `Newsletter`) are skipped so a
+  phishing primary never surfaces a benign secondary.
 
 This produces a behaviour where **multiple medium-strength signals
 can flip a verdict** even when no single one would. Example:
 
-> Auth fail (+2) + suspicious URL (+3) + invoice fraud lexicon (+2)
-> → InvoiceFraud bucket = 4, LikelyPhishing bucket = 1+3 = 4,
-> SuspiciousURL bucket = 3. The InvoiceFraud + LikelyPhishing tie
-> resolves alphabetically to **InvoiceFraud** as primary, with
-> **LikelyPhishing** and **SuspiciousURL** surfaced as secondaries.
+> `AuthFailed` (+2 AuthFailed, +1 LikelyPhishing) +
+> `HasSuspiciousURL` (+3 SuspiciousURL, +1 LikelyPhishing) +
+> `HasInvoiceHint` (+2 InvoiceFraud) →
+> SuspiciousURL=3, LikelyPhishing=2, InvoiceFraud=2, AuthFailed=2.
+> **SuspiciousURL** is the primary; LikelyPhishing and InvoiceFraud
+> surface as secondaries (AuthFailed is dropped because the
+> per-message limit is two).
 
 ## Weight catalogue
 
@@ -91,32 +99,40 @@ own (2 LLM categories = 3, still < 4).
 
 ### Example 1: Lookalike vendor with invoice
 
-* `RiskSignals.IsLookalike = true` → LookalikeDomain += 4, BEC += 1
-* `RiskSignals.IsInvoice = true` → InvoiceFraud += 2
+* `RiskSignals.HasLookalikeDomain = true` → LookalikeDomain += 4,
+  BECImpersonation += 1
+* `RiskSignals.HasInvoiceHint = true` → InvoiceFraud += 2
 * Lookalike + invoice combo → InvoiceFraud += 2 (boost)
 
-Totals: InvoiceFraud=4, LookalikeDomain=4, BEC=1.
-Tie → **InvoiceFraud** (alphabetical), LookalikeDomain as secondary.
+Totals: InvoiceFraud=4, LookalikeDomain=4, BECImpersonation=1.
+Tie → **LookalikeDomain** as primary because it appears earlier in
+`constant.AllCategories` than `InvoiceFraud`; InvoiceFraud surfaces
+as a secondary, BECImpersonation as the second secondary.
 
 ### Example 2: LLM disagrees with rules
 
-* `RiskSignals.SuspiciousURL = true` → SuspiciousURL += 3, LikelyPhishing += 1
-* Tier 2 proposes `[CredentialHarvesting]` → CredentialHarvesting += 1.5
+* `RiskSignals.HasSuspiciousURL = true` → SuspiciousURL += 3,
+  LikelyPhishing += 1
+* Tier 2 proposes `[CredentialHarvesting]` → CredentialHarvesting +=
+  1.5
 
-Totals: SuspiciousURL=3, LikelyPhishing=1, CredentialHarvesting=1.5.
-**SuspiciousURL** wins. The LLM's secondary opinion surfaces as a
-secondary only if its bucket clears 1.0 (it does), so the operator sees
-both the deterministic primary and the LLM's read.
+Totals: SuspiciousURL=3, CredentialHarvesting=1.5, LikelyPhishing=1.
+**SuspiciousURL** wins. The LLM’s proposal surfaces as a secondary
+(non-zero score is enough), so the operator sees both the
+deterministic primary and the LLM’s read.
 
 ### Example 3: Multiple medium signals
 
-* `IsFirstContactExternal = true` → FirstContactExternal += 2
-* `SPF=fail` → AuthFailed += 2, LikelyPhishing += 1
-* Tier 1 score = 65 (below high-score threshold of 70 — no nudge)
+* `RiskSignals.IsExternal && RelationshipCategory == "FirstTimeExternal"`
+  → FirstContactExternal += 2
+* `RiskSignals.AuthFailed = true` → AuthFailed += 2,
+  LikelyPhishing += 1
+* Tier 1 score = 65 (below `HighScoreThreshold` of 70 — no nudge)
 * Tier 2 proposes `[LikelyPhishing]` → LikelyPhishing += 1.5
 
-Totals: AuthFailed=2, FirstContactExternal=2, LikelyPhishing=2.5.
-**LikelyPhishing** wins. The LLM advisory weight tipped the tie.
+Totals: LikelyPhishing=2.5, AuthFailed=2, FirstContactExternal=2.
+**LikelyPhishing** wins outright; the LLM advisory weight tipped a
+three-way medium-signal cluster into a clear primary.
 
 ## Per-tenant overrides
 
@@ -125,10 +141,14 @@ per tenant, construct a categorizer with explicit weights:
 
 ```go
 weights := evaluate.DefaultCategoryWeights()
-weights.LLMCategoryWeight = 0.5 // operator distrusts the LLM
-weights.LookalikeDomainWeight = 6 // tenant has been heavily impersonated
-categorizer := evaluate.NewRuleCategorizerWithWeights(weights)
+weights.LLMCategoryWeight = 0.5    // operator distrusts the LLM
+weights.LookalikeDomainWeight = 6  // tenant has been heavily impersonated
+categorizer := evaluate.NewRuleCategorizer(evaluate.WithCategoryWeights(weights))
 ```
+
+The constructor is a functional-option builder: `NewRuleCategorizer()`
+uses the defaults, and `WithCategoryWeights(weights)` swaps the entire
+weight matrix.
 
 Recommended override patterns:
 
