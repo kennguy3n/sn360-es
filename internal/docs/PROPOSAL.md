@@ -34,7 +34,8 @@ binary.
 Both buses share the same `events.EventService` interface
 (`pkg/events/`). NATS JetStream is the production transport; Redis
 Streams remains as a fallback for environments without NATS. Selection
-is via `EVENT_BUS_TYPE=nats|redis`.
+is via `EVENT_BUS_TYPE=nats|redis` (default `nats`); invalid values are
+rejected at config-validation time.
 
 ### JetStream Subject Design
 
@@ -597,16 +598,21 @@ patterns with two design choices that are particular to this product:
 | Tier | Score | Banner Color | Banner Headline (en) | Native Label | Provider Action |
 |---|---|---|---|---|---|
 | **Blocked** | 85-100 | Red (filled, white text) | "This message was blocked as malicious." | `SN360 / Blocked` (red) | Auto-quarantine; user sees stub only |
-| **High Risk** | 70-84 | Red (filled, white text) | "Likely phishing — do not click links or reply." | `SN360 / Warning` (red) | Banner + URLs rewritten/disabled |
-| **Warning** | 50-69 | Orange (white text) | "Caution: This message has suspicious traits." | `SN360 / Caution` (orange) | Banner with reasons + actions |
-| **Caution** | 30-49 | Yellow (dark text) | "Be cautious — verify the sender before acting." | `SN360 / Notice` (yellow) | Compact footer banner |
-| **Informational** | 15-29 | Blue (dark text) | "External sender / First contact." | `SN360 / External` (blue) | Inline chip near sender name |
+| **High Risk** | 70-84 | Red (filled, white text) | "Likely phishing — do not click links or reply." | `SN360 / HighRisk` (red) | Banner + URLs rewritten/disabled |
+| **Warning** | 50-69 | Orange (white text) | "Caution: This message has suspicious traits." | `SN360 / Warning` (orange) | Banner with reasons + actions |
+| **Caution** | 30-49 | Yellow (dark text) | "Be cautious — verify the sender before acting." | `SN360 / Caution` (yellow) | Compact footer banner |
+| **Informational** | 15-29 | Blue (dark text) | "External sender / First contact." | `SN360 / Informational` (blue) | Inline chip near sender name |
 | **Trusted** | 0-14 | Green chip | "Verified internal / trusted vendor." | `SN360 / Trusted` (green) | Optional positive chip |
 
 Score → tier mapping is configurable per tenant via the score engine.
-The actual tier values live in
-[`internal/constant/tiers.go`](../constant/tiers.go) and are typed as
-`Tier string` (not `int iota`).
+Defaults are sourced from
+[`internal/service/action/tier_decider.go`](../service/action/tier_decider.go)
+(`DefaultTierThresholds`: Blocked=85, HighRisk=70, Warning=50,
+Caution=30, Informational=15, FirstContactFloor=`Informational`). Tier
+identifiers are defined in
+[`internal/constant/tiers.go`](../constant/tiers.go) as typed
+`Tier string` constants — the native label is computed as
+`SN360 / {tier}` by `Tier.LabelName()`.
 
 ### Category Vocabulary
 
@@ -672,8 +678,12 @@ The canonical category constants are defined in
 | **Google Workspace** | Gmail label per tier (created on tenant onboarding) | Gmail label colors mapped to tier colors |
 | **Microsoft 365** | Outlook Master Categories | Outlook category color closest to tier color |
 
-Label naming convention: `SN360 / {Tier}` (e.g., `SN360 / Blocked`). Categories
-are surfaced as sub-labels when supported: `SN360 / Warning / Lookalike`.
+Label naming convention: `SN360 / {Tier}` (e.g., `SN360 / Blocked`,
+`SN360 / HighRisk`, `SN360 / Warning`) computed by
+`constant.Tier.LabelName()`. Categories are surfaced as sub-labels
+when the provider supports them, e.g. `SN360 / Warning / Lookalike Domain`
+(the category short-name comes from `categoryShortName` in
+`internal/service/action/label_applier.go`).
 
 ### URL Rewriting (High Risk + Blocked Only)
 
