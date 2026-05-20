@@ -44,8 +44,8 @@ func TestRequestLogger_LogsMethodPathStatus(t *testing.T) {
 			return time.Unix(0, int64(calls)*int64(time.Millisecond))
 		},
 	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/predict/open", nil)
-	req.Header.Set("X-Correlation-ID", "cid-1")
+	req := httptest.NewRequest(http.MethodPost, "/v1/predict/open", nil).
+		WithContext(withCorrelationID(context.Background(), "cid-1"))
 	mw.ServeHTTP(httptest.NewRecorder(), req)
 	var rec map[string]any
 	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &rec); err != nil {

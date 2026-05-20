@@ -8,18 +8,33 @@ services:
       - "/data"
       - "-m"
       - "8222"
+    # Bind to the loopback interface so the dev stack is not
+    # accessible from other machines on the LAN. Operators who need
+    # remote access should change this explicitly and add auth.
     ports:
-      - "4222:4222"
-      - "8222:8222"
+      - "127.0.0.1:4222:4222"
+      - "127.0.0.1:8222:8222"
     volumes:
       - nats-data:/data
 
   redis:
     image: redis:7-alpine
     container_name: sn360es-redis
-    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
+    # The dev password is intentionally not a secret — it gates
+    # accidental connections from cohabiting containers/tools on the
+    # same loopback, not real attackers. Match REDIS_PASSWORD in
+    # .env.example so `make run` works out of the box.
+    command:
+      - "redis-server"
+      - "--save"
+      - "60"
+      - "1"
+      - "--appendonly"
+      - "yes"
+      - "--requirepass"
+      - "sn360es-dev"
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
 
@@ -31,7 +46,7 @@ services:
       POSTGRES_PASSWORD: sn360es
       POSTGRES_DB: sn360es
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
@@ -39,14 +54,14 @@ services:
     image: rspamd/rspamd:3.14
     container_name: sn360es-rspamd
     ports:
-      - "11333:11333"
-      - "11334:11334"
+      - "127.0.0.1:11333:11333"
+      - "127.0.0.1:11334:11334"
 
   unbound:
     image: mvance/unbound:latest
     container_name: sn360es-unbound
     ports:
-      - "5335:53/udp"
+      - "127.0.0.1:5335:53/udp"
 
   # ClamAV is used by the attachment pre-screening dev workflow.
   # It exposes the clamd daemon on port 3310; the freshclam mirror is
@@ -57,7 +72,7 @@ services:
     image: clamav/clamav:1.4
     container_name: sn360es-clamav
     ports:
-      - "3310:3310"
+      - "127.0.0.1:3310:3310"
     volumes:
       - clamav-data:/var/lib/clamav
     healthcheck:

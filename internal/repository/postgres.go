@@ -859,15 +859,21 @@ func (p *pgGroupMemberships) ReplaceForGroup(ctx context.Context, groupID string
 	if err != nil {
 		return err
 	}
+	if len(userIDs) == 0 {
+		return tx.Commit()
+	}
 	now := time.Now().UTC()
-	for _, uid := range userIDs {
-		_, err = tx.ExecContext(ctx, `
+	// Single-round-trip insert: unnest the user_id slice into rows
+	// rather than issuing one INSERT per user. The ON CONFLICT clause
+	// stays so duplicate user_ids within the same batch — or a stale
+	// row left by a crash mid-DELETE — don't fail the whole
+	// transaction.
+	_, err = tx.ExecContext(ctx, `
 INSERT INTO group_memberships (group_id, user_id, created_at)
-VALUES ($1,$2,$3)
-ON CONFLICT (group_id, user_id) DO NOTHING`, groupID, uid, now)
-		if err != nil {
-			return err
-		}
+SELECT $1, uid, $2 FROM unnest($3::text[]) AS uid
+ON CONFLICT (group_id, user_id) DO NOTHING`, groupID, now, pq.Array(userIDs))
+	if err != nil {
+		return err
 	}
 	return tx.Commit()
 }

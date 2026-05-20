@@ -3,7 +3,6 @@ package middleware
 import (
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -70,7 +69,7 @@ func (l *RequestLogger) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.Int64("http.latency_ms", latency.Milliseconds()),
 		slog.Int("http.bytes_out", sw.bytes),
 	}
-	if cid := strings.TrimSpace(r.Header.Get("X-Correlation-ID")); cid != "" {
+	if cid := CorrelationIDFromContext(r.Context()); cid != "" {
 		attrs = append(attrs, slog.String("correlation_id", cid))
 	}
 	if tid := TenantIDFromContext(r.Context()); tid != "" {

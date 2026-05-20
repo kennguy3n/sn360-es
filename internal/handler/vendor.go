@@ -63,8 +63,13 @@ func (h *VendorHandler) ServeCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	// Cap body size and reject unknown fields, matching the rest of
+	// the handler package (quarantine.go, escalation.go, predict.go).
+	// 8 KiB is well above any legitimate vendor-create payload.
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024))
+	dec.DisallowUnknownFields()
 	var req vendorCreateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -101,8 +106,10 @@ func (h *VendorHandler) ServeApprove(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "domain required in path")
 		return
 	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024))
+	dec.DisallowUnknownFields()
 	var req vendorApproveRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -136,8 +143,10 @@ func (h *VendorHandler) ServeRevoke(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "domain required in path")
 		return
 	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024))
+	dec.DisallowUnknownFields()
 	var req vendorApproveRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
