@@ -17,8 +17,10 @@ consumers are wired today.
 - **`EventService` interface** — `pkg/events/interface.go` with NATS
   and Redis Streams implementations selected at runtime by the
   `EVENT_BUS_TYPE` config flag (`pkg/events/factory.go`).
-- **Dead-letter routing** — `pkg/events/nats/dlq.go` and
-  `internal/service/dlq_processor.go`.
+- **Dead-letter routing** — `pkg/events/nats/dlq.go`,
+  `internal/service/dlq_processor.go` (DLQ consumer), and
+  `internal/service/dlq_alerting.go` (per-tenant burst detection +
+  warn-level alerting on sustained NAK loops).
 
 ## Detection Pipeline
 
@@ -59,18 +61,21 @@ orchestrator with per-component circuit breakers
 ### Sensitivity Classifier
 
 `internal/service/agent/sensitivity_classifier.go` — tiered
-classification pipeline for user sensitivity (Max / High / Elevated /
-Default) used during onboarding and directory sync:
+classification pipeline for user sensitivity (Critical / Max / High /
+Elevated / Default) used during onboarding and directory sync:
 
 - **Encoder** — first pass via the Tier 1 encoder model.
 - **Bonsai** (optional) — second pass via the Bonsai SLM when
   `SENSITIVITY_BONSAI_URL` is configured. Falls back to encoder-only
   when unset.
 - **Keyword fallback** — multilingual keyword matching across English,
-  Japanese, Korean, Thai, Vietnamese, and Chinese. Three tiers of
-  keywords cover executive titles (Max), finance/legal/HR roles
-  (High), and procurement/admin roles (Elevated). Activates when ML
-  classifiers are unavailable.
+  Japanese, Korean, Thai, Vietnamese, and Chinese. The keyword sets
+  cover infrastructure-access roles (Critical: DBA, SRE Lead, Cloud
+  Admin, Platform Engineer), executive titles (Max: CEO, CFO, Board),
+  finance / legal / HR / M&A / R&D roles (High), and procurement /
+  admin / DevOps / paralegal roles (Elevated). Activates when ML
+  classifiers are unavailable. The five-tier model is persisted via
+  `migrations/0012_expand_sensitivity_tiers`.
 
 ### Categoriser
 
@@ -337,6 +342,14 @@ deterministic fallback.
 - **Provider clients** — `pkg/email_provider/{gmail,outlook}/` —
   concrete `LabelProvider`, `BannerInjector`, `QuarantineProvider`,
   `DirectoryClient`, and `MailboxProvider` implementations.
+- **Push-notification receivers** (implemented, not yet routed) —
+  `internal/service/ingestion/push.go` (PushManager + receivers) and
+  `internal/handler/push_webhook.go` (`POST /v1/push/{provider}/{tenant}`)
+  with Google Pub/Sub OIDC + Microsoft Graph clientState verification
+  in `internal/handler/push_signature.go`. The handler is unit-tested
+  but the route is intentionally not mounted in
+  `cmd/sn360-es/routes.go` yet — see
+  [ARCHITECTURE.md §5.1.2](./ARCHITECTURE.md#512-push-notification-receivers-implemented-not-yet-routed).
 
 ## Periodic Workers
 
@@ -365,7 +378,12 @@ process. Key wiring:
 - Every service constructor invoked with the relevant config struct;
   HTTP handlers registered with `handler != nil` guards so missing
   dependencies return 503 instead of crashing.
-- Middleware chain: telemetry → JWT auth → CORS → request logger.
+- Middleware chain (outside→in): telemetry → request-id → request-logger
+  → CORS → rate-limit → JWT-auth → mux. Each tier short-circuits on
+  failure; the JWT layer is skipped on the documented public paths
+  (`/v1/banner/action`, `/v1/predict/*`, `/v1/onboarding/*`,
+  `/v1/educate/lesson/*`, `/l/{token}`, the health probes, and
+  `/metrics`).
 - NATS consumers registered before HTTP `ListenAndServe`; graceful
   shutdown closes subscriptions before the HTTP server and event bus.
 - Provider-side action consumers
