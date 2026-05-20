@@ -340,9 +340,26 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		logger.Warn("sn360-es: simulation engine init failed", slog.Any("error", eerr))
 	}
 
-	// Simulation tracker.
+	// Simulation tracker: same fallback policy as the campaign
+	// store. The PostgresInteractionStore persists each interaction
+	// into the education_interactions table (created on first boot
+	// via EnsureSchema) so per-target opens/clicks/reports survive
+	// a restart.
+	var interactionStore education.InteractionStore
+	if app.pgDB != nil {
+		pgTrack := education.NewPostgresInteractionStore(app.pgDB)
+		if err := pgTrack.EnsureSchema(ctx); err != nil {
+			logger.Warn("sn360-es: interaction store schema check failed; falling back to memory",
+				slog.Any("error", err))
+			interactionStore = education.NewMemoryInteractionStore()
+		} else {
+			interactionStore = pgTrack
+		}
+	} else {
+		interactionStore = education.NewMemoryInteractionStore()
+	}
 	if tracker, terr := education.NewSimulationTracker(education.TrackerConfig{
-		Store:  education.NewMemoryInteractionStore(),
+		Store:  interactionStore,
 		Logger: logger,
 	}); terr == nil {
 		app.simulationTracker = tracker
@@ -663,10 +680,11 @@ func assertProductionDurableStores(cfg *config.Config, app *application, logger 
 			blocker: true,
 		})
 	}
-	if app.simulationTracker != nil {
+	if app.simulationTracker != nil && app.pgDB == nil {
 		inMemory = append(inMemory, memStore{
-			name: "simulation interaction store",
-			fix:  "no persistent backend implemented yet; tracked in DEGRADATION_MODES.md",
+			name:    "simulation interaction store",
+			fix:     "configure PG_HOST/PG_DATABASE so simulation interactions survive a restart",
+			blocker: true,
 		})
 	}
 
