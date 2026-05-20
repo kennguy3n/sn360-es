@@ -1,0 +1,25 @@
+{{- /*
+PodDisruptionBudget keeps at least one sn360-es replica available
+during voluntary disruptions (node drains, cluster upgrades, control-
+plane evictions). We only emit the PDB when autoscaling is enabled
+AND minReplicas > 1; rendering one for a single-replica deployment
+would deadlock the eviction API since `minAvailable: 1` cannot be
+satisfied by a pool of size 1 mid-drain.
+
+The selector reuses sn360-es.selectorLabels so pods rendered by the
+Deployment template are covered automatically — there is no separate
+label maintenance burden when the chart adds new labels.
+*/ -}}
+{{- if and .Values.autoscaling.enabled (gt (int .Values.autoscaling.minReplicas) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "sn360-es.fullname" . }}
+  labels:
+    {{- include "sn360-es.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "sn360-es.selectorLabels" . | nindent 6 }}
+{{- end }}
