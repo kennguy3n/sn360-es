@@ -367,7 +367,8 @@ multiple replicas of the same binary behind the same event bus.
 #### 5.1.1 Ingestion Polling
 
 The polling layer lives in `internal/service/ingestion/` and is wired
-by `cmd/sn360-es/main.go` (`buildPoller`, `buildMailboxProviders`).
+by `cmd/sn360-es/wire_infra.go` (`buildPoller`, `buildMailboxProviders`)
+from `cmd/sn360-es/main.go`.
 
 - **`Poller`** (`internal/service/ingestion/poller.go`): owns one
   `MailboxProvider` per provider kind (Gmail, Outlook) plus a worker
@@ -406,6 +407,49 @@ by `cmd/sn360-es/main.go` (`buildPoller`, `buildMailboxProviders`).
   poller is not constructed at all and `StartBackground` becomes a
   no-op.
 
+#### 5.1.2 Push-Notification Receivers (implemented, not yet routed)
+
+Alongside the polling fallback, the codebase contains a push-notification
+ingestion path designed to short-circuit poll latency for tenants whose
+provider supports webhook delivery (Gmail Pub/Sub, Microsoft Graph
+Change Notifications):
+
+- **`PushManager`** (`internal/service/ingestion/push.go`): owns one
+  `PushReceiver` per provider kind, registers / renews subscriptions
+  on a renewal loop, and dispatches inbound notifications to the
+  matching receiver.
+- **`PushWebhookHandler`** (`internal/handler/push_webhook.go`):
+  parses the `POST /v1/push/{provider}/{tenant}` URL, echoes the
+  Microsoft Graph `validationToken` verbatim on the validation
+  round-trip (with `Content-Type: text/plain; charset=utf-8` and
+  `X-Content-Type-Options: nosniff` for defense-in-depth), reads the
+  body under a 4 MiB cap, authenticates the caller via the
+  `PushSignatureVerifier`, and delegates to
+  `ingestion.HandlePushNotification`.
+- **`PushSignatureVerifier`** (`internal/handler/push_signature.go`):
+    - `GoogleOIDCVerifier` validates the Pub/Sub OIDC bearer token
+      against Google's JWKS (`https://www.googleapis.com/oauth2/v3/certs`),
+      checks `aud == INGESTION_PUSH_GOOGLE_AUDIENCE` and
+      `iss == https://accounts.google.com`, and collapses concurrent
+      JWKS refreshes via `singleflight.Group` to defeat
+      thundering-herd on key rotation.
+    - `MicrosoftClientStateVerifier` confirms each
+      `value[i].clientState` matches the per-tenant secret using
+      `crypto/subtle.ConstantTimeCompare` so the comparison does not
+      leak timing oracles.
+    - `PushSignatureRouter` dispatches verification based on the
+      `provider` path segment and returns `400` (not a misleading
+      `401`) for unknown provider names.
+
+The verifiers and handler are unit-tested in
+`internal/handler/push_webhook_test.go` (which exercises both the
+HTTP handler and the Google / Microsoft verifiers), but the
+`/v1/push/{provider}/{tenant}` route is intentionally not mounted in
+`cmd/sn360-es/routes.go` yet: the receivers + per-tenant
+`clientState` storage that make push end-to-end are part of work that
+is not yet wired. The poller in §5.1.1 remains the only ingestion
+path in the running binary.
+
 ### 5.2 Evaluation Domain
 
 - **Tier 0 Gate**: Rule-based classification using `buildRiskSignals()`
@@ -438,6 +482,7 @@ by `cmd/sn360-es/main.go` (`buildPoller`, `buildMailboxProviders`).
 ### 5.5 Shared Packages
 
 - **`pkg/httpclient/`**: HTTP/2 pooled client with retry, circuit breaker, and per-call timeout. Shared by the VirusTotal URL scanner, the encoder client (Tier 1), the SLM client (Tier 2), and tenant provider clients.
+- **`pkg/email_provider/`**: Provider-agnostic mailbox-provider abstractions (token sources, mailbox listing, message fetch, label / category mutation) used by the Gmail and Outlook implementations under `internal/service/ingestion/`.
 - **`pkg/storage/postgres/`**: pgx-based PostgreSQL connection helper with structured `Config` and `Open` / `Close` / `Ping` / `Driver` accessors.
 - **`pkg/storage/redis/`**: Redis pipeline wrapper, scan / prefix helpers, and JSON serialization helpers used by the `internal/service/cache/` AI + Rspamd caches and the action-token cache.
 - **`pkg/storage/s3/`**: AWS S3 client wrapper for raw-body offload (optional).
@@ -617,7 +662,7 @@ leader via a Redis lock so only one replica runs them at a time.
 - **Tool**: `golang-migrate/migrate` v4 (PostgreSQL driver).
 - **CLI**: `cmd/sn360-es-migrate/` wraps the library so deployments can run migrations as a Kubernetes Job (template included in the Helm chart).
 - **Make targets**: `make migrate-up`, `make migrate-down`, `make migrate-check` (validates SQL syntax in CI).
-- **Schema**: `migrations/0001_init.{up,down}.sql` provisions the base 14 tables (tenants, users, groups, group_memberships, labels, score_engine, email_classifications, vendors, evaluation_results, communication_histories, campaigns, simulation_results, escalation_tickets, audit_logs). Subsequent migrations add 5 more: feedback_events (0002), oauth_tokens (0005), sync_checkpoints (0008), user_behavioral_baselines (0009), and org_graphs (0010) — 19 tables total.
+- **Schema**: `migrations/0001_init.{up,down}.sql` provisions the base 14 tables (tenants, users, groups, group_memberships, labels, score_engine, email_classifications, vendors, evaluation_results, communication_histories, campaigns, simulation_results, escalation_tickets, audit_logs). Subsequent migrations (0002–0012) add five more tables — feedback_events (0002), oauth_tokens (0005), sync_checkpoints (0008), user_behavioral_baselines (0009), org_graphs (0010) — and seven `ALTER` migrations evolve existing tables (escalation resolution code, communication-history sender domain / timing, sensitivity confidence + admin review, tenant FK cascade, expanded sensitivity tiers). Nineteen tables total at HEAD.
 
 ### 6.5 Deployment Artifacts
 
