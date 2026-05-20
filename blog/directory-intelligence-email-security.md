@@ -179,7 +179,7 @@ The Ternary-Bonsai-8B SLM is a self-hosted small language model that provides:
 
 ### Always-On Parallel: Rspamd Heuristics
 
-Regardless of which ML tier processes the email, Rspamd runs in parallel checking SPF, DKIM, DMARC, RBL reputation, and header anomalies. Its score is combined with the ML verdict through weighted aggregation (default: 80% ML, 20% Rspamd).
+Regardless of which ML tier processes the email, Rspamd runs in parallel checking SPF, DKIM, DMARC, RBL reputation, and header anomalies. Its score is combined with the ML verdict through weighted aggregation alongside URL- and attachment-scanner output. The platform defaults are 60% AI, 15% attachments, 15% links, and 10% Rspamd — every component contributes meaningful signal now that they are all wired into the pipeline, and the agent layer continuously retunes the mix from observed false-positive / false-negative rates within bounded shift caps.
 
 ### The Cost Math
 

@@ -114,10 +114,10 @@ with **two** end-user signals:
 | Tier | Score | Banner Color | Native Label | Action |
 |---|---|---|---|---|
 | **Blocked** | 85-100 | Red (filled) | `SN360 / Blocked` | Auto-quarantine; release requires admin (AI agent) approval |
-| **High Risk** | 70-84 | Red (filled) | `SN360 / Warning` | Banner with strong wording; URLs rewritten/disabled |
-| **Warning** | 50-69 | Orange | `SN360 / Caution` | Banner with actionable buttons + micro-lesson |
-| **Caution** | 30-49 | Yellow | `SN360 / Notice` | Compact footer banner |
-| **Informational** | 15-29 | Blue | `SN360 / External` | Contextual chip ("First contact", "External") |
+| **High Risk** | 70-84 | Red (filled) | `SN360 / HighRisk` | Banner with strong wording; URLs rewritten/disabled |
+| **Warning** | 50-69 | Orange | `SN360 / Warning` | Banner with actionable buttons + micro-lesson |
+| **Caution** | 30-49 | Yellow | `SN360 / Caution` | Compact footer banner |
+| **Informational** | 15-29 | Blue | `SN360 / Informational` | Contextual chip ("First contact", "External") |
 | **Trusted** | 0-14 | Green chip | `SN360 / Trusted` | Optional verified-sender chip |
 
 ### Category Labels (Specific, Not Generic)
@@ -190,7 +190,7 @@ infrastructure is missing.
 | Area | Implemented | Wired into `cmd/sn360-es` | Notes |
 |---|---|---|---|
 | HTTP server, health, metrics, OpenAPI/docs | Yes | Yes | Always on |
-| Middleware (telemetry, request logger, CORS, JWT auth) | Yes | Yes | JWT skips `/healthz`, `/readyz`, `/metrics`, `/docs`, `/openapi.yaml` |
+| Middleware (telemetry, request-id, request logger, CORS, rate limit, JWT auth) | Yes | Yes | Chain order: telemetry → request-id → request-logger → CORS → rate-limit → JWT-auth → mux. JWT-skipped paths are listed in `defaultAuthSkipPaths()` (`/healthz`, `/readyz`, `/metrics`, `/docs`, `/docs/`, `/openapi.yaml`, `/l/`, `/v1/banner/action`, `/v1/quarantine/release`, `/v1/education/lesson/`, `/v1/onboarding/callback`) |
 | Event bus (NATS JetStream + Redis Streams fallback + factory) | Yes | Yes | Selected via `EVENT_BUS_TYPE=nats\|redis` |
 | Tier 0 classification gate | Yes | Yes | Pure CPU, in-process |
 | Tier 1 encoder client | Yes | Optional | Requires the encoder service from [`deployments/encoder/`](./deployments/encoder/) |
@@ -200,6 +200,7 @@ infrastructure is missing.
 | Banner / label / quarantine / URL-rewrite / feedback services | Yes | Partial | URL rewriter and quarantine release require Redis + JWT secret; degrade to 503 when unset |
 | Provider-side action consumers (`es.action.{banner,label,url_rewrite,quarantine}`) | Yes | Yes | Best-effort; degrade to logging when no provider is registered for the tenant |
 | Ingestion polling (Gmail + Outlook MailboxProviders, Redis checkpoint, distributed lock) | Yes | Optional | Requires GWS / O365 credentials; the poller is not constructed when both are unset |
+| Push-webhook signature verification (Google Pub/Sub OIDC + Microsoft Graph clientState) | Yes | No | `PushSignatureVerifier` interface + `GoogleOIDCVerifier` (JWKS-backed, `singleflight`-collapsed refresh) + `MicrosoftClientStateVerifier` (constant-time compare) live in `internal/handler/push_signature.go` with handler `PushWebhookHandler` in `internal/handler/push_webhook.go`. The verifiers are unit-tested but the `POST /v1/push/{provider}/{tenant}` route is intentionally not mounted: receivers and per-tenant `clientState` storage are part of the push-ingestion pipeline that is not yet wired. Google audience is read from `INGESTION_PUSH_GOOGLE_AUDIENCE` |
 | AI agents (Onboarding, Tuning, Support) | Yes | Optional | Each is wired only when its inputs (directory client, repos, event bus) are available |
 | Directory sync (delta/incremental, GWS + O365) | Yes | Optional | Requires provider credentials; falls back to full enumeration when no delta token exists |
 | Nested group resolution (O365 transitive memberOf) | Yes | Optional | Enabled via `O365_RESOLVE_NESTED_GROUPS`; falls back to direct memberOf on error |
@@ -229,7 +230,7 @@ than crashing the process.
 Prerequisites:
 
 - Go 1.25+ (matches `go.mod`)
-- Docker / Docker Compose for the local NATS + PostgreSQL + Redis + Rspamd stack
+- Docker / Docker Compose for the local NATS + PostgreSQL + Redis + Rspamd + Unbound + ClamAV stack
 - Optional: a running Tier 1 encoder ([`deployments/encoder/`](./deployments/encoder/))
   and Tier 2 SLM ([`deployments/llm/`](./deployments/llm/)) for end-to-end ML;
   the binary degrades gracefully when either is missing.
@@ -321,16 +322,19 @@ sn360-es/
 │   │   ├── dashboard/                   # AI-generated admin dashboard
 │   │   ├── education/                   # Micro-lessons, simulation, resilience, adaptive
 │   │   ├── evaluate/                    # Tier 0/1/2 + score + URL + attachment pre-scan
+│   │   ├── ingestion/                   # Mailbox polling, push subscriptions, action dispatch
 │   │   ├── onboarding/                  # OAuth flow + org graph builder
 │   │   ├── predict/                     # Pre-send / pre-open recipient analysis
 │   │   ├── relationship/                # Categories, vulnerability, vendor, timing, baselines
 │   │   ├── tenant/                      # Tenant CRUD + cryptographic erasure
 │   │   ├── tier0/                       # Pure-CPU classification gates
 │   │   ├── tier1/                       # Encoder client + batch orchestration
-│   │   └── worker/                      # Periodic workers (relationship, directory sync, vendor, cleanup)
+│   │   ├── worker/                      # Periodic workers (relationship, directory sync, vendor, cleanup)
+│   │   └── dlq_processor.go, dlq_alerting.go  # Dead-letter consumer + alerting
 │   ├── docs/                            # Design, architecture, and codebase guide
 │   └── translation/                     # Cross-service i18n bundles (banners/)
 ├── pkg/
+│   ├── email_provider/                  # GWS / O365 mailbox provider abstractions
 │   ├── events/                          # bus factory, NATS JetStream, Redis Streams fallback
 │   ├── httpclient/                      # HTTP/2 pooled client + circuit breaker
 │   ├── privacy/                         # Pseudonymisation, KMS, encryption, JWT, erasure
@@ -342,7 +346,7 @@ sn360-es/
 │   ├── corpus/                          # Generated corpus artefacts (all.json, …)
 │   ├── corpus_generator/                # Generator source + README.md
 │   └── corpus_schema.json               # JSON schema for corpus entries
-├── docker-compose.yml                   # Local NATS + Postgres + Redis + Rspamd + ClamAV
+├── docker-compose.yml                   # Local NATS + Postgres + Redis + Rspamd + Unbound + ClamAV (all bound to 127.0.0.1)
 ├── Dockerfile
 ├── Makefile                             # test, lint, migrate-up/-down/-check, bench-* targets
 └── README.md
