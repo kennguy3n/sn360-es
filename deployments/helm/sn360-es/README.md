@@ -13,7 +13,9 @@ helm install sn360-es deployments/helm/sn360-es \
   --set secret.data.jwtSigningKey=$JWT_KEY
 ```
 
-Override defaults with `-f values.dev.yaml` or `-f values.prod.yaml`.
+Override defaults with one of the per-environment files: `values.dev.yaml`,
+`values.qa.yaml`, `values.uat.yaml`, or `values.prod.yaml`. The ArgoCD
+`Application` selects the right file per cluster (see below).
 
 ## Values
 
@@ -50,5 +52,5 @@ documentation. Key sections:
 
 The companion ArgoCD `Application` manifest lives at
 [`deployments/argocd/application.yaml`](../../argocd/application.yaml).
-It points to this chart and consumes `values.dev.yaml` /
-`values.prod.yaml` per cluster.
+It points to this chart and consumes the matching
+`values.{dev,qa,uat,prod}.yaml` per cluster.
