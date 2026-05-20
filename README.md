@@ -114,10 +114,10 @@ with **two** end-user signals:
 | Tier | Score | Banner Color | Native Label | Action |
 |---|---|---|---|---|
 | **Blocked** | 85-100 | Red (filled) | `SN360 / Blocked` | Auto-quarantine; release requires admin (AI agent) approval |
-| **High Risk** | 70-84 | Red (filled) | `SN360 / Warning` | Banner with strong wording; URLs rewritten/disabled |
-| **Warning** | 50-69 | Orange | `SN360 / Caution` | Banner with actionable buttons + micro-lesson |
-| **Caution** | 30-49 | Yellow | `SN360 / Notice` | Compact footer banner |
-| **Informational** | 15-29 | Blue | `SN360 / External` | Contextual chip ("First contact", "External") |
+| **High Risk** | 70-84 | Red (filled) | `SN360 / HighRisk` | Banner with strong wording; URLs rewritten/disabled |
+| **Warning** | 50-69 | Orange | `SN360 / Warning` | Banner with actionable buttons + micro-lesson |
+| **Caution** | 30-49 | Yellow | `SN360 / Caution` | Compact footer banner |
+| **Informational** | 15-29 | Blue | `SN360 / Informational` | Contextual chip ("First contact", "External") |
 | **Trusted** | 0-14 | Green chip | `SN360 / Trusted` | Optional verified-sender chip |
 
 ### Category Labels (Specific, Not Generic)
@@ -190,7 +190,7 @@ infrastructure is missing.
 | Area | Implemented | Wired into `cmd/sn360-es` | Notes |
 |---|---|---|---|
 | HTTP server, health, metrics, OpenAPI/docs | Yes | Yes | Always on |
-| Middleware (telemetry, request-id, request logger, CORS, rate limit, JWT auth) | Yes | Yes | Chain order: telemetry → request-id → request-logger → CORS → rate-limit → JWT-auth → mux. JWT skips `/healthz`, `/readyz`, `/metrics`, `/docs`, `/openapi.yaml` |
+| Middleware (telemetry, request-id, request logger, CORS, rate limit, JWT auth) | Yes | Yes | Chain order: telemetry → request-id → request-logger → CORS → rate-limit → JWT-auth → mux. JWT-skipped paths are listed in `defaultAuthSkipPaths()` (`/healthz`, `/readyz`, `/metrics`, `/docs`, `/docs/`, `/openapi.yaml`, `/l/`, `/v1/banner/action`, `/v1/quarantine/release`, `/v1/education/lesson/`, `/v1/onboarding/callback`) |
 | Event bus (NATS JetStream + Redis Streams fallback + factory) | Yes | Yes | Selected via `EVENT_BUS_TYPE=nats\|redis` |
 | Tier 0 classification gate | Yes | Yes | Pure CPU, in-process |
 | Tier 1 encoder client | Yes | Optional | Requires the encoder service from [`deployments/encoder/`](./deployments/encoder/) |

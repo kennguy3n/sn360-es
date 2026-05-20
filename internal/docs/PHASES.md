@@ -380,10 +380,13 @@ process. Key wiring:
   dependencies return 503 instead of crashing.
 - Middleware chain (outside→in): telemetry → request-id → request-logger
   → CORS → rate-limit → JWT-auth → mux. Each tier short-circuits on
-  failure; the JWT layer is skipped on the documented public paths
-  (`/v1/banner/action`, `/v1/predict/*`, `/v1/onboarding/*`,
-  `/v1/educate/lesson/*`, `/l/{token}`, the health probes, and
-  `/metrics`).
+  failure; the JWT layer is skipped only on the paths listed in
+  `defaultAuthSkipPaths()` in [`cmd/sn360-es/routes.go`](../../cmd/sn360-es/routes.go):
+  `/healthz`, `/readyz`, `/metrics`, `/docs`, `/docs/`, `/openapi.yaml`,
+  `/l/`, `/v1/banner/action`, `/v1/quarantine/release`,
+  `/v1/education/lesson/`, and `/v1/onboarding/callback`. Every other
+  route — including `/v1/predict/*` and the rest of `/v1/onboarding/*`
+  (`start`, `status`, `revoke`) — requires a valid JWT.
 - NATS consumers registered before HTTP `ListenAndServe`; graceful
   shutdown closes subscriptions before the HTTP server and event bus.
 - Provider-side action consumers
