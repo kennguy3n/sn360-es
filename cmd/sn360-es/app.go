@@ -311,8 +311,25 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 			simSender = smtpSender
 		}
 	}
+	// Simulation campaign store: prefer the durable Postgres
+	// backend when PG_HOST is configured so campaigns survive a
+	// restart; fall back to in-memory only in local/dev to keep
+	// integration tests and `make run` working without a database.
+	var campaignStore education.CampaignStore
+	if app.pgDB != nil {
+		pgStore := education.NewPostgresCampaignStore(app.pgDB)
+		if err := pgStore.EnsureSchema(ctx); err != nil {
+			logger.Warn("sn360-es: campaign store schema check failed; falling back to memory",
+				slog.Any("error", err))
+			campaignStore = education.NewMemoryCampaignStore()
+		} else {
+			campaignStore = pgStore
+		}
+	} else {
+		campaignStore = education.NewMemoryCampaignStore()
+	}
 	if eng, eerr := education.NewSimulationEngine(education.EngineConfig{
-		Store:     education.NewMemoryCampaignStore(),
+		Store:     campaignStore,
 		Templates: education.NewTemplateLibrary(),
 		Sender:    simSender,
 		Publisher: eventBus,
@@ -633,14 +650,17 @@ func assertProductionDurableStores(cfg *config.Config, app *application, logger 
 			blocker: true,
 		})
 	}
-	// Simulation engine + tracker have no persistent backend implemented
-	// yet, so we surface the data-loss exposure as a non-blocking warning
-	// even in production rather than refusing boot. Replacing these with
-	// durable stores is tracked in internal/docs/DEGRADATION_MODES.md.
-	if app.simulationEng != nil {
+	// Simulation engine + tracker now have durable Postgres
+	// backends (PostgresCampaignStore + PostgresInteractionStore)
+	// wired in newApplication. If the binary is still running on
+	// the in-memory fallback in a production environment it means
+	// PG_HOST/PG_DATABASE were not configured — that's a real
+	// data-loss exposure, so treat it as a boot blocker.
+	if app.simulationEng != nil && app.pgDB == nil {
 		inMemory = append(inMemory, memStore{
-			name: "simulation campaign store",
-			fix:  "no persistent backend implemented yet; tracked in DEGRADATION_MODES.md",
+			name:    "simulation campaign store",
+			fix:     "configure PG_HOST/PG_DATABASE so simulation campaigns survive a restart",
+			blocker: true,
 		})
 	}
 	if app.simulationTracker != nil {
