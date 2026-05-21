@@ -194,6 +194,21 @@ func NewOTLPBridge(ctx context.Context, cfg OTLPBridgeConfig) (Exporter, Shutdow
 	if err != nil {
 		return nil, nil, fmt.Errorf("telemetry: init OTLP/HTTP exporter: %w", err)
 	}
+	// Defensive: if any wiring step BELOW this point fails, we
+	// must shut the freshly-opened OTLP HTTP client down so a
+	// retried boot doesn't accumulate dangling connections / file
+	// descriptors. The flag flips to false once we hand `exp` to
+	// the BatchSpanProcessor, after which shutdown is the caller's
+	// responsibility via the returned ShutdownFunc.
+	expOwned := true
+	defer func() {
+		if !expOwned {
+			return
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = exp.Shutdown(shutdownCtx)
+	}()
 
 	serviceName := cfg.ServiceName
 	if serviceName == "" {
@@ -224,6 +239,10 @@ func NewOTLPBridge(ctx context.Context, cfg OTLPBridgeConfig) (Exporter, Shutdow
 		sdktrace.WithMaxExportBatchSize(512),
 	)
 
+	// Ownership of `exp` has now transferred to processor.Shutdown,
+	// which is wired into the returned ShutdownFunc below. Disable
+	// the bail-out cleanup so we don't double-Shutdown the exporter.
+	expOwned = false
 	bridge := &otlpBridgeExporter{processor: processor, resource: res}
 
 	shutdown := func(sctx context.Context) error {
