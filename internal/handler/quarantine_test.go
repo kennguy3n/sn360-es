@@ -59,6 +59,17 @@ func (s *qhFakeStore) Del(_ context.Context, keys ...string) error {
 	return nil
 }
 
+func (s *qhFakeStore) GetDel(_ context.Context, key string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.data[key]
+	if !ok {
+		return "", false, nil
+	}
+	delete(s.data, key)
+	return v, true, nil
+}
+
 type qhFakeEncryptor struct{}
 
 func (qhFakeEncryptor) Encrypt(_ context.Context, tenant string, plaintext []byte) ([]byte, error) {

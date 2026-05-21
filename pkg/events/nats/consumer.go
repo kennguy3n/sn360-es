@@ -179,13 +179,22 @@ func (c *Consumer) Subject() string { return c.subject }
 
 // Close stops delivery and waits for in-flight handlers.
 //
-// Order is significant: cc.Stop() first prevents the JetStream
-// library from dispatching new messages, then parentCancel signals
-// to in-flight handlers that the consumer is shutting down, then
-// wg.Wait() blocks until they return. Cancelling parentCtx before
-// Stop would race against handlers that were already on the
-// dispatch goroutine but had not yet returned from the channel
-// receive.
+// Order matters for correctness:
+//
+//  1. Flip the `closed` flag under the mutex. Dispatch invocations
+//     entering after this point check the flag (also under the
+//     mutex) and return immediately without calling wg.Add — so
+//     wg.Wait below cannot race with a late dispatch incrementing
+//     the counter from zero after wg.Wait has already returned.
+//  2. parentCancel signals in-flight handlers (whose ctx chains
+//     off parentCtx) that shutdown is in progress so they can
+//     abort cleanly.
+//  3. cc.Stop tells the JetStream library to stop scheduling new
+//     dispatch callbacks. After Stop returns, the library still
+//     drains any callbacks already in flight; that is what wg.Wait
+//     blocks on.
+//  4. wg.Wait blocks until every dispatch that had passed the
+//     closed-check (and therefore called wg.Add(1)) has returned.
 func (c *Consumer) Close() error {
 	c.mu.Lock()
 	if c.closed {
@@ -195,19 +204,36 @@ func (c *Consumer) Close() error {
 	c.closed = true
 	c.mu.Unlock()
 
-	if c.cc != nil {
-		c.cc.Stop()
-	}
 	if c.parentCancel != nil {
 		c.parentCancel()
+	}
+	if c.cc != nil {
+		c.cc.Stop()
 	}
 	c.wg.Wait()
 	return nil
 }
 
 // dispatch is called by the JetStream library for every delivery.
+//
+// The closed-check and wg.Add must happen atomically under c.mu so
+// Close() cannot observe a wg.Wait that returns prematurely. The
+// JetStream library invokes dispatch from its own goroutine pool, so
+// without this guard the sequence (a) library invokes dispatch,
+// (b) Close sets closed=true and calls wg.Wait, (c) dispatch then
+// calls wg.Add(1) is observable: wg.Wait returns zero while a
+// handler is still running.
 func (c *Consumer) dispatch(jm jetstream.Msg) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		// The consumer is shutting down. Don't ack — JetStream
+		// will redeliver after AckWait expires and the new
+		// owner / next session can pick the message up.
+		return
+	}
 	c.wg.Add(1)
+	c.mu.Unlock()
 	defer c.wg.Done()
 
 	msg := &message{raw: jm}

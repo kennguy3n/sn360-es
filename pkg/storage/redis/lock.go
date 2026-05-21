@@ -16,6 +16,40 @@
 // The lock is used by the ingestion poller (per-mailbox locks to
 // dedupe across replicas) and by the periodic workers (leader
 // election so only one replica runs a worker cycle).
+//
+// IMPORTANT: single-node Redis lock — split-brain caveat.
+//
+// This implementation targets a SINGLE Redis instance. In an HA
+// Redis deployment (Sentinel failover, Cluster mode with replica
+// promotion, multi-AZ replication with async streaming), the
+// canonical SET NX EX primitive is NOT split-brain-safe:
+//
+//   - Replica promotion can lose the most recent SETs not yet
+//     streamed from the primary.
+//   - Two holders — the one that acquired against the deposed
+//     primary, and a new acquirer against the freshly-promoted
+//     replica — can each believe they own the lock simultaneously.
+//
+// The Redlock algorithm (multiple independent Redis instances,
+// quorum acquire) addresses this at the lock layer but adds
+// significant operational complexity (N independent instances,
+// clock-drift tolerances, fault budgets). For SN360-ES we treat the
+// Redis lock as an OPTIMISATION — it suppresses the common case of
+// two-replica contention — and rely on APPLICATION-LAYER FENCING for
+// correctness in safety-critical paths.
+//
+// Application-layer fencing is implemented as:
+//
+//  1. Persist the holder UUID (Token()) alongside the protected
+//     resource where you can read-and-compare-and-swap atomically.
+//  2. Make the critical operation idempotent at the persistence
+//     layer (e.g. the quarantine release flow uses an atomic GETDEL
+//     so two concurrent releases race to claim the encrypted
+//     reference — only one wins, the loser short-circuits).
+//
+// In short: use this lock to suppress contention; use the
+// persistence layer to enforce correctness. Document any
+// safety-critical caller that doesn't follow this pattern.
 package redis
 
 import (
@@ -143,6 +177,22 @@ func (l *DistributedLock) Extend(ctx context.Context, ttl time.Duration) (bool, 
 	}
 	return n == 1, nil
 }
+
+// Token returns the random 16-byte hex-encoded value this lock
+// instance writes into Redis on Acquire. It is the per-holder
+// fingerprint Release / Extend / Owns compare against — callers
+// that want application-layer fencing (see the package-level
+// split-brain caveat) should persist Token() alongside the
+// protected resource so a follow-up operation can compare-and-
+// swap on the holder identity.
+//
+// Example: a quarantine release flow that acquires this lock,
+// stores Token() into the encrypted reference, then on a later
+// restore call verifies the stored token still matches the
+// current holder's Token() before mutating the message. A split-
+// brain replica that acquired against a stale primary will have
+// a different Token() so the compare-and-swap fails.
+func (l *DistributedLock) Token() string { return l.value }
 
 // Owns reports whether the holder UUID still matches the current
 // value of the key. It is informational — callers should not gate

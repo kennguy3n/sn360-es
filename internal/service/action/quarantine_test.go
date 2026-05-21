@@ -49,6 +49,18 @@ func (s *fakeQStore) Del(_ context.Context, keys ...string) error {
 	return nil
 }
 
+func (s *fakeQStore) GetDel(_ context.Context, key string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.data[key]
+	if !ok {
+		return "", false, nil
+	}
+	delete(s.data, key)
+	delete(s.ttls, key)
+	return v, true, nil
+}
+
 // fakeQEncryptor xors with a 1-byte key derived from tenant id. Not
 // secure — only used to exercise encrypt/decrypt round-trips in
 // tests deterministically.
@@ -312,5 +324,111 @@ func TestQuarantine_ProviderEnsureFailureSurfacesError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error from ensure")
+	}
+}
+
+// failingDecryptor is a QuarantineEncryptor whose Decrypt always
+// returns an error. Used to exercise the ClaimReference re-persist
+// symmetry on decrypt failure without needing to corrupt the store
+// out-of-band.
+type failingDecryptor struct{}
+
+func (failingDecryptor) Encrypt(_ context.Context, _ string, plaintext []byte) ([]byte, error) {
+	return plaintext, nil
+}
+
+func (failingDecryptor) Decrypt(_ context.Context, _ string, _ []byte) ([]byte, error) {
+	return nil, errors.New("decrypt: simulated KMS failure")
+}
+
+// TestQuarantine_ClaimReferenceRepersistsOnHexFailure asserts that
+// when ClaimReference's hex.DecodeString fails AFTER the atomic
+// GETDEL has already removed the key, the raw encHex is written
+// back to the store so the reference is not stranded. This is the
+// symmetry guarantee with the post-claim provider-fail recovery
+// path (which calls RestoreReference) — both error categories
+// leave the store in the same pre-claim state so a retry can
+// succeed.
+func TestQuarantine_ClaimReferenceRepersistsOnHexFailure(t *testing.T) {
+	ctx := context.Background()
+	prov := newFakeQProvider(LabelProviderGmail, "Label_42")
+	svc, store := newQuarantineForTest(t, prov, &recordingPublisher{})
+
+	// Write a non-hex value directly into the store so the hex
+	// decode inside ClaimReference fails. The pre-condition is
+	// that the key exists — the actual content shape is irrelevant
+	// because we expect Claim to abort before decryption.
+	key := QuarantineKey("acme", "garbled")
+	const corrupt = "zzzz-not-hex-zzzz"
+	if err := store.Set(ctx, key, corrupt, time.Hour); err != nil {
+		t.Fatalf("store.Set: %v", err)
+	}
+
+	_, claimed, err := svc.ClaimReference(ctx, "acme", "garbled")
+	if err == nil {
+		t.Fatal("ClaimReference: expected error, got nil")
+	}
+	if claimed {
+		t.Fatal("ClaimReference: expected claimed=false, got true")
+	}
+
+	// Symmetry guarantee: the encrypted blob must still be
+	// readable from the store after the failed claim, with the
+	// exact value we wrote.
+	got, found, err := store.Get(ctx, key)
+	if err != nil {
+		t.Fatalf("post-claim store.Get: %v", err)
+	}
+	if !found {
+		t.Fatal("post-claim store.Get: key was not re-persisted after decode failure")
+	}
+	if got != corrupt {
+		t.Fatalf("post-claim store.Get: got %q, want %q (re-persist must preserve original blob byte-for-byte)", got, corrupt)
+	}
+}
+
+// TestQuarantine_ClaimReferenceRepersistsOnDecryptFailure asserts
+// the same symmetry guarantee for the decrypt failure branch — the
+// most plausible production failure (transient KMS outage,
+// rotated-out key, etc.) must not strand a quarantined message.
+func TestQuarantine_ClaimReferenceRepersistsOnDecryptFailure(t *testing.T) {
+	ctx := context.Background()
+	prov := newFakeQProvider(LabelProviderGmail, "Label_42")
+	store := newFakeQStore()
+	svc, err := NewQuarantineService(QuarantineConfig{
+		Providers: []QuarantineProvider{prov},
+		Store:     store,
+		Encryptor: failingDecryptor{},
+		Publisher: &recordingPublisher{},
+	})
+	if err != nil {
+		t.Fatalf("NewQuarantineService: %v", err)
+	}
+
+	// Pre-populate the store with a hex-valid blob so Claim
+	// proceeds past hex decode and fails inside Decrypt.
+	key := QuarantineKey("acme", "msg-decrypt")
+	const blobHex = "deadbeef"
+	if err := store.Set(ctx, key, blobHex, time.Hour); err != nil {
+		t.Fatalf("store.Set: %v", err)
+	}
+
+	_, claimed, err := svc.ClaimReference(ctx, "acme", "msg-decrypt")
+	if err == nil {
+		t.Fatal("ClaimReference: expected error, got nil")
+	}
+	if claimed {
+		t.Fatal("ClaimReference: expected claimed=false, got true")
+	}
+
+	got, found, err := store.Get(ctx, key)
+	if err != nil {
+		t.Fatalf("post-claim store.Get: %v", err)
+	}
+	if !found {
+		t.Fatal("post-claim store.Get: key was not re-persisted after decrypt failure")
+	}
+	if got != blobHex {
+		t.Fatalf("post-claim store.Get: got %q, want %q", got, blobHex)
 	}
 }

@@ -44,6 +44,12 @@ type application struct {
 	cfg     *config.Config
 	logger  *slog.Logger
 	metrics *telemetry.Metrics
+	// tracer is the W3C-traceparent span source. When
+	// OTEL_EXPORTER_OTLP_ENDPOINT is set its exporter is the OTLP
+	// bridge from pkg/telemetry/otel.go; otherwise it uses the
+	// no-op exporter so call sites can record spans
+	// unconditionally without paying any I/O cost.
+	tracer *telemetry.Tracer
 
 	eventBus events.EventService
 	pgDB     *postgres.DB
@@ -63,6 +69,14 @@ type application struct {
 	microLessonSvc    *education.MicroLessonService
 	simulationEng     *education.SimulationEngine
 	simulationTracker *education.SimulationTracker
+	// usingMemoryCampaignStore / usingMemoryInteractionStore record
+	// whether newApplication had to fall back to the in-memory
+	// education stores even though pgDB was wired (e.g. EnsureSchema
+	// failed against a degraded database). assertProductionDurableStores
+	// reads these so the prod boot gate fires on the real in-memory
+	// state, not just on pgDB == nil.
+	usingMemoryCampaignStore    bool
+	usingMemoryInteractionStore bool
 	dashboardGen      *dashboard.DashboardGenerator
 	recipientSvc      *predict.RecipientService
 	openSvc           *predict.OpenService
@@ -135,6 +149,24 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 			app.Close(logger)
 		}
 	}()
+
+	// Build the tracer up front so every downstream wiring can
+	// attach to it. When OTEL_EXPORTER_OTLP_ENDPOINT is set we
+	// stand up the real OTel SDK bridge — finished SN360 spans
+	// are forwarded through a BatchSpanProcessor to the
+	// configured collector with trace/span IDs preserved. When
+	// the env var is unset the tracer falls back to a no-op
+	// exporter so instrumented call sites pay no cost in dev /
+	// tests but the API contract (SpanContextFromContext, etc.)
+	// keeps working.
+	tracer, tracerCloser, err := buildTracer(ctx, cfg, logger)
+	if err != nil {
+		return nil, fmt.Errorf("telemetry: %w", err)
+	}
+	app.tracer = tracer
+	if tracerCloser != nil {
+		app.closers = append(app.closers, tracerCloser)
+	}
 
 	// Event bus is required.
 	eventBus, err := bus.New(ctx, factoryConfigFromAppConfig(cfg), logger)
@@ -311,8 +343,27 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 			simSender = smtpSender
 		}
 	}
+	// Simulation campaign store: prefer the durable Postgres
+	// backend when PG_HOST is configured so campaigns survive a
+	// restart; fall back to in-memory only in local/dev to keep
+	// integration tests and `make run` working without a database.
+	var campaignStore education.CampaignStore
+	if app.pgDB != nil {
+		pgStore := education.NewPostgresCampaignStore(app.pgDB)
+		if err := pgStore.EnsureSchema(ctx); err != nil {
+			logger.Warn("sn360-es: campaign store schema check failed; falling back to memory",
+				slog.Any("error", err))
+			campaignStore = education.NewMemoryCampaignStore()
+			app.usingMemoryCampaignStore = true
+		} else {
+			campaignStore = pgStore
+		}
+	} else {
+		campaignStore = education.NewMemoryCampaignStore()
+		app.usingMemoryCampaignStore = true
+	}
 	if eng, eerr := education.NewSimulationEngine(education.EngineConfig{
-		Store:     education.NewMemoryCampaignStore(),
+		Store:     campaignStore,
 		Templates: education.NewTemplateLibrary(),
 		Sender:    simSender,
 		Publisher: eventBus,
@@ -323,9 +374,28 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		logger.Warn("sn360-es: simulation engine init failed", slog.Any("error", eerr))
 	}
 
-	// Simulation tracker.
+	// Simulation tracker: same fallback policy as the campaign
+	// store. The PostgresInteractionStore persists each interaction
+	// into the education_interactions table (created on first boot
+	// via EnsureSchema) so per-target opens/clicks/reports survive
+	// a restart.
+	var interactionStore education.InteractionStore
+	if app.pgDB != nil {
+		pgTrack := education.NewPostgresInteractionStore(app.pgDB)
+		if err := pgTrack.EnsureSchema(ctx); err != nil {
+			logger.Warn("sn360-es: interaction store schema check failed; falling back to memory",
+				slog.Any("error", err))
+			interactionStore = education.NewMemoryInteractionStore()
+			app.usingMemoryInteractionStore = true
+		} else {
+			interactionStore = pgTrack
+		}
+	} else {
+		interactionStore = education.NewMemoryInteractionStore()
+		app.usingMemoryInteractionStore = true
+	}
 	if tracker, terr := education.NewSimulationTracker(education.TrackerConfig{
-		Store:  education.NewMemoryInteractionStore(),
+		Store:  interactionStore,
 		Logger: logger,
 	}); terr == nil {
 		app.simulationTracker = tracker
@@ -633,20 +703,26 @@ func assertProductionDurableStores(cfg *config.Config, app *application, logger 
 			blocker: true,
 		})
 	}
-	// Simulation engine + tracker have no persistent backend implemented
-	// yet, so we surface the data-loss exposure as a non-blocking warning
-	// even in production rather than refusing boot. Replacing these with
-	// durable stores is tracked in internal/docs/DEGRADATION_MODES.md.
-	if app.simulationEng != nil {
+	// Simulation engine + tracker now have durable Postgres
+	// backends (PostgresCampaignStore + PostgresInteractionStore)
+	// wired in newApplication. We check the actual fallback flags
+	// (set on EnsureSchema failure OR pgDB == nil) rather than just
+	// `pgDB == nil` so a degraded database that fails the schema
+	// check still trips the boot gate — otherwise pgDB would be
+	// non-nil but the runtime store would be the in-memory
+	// fallback, silently losing data on the next restart.
+	if app.simulationEng != nil && app.usingMemoryCampaignStore {
 		inMemory = append(inMemory, memStore{
-			name: "simulation campaign store",
-			fix:  "no persistent backend implemented yet; tracked in DEGRADATION_MODES.md",
+			name:    "simulation campaign store",
+			fix:     "configure PG_HOST/PG_DATABASE (and ensure migrations are applied) so simulation campaigns survive a restart",
+			blocker: true,
 		})
 	}
-	if app.simulationTracker != nil {
+	if app.simulationTracker != nil && app.usingMemoryInteractionStore {
 		inMemory = append(inMemory, memStore{
-			name: "simulation interaction store",
-			fix:  "no persistent backend implemented yet; tracked in DEGRADATION_MODES.md",
+			name:    "simulation interaction store",
+			fix:     "configure PG_HOST/PG_DATABASE (and ensure migrations are applied) so simulation interactions survive a restart",
+			blocker: true,
 		})
 	}
 
@@ -743,4 +819,64 @@ func (a *application) spawn(ctx context.Context, name string, fn func(ctx contex
 // StartBackground has returned.
 func (a *application) WaitBackground() {
 	a.bgWG.Wait()
+}
+
+// buildTracer constructs the application's Tracer. When the
+// standard OTEL_EXPORTER_OTLP_ENDPOINT env var is set, finished
+// spans are batched through the OTel SDK bridge (telemetry.
+// NewOTLPBridge) and shipped to the configured collector with
+// trace/span IDs preserved 1:1. The collector type (Jaeger, Tempo,
+// OTel collector + Datadog exporter, etc.) is opaque to us — we
+// speak OTLP/HTTP and let the collector handle the rest.
+//
+// When OTEL_EXPORTER_OTLP_ENDPOINT is unset, the function returns
+// a tracer with the no-op exporter so call sites can still record
+// spans for the W3C traceparent header propagation without paying
+// any network I/O. This is the right default for dev / unit tests
+// and avoids ever silently dropping spans on a misconfigured
+// collector URL.
+//
+// The returned closer (when non-nil) drains in-flight spans and
+// shuts down the OTel SDK BatchSpanProcessor + OTLP exporter; it
+// MUST be registered on the application's closer chain so a
+// graceful shutdown doesn't lose telemetry.
+func buildTracer(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*telemetry.Tracer, func() error, error) {
+	serviceName := cfg.AppName
+	if serviceName == "" {
+		serviceName = "sn360-es"
+	}
+	serviceVersion := strings.TrimSpace(cfg.Telemetry.ServiceVersion)
+	env := strings.TrimSpace(string(cfg.Environment))
+	endpoint := strings.TrimSpace(cfg.Telemetry.OTLPEndpoint)
+	if endpoint == "" {
+		return telemetry.NewTracer(telemetry.TracerConfig{
+			ServiceName:    serviceName,
+			ServiceVersion: serviceVersion,
+			Environment:    env,
+		}), nil, nil
+	}
+	exp, shutdown, err := telemetry.NewOTLPBridge(ctx, telemetry.OTLPBridgeConfig{
+		Endpoint:       endpoint,
+		ServiceName:    serviceName,
+		ServiceVersion: serviceVersion,
+		Environment:    env,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("build OTLP bridge: %w", err)
+	}
+	logger.Info("sn360-es: OTLP tracing enabled",
+		slog.String("endpoint", endpoint),
+		slog.String("service_version", serviceVersion))
+	tr := telemetry.NewTracer(telemetry.TracerConfig{
+		ServiceName:    serviceName,
+		ServiceVersion: serviceVersion,
+		Environment:    env,
+		Exporter:       exp,
+	})
+	closer := func() error {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return shutdown(flushCtx)
+	}
+	return tr, closer, nil
 }

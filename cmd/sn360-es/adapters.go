@@ -179,6 +179,15 @@ func (s redisQuarantineStore) Del(ctx context.Context, keys ...string) error {
 	return s.client.Del(ctx, keys...)
 }
 
+// GetDel proxies to the redis client's atomic GETDEL primitive so
+// the release flow can claim ownership of a quarantine reference in
+// a single round-trip. Returns (value, true, nil) when the key
+// existed, ("", false, nil) when the key was already absent, and
+// errors on transport failure.
+func (s redisQuarantineStore) GetDel(ctx context.Context, key string) (string, bool, error) {
+	return s.client.GetDel(ctx, key)
+}
+
 // memoryQuarantineStore is the in-memory fallback used when Redis is
 // not configured. It is goroutine-safe and respects the TTL parameter
 // so dev / unit-test behaviour matches the redis path.
@@ -228,6 +237,26 @@ func (m *memoryQuarantineStore) Del(_ context.Context, keys ...string) error {
 		delete(m.rows, k)
 	}
 	return nil
+}
+
+// GetDel is the in-memory twin of redisQuarantineStore.GetDel.
+// Holding the mutex across the read-and-delete makes the operation
+// atomic with respect to concurrent goroutines in the same process,
+// which is the only concurrency model the memory fallback ever sees
+// (it's single-replica by definition).
+func (m *memoryQuarantineStore) GetDel(_ context.Context, key string) (string, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.rows[key]
+	if !ok {
+		return "", false, nil
+	}
+	if !entry.expires.IsZero() && time.Now().After(entry.expires) {
+		delete(m.rows, key)
+		return "", false, nil
+	}
+	delete(m.rows, key)
+	return entry.value, true, nil
 }
 
 // latestVerdictReevaluator implements action.QuarantineReevaluator by

@@ -30,6 +30,19 @@ const (
 	ActionDrop Action = "drop"
 )
 
+// maxRetryBackoff caps the synchronous time.After wait in retry().
+// The Decider field Backoff is honoured up to this ceiling so a
+// misconfigured policy (e.g. Backoff: 30*time.Minute on a
+// transient-rate-limit decision) cannot pin a DLQ dispatch
+// goroutine for an extended period. With a small worker pool, even
+// a handful of long-Backoff messages is enough to starve every
+// dispatch slot and stop the DLQ consumer from acking anything.
+//
+// 5s is generous enough for the typical upstream-recovery window
+// (rspamd flap, tier1 502, etc.) and short enough that pool
+// starvation under load is bounded.
+const maxRetryBackoff = 5 * time.Second
+
 // Decision is the per-message verdict from a Decider.
 type Decision struct {
 	Action  Action
@@ -216,9 +229,20 @@ func (p *DLQProcessor) retry(ctx context.Context, msg events.Message, dec Decisi
 	}
 
 	if dec.Backoff > 0 {
-		// Block before publishing so the upstream gets a backoff window.
+		// Block before publishing so the upstream gets a backoff
+		// window. The wait is intentionally synchronous so the
+		// retry is delivered exactly once per call (no fire-and-
+		// forget goroutine that can lose the retry on a crash),
+		// but it's capped at maxRetryBackoff so a misconfigured
+		// Decider can never stall a consumer dispatch goroutine
+		// for minutes at a time — which under load is enough to
+		// starve the entire DLQ consumer.
+		backoff := dec.Backoff
+		if backoff > maxRetryBackoff {
+			backoff = maxRetryBackoff
+		}
 		select {
-		case <-time.After(dec.Backoff):
+		case <-time.After(backoff):
 		case <-ctx.Done():
 			return ctx.Err()
 		}

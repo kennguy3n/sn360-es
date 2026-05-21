@@ -426,12 +426,12 @@ func TestIsLowEntropy_CryptoRandomBytesAreHighEntropy(t *testing.T) {
 func TestIsLowEntropy_CatchesKnownWeakInputs(t *testing.T) {
 	t.Parallel()
 	weak := []string{
-		strings.Repeat("a", 32),                  // Shannon = 0
-		strings.Repeat("a", 64),                  // Shannon = 0
-		"abcdefghijklmnopqrstuvwxyz012345",       // monotone run ≥ 26
-		strings.Repeat("ab", 32),                 // period 2 tiles len 64
-		strings.Repeat("abcd", 16),               // period 4 tiles len 64
-		strings.Repeat("password", 4),            // period 8 tiles len 32
+		strings.Repeat("a", 32),                                // Shannon = 0
+		strings.Repeat("a", 64),                                // Shannon = 0
+		"abcdefghijklmnopqrstuvwxyz012345",                     // monotone run ≥ 26
+		strings.Repeat("ab", 32),                               // period 2 tiles len 64
+		strings.Repeat("abcd", 16),                             // period 4 tiles len 64
+		strings.Repeat("password", 4),                          // period 8 tiles len 32
 		fmt.Sprintf("%s%s", strings.Repeat("01234567", 4), ""), // period 8 tiles len 32
 	}
 	for i, s := range weak {
@@ -523,5 +523,60 @@ func TestLoad_ReadHeaderTimeout_ReadsEnv(t *testing.T) {
 	}
 	if cfg.HTTP.ReadHeaderTimeout != 750*time.Millisecond {
 		t.Fatalf("HTTP.ReadHeaderTimeout = %v, want 750ms", cfg.HTTP.ReadHeaderTimeout)
+	}
+}
+
+// TestLoad_StrictEnvParsing_FailsOnInvalidHTTPPort proves the strict
+// parser surfaces a typo'd HTTP_PORT at boot rather than silently
+// reverting to the 8080 default. Operators routinely tune the port
+// per environment (8080 dev, 80 prod via Service mapping, 8443
+// behind TLS-terminating ingress), and a silent fallback to 8080
+// can leave a prod listener on the wrong port.
+func TestLoad_StrictEnvParsing_FailsOnInvalidHTTPPort(t *testing.T) {
+	withEnv(t, map[string]string{
+		"APP_NAME":    "sn360-es-test",
+		"ENVIRONMENT": "local",
+		"HTTP_PORT":   "80a",
+	})
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("Load returned no error for HTTP_PORT=80a; want a strict parse failure")
+	}
+}
+
+// TestLoad_StrictEnvParsing_FailsOnInvalidDuration proves the
+// duration twin behaves the same way. '5second' is a common typo
+// (correct: '5s').
+func TestLoad_StrictEnvParsing_FailsOnInvalidDuration(t *testing.T) {
+	withEnv(t, map[string]string{
+		"APP_NAME":      "sn360-es-test",
+		"ENVIRONMENT":   "local",
+		"TIER1_TIMEOUT": "5second",
+	})
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("Load returned no error for TIER1_TIMEOUT=5second; want a strict parse failure")
+	}
+}
+
+// TestLoad_StrictEnvParsing_HonoursValidValues proves the strict
+// helpers don't regress the happy path: a valid HTTP_PORT must
+// propagate to the field and Load must succeed.
+func TestLoad_StrictEnvParsing_HonoursValidValues(t *testing.T) {
+	withEnv(t, map[string]string{
+		"APP_NAME":      "sn360-es-test",
+		"ENVIRONMENT":   "local",
+		"HTTP_PORT":     "9090",
+		"TIER1_TIMEOUT": "7s",
+	})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.HTTP.Port != 9090 {
+		t.Fatalf("HTTP.Port = %d, want 9090", cfg.HTTP.Port)
+	}
+	if cfg.Tier1.Timeout != 7*time.Second {
+		t.Fatalf("Tier1.Timeout = %v, want 7s", cfg.Tier1.Timeout)
 	}
 }

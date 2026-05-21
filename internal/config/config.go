@@ -96,6 +96,24 @@ type Config struct {
 	Ingestion                Ingestion
 	Worker                   Worker
 	Onboarding               Onboarding
+	Telemetry                Telemetry
+}
+
+// Telemetry carries OTel SDK bridge configuration. Wiring is
+// centralised here (rather than read straight from os.Getenv in
+// the bridge constructor) so that startup config is fully
+// inspectable from one place — useful for `sn360-es validate`,
+// for snapshot tests of the resolved configuration, and for any
+// future operator who has to debug a misconfigured deploy.
+type Telemetry struct {
+	// OTLPEndpoint is the OTLP/HTTP collector endpoint. When empty
+	// the OTel SDK bridge is disabled and the in-process tracer
+	// falls back to the no-op exporter — spans are still recorded
+	// for W3C traceparent propagation but never leave the process.
+	OTLPEndpoint string
+	// ServiceVersion populates the OTel resource attribute
+	// service.version. Typically the release tag or git SHA.
+	ServiceVersion string
 }
 
 // Log carries structured-logging configuration.
@@ -656,6 +674,58 @@ func Load() (Config, error) {
 			CallbackURL: getStr("ONBOARDING_CALLBACK_URL", ""),
 			TokenKeyHex: getStr("ONBOARDING_TOKEN_KEY_HEX", ""),
 		},
+		Telemetry: Telemetry{
+			OTLPEndpoint:   getStr("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+			ServiceVersion: getStr("SERVICE_VERSION", ""),
+		},
+	}
+
+	// Critical numeric settings: re-parse with the strict helpers so a
+	// typo (e.g. HTTP_PORT="80a", TIER1_TIMEOUT="5second") fails boot
+	// loudly instead of silently reverting to the default and giving
+	// us an off-by-many-seconds tier client timeout in production.
+	// Settings here are the ones an operator most plausibly tunes by
+	// hand and whose silent fallback is the most surprising
+	// operationally; non-critical knobs continue to use the lenient
+	// getInt/getDuration helpers.
+	var strictErrs []error
+	if v, err := getIntStrict("HTTP_PORT", 8080); err != nil {
+		strictErrs = append(strictErrs, err)
+	} else {
+		cfg.HTTP.Port = v
+	}
+	if v, err := getDurationStrict("TIER1_TIMEOUT", 5*time.Second); err != nil {
+		strictErrs = append(strictErrs, err)
+	} else {
+		cfg.Tier1.Timeout = v
+	}
+	if v, err := getIntStrict("TIER1_BATCH_SIZE", 64); err != nil {
+		strictErrs = append(strictErrs, err)
+	} else {
+		cfg.Tier1.BatchSize = v
+	}
+	if v, err := getIntStrict("TIER1_PASS_THRESHOLD", 20); err != nil {
+		strictErrs = append(strictErrs, err)
+	} else {
+		cfg.Tier1.PassThreshold = v
+	}
+	if v, err := getIntStrict("TIER1_FLAG_THRESHOLD", 60); err != nil {
+		strictErrs = append(strictErrs, err)
+	} else {
+		cfg.Tier1.FlagThreshold = v
+	}
+	if v, err := getDurationStrict("AI_TIMEOUT", 30*time.Second); err != nil {
+		strictErrs = append(strictErrs, err)
+	} else {
+		cfg.AI.Timeout = v
+	}
+	if v, err := getDurationStrict("RSPAMD_TIMEOUT", 5*time.Second); err != nil {
+		strictErrs = append(strictErrs, err)
+	} else {
+		cfg.Rspamd.Timeout = v
+	}
+	if len(strictErrs) > 0 {
+		return cfg, errors.Join(strictErrs...)
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -831,6 +901,47 @@ func getInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// getIntStrict is the variant of getInt used for critical settings
+// (HTTP_PORT, tier timeouts, decision thresholds) where a typo or
+// stray whitespace must fail boot rather than silently fall back to
+// a default that may differ from the operator's intent. It returns:
+//
+//   - (def, nil)  when the env var is unset or empty.
+//   - (n,   nil)  when the env var parses cleanly as an int.
+//   - (0,   err)  when the env var is set but unparseable.
+//
+// The error wraps the offending value (NOT the secret value of the
+// env var, since these are all numeric tunables) so operators get an
+// actionable diagnostic at boot.
+func getIntStrict(key string, def int) (int, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("config: %s=%q is not a valid integer: %w", key, v, err)
+	}
+	return n, nil
+}
+
+// getDurationStrict is the duration twin of getIntStrict. We apply
+// the strict policy to the same set of critical settings (tier
+// timeouts in particular) so a malformed value like '5second'
+// surfaces as a boot error instead of silently reverting to the
+// (potentially much shorter or much longer) default.
+func getDurationStrict(key string, def time.Duration) (time.Duration, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("config: %s=%q is not a valid duration: %w", key, v, err)
+	}
+	return d, nil
 }
 
 func getBool(key string, def bool) bool {

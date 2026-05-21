@@ -120,6 +120,26 @@ func (c *Client) Del(ctx context.Context, keys ...string) error {
 	return c.rdb.Del(ctx, keys...).Err()
 }
 
+// GetDel atomically reads and deletes a single key. Returns
+// (value, true, nil) when the key existed and was removed, and
+// ("", false, nil) when the key was already absent.
+//
+// Used by the quarantine release flow as an application-layer
+// fencing primitive (see pkg/storage/redis/lock.go package doc):
+// two concurrent release flows race to claim the encrypted
+// reference; only one observes ok=true, the other observes
+// ok=false and short-circuits without restoring.
+func (c *Client) GetDel(ctx context.Context, key string) (string, bool, error) {
+	v, err := c.rdb.GetDel(ctx, key).Result()
+	if errors.Is(err, goredis.Nil) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return v, true, nil
+}
+
 // HGetAll fetches the full hash at key (empty map if missing).
 func (c *Client) HGetAll(ctx context.Context, key string) (map[string]string, error) {
 	return c.rdb.HGetAll(ctx, key).Result()
