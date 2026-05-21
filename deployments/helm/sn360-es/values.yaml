@@ -74,11 +74,42 @@ autoscaling:
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 80
 
-# Pod scheduling.
+# Pod scheduling. nodeSelector / tolerations / affinity /
+# topologySpreadConstraints are passed through verbatim for advanced
+# overrides. For the common production case (multi-AZ HA with the
+# right pod selector), prefer the higher-level `podHA` block below —
+# it guarantees the labelSelector stays in sync with the Deployment
+# selector even when `nameOverride` / `fullnameOverride` are set.
 nodeSelector: {}
 tolerations: []
 affinity: {}
 topologySpreadConstraints: []
+
+# podHA: opt-in HA scheduling. When enabled, the chart generates
+# topologySpreadConstraints + podAntiAffinity using the chart's own
+# `selectorLabels` include, so the selectors cannot drift from the
+# Deployment label set under `nameOverride`. Disabled by default so
+# the bundled chart still installs cleanly on single-node clusters.
+# Raw `affinity` / `topologySpreadConstraints` above still apply on
+# top, so an operator can layer custom rules without losing the
+# auto-injected selector.
+podHA:
+  enabled: false
+  # topologySpread distributes replicas across this topology key. The
+  # production overlay sets this to topology.kubernetes.io/zone; on
+  # single-AZ clusters set it to kubernetes.io/hostname instead.
+  topologySpread:
+    topologyKey: topology.kubernetes.io/zone
+    maxSkew: 1
+    # DoNotSchedule blocks the HPA from over-loading one zone. Set
+    # to ScheduleAnyway if you want best-effort spread that still
+    # admits new pods under cluster pressure.
+    whenUnsatisfiable: DoNotSchedule
+  # podAntiAffinity is a soft (preferred) hostname-level rule so a
+  # single node loss never evicts the majority of the fleet.
+  podAntiAffinity:
+    weight: 100
+    topologyKey: kubernetes.io/hostname
 
 # probes — see internal/handler/health.go for endpoint semantics.
 probes:

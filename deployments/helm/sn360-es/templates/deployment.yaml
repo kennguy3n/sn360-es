@@ -85,11 +85,33 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- if or .Values.affinity (and .Values.podHA .Values.podHA.enabled) }}
       affinity:
+        {{- with .Values.affinity }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if and .Values.podHA .Values.podHA.enabled }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: {{ .Values.podHA.podAntiAffinity.weight }}
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "sn360-es.selectorLabels" . | nindent 20 }}
+                topologyKey: {{ .Values.podHA.podAntiAffinity.topologyKey }}
+        {{- end }}
       {{- end }}
-      {{- with .Values.topologySpreadConstraints }}
+      {{- if or .Values.topologySpreadConstraints (and .Values.podHA .Values.podHA.enabled) }}
       topologySpreadConstraints:
+        {{- with .Values.topologySpreadConstraints }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if and .Values.podHA .Values.podHA.enabled }}
+        - maxSkew: {{ .Values.podHA.topologySpread.maxSkew }}
+          topologyKey: {{ .Values.podHA.topologySpread.topologyKey }}
+          whenUnsatisfiable: {{ .Values.podHA.topologySpread.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              {{- include "sn360-es.selectorLabels" . | nindent 14 }}
+        {{- end }}
       {{- end }}
