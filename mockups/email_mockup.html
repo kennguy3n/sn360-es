@@ -268,6 +268,31 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
   .tab-panel{display:block !important}
   .scenario-grid{grid-template-columns:1fr 1fr}
 }
+
+/* ---------- Section 3: client-rendering matrix ---------- */
+.matrix-wrap{overflow-x:auto;margin-top:12px}
+.matrix{width:100%;border-collapse:collapse;font-size:13px;background:var(--panel-bg);
+  border:1px solid var(--panel-border);border-radius:8px;overflow:hidden}
+.matrix th,.matrix td{padding:10px 12px;text-align:left;vertical-align:top;
+  border-bottom:1px solid var(--panel-border)}
+.matrix tbody tr:last-child td{border-bottom:none}
+.matrix thead th{background:var(--gmail-divider);font-weight:700;color:var(--text);
+  font-size:12px;letter-spacing:0.02em;text-transform:uppercase}
+.matrix td.client{font-weight:600;color:var(--text);white-space:nowrap}
+.matrix code{background:var(--gmail-divider);padding:1px 5px;border-radius:3px;
+  font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.matrix .ok{color:#08642f;font-weight:600}
+.matrix .partial{color:#a64600;font-weight:600}
+.matrix .broken{color:#9b0019;font-weight:700}
+.matrix .missing{color:#5f6368;font-style:italic}
+html[data-theme="dark"] .matrix .ok{color:#3fb950}
+html[data-theme="dark"] .matrix .partial{color:#d29922}
+html[data-theme="dark"] .matrix .broken{color:#f85149}
+html[data-theme="dark"] .matrix .missing{color:#9aa4af}
+.matrix-caption{color:var(--muted);font-size:13px;margin:8px 0 12px;line-height:1.55}
+.matrix-footnote{margin:14px 0 0 0;padding:12px 14px;background:var(--panel-bg);
+  border:1px solid var(--panel-border);border-radius:8px;font-size:13px;line-height:1.55}
+.matrix-footnote strong{color:var(--text)}
 </style>
 </head>
 <body>
@@ -292,12 +317,16 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
 </header>
 
 <div class="note">
-  <strong>How to read this mockup.</strong> Gmail renders SN360 labels as
-  coloured chips next to the subject; Outlook renders them as coloured
-  category dots/pills at the right of each row. SN360-ES creates these
-  natively via the Gmail Labels API and the Outlook Master Categories API —
-  no custom inbox UI is required. The reading-pane view below shows the
-  HTML banner that gets injected into the message body at delivery time.
+  <strong>How to read this mockup.</strong> SN360-ES decorates messages
+  with two signals: a single <em>native severity label</em>
+  (<code>SN360 / Tier</code>) created via the Gmail Labels API or the
+  Outlook Master Categories API, and the inline HTML <em>banner</em>
+  injected into the message body. Category specificity (Likely phishing,
+  BEC impersonation, etc.) lives in the banner copy — not as a
+  per-email sub-label — so the inbox stays uncluttered.
+  <strong>Trusted</strong> messages get no native label at all (silence
+  is the correct UX for known-good mail). Section 3 below summarises
+  how each signal renders across email clients.
 </div>
 
 <!-- ============================================================== -->
@@ -333,7 +362,6 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
         <div class="subject-cell">
           <span class="labels">
             <span class="gmail-label tier-blocked">SN360 / Blocked</span>
-            <span class="gmail-label tier-blocked">SN360 / Blocked / Likely Phishing</span>
           </span>
           <span class="subject-text"><b>Urgent: verify your PayPal account immediately</b> — Your account has been temporarily suspended. Click the secure link below to restore access…</span>
         </div>
@@ -348,7 +376,6 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
         <div class="subject-cell">
           <span class="labels">
             <span class="gmail-label tier-highrisk">SN360 / HighRisk</span>
-            <span class="gmail-label tier-highrisk">SN360 / HighRisk / BEC Impersonation</span>
           </span>
           <span class="subject-text"><b>Quick favour — are you at your desk?</b> — Need you to handle a confidential wire transfer before the close of business today…</span>
         </div>
@@ -363,7 +390,6 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
         <div class="subject-cell">
           <span class="labels">
             <span class="gmail-label tier-highrisk">SN360 / HighRisk</span>
-            <span class="gmail-label tier-highrisk">SN360 / HighRisk / Credential Harvesting</span>
           </span>
           <span class="subject-text"><b>[Action required] Re-authenticate your mailbox</b> — Your password will expire in 24 hours. Click here to keep your account active…</span>
         </div>
@@ -378,7 +404,6 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
         <div class="subject-cell">
           <span class="labels">
             <span class="gmail-label tier-warning">SN360 / Warning</span>
-            <span class="gmail-label tier-warning">SN360 / Warning / Lookalike Domain</span>
           </span>
           <span class="subject-text"><b>Your order #112-8732190 — payment failed</b> — We were unable to charge your card. Please update your billing information…</span>
         </div>
@@ -393,7 +418,6 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
         <div class="subject-cell">
           <span class="labels">
             <span class="gmail-label tier-warning">SN360 / Warning</span>
-            <span class="gmail-label tier-warning">SN360 / Warning / Invoice Fraud</span>
           </span>
           <span class="subject-text"><b>Updated bank details for invoice INV-2047</b> — Please remit future payments to the new account attached…</span>
         </div>
@@ -408,7 +432,6 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
         <div class="subject-cell">
           <span class="labels">
             <span class="gmail-label tier-caution">SN360 / Caution</span>
-            <span class="gmail-label tier-caution">SN360 / Caution / Suspicious URL</span>
           </span>
           <span class="subject-text"><b>Limited-time offer just for you</b> — Click here to redeem before the link expires…</span>
         </div>
@@ -423,7 +446,6 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
         <div class="subject-cell">
           <span class="labels">
             <span class="gmail-label tier-informational">SN360 / Informational</span>
-            <span class="gmail-label tier-informational">SN360 / Informational / First Contact External</span>
           </span>
           <span class="subject-text"><b>Intro — new account manager at NewClient</b> — Hi, just wanted to introduce myself as your new point of contact…</span>
         </div>
@@ -436,10 +458,7 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
         <span class="star">☆</span>
         <span class="sender">Known Vendor — Invoices</span>
         <div class="subject-cell">
-          <span class="labels">
-            <span class="gmail-label tier-trusted">SN360 / Trusted</span>
-            <span class="gmail-label tier-trusted">SN360 / Trusted / Vendor Trusted</span>
-          </span>
+          <span class="labels" aria-label="No SN360 label — Trusted senders intentionally render without inbox decoration"></span>
           <span class="subject-text"><b>Invoice INV-9931 for May services</b> — Please find attached the invoice for May. Payment is due net-30…</span>
         </div>
         <span class="time">Mon</span>
@@ -558,16 +577,19 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
         </div>
       </div>
 
-      <!-- Row 8 -->
+      <!-- Row 8: Trusted vendor — intentionally undecorated. Trusted
+           messages do NOT get an SN360 category in Outlook; silence is
+           the correct UX for known-good mail (and avoids polluting the
+           per-mailbox Master Category list with 6 colour-coded entries
+           on every install). -->
       <div class="outlook-row">
-        <span class="dot tier-trusted outlook-dot tier-trusted"></span>
+        <span class="dot" aria-hidden="true"></span>
         <div>
           <div class="from">Known Vendor — Invoices</div>
           <div class="subject-row"><div class="subject">Invoice INV-9931 for May services</div></div>
           <div class="snippet">Please find attached the invoice for May. Payment is due net-30…</div>
         </div>
         <div class="cats">
-          <span class="pill outlook-pill tier-trusted">SN360 / Trusted</span>
           <span class="time">Mon</span>
         </div>
       </div>
@@ -807,7 +829,7 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
           <div class="rp-subject">Urgent: verify your PayPal account immediately</div>
           <div class="rp-meta"><strong>security@paypa1.com</strong> &lt;security@paypa1.com&gt;</div>
           <div class="rp-meta">To: me · Today, 9:42 AM</div>
-          <div class="rp-cats"><span class="outlook-pill tier-blocked">SN360 / Blocked</span><span class="outlook-pill tier-blocked">SN360 / Blocked / Likely Phishing</span></div>
+          <div class="rp-cats"><span class="outlook-pill tier-blocked">SN360 / Blocked</span></div>
         </div>
         <div class="rp-body">
           <div class="scenario-label">1. Blocked · Likely phishing</div>
@@ -832,7 +854,7 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
           <div class="rp-subject">Quick favour — are you at your desk?</div>
           <div class="rp-meta"><strong>CEO Name</strong> &lt;ceo.name@external-domain.com&gt;</div>
           <div class="rp-meta">To: me · Today, 9:18 AM</div>
-          <div class="rp-cats"><span class="outlook-pill tier-highrisk">SN360 / HighRisk</span><span class="outlook-pill tier-highrisk">SN360 / HighRisk / BEC Impersonation</span></div>
+          <div class="rp-cats"><span class="outlook-pill tier-highrisk">SN360 / HighRisk</span></div>
         </div>
         <div class="rp-body">
           <div class="scenario-label">2. High risk · BEC impersonation</div>
@@ -857,7 +879,7 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
           <div class="rp-subject">[Action required] Re-authenticate your mailbox</div>
           <div class="rp-meta"><strong>IT Support</strong> &lt;support@company-reset.net&gt;</div>
           <div class="rp-meta">To: me · Today, 8:55 AM</div>
-          <div class="rp-cats"><span class="outlook-pill tier-highrisk">SN360 / HighRisk</span><span class="outlook-pill tier-highrisk">SN360 / HighRisk / Credential Harvesting</span></div>
+          <div class="rp-cats"><span class="outlook-pill tier-highrisk">SN360 / HighRisk</span></div>
         </div>
         <div class="rp-body">
           <div class="scenario-label">3. High risk · Credential harvesting</div>
@@ -882,7 +904,7 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
           <div class="rp-subject">Your order #112-8732190 — payment failed</div>
           <div class="rp-meta"><strong>Amazon Billing</strong> &lt;billing@amaz0n-support.com&gt;</div>
           <div class="rp-meta">To: me · Today, 8:31 AM</div>
-          <div class="rp-cats"><span class="outlook-pill tier-warning">SN360 / Warning</span><span class="outlook-pill tier-warning">SN360 / Warning / Lookalike Domain</span></div>
+          <div class="rp-cats"><span class="outlook-pill tier-warning">SN360 / Warning</span></div>
         </div>
         <div class="rp-body">
           <div class="scenario-label">4. Warning · Lookalike domain</div>
@@ -910,7 +932,7 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
           <div class="rp-subject">Updated bank details for invoice INV-2047</div>
           <div class="rp-meta"><strong>Accounts</strong> &lt;accounts@vendor-name.biz&gt;</div>
           <div class="rp-meta">To: me · Yesterday, 4:12 PM</div>
-          <div class="rp-cats"><span class="outlook-pill tier-warning">SN360 / Warning</span><span class="outlook-pill tier-warning">SN360 / Warning / Invoice Fraud</span></div>
+          <div class="rp-cats"><span class="outlook-pill tier-warning">SN360 / Warning</span></div>
         </div>
         <div class="rp-body">
           <div class="scenario-label">5. Warning · Invoice fraud</div>
@@ -938,7 +960,7 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
           <div class="rp-subject">Limited-time offer just for you</div>
           <div class="rp-meta"><strong>Marketing Co.</strong> &lt;newsletter@marketing-co.io&gt;</div>
           <div class="rp-meta">To: me · Yesterday, 11:01 AM</div>
-          <div class="rp-cats"><span class="outlook-pill tier-caution">SN360 / Caution</span><span class="outlook-pill tier-caution">SN360 / Caution / Suspicious URL</span></div>
+          <div class="rp-cats"><span class="outlook-pill tier-caution">SN360 / Caution</span></div>
         </div>
         <div class="rp-body">
           <div class="scenario-label">6. Caution · Suspicious URL</div>
@@ -964,7 +986,7 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
           <div class="rp-subject">Intro — new account manager at NewClient</div>
           <div class="rp-meta"><strong>Jane Doe</strong> &lt;jane.doe@newclient.com&gt;</div>
           <div class="rp-meta">To: me · Monday, 2:30 PM</div>
-          <div class="rp-cats"><span class="outlook-pill tier-informational">SN360 / Informational</span><span class="outlook-pill tier-informational">SN360 / Informational / First Contact External</span></div>
+          <div class="rp-cats"><span class="outlook-pill tier-informational">SN360 / Informational</span></div>
         </div>
         <div class="rp-body">
           <div class="scenario-label">7. Informational · First contact</div>
@@ -989,7 +1011,6 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
           <div class="rp-subject">Invoice INV-9931 for May services</div>
           <div class="rp-meta"><strong>Known Vendor — Invoices</strong> &lt;invoices@known-vendor.com&gt;</div>
           <div class="rp-meta">To: me · Monday, 9:00 AM</div>
-          <div class="rp-cats"><span class="outlook-pill tier-trusted">SN360 / Trusted</span><span class="outlook-pill tier-trusted">SN360 / Trusted / Vendor Trusted</span></div>
         </div>
         <div class="rp-body">
           <div class="scenario-label">8. Trusted · Trusted vendor</div>
@@ -1009,6 +1030,112 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
   </div>
 </section>
 
+<!-- ============================================================== -->
+<!-- Section 3: Client-rendering matrix                              -->
+<!-- ============================================================== -->
+<section class="major" id="section-matrix">
+  <h2>3. How this renders across email clients</h2>
+  <p class="matrix-caption">
+    Native label rendering varies by client; inline-CSS banner rendering
+    varies too (Outlook 2016/2019/2021 desktop uses the Word HTML engine
+    and strips modern CSS). The inline banner is the only signal that
+    renders cross-client, so banner copy must always stand on its own.
+    Native labels are a best-effort severity hint in clients that support
+    them — never a primary signal.
+  </p>
+
+  <div class="matrix-wrap">
+    <table class="matrix">
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th>Native SN360 label</th>
+          <th>Banner HTML / CSS</th>
+          <th>Dark mode</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="client">Gmail — web</td>
+          <td><span class="ok">Chip beside subject</span></td>
+          <td><span class="ok">Renders correctly</span></td>
+          <td><span class="ok">Honours <code>@media (prefers-color-scheme:dark)</code></span></td>
+          <td>Reference experience for the design.</td>
+        </tr>
+        <tr>
+          <td class="client">Gmail — Android</td>
+          <td><span class="partial">Small chip, often truncated on narrow viewports</span></td>
+          <td><span class="ok">Renders correctly</span></td>
+          <td><span class="partial">Partial — system dark theme overrides some colours</span></td>
+          <td>Users can disable label display in Gmail app settings.</td>
+        </tr>
+        <tr>
+          <td class="client">Gmail — iOS</td>
+          <td><span class="partial">Small chip, often truncated</span></td>
+          <td><span class="ok">Renders correctly</span></td>
+          <td><span class="partial">Partial — depends on Gmail app version</span></td>
+          <td>Same caveats as Android.</td>
+        </tr>
+        <tr>
+          <td class="client">Outlook — web (OWA / Monarch)</td>
+          <td><span class="ok">Coloured square + category name</span></td>
+          <td><span class="ok">Renders correctly</span></td>
+          <td><span class="ok">Honours <code>@media</code></span></td>
+          <td>“New Outlook” may hide categories by default in some layouts; user-toggleable.</td>
+        </tr>
+        <tr>
+          <td class="client">Outlook — desktop (2016 / 2019 / 2021, Windows)</td>
+          <td><span class="ok">Coloured square + name</span></td>
+          <td><span class="broken">Broken</span> — Word HTML engine ignores <code>display:flex</code>, <code>gap</code>, <code>border-radius</code>; action buttons stack flat without spacing</td>
+          <td><span class="broken">Not supported</span> — no <code>@media (prefers-color-scheme)</code></td>
+          <td>Requires MSO conditional + table fallback variant in the banner template (tracked in the companion engineering PR).</td>
+        </tr>
+        <tr>
+          <td class="client">Outlook — iOS</td>
+          <td><span class="partial">Coloured dot near sender; name hidden until tap</span></td>
+          <td><span class="ok">Renders correctly</span></td>
+          <td><span class="ok">Honours system theme on modern iOS</span></td>
+          <td>Banner copy is the only readable severity signal at-a-glance.</td>
+        </tr>
+        <tr>
+          <td class="client">Outlook — Android</td>
+          <td><span class="partial">Coloured dot near sender; name hidden until tap</span></td>
+          <td><span class="ok">Renders correctly</span></td>
+          <td><span class="ok">Honours system theme</span></td>
+          <td>Same as iOS.</td>
+        </tr>
+        <tr>
+          <td class="client">Apple Mail (macOS / iOS / iPadOS)</td>
+          <td><span class="missing">Not shown</span> — Apple Mail does not surface Gmail labels or Outlook categories (uses its own flags system)</td>
+          <td><span class="ok">Renders correctly</span></td>
+          <td><span class="ok">Honours system theme</span></td>
+          <td>Banner is the only severity signal users see.</td>
+        </tr>
+        <tr>
+          <td class="client">Thunderbird (IMAP)</td>
+          <td><span class="missing">Not shown</span> for Outlook categories; Gmail labels appear only as IMAP folder names in the sidebar</td>
+          <td><span class="ok">Renders correctly</span></td>
+          <td><span class="ok">Honours <code>@media</code></span></td>
+          <td>Banner is the primary severity signal.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="matrix-footnote">
+    <strong>Implication for product design.</strong> The inline HTML
+    banner is the only signal we can rely on universally — banner copy
+    must always stand on its own, never assume a user has seen the
+    native label first. Native labels are a useful at-a-glance inbox
+    severity hint in clients that render them, but they cannot be the
+    primary affordance. The Outlook-desktop banner-rendering gap is
+    being addressed in the companion engineering PR against
+    <code>internal/service/action/banner_renderer.go</code> (MSO
+    conditional comments + table-based fallback layout).
+  </p>
+</section>
+
 <footer class="note" style="margin-top:32px">
   This file is a stakeholder mockup. The banner CSS, HTML template, copy
   strings, icon glyphs, chip classes and tier slugs are pulled directly
@@ -1017,6 +1144,10 @@ section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-t
   <code>gmailBackgroundPalette</code> approved by the Gmail Labels API; the
   Outlook category presets approximate the
   <code>preset0…preset24</code> values from the Master Categories API.
+  The label strategy shown here (one tier-only label per email, no
+  Trusted label) is the design recommendation that came out of the
+  label-bloat / cross-client-parity review; see Section 3 for the
+  rationale.
 </footer>
 
 </div>
