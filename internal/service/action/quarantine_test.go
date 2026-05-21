@@ -49,6 +49,18 @@ func (s *fakeQStore) Del(_ context.Context, keys ...string) error {
 	return nil
 }
 
+func (s *fakeQStore) GetDel(_ context.Context, key string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.data[key]
+	if !ok {
+		return "", false, nil
+	}
+	delete(s.data, key)
+	delete(s.ttls, key)
+	return v, true, nil
+}
+
 // fakeQEncryptor xors with a 1-byte key derived from tenant id. Not
 // secure — only used to exercise encrypt/decrypt round-trips in
 // tests deterministically.

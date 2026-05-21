@@ -37,6 +37,12 @@ const (
 	// matching quarantine record. Callers should treat this as a
 	// 404 / no-op.
 	ReleaseNotFound ReleaseReason = "not_found"
+	// ReleaseAlreadyDone means a concurrent release flow claimed and
+	// restored the record before this one could (see ClaimReference
+	// fencing). The caller should treat the outcome as a no-op
+	// success: the user got the message restored, just by a
+	// different flow.
+	ReleaseAlreadyDone ReleaseReason = "already_done"
 )
 
 // ReleaseOutcome carries the resolved verdict back to the caller.
@@ -193,9 +199,45 @@ func (s *ReleaseService) Release(ctx context.Context, req ReleaseRequest) (Relea
 		return outcome, nil
 	}
 
-	// Verdict cleared; restore the message.
+	// Verdict cleared; atomically claim the reference before
+	// mutating the provider. ClaimReference is the application-
+	// layer fencing token that defends against a split-brain Redis
+	// lock causing two concurrent release flows to both call
+	// RestoreFromQuarantine on the same message. Only one flow
+	// wins the GETDEL race; the loser short-circuits with
+	// ReleaseAlreadyDone.
+	claimedRec, claimed, err := s.quarantine.ClaimReference(ctx, req.TenantID, req.PseudonymizedMessage)
+	if err != nil {
+		return outcome, fmt.Errorf("release: claim reference: %w: %w", ErrProviderUnavailable, err)
+	}
+	if !claimed {
+		// Another release flow took ownership of this record before
+		// we could. The user's intent (restore the message) is
+		// already in flight on the winning replica; treat this as a
+		// successful no-op so the caller doesn't surface a spurious
+		// 4xx/5xx.
+		outcome.Reason = ReleaseAlreadyDone
+		s.logger.InfoContext(ctx, "action.quarantine.release deduplicated",
+			slog.String("tenant_id", req.TenantID),
+		)
+		s.publishOutcome(ctx, req, outcome)
+		return outcome, nil
+	}
+	// Use the freshly-claimed record so we restore against the
+	// provider state captured at claim time, not the pre-Reevaluate
+	// state.
+	rec = claimedRec
+	outcome.Record = rec
+	outcome.Original = rec.OriginalTier
+
 	prov, ok := s.quarantine.Provider(rec.Provider)
 	if !ok {
+		// No provider for the kind we just claimed. Re-persist so the
+		// record isn't permanently orphaned and surface the error.
+		if rerr := s.quarantine.RestoreReference(ctx, req.TenantID, req.PseudonymizedMessage, rec); rerr != nil {
+			s.logger.ErrorContext(ctx, "release: re-persist after no-provider failure",
+				slog.Any("error", rerr))
+		}
 		return outcome, fmt.Errorf("release: no provider registered for %q: %w", rec.Provider, ErrNotFound)
 	}
 	body := req.RestoredBody
@@ -203,11 +245,15 @@ func (s *ReleaseService) Release(ctx context.Context, req ReleaseRequest) (Relea
 		body = defaultRestoredBody(verdict)
 	}
 	if err := prov.RestoreFromQuarantine(ctx, rec.Email, rec.MessageID, rec.LabelID, body); err != nil {
+		// The reference is already gone (ClaimReference removed it).
+		// Re-persist so a follow-up release call can retry; the
+		// reference would otherwise be permanently lost on a transient
+		// provider failure.
+		if rerr := s.quarantine.RestoreReference(ctx, req.TenantID, req.PseudonymizedMessage, rec); rerr != nil {
+			s.logger.ErrorContext(ctx, "release: re-persist after restore failure",
+				slog.Any("error", rerr))
+		}
 		return outcome, fmt.Errorf("release: restore: %w: %w", ErrProviderUnavailable, err)
-	}
-	if err := s.quarantine.ClearReference(ctx, req.TenantID, req.PseudonymizedMessage); err != nil {
-		// Restored already; clearing the reference is best-effort.
-		s.logger.WarnContext(ctx, "release: clear reference", slog.Any("error", err))
 	}
 	outcome.Reason = ReleaseAllowed
 	outcome.Restored = true

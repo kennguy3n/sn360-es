@@ -58,6 +58,13 @@ type QuarantineStore interface {
 	Set(ctx context.Context, key, value string, ttl time.Duration) error
 	Get(ctx context.Context, key string) (string, bool, error)
 	Del(ctx context.Context, keys ...string) error
+	// GetDel atomically reads and removes the key. Returns
+	// (value, true, nil) when the key existed, ("", false, nil) when
+	// it was already absent, and ("", false, err) on transport
+	// failures. Used by ClaimReference to fence concurrent release
+	// flows so a split-brain Redis lock cannot cause two restorers
+	// to mutate the same provider message.
+	GetDel(ctx context.Context, key string) (string, bool, error)
 }
 
 // QuarantineEncryptor encrypts and decrypts the persisted message
@@ -289,6 +296,54 @@ func (s *QuarantineService) ClearReference(ctx context.Context, tenant, pseudoMe
 		return fmt.Errorf("quarantine: store del: %w", err)
 	}
 	return nil
+}
+
+// ClaimReference atomically reads-and-deletes the stored reference.
+//
+// This is the application-layer fencing primitive that defends the
+// release flow against split-brain Redis locks (see
+// pkg/storage/redis/lock.go's package doc). Two concurrent release
+// flows that both passed the Reevaluate gate race to ClaimReference:
+// only one wins (claimed=true), the loser sees claimed=false and
+// short-circuits without calling RestoreFromQuarantine — so a
+// safety-critical phishing email cannot be unblocked twice from a
+// single quarantine event even if the surrounding lock fails to
+// arbitrate.
+//
+// On success the encrypted blob is gone from Redis. If the caller
+// fails AFTER claiming (typically: provider RestoreFromQuarantine
+// errors) it must call RestoreReference to re-persist the record so
+// a subsequent release attempt can retry.
+func (s *QuarantineService) ClaimReference(ctx context.Context, tenant, pseudoMessage string) (QuarantineRecord, bool, error) {
+	encHex, ok, err := s.store.GetDel(ctx, QuarantineKey(tenant, pseudoMessage))
+	if err != nil {
+		return QuarantineRecord{}, false, fmt.Errorf("quarantine: store getdel: %w", err)
+	}
+	if !ok {
+		return QuarantineRecord{}, false, nil
+	}
+	enc, err := hex.DecodeString(encHex)
+	if err != nil {
+		return QuarantineRecord{}, false, fmt.Errorf("quarantine: hex decode: %w", err)
+	}
+	plain, err := s.encryptor.Decrypt(ctx, tenant, enc)
+	if err != nil {
+		return QuarantineRecord{}, false, fmt.Errorf("quarantine: decrypt: %w", err)
+	}
+	var rec QuarantineRecord
+	if err := json.Unmarshal(plain, &rec); err != nil {
+		return QuarantineRecord{}, false, fmt.Errorf("quarantine: unmarshal: %w", err)
+	}
+	return rec, true, nil
+}
+
+// RestoreReference re-persists a claimed record. Used by the release
+// flow when the post-claim provider call fails so a later attempt
+// can retry. Re-persistence reuses the encrypt-and-set path so the
+// payload round-trips through the encryptor exactly as the original
+// quarantine did.
+func (s *QuarantineService) RestoreReference(ctx context.Context, tenant, pseudoMessage string, rec QuarantineRecord) error {
+	return s.persist(ctx, tenant, pseudoMessage, rec)
 }
 
 // persist encrypts rec and stores it under QuarantineKey.

@@ -223,3 +223,122 @@ func TestRelease_EventEnvelopeHasReason(t *testing.T) {
 		t.Fatalf("reason in event: %v", releaseEnv["reason"])
 	}
 }
+
+// TestRelease_ConcurrentClaimsDeduplicate proves the
+// ClaimReference-based fencing path: when two release flows run
+// concurrently against the same (tenant, pseudoMessage), exactly
+// one wins the atomic GETDEL and calls RestoreFromQuarantine; the
+// loser observes the missing reference and returns
+// ReleaseAlreadyDone. This is the application-layer guarantee that
+// defends against split-brain Redis lock failures.
+func TestRelease_ConcurrentClaimsDeduplicate(t *testing.T) {
+	ctx := context.Background()
+	prov := newFakeQProvider(LabelProviderGmail, "Label_99")
+	pub := &recordingPublisher{}
+	qsvc, _ := newQuarantineForTest(t, prov, pub)
+	mustQuarantine(t, qsvc)
+
+	rsvc, err := NewReleaseService(ReleaseConfig{
+		Quarantine: qsvc,
+		Reevaluator: stubReevaluator{
+			verdict: dto.EvaluateResult{
+				Tier:    constant.TierInformational,
+				Primary: constant.CategoryFirstContactExternal,
+			},
+		},
+		Publisher: pub,
+	})
+	if err != nil {
+		t.Fatalf("NewReleaseService: %v", err)
+	}
+
+	type result struct {
+		outcome ReleaseOutcome
+		err     error
+	}
+	const replicas = 8
+	results := make(chan result, replicas)
+	start := make(chan struct{})
+	for i := 0; i < replicas; i++ {
+		go func() {
+			<-start
+			o, e := rsvc.Release(ctx, ReleaseRequest{
+				TenantID:             "acme",
+				PseudonymizedMessage: "msg-1",
+			})
+			results <- result{outcome: o, err: e}
+		}()
+	}
+	close(start)
+
+	// Losers can show up as either ReleaseAlreadyDone (their
+	// LookupReference saw the record, their ClaimReference lost
+	// the race) or ReleaseNotFound (their LookupReference happened
+	// AFTER the winner's claim cleared the record). Both are
+	// "no-op, no second restore" outcomes and equally valid — the
+	// fencing guarantee under test is that exactly one replica
+	// reaches RestoreFromQuarantine, not which return code the
+	// other replicas surface.
+	var allowed, noop int
+	for i := 0; i < replicas; i++ {
+		r := <-results
+		if r.err != nil {
+			t.Fatalf("Release: %v", r.err)
+		}
+		switch r.outcome.Reason {
+		case ReleaseAllowed:
+			allowed++
+		case ReleaseAlreadyDone, ReleaseNotFound:
+			noop++
+		default:
+			t.Fatalf("unexpected reason: %v", r.outcome.Reason)
+		}
+	}
+	if allowed != 1 {
+		t.Fatalf("expected exactly 1 ReleaseAllowed, got %d (noop=%d)", allowed, noop)
+	}
+	if noop != replicas-1 {
+		t.Fatalf("expected %d no-op outcomes, got %d", replicas-1, noop)
+	}
+	if len(prov.restoreCalls) != 1 {
+		t.Fatalf("expected exactly 1 RestoreFromQuarantine call, got %d", len(prov.restoreCalls))
+	}
+}
+
+// TestRelease_RestoreFailureRepersistsRecord proves the recovery
+// invariant: if the provider RestoreFromQuarantine call fails AFTER
+// ClaimReference removed the encrypted blob, the release service
+// must re-persist so a subsequent attempt can retry. A naive
+// claim-and-restore implementation would lose the record on
+// transient provider outages.
+func TestRelease_RestoreFailureRepersistsRecord(t *testing.T) {
+	ctx := context.Background()
+	prov := newFakeQProvider(LabelProviderGmail, "Label_99")
+	prov.restoreErr = errors.New("provider 503")
+	pub := &recordingPublisher{}
+	qsvc, _ := newQuarantineForTest(t, prov, pub)
+	mustQuarantine(t, qsvc)
+
+	rsvc, err := NewReleaseService(ReleaseConfig{
+		Quarantine: qsvc,
+		Reevaluator: stubReevaluator{
+			verdict: dto.EvaluateResult{
+				Tier:    constant.TierInformational,
+				Primary: constant.CategoryFirstContactExternal,
+			},
+		},
+		Publisher: pub,
+	})
+	if err != nil {
+		t.Fatalf("NewReleaseService: %v", err)
+	}
+	if _, err := rsvc.Release(ctx, ReleaseRequest{
+		TenantID:             "acme",
+		PseudonymizedMessage: "msg-1",
+	}); err == nil {
+		t.Fatal("expected restore failure error")
+	}
+	if _, found, lerr := qsvc.LookupReference(ctx, "acme", "msg-1"); !found {
+		t.Fatalf("expected reference re-persisted after restore failure; found=%v err=%v", found, lerr)
+	}
+}

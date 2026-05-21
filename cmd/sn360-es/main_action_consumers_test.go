@@ -185,6 +185,17 @@ func (s *fakeQuarantineStore) Del(_ context.Context, keys ...string) error {
 	return nil
 }
 
+func (s *fakeQuarantineStore) GetDel(_ context.Context, key string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.values[key]
+	if !ok {
+		return "", false, nil
+	}
+	delete(s.values, key)
+	return v, true, nil
+}
+
 // fakeQuarantineEncryptor is a passthrough encryptor — the consumer
 // tests don't exercise the cryptographic ladder. Encrypt prepends a
 // fixed "enc:" prefix; Decrypt strips it. The roundtrip is symmetric
