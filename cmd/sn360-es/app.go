@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -70,6 +69,14 @@ type application struct {
 	microLessonSvc    *education.MicroLessonService
 	simulationEng     *education.SimulationEngine
 	simulationTracker *education.SimulationTracker
+	// usingMemoryCampaignStore / usingMemoryInteractionStore record
+	// whether newApplication had to fall back to the in-memory
+	// education stores even though pgDB was wired (e.g. EnsureSchema
+	// failed against a degraded database). assertProductionDurableStores
+	// reads these so the prod boot gate fires on the real in-memory
+	// state, not just on pgDB == nil.
+	usingMemoryCampaignStore    bool
+	usingMemoryInteractionStore bool
 	dashboardGen      *dashboard.DashboardGenerator
 	recipientSvc      *predict.RecipientService
 	openSvc           *predict.OpenService
@@ -347,11 +354,13 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 			logger.Warn("sn360-es: campaign store schema check failed; falling back to memory",
 				slog.Any("error", err))
 			campaignStore = education.NewMemoryCampaignStore()
+			app.usingMemoryCampaignStore = true
 		} else {
 			campaignStore = pgStore
 		}
 	} else {
 		campaignStore = education.NewMemoryCampaignStore()
+		app.usingMemoryCampaignStore = true
 	}
 	if eng, eerr := education.NewSimulationEngine(education.EngineConfig{
 		Store:     campaignStore,
@@ -377,11 +386,13 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 			logger.Warn("sn360-es: interaction store schema check failed; falling back to memory",
 				slog.Any("error", err))
 			interactionStore = education.NewMemoryInteractionStore()
+			app.usingMemoryInteractionStore = true
 		} else {
 			interactionStore = pgTrack
 		}
 	} else {
 		interactionStore = education.NewMemoryInteractionStore()
+		app.usingMemoryInteractionStore = true
 	}
 	if tracker, terr := education.NewSimulationTracker(education.TrackerConfig{
 		Store:  interactionStore,
@@ -694,21 +705,23 @@ func assertProductionDurableStores(cfg *config.Config, app *application, logger 
 	}
 	// Simulation engine + tracker now have durable Postgres
 	// backends (PostgresCampaignStore + PostgresInteractionStore)
-	// wired in newApplication. If the binary is still running on
-	// the in-memory fallback in a production environment it means
-	// PG_HOST/PG_DATABASE were not configured — that's a real
-	// data-loss exposure, so treat it as a boot blocker.
-	if app.simulationEng != nil && app.pgDB == nil {
+	// wired in newApplication. We check the actual fallback flags
+	// (set on EnsureSchema failure OR pgDB == nil) rather than just
+	// `pgDB == nil` so a degraded database that fails the schema
+	// check still trips the boot gate — otherwise pgDB would be
+	// non-nil but the runtime store would be the in-memory
+	// fallback, silently losing data on the next restart.
+	if app.simulationEng != nil && app.usingMemoryCampaignStore {
 		inMemory = append(inMemory, memStore{
 			name:    "simulation campaign store",
-			fix:     "configure PG_HOST/PG_DATABASE so simulation campaigns survive a restart",
+			fix:     "configure PG_HOST/PG_DATABASE (and ensure migrations are applied) so simulation campaigns survive a restart",
 			blocker: true,
 		})
 	}
-	if app.simulationTracker != nil && app.pgDB == nil {
+	if app.simulationTracker != nil && app.usingMemoryInteractionStore {
 		inMemory = append(inMemory, memStore{
 			name:    "simulation interaction store",
-			fix:     "configure PG_HOST/PG_DATABASE so simulation interactions survive a restart",
+			fix:     "configure PG_HOST/PG_DATABASE (and ensure migrations are applied) so simulation interactions survive a restart",
 			blocker: true,
 		})
 	}
@@ -828,19 +841,23 @@ func (a *application) WaitBackground() {
 // MUST be registered on the application's closer chain so a
 // graceful shutdown doesn't lose telemetry.
 func buildTracer(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*telemetry.Tracer, func() error, error) {
-	serviceVersion := strings.TrimSpace(os.Getenv("SERVICE_VERSION"))
-	env := strings.TrimSpace(os.Getenv("DEPLOY_ENV"))
-	endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	serviceName := cfg.AppName
+	if serviceName == "" {
+		serviceName = "sn360-es"
+	}
+	serviceVersion := strings.TrimSpace(cfg.Telemetry.ServiceVersion)
+	env := strings.TrimSpace(string(cfg.Environment))
+	endpoint := strings.TrimSpace(cfg.Telemetry.OTLPEndpoint)
 	if endpoint == "" {
 		return telemetry.NewTracer(telemetry.TracerConfig{
-			ServiceName:    "sn360-es",
+			ServiceName:    serviceName,
 			ServiceVersion: serviceVersion,
 			Environment:    env,
 		}), nil, nil
 	}
 	exp, shutdown, err := telemetry.NewOTLPBridge(ctx, telemetry.OTLPBridgeConfig{
 		Endpoint:       endpoint,
-		ServiceName:    "sn360-es",
+		ServiceName:    serviceName,
 		ServiceVersion: serviceVersion,
 		Environment:    env,
 	})
@@ -851,7 +868,7 @@ func buildTracer(ctx context.Context, cfg *config.Config, logger *slog.Logger) (
 		slog.String("endpoint", endpoint),
 		slog.String("service_version", serviceVersion))
 	tr := telemetry.NewTracer(telemetry.TracerConfig{
-		ServiceName:    "sn360-es",
+		ServiceName:    serviceName,
 		ServiceVersion: serviceVersion,
 		Environment:    env,
 		Exporter:       exp,

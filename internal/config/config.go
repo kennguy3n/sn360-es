@@ -96,6 +96,24 @@ type Config struct {
 	Ingestion                Ingestion
 	Worker                   Worker
 	Onboarding               Onboarding
+	Telemetry                Telemetry
+}
+
+// Telemetry carries OTel SDK bridge configuration. Wiring is
+// centralised here (rather than read straight from os.Getenv in
+// the bridge constructor) so that startup config is fully
+// inspectable from one place — useful for `sn360-es validate`,
+// for snapshot tests of the resolved configuration, and for any
+// future operator who has to debug a misconfigured deploy.
+type Telemetry struct {
+	// OTLPEndpoint is the OTLP/HTTP collector endpoint. When empty
+	// the OTel SDK bridge is disabled and the in-process tracer
+	// falls back to the no-op exporter — spans are still recorded
+	// for W3C traceparent propagation but never leave the process.
+	OTLPEndpoint string
+	// ServiceVersion populates the OTel resource attribute
+	// service.version. Typically the release tag or git SHA.
+	ServiceVersion string
 }
 
 // Log carries structured-logging configuration.
@@ -655,6 +673,10 @@ func Load() (Config, error) {
 			StateSecret: getStr("ONBOARDING_STATE_SECRET", ""),
 			CallbackURL: getStr("ONBOARDING_CALLBACK_URL", ""),
 			TokenKeyHex: getStr("ONBOARDING_TOKEN_KEY_HEX", ""),
+		},
+		Telemetry: Telemetry{
+			OTLPEndpoint:   getStr("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+			ServiceVersion: getStr("SERVICE_VERSION", ""),
 		},
 	}
 
