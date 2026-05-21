@@ -65,6 +65,60 @@ func isRTLLocale(locale string) bool {
 	return ok
 }
 
+// tierColors mirrors the per-tier palette baked into bannerCSS so the
+// renderer can also emit equivalent inline `style="..."` attributes.
+// Modern clients honour the <style> block; Outlook 2016/2019/2021
+// desktop (Word HTML engine) strips most rules in <style> and only
+// respects inline style attributes. Keeping both representations in
+// sync — the CSS rules in bannerCSS and the inline-style maps here —
+// is what lets the same banner render correctly across Gmail web,
+// Outlook web, Outlook desktop, Apple Mail and Thunderbird without a
+// provider switch in the renderer.
+//
+// Background / Border / Text mirror the .sn360-{tier} CSS rules.
+// Button / ButtonText mirror the .sn360-{tier} .sn360-actions a rule.
+type tierColors struct {
+	Background string
+	Border     string
+	Text       string
+	Button     string
+	ButtonText string
+}
+
+func tierColorsFor(t constant.Tier) tierColors {
+	switch t {
+	case constant.TierBlocked:
+		return tierColors{"#fce8e6", "#9b0019", "#3d0010", "#9b0019", "#ffffff"}
+	case constant.TierHighRisk:
+		return tierColors{"#fff1e5", "#a64600", "#3d1900", "#a64600", "#ffffff"}
+	case constant.TierWarning:
+		return tierColors{"#fff8e1", "#6e4d00", "#3d2c00", "#6e4d00", "#ffffff"}
+	case constant.TierCaution:
+		return tierColors{"#eef6ff", "#0d4ea0", "#062a59", "#0d4ea0", "#ffffff"}
+	case constant.TierInformational:
+		return tierColors{"#f1f5f9", "#4a566a", "#16202c", "#4a566a", "#ffffff"}
+	case constant.TierTrusted:
+		return tierColors{"#e6f4ea", "#08642f", "#143d24", "#08642f", "#ffffff"}
+	}
+	return tierColors{"#f5f5f5", "transparent", "#0a0a0a", "#262626", "#ffffff"}
+}
+
+// chipInlineStyle returns the inline background colour mirror of the
+// .sn360-chip-* CSS classes in bannerCSS. Used so Outlook desktop
+// renders the auth-verdict chip with the correct colour even when the
+// <style> block is stripped.
+func chipInlineStyle(v AuthVerdict) string {
+	switch v {
+	case AuthVerified:
+		return "background:#08642f;color:#ffffff"
+	case AuthFailed:
+		return "background:#9b0019;color:#ffffff"
+	case AuthUnverified:
+		return "background:#595959;color:#ffffff"
+	}
+	return "background:#595959;color:#ffffff"
+}
+
 // tierIcon returns a short text glyph that conveys severity
 // independently of color. Falls back to an empty string for unknown
 // tiers so the template renders no icon span.
@@ -137,6 +191,15 @@ func NewBannerRenderer(tr Translator) (*BannerRenderer, error) {
 		// names returned by chipClassFor. Neither is attacker-
 		// controlled. The G203 finding is therefore a false positive.
 		"safeCSS": func(s string) template.CSS { return template.CSS(s) }, //nolint:gosec
+		// safeHTML is used solely to emit the four hardcoded Microsoft
+		// Outlook conditional-comment delimiters (`<!--[if mso]>`,
+		// `<![endif]-->`, `<!--[if !mso]><!-->`, `<!--<![endif]-->`)
+		// that bracket the Outlook-desktop fallback table. Go's
+		// html/template package strips HTML comments by default, which
+		// would silently drop the entire fallback path. Every caller
+		// in bannerTemplate passes a string literal that comes from
+		// this file — none of the input is attacker-controlled.
+		"safeHTML": func(s string) template.HTML { return template.HTML(s) }, //nolint:gosec
 	}).Parse(bannerTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("banner: parse template: %w", err)
@@ -160,35 +223,40 @@ func (r *BannerRenderer) Render(in BannerInput) ([]byte, error) {
 	// 401 on the server, so suppress them when no token is supplied.
 	// The micro-lesson link is unrelated to feedback and stays visible.
 	hasToken := in.ActionToken != ""
+	colors := tierColorsFor(in.Tier)
 	view := bannerView{
-		Tier:          in.Tier,
-		TierClass:     tierClassFor(in.Tier),
-		Title:         title,
-		Body:          r.tr.Translate(locale, "tier."+string(in.Tier)+".body"),
-		Primary:       in.Primary,
-		PrimaryCopy:   r.tr.Translate(locale, in.Primary.CopyKey()),
-		Secondary:     in.Secondary,
-		ReasonCodes:   in.ReasonCodes,
-		AuthVerdict:   in.SenderAuth,
-		AuthLabel:     r.tr.Translate(locale, "auth."+string(in.SenderAuth)),
-		SenderDisplay: in.SenderDisplay,
-		SenderDomain:  in.SenderDomain,
-		Locale:        locale,
-		Dir:           dirFor(locale),
-		AriaRole:      ariaRoleFor(in.Tier),
-		AriaLabel:     title,
-		IconGlyph:     tierIcon(in.Tier),
-		ActionToken:   in.ActionToken,
-		ShowReport:    hasToken && in.Tier.Severity() >= constant.TierInformational.Severity(),
-		ShowMarkSafe:  hasToken && in.Tier.AllowsMarkSafe(),
-		ShowTrust:     hasToken && in.Tier.AllowsMarkSafe(),
-		MicroLesson:   in.MicroLessonURL,
-		Degraded:      in.Degraded,
-		ReportLabel:   r.tr.Translate(locale, "action.report"),
-		MarkSafeLabel: r.tr.Translate(locale, "action.mark_safe"),
-		TrustLabel:    r.tr.Translate(locale, "action.trust_sender"),
-		LearnLabel:    r.tr.Translate(locale, "action.learn_more"),
-		DegradedLabel: r.tr.Translate(locale, "banner.degraded"),
+		Tier:           in.Tier,
+		TierClass:      tierClassFor(in.Tier),
+		WrapperStyle:   wrapperInlineStyle(colors),
+		ButtonStyle:    buttonInlineStyle(colors, false),
+		ButtonStyleMSO: buttonInlineStyle(colors, true),
+		ChipStyle:      chipInlineStyle(in.SenderAuth),
+		Title:          title,
+		Body:           r.tr.Translate(locale, "tier."+string(in.Tier)+".body"),
+		Primary:        in.Primary,
+		PrimaryCopy:    r.tr.Translate(locale, in.Primary.CopyKey()),
+		Secondary:      in.Secondary,
+		ReasonCodes:    in.ReasonCodes,
+		AuthVerdict:    in.SenderAuth,
+		AuthLabel:      r.tr.Translate(locale, "auth."+string(in.SenderAuth)),
+		SenderDisplay:  in.SenderDisplay,
+		SenderDomain:   in.SenderDomain,
+		Locale:         locale,
+		Dir:            dirFor(locale),
+		AriaRole:       ariaRoleFor(in.Tier),
+		AriaLabel:      title,
+		IconGlyph:      tierIcon(in.Tier),
+		ActionToken:    in.ActionToken,
+		ShowReport:     hasToken && in.Tier.Severity() >= constant.TierInformational.Severity(),
+		ShowMarkSafe:   hasToken && in.Tier.AllowsMarkSafe(),
+		ShowTrust:      hasToken && in.Tier.AllowsMarkSafe(),
+		MicroLesson:    in.MicroLessonURL,
+		Degraded:       in.Degraded,
+		ReportLabel:    r.tr.Translate(locale, "action.report"),
+		MarkSafeLabel:  r.tr.Translate(locale, "action.mark_safe"),
+		TrustLabel:     r.tr.Translate(locale, "action.trust_sender"),
+		LearnLabel:     r.tr.Translate(locale, "action.learn_more"),
+		DegradedLabel:  r.tr.Translate(locale, "banner.degraded"),
 	}
 
 	for _, sec := range in.Secondary {
@@ -204,35 +272,71 @@ func (r *BannerRenderer) Render(in BannerInput) ([]byte, error) {
 
 // bannerView is the template's input struct.
 type bannerView struct {
-	Tier          constant.Tier
-	TierClass     string
-	Title         string
-	Body          string
-	Primary       constant.Category
-	PrimaryCopy   string
-	Secondary     []constant.Category
-	SecondaryCopy []string
-	ReasonCodes   []string
-	AuthVerdict   AuthVerdict
-	AuthLabel     string
-	SenderDisplay string
-	SenderDomain  string
-	Locale        string
-	Dir           string
-	AriaRole      string
-	AriaLabel     string
-	IconGlyph     string
-	ActionToken   string
-	ShowReport    bool
-	ShowMarkSafe  bool
-	ShowTrust     bool
-	MicroLesson   string
-	Degraded      bool
-	ReportLabel   string
-	MarkSafeLabel string
-	TrustLabel    string
-	LearnLabel    string
-	DegradedLabel string
+	Tier           constant.Tier
+	TierClass      string
+	WrapperStyle   string
+	ButtonStyle    string
+	ButtonStyleMSO string
+	ChipStyle      string
+	Title          string
+	Body           string
+	Primary        constant.Category
+	PrimaryCopy    string
+	Secondary      []constant.Category
+	SecondaryCopy  []string
+	ReasonCodes    []string
+	AuthVerdict    AuthVerdict
+	AuthLabel      string
+	SenderDisplay  string
+	SenderDomain   string
+	Locale         string
+	Dir            string
+	AriaRole       string
+	AriaLabel      string
+	IconGlyph      string
+	ActionToken    string
+	ShowReport     bool
+	ShowMarkSafe   bool
+	ShowTrust      bool
+	MicroLesson    string
+	Degraded       bool
+	ReportLabel    string
+	MarkSafeLabel  string
+	TrustLabel     string
+	LearnLabel     string
+	DegradedLabel  string
+}
+
+// wrapperInlineStyle composes the wrapper-element inline style that
+// mirrors the tier-specific CSS rule in bannerCSS. Emitted on the
+// outer <div> so Outlook desktop renders the tier colour even though
+// the Word HTML engine ignores most rules inside the embedded <style>
+// block. The font-family and base typography are repeated here so the
+// banner still looks like a banner if the <style> block is stripped
+// outright by a strict sanitiser.
+func wrapperInlineStyle(c tierColors) string {
+	return "font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;" +
+		"font-size:14px;line-height:1.4;padding:12px 16px;margin:8px 0;" +
+		"border-radius:8px;border:1px solid " + c.Border + ";" +
+		"color:" + c.Text + ";background:" + c.Background
+}
+
+// buttonInlineStyle composes the inline style applied to action <a>
+// elements. The mso=true variant omits border-radius (Word ignores it
+// anyway) and uses a slightly thicker padding so the buttons remain
+// tap-target sized even when the engine drops display:inline-block.
+func buttonInlineStyle(c tierColors, mso bool) string {
+	base := "display:inline-block;padding:6px 12px;text-decoration:none;" +
+		"font-weight:600;font-size:12px;" +
+		"font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;" +
+		"color:" + c.ButtonText + ";background:" + c.Button + ";" +
+		"border:1px solid " + c.Button + ";"
+	if !mso {
+		base += "border-radius:6px;"
+	} else {
+		base += "mso-padding-alt:0;"
+	}
+	return base
 }
 
 // dirFor returns "rtl" for RTL locales and "ltr" otherwise. Always
@@ -331,6 +435,26 @@ const bannerCSS = `.sn360-banner{font-family:-apple-system,BlinkMacSystemFont,Se
 // intentionally inlines all CSS so the banner survives provider HTML
 // sanitisers.
 //
+// Cross-client rendering strategy:
+//   - The full bannerCSS block is emitted in a <style> tag for modern
+//     clients (Gmail web/mobile, Outlook web, Apple Mail, Thunderbird)
+//     that honour stylesheet rules in embedded <style> blocks.
+//   - Every visible element ALSO carries an inline style="..." attribute
+//     mirroring the same rule, because Outlook 2016 / 2019 / 2021 desktop
+//     (Word HTML rendering engine) strips most rules from <style> and
+//     only honours inline style attributes. Without the mirror, Outlook
+//     desktop would render the banner as default-styled black text on a
+//     white background.
+//   - The action buttons are emitted twice: once inside an
+//     <!--[if !mso]><!--> / <!--<![endif]--> guard (the modern flexbox
+//     <div> seen by every non-Outlook-desktop client), and once inside
+//     an <!--[if mso]> / <![endif]--> guard (the Outlook-desktop-only
+//     <table> fallback so the buttons render as a proper row of tap
+//     targets instead of stacking flat). MSO conditional comments are
+//     ignored by every client other than Outlook desktop, so a single
+//     HTML body cleanly serves heterogeneous reading clients without a
+//     provider switch in the renderer.
+//
 // Accessibility:
 //   - role attribute is "alert" for Blocked/HighRisk and "status" for
 //     softer tiers so assistive tech announces severity immediately.
@@ -346,20 +470,34 @@ const bannerCSS = `.sn360-banner{font-family:-apple-system,BlinkMacSystemFont,Se
 //   - dir attribute is set explicitly for RTL locales.
 //   - Focus order follows reading order: title -> body -> reasons ->
 //     auth chip -> action buttons.
+//   - The Outlook-only <table> fallback duplicates the action links but
+//     is unreachable by every other client (conditional comments hide
+//     it from the DOM), so screen readers only encounter the modern
+//     flexbox <div role="group"> path. No duplicate-announcement risk.
 var bannerTemplate = `<style>` + bannerCSS + `</style>
-<div class="{{ .TierClass }}" role="{{ .AriaRole }}" aria-label="{{ .AriaLabel }}" dir="{{ .Dir }}" data-sn360-tier="{{ .Tier }}" data-sn360-locale="{{ .Locale }}">
-  <h1>{{ if .IconGlyph }}<span class="sn360-icon" aria-hidden="true">{{ .IconGlyph }}</span>{{ end }}<span class="sn360-sr-only">{{ .AriaLabel }}: </span>{{ .Title }}</h1>
-  <p>{{ .Body }}</p>
-  {{ if .PrimaryCopy }}<p><strong>{{ .PrimaryCopy }}</strong></p>{{ end }}
-  {{ if .SecondaryCopy }}<p class="sn360-secondary">{{ range $i, $s := .SecondaryCopy }}{{ if $i }} · {{ end }}{{ $s }}{{ end }}</p>{{ end }}
-  {{ if .ReasonCodes }}<p class="sn360-reasons">{{ range $i, $r := .ReasonCodes }}{{ if $i }} · {{ end }}{{ $r }}{{ end }}</p>{{ end }}
-  {{ if .AuthLabel }}<p><span class="{{ chipClass .AuthVerdict }}" role="img" aria-label="{{ .AuthLabel }}">{{ .AuthLabel }}</span>{{ if .SenderDomain }} <span class="sn360-secondary">{{ .SenderDomain }}</span>{{ end }}</p>{{ end }}
-  <div class="sn360-actions" role="group" aria-label="{{ .AriaLabel }}">
-    {{ if .ShowReport }}<a href="https://l.sn360.io/action/report_phishing?token={{ .ActionToken }}" aria-label="{{ .ReportLabel }}">{{ .ReportLabel }}</a>{{ end }}
-    {{ if .ShowMarkSafe }}<a href="https://l.sn360.io/action/mark_safe?token={{ .ActionToken }}" aria-label="{{ .MarkSafeLabel }}">{{ .MarkSafeLabel }}</a>{{ end }}
-    {{ if .ShowTrust }}<a href="https://l.sn360.io/action/trust_sender?token={{ .ActionToken }}" aria-label="{{ .TrustLabel }}">{{ .TrustLabel }}</a>{{ end }}
-    {{ if .MicroLesson }}<a href="{{ .MicroLesson }}" aria-label="{{ .LearnLabel }}">{{ .LearnLabel }}</a>{{ end }}
+<div class="{{ .TierClass }}" style="{{ safeCSS .WrapperStyle }}" role="{{ .AriaRole }}" aria-label="{{ .AriaLabel }}" dir="{{ .Dir }}" data-sn360-tier="{{ .Tier }}" data-sn360-locale="{{ .Locale }}">
+  <h1 style="font-size:14px;font-weight:700;margin:0 0 4px 0;letter-spacing:0.01em">{{ if .IconGlyph }}<span class="sn360-icon" aria-hidden="true" style="display:inline-block;margin-right:6px;font-size:16px;line-height:1;vertical-align:middle;font-weight:700">{{ .IconGlyph }}</span>{{ end }}<span class="sn360-sr-only" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0">{{ .AriaLabel }}: </span>{{ .Title }}</h1>
+  <p style="margin:0 0 6px 0">{{ .Body }}</p>
+  {{ if .PrimaryCopy }}<p style="margin:0 0 6px 0"><strong>{{ .PrimaryCopy }}</strong></p>{{ end }}
+  {{ if .SecondaryCopy }}<p class="sn360-secondary" style="color:#3a3a3a;font-size:12px;margin-top:4px">{{ range $i, $s := .SecondaryCopy }}{{ if $i }} · {{ end }}{{ $s }}{{ end }}</p>{{ end }}
+  {{ if .ReasonCodes }}<p class="sn360-reasons" style="color:#3a3a3a;font-size:12px;margin-top:4px;font-style:italic">{{ range $i, $r := .ReasonCodes }}{{ if $i }} · {{ end }}{{ $r }}{{ end }}</p>{{ end }}
+  {{ if .AuthLabel }}<p style="margin:0 0 6px 0"><span class="{{ chipClass .AuthVerdict }}" style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;margin-right:6px;vertical-align:middle;{{ safeCSS .ChipStyle }}" role="img" aria-label="{{ .AuthLabel }}">{{ .AuthLabel }}</span>{{ if .SenderDomain }} <span class="sn360-secondary" style="color:#3a3a3a;font-size:12px">{{ .SenderDomain }}</span>{{ end }}</p>{{ end }}
+  {{ safeHTML "<!--[if !mso]><!-->" }}
+  <div class="sn360-actions" role="group" aria-label="{{ .AriaLabel }}" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px">
+    {{ if .ShowReport }}<a href="https://l.sn360.io/action/report_phishing?token={{ .ActionToken }}" aria-label="{{ .ReportLabel }}" style="{{ safeCSS .ButtonStyle }}">{{ .ReportLabel }}</a>{{ end }}
+    {{ if .ShowMarkSafe }}<a href="https://l.sn360.io/action/mark_safe?token={{ .ActionToken }}" aria-label="{{ .MarkSafeLabel }}" style="{{ safeCSS .ButtonStyle }}">{{ .MarkSafeLabel }}</a>{{ end }}
+    {{ if .ShowTrust }}<a href="https://l.sn360.io/action/trust_sender?token={{ .ActionToken }}" aria-label="{{ .TrustLabel }}" style="{{ safeCSS .ButtonStyle }}">{{ .TrustLabel }}</a>{{ end }}
+    {{ if .MicroLesson }}<a href="{{ .MicroLesson }}" aria-label="{{ .LearnLabel }}" style="{{ safeCSS .ButtonStyle }}">{{ .LearnLabel }}</a>{{ end }}
   </div>
-  {{ if .Degraded }}<p class="sn360-degraded">{{ .DegradedLabel }}</p>{{ end }}
+  {{ safeHTML "<!--<![endif]-->" }}
+  {{ safeHTML "<!--[if mso]>" }}
+  <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;border-collapse:collapse" aria-hidden="true"><tr>
+    {{ if .ShowReport }}<td style="padding-right:8px"><a href="https://l.sn360.io/action/report_phishing?token={{ .ActionToken }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .ReportLabel }}</a></td>{{ end }}
+    {{ if .ShowMarkSafe }}<td style="padding-right:8px"><a href="https://l.sn360.io/action/mark_safe?token={{ .ActionToken }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .MarkSafeLabel }}</a></td>{{ end }}
+    {{ if .ShowTrust }}<td style="padding-right:8px"><a href="https://l.sn360.io/action/trust_sender?token={{ .ActionToken }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .TrustLabel }}</a></td>{{ end }}
+    {{ if .MicroLesson }}<td style="padding-right:8px"><a href="{{ .MicroLesson }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .LearnLabel }}</a></td>{{ end }}
+  </tr></table>
+  {{ safeHTML "<![endif]-->" }}
+  {{ if .Degraded }}<p class="sn360-degraded" style="color:#3a3a3a;font-size:11px;margin-top:6px;font-style:italic">{{ .DegradedLabel }}</p>{{ end }}
 </div>
 `

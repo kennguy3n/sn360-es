@@ -362,3 +362,185 @@ func TestBannerRendererArabicRTLProductionCatalog(t *testing.T) {
 		t.Errorf("missing locale marker for ar\n%s", s)
 	}
 }
+
+// TestBannerRendererInlineWrapperStyle locks in the contract that the
+// renderer emits a per-tier inline style="..." attribute on the wrapper
+// <div>. Outlook 2016 / 2019 / 2021 desktop uses the Word HTML engine,
+// which strips most rules from the embedded <style> block and only
+// honours inline style attributes — so without this attribute the
+// banner renders as default-styled black text on white in those clients,
+// losing the severity colour cue that the design relies on.
+func TestBannerRendererInlineWrapperStyle(t *testing.T) {
+	r := mustRenderer(t)
+	cases := []struct {
+		name      string
+		tier      constant.Tier
+		wantBG    string
+		wantText  string
+		wantBordr string
+	}{
+		// Backgrounds + text colours mirror the .sn360-{tier} CSS rules
+		// in bannerCSS. If you change one, change the other.
+		{"blocked", constant.TierBlocked, "background:#fce8e6", "color:#3d0010", "border:1px solid #9b0019"},
+		{"high risk", constant.TierHighRisk, "background:#fff1e5", "color:#3d1900", "border:1px solid #a64600"},
+		{"warning", constant.TierWarning, "background:#fff8e1", "color:#3d2c00", "border:1px solid #6e4d00"},
+		{"caution", constant.TierCaution, "background:#eef6ff", "color:#062a59", "border:1px solid #0d4ea0"},
+		{"informational", constant.TierInformational, "background:#f1f5f9", "color:#16202c", "border:1px solid #4a566a"},
+		{"trusted", constant.TierTrusted, "background:#e6f4ea", "color:#143d24", "border:1px solid #08642f"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			html, err := r.Render(BannerInput{
+				Tier:        tc.tier,
+				Primary:     constant.CategoryFirstContactExternal,
+				Locale:      "en",
+				ActionToken: "tok",
+			})
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			s := string(html)
+			for _, want := range []string{tc.wantBG, tc.wantText, tc.wantBordr} {
+				if !strings.Contains(s, want) {
+					t.Errorf("wrapper missing inline %q (tier=%s)\n%s", want, tc.tier, s)
+				}
+			}
+		})
+	}
+}
+
+// TestBannerRendererEmitsMSOConditionalFallback locks in the contract
+// that the renderer emits the Outlook-desktop-only MSO conditional
+// fallback alongside the modern flexbox path. Without these comments,
+// Outlook 2016 / 2019 / 2021 desktop would see only the flexbox <div>
+// whose `display:flex` rule is stripped by the Word HTML engine,
+// causing the action buttons to stack flat without spacing. The MSO
+// fallback wraps a <table> of <a> elements that the Word engine
+// renders as a proper row of tap-targets.
+//
+// The negative assertion guards that the modern path is also wrapped
+// in `<!--[if !mso]><!-->` so Outlook desktop does not see it twice
+// and end up with two banners stacked on top of each other.
+func TestBannerRendererEmitsMSOConditionalFallback(t *testing.T) {
+	r := mustRenderer(t)
+	html, err := r.Render(BannerInput{
+		Tier:        constant.TierWarning,
+		Primary:     constant.CategoryLookalikeDomain,
+		Locale:      "en",
+		ActionToken: "tok-xyz",
+		SenderAuth:  AuthFailed,
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	s := string(html)
+	for _, want := range []string{
+		"<!--[if !mso]><!-->",
+		"<!--<![endif]-->",
+		"<!--[if mso]>",
+		"<![endif]-->",
+		// MSO branch uses a <table> for the action buttons.
+		`<table role="presentation"`,
+		`cellpadding="0"`,
+		`cellspacing="0"`,
+		// The fallback table must be marked aria-hidden so screen
+		// readers do not announce the buttons twice (the modern
+		// flexbox <div role="group"> already handles announcement).
+		`aria-hidden="true"`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("MSO fallback missing %q\n%s", want, s)
+		}
+	}
+}
+
+// TestBannerRendererMSOFallbackRespectsCTAVisibility verifies that the
+// suppression logic for missing ActionTokens also flows through to the
+// Outlook fallback table. Without this, an Outlook-desktop reader
+// could see Report/Mark-safe/Trust buttons with broken `token=` URLs
+// that 401 when clicked, while every other client correctly suppresses
+// them. The fallback path uses the same {{ if .ShowReport }} guard so
+// the two paths cannot drift.
+func TestBannerRendererMSOFallbackRespectsCTAVisibility(t *testing.T) {
+	r := mustRenderer(t)
+	html, err := r.Render(BannerInput{
+		Tier:    constant.TierWarning,
+		Primary: constant.CategoryLikelyPhishing,
+		Locale:  "en",
+		// No ActionToken — both paths must suppress CTAs.
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	s := string(html)
+	for _, banned := range []string{"report_phishing", "mark_safe", "trust_sender"} {
+		if strings.Contains(s, banned) {
+			t.Errorf("interactive CTA %q leaked into output (modern or MSO path) when no token was supplied\n%s", banned, s)
+		}
+	}
+}
+
+// TestBannerRendererInlineActionButtonStyle verifies that the per-tier
+// background colour of the action <a> elements is emitted as an inline
+// style attribute in both the modern and MSO branches. Without this,
+// Outlook desktop would render the buttons with the default colour
+// only because the .sn360-{tier} .sn360-actions a CSS rule lives in
+// the stripped <style> block.
+func TestBannerRendererInlineActionButtonStyle(t *testing.T) {
+	r := mustRenderer(t)
+	html, err := r.Render(BannerInput{
+		Tier:        constant.TierBlocked,
+		Primary:     constant.CategoryLikelyPhishing,
+		Locale:      "en",
+		ActionToken: "tok",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	s := string(html)
+	// .sn360-blocked .sn360-actions a uses background:#9b0019.
+	if strings.Count(s, "background:#9b0019") < 2 {
+		t.Errorf("blocked-tier button colour should appear inline in BOTH the modern and MSO paths (>=2 hits), got\n%s", s)
+	}
+	// Buttons must also carry text-decoration:none so Outlook does
+	// not render them as underlined links.
+	if !strings.Contains(s, "text-decoration:none") {
+		t.Errorf("action <a> elements missing inline text-decoration:none\n%s", s)
+	}
+}
+
+// TestBannerRendererInlineChipStyle verifies the auth-verdict chip
+// carries the inline colour that mirrors .sn360-chip-verified /
+// .sn360-chip-failed / .sn360-chip-unverified in bannerCSS. The same
+// argument applies as for the wrapper and action buttons: Outlook
+// desktop strips the chip-class rules, so the inline mirror is what
+// keeps the chip rendering as a coloured pill instead of plain text.
+func TestBannerRendererInlineChipStyle(t *testing.T) {
+	r := mustRenderer(t)
+	cases := []struct {
+		name string
+		verd AuthVerdict
+		want string
+	}{
+		{"verified -> green", AuthVerified, "background:#08642f"},
+		{"failed -> red", AuthFailed, "background:#9b0019"},
+		{"unverified -> gray", AuthUnverified, "background:#595959"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			html, err := r.Render(BannerInput{
+				Tier:        constant.TierCaution,
+				Primary:     constant.CategoryFirstContactExternal,
+				Locale:      "en",
+				SenderAuth:  tc.verd,
+				ActionToken: "tok",
+			})
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			if !strings.Contains(string(html), tc.want) {
+				t.Errorf("missing inline chip style %q for verdict=%s\n%s", tc.want, tc.verd, html)
+			}
+		})
+	}
+}
