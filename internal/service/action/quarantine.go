@@ -314,25 +314,51 @@ func (s *QuarantineService) ClearReference(ctx context.Context, tenant, pseudoMe
 // fails AFTER claiming (typically: provider RestoreFromQuarantine
 // errors) it must call RestoreReference to re-persist the record so
 // a subsequent release attempt can retry.
+//
+// Failure handling between GETDEL and the successful unmarshal of
+// rec is symmetric with the post-claim provider-failure path: if
+// decode / decrypt / unmarshal fails AFTER the atomic GETDEL has
+// already removed the key, we re-`Set` the original encrypted hex
+// back into the store so the data is not lost on what is otherwise
+// expected to be a transient or near-impossible error (LookupReference
+// just successfully decoded the same blob). The re-persist is
+// best-effort — if it itself fails we surface the original decode
+// error joined with the re-persist error so an operator sees both.
 func (s *QuarantineService) ClaimReference(ctx context.Context, tenant, pseudoMessage string) (QuarantineRecord, bool, error) {
-	encHex, ok, err := s.store.GetDel(ctx, QuarantineKey(tenant, pseudoMessage))
+	key := QuarantineKey(tenant, pseudoMessage)
+	encHex, ok, err := s.store.GetDel(ctx, key)
 	if err != nil {
 		return QuarantineRecord{}, false, fmt.Errorf("quarantine: store getdel: %w", err)
 	}
 	if !ok {
 		return QuarantineRecord{}, false, nil
 	}
+	// repersist writes the raw encrypted hex back under key with
+	// the same TTL the original blob had. Used to restore the
+	// store to its pre-GETDEL state when a downstream step on the
+	// hot path (decode/decrypt/unmarshal) fails — i.e. when we
+	// hold a value we can't interpret but have already removed
+	// from Redis. Without this, a one-off decrypt blip would
+	// permanently strand the reference.
+	repersist := func(decodeErr error, op string) (QuarantineRecord, bool, error) {
+		setCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if perr := s.store.Set(setCtx, key, encHex, s.ttl); perr != nil {
+			return QuarantineRecord{}, false, fmt.Errorf("quarantine: %s: %w (repersist also failed: %v)", op, decodeErr, perr)
+		}
+		return QuarantineRecord{}, false, fmt.Errorf("quarantine: %s: %w", op, decodeErr)
+	}
 	enc, err := hex.DecodeString(encHex)
 	if err != nil {
-		return QuarantineRecord{}, false, fmt.Errorf("quarantine: hex decode: %w", err)
+		return repersist(err, "hex decode")
 	}
 	plain, err := s.encryptor.Decrypt(ctx, tenant, enc)
 	if err != nil {
-		return QuarantineRecord{}, false, fmt.Errorf("quarantine: decrypt: %w", err)
+		return repersist(err, "decrypt")
 	}
 	var rec QuarantineRecord
 	if err := json.Unmarshal(plain, &rec); err != nil {
-		return QuarantineRecord{}, false, fmt.Errorf("quarantine: unmarshal: %w", err)
+		return repersist(err, "unmarshal")
 	}
 	return rec, true, nil
 }
