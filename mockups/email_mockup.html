@@ -1,0 +1,1062 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>SN360-ES — Gmail &amp; Outlook banner/label mockup</title>
+<style>
+/* =====================================================================
+   Banner CSS — copied VERBATIM from
+   internal/service/action/banner_renderer.go (bannerCSS, lines 297-327).
+   Do not edit this block; it is the source of truth for banner rendering.
+   ===================================================================== */
+.sn360-banner{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.4;border-radius:8px;padding:12px 16px;margin:8px 0;border:1px solid transparent;color:#0a0a0a;background:#f5f5f5}
+.sn360-banner h1{font-size:14px;font-weight:700;margin:0 0 4px 0;letter-spacing:0.01em}
+.sn360-banner p{margin:0 0 6px 0}
+.sn360-banner .sn360-icon{display:inline-block;margin-right:6px;font-size:16px;line-height:1;vertical-align:middle;font-weight:700}
+.sn360-banner[dir="rtl"] .sn360-icon{margin-right:0;margin-left:6px}
+.sn360-banner .sn360-secondary{color:#3a3a3a;font-size:12px;margin-top:4px}
+.sn360-banner .sn360-reasons{color:#3a3a3a;font-size:12px;margin-top:4px;font-style:italic}
+.sn360-banner .sn360-actions{margin-top:8px;display:flex;flex-wrap:wrap;gap:8px}
+.sn360-banner .sn360-actions a{display:inline-block;padding:6px 12px;border-radius:6px;text-decoration:none;font-weight:600;font-size:12px;color:#fff;background:#262626;border:1px solid transparent}
+.sn360-banner .sn360-actions a:focus{outline:2px solid #0050b3;outline-offset:2px}
+.sn360-banner .sn360-actions a:hover{text-decoration:underline}
+.sn360-banner .sn360-chip{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;margin-right:6px;vertical-align:middle;color:#fff}
+.sn360-banner[dir="rtl"] .sn360-chip{margin-right:0;margin-left:6px}
+.sn360-banner .sn360-chip-verified{background:#08642f}
+.sn360-banner .sn360-chip-failed{background:#9b0019}
+.sn360-banner .sn360-chip-unverified{background:#595959}
+.sn360-blocked{background:#fce8e6;border-color:#9b0019;color:#3d0010}
+.sn360-blocked .sn360-actions a{background:#9b0019}
+.sn360-high{background:#fff1e5;border-color:#a64600;color:#3d1900}
+.sn360-high .sn360-actions a{background:#a64600}
+.sn360-warning{background:#fff8e1;border-color:#6e4d00;color:#3d2c00}
+.sn360-warning .sn360-actions a{background:#6e4d00}
+.sn360-caution{background:#eef6ff;border-color:#0d4ea0;color:#062a59}
+.sn360-caution .sn360-actions a{background:#0d4ea0}
+.sn360-info{background:#f1f5f9;border-color:#4a566a;color:#16202c}
+.sn360-info .sn360-actions a{background:#4a566a}
+.sn360-trusted{background:#e6f4ea;border-color:#08642f;color:#143d24}
+.sn360-trusted .sn360-actions a{background:#08642f}
+.sn360-degraded{color:#3a3a3a;font-size:11px;margin-top:6px;font-style:italic}
+.sn360-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media (prefers-color-scheme:dark){.sn360-banner{color:#f5f5f5;background:#1a1a1a}.sn360-banner .sn360-secondary,.sn360-banner .sn360-reasons,.sn360-degraded{color:#cfcfcf}}
+
+/* Manual dark-mode toggle: mirrors the @media (prefers-color-scheme:dark)
+   block above so stakeholders can preview dark mode without changing OS
+   settings. The verbatim @media block stays intact for accuracy. */
+html[data-theme="dark"] .sn360-banner{color:#f5f5f5;background:#1a1a1a}
+html[data-theme="dark"] .sn360-banner .sn360-secondary,
+html[data-theme="dark"] .sn360-banner .sn360-reasons,
+html[data-theme="dark"] .sn360-degraded{color:#cfcfcf}
+
+/* =====================================================================
+   Page chrome — minimal site CSS for the mockup itself. Not part of the
+   product; only used to frame the banners inside fake Gmail/Outlook UI.
+   ===================================================================== */
+:root{
+  --page-bg:#f6f8fa;
+  --panel-bg:#ffffff;
+  --panel-border:#e5e7eb;
+  --text:#0a0a0a;
+  --muted:#5f6368;
+  --gmail-hover:#f5f5f5;
+  --gmail-divider:#f1f3f4;
+  --gmail-blue:#1a73e8;
+  --gmail-blue-bg:#e8f0fe;
+  --outlook-blue:#0078d4;
+  --outlook-hover:#f3f2f1;
+  --outlook-divider:#edebe9;
+  --outlook-selected-bg:#cfe4fa;
+}
+html[data-theme="dark"]{
+  --page-bg:#0d1117;
+  --panel-bg:#161b22;
+  --panel-border:#30363d;
+  --text:#f5f5f5;
+  --muted:#9aa4af;
+  --gmail-hover:#21262d;
+  --gmail-divider:#21262d;
+  --gmail-blue:#58a6ff;
+  --gmail-blue-bg:#1d2d44;
+  --outlook-blue:#58a6ff;
+  --outlook-hover:#21262d;
+  --outlook-divider:#21262d;
+  --outlook-selected-bg:#1d2d44;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--page-bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  font-size:14px;line-height:1.5}
+a{color:inherit}
+.container{max-width:1180px;margin:0 auto;padding:24px}
+header.page{
+  display:flex;align-items:center;justify-content:space-between;
+  gap:16px;flex-wrap:wrap;margin-bottom:16px;
+}
+header.page h1{font-size:20px;margin:0;font-weight:700}
+header.page .subtitle{color:var(--muted);font-size:13px;margin-top:4px}
+.toolbar{display:flex;gap:8px;align-items:center}
+.toolbar button{
+  font:inherit;padding:8px 14px;border-radius:999px;border:1px solid var(--panel-border);
+  background:var(--panel-bg);color:var(--text);cursor:pointer;
+}
+.toolbar button:hover{background:var(--gmail-hover)}
+.toolbar button[aria-pressed="true"]{background:var(--gmail-blue-bg);border-color:var(--gmail-blue);color:var(--gmail-blue);font-weight:600}
+
+.note{
+  background:var(--panel-bg);border:1px solid var(--panel-border);border-radius:8px;
+  padding:12px 16px;margin:16px 0;color:var(--muted);font-size:13px;
+}
+.note strong{color:var(--text)}
+
+section.major{margin-top:32px}
+section.major > h2{font-size:16px;margin:0 0 12px 0;letter-spacing:0.02em;text-transform:uppercase;color:var(--muted)}
+
+/* Tab switcher inside each major section */
+.tabs{display:flex;gap:6px;margin-bottom:12px}
+.tabs button{
+  font:inherit;padding:8px 16px;border:1px solid var(--panel-border);border-bottom:none;
+  background:var(--panel-bg);color:var(--text);cursor:pointer;
+  border-top-left-radius:8px;border-top-right-radius:8px;
+}
+.tabs button[aria-selected="true"]{background:var(--page-bg);font-weight:600;position:relative;z-index:1}
+.tab-panel{display:none}
+.tab-panel.is-active{display:block}
+
+/* ---------- Gmail inbox list ---------- */
+.gmail-app{
+  background:var(--panel-bg);border:1px solid var(--panel-border);border-radius:12px;
+  overflow:hidden;font-family:"Google Sans","Roboto",-apple-system,sans-serif;
+}
+.gmail-topbar{
+  display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--panel-border);
+  background:var(--panel-bg);
+}
+.gmail-logo{font-weight:700;font-size:18px;color:var(--gmail-blue)}
+.gmail-search{
+  flex:1;background:var(--gmail-hover);border-radius:8px;padding:8px 14px;color:var(--muted);
+  font-size:13px;
+}
+.gmail-toolbar{
+  display:flex;align-items:center;gap:14px;padding:6px 16px;border-bottom:1px solid var(--panel-border);
+  font-size:13px;color:var(--muted);
+}
+.gmail-toolbar .chev{opacity:.6}
+.gmail-row{
+  display:grid;grid-template-columns:32px 28px 200px 1fr 80px;align-items:center;gap:8px;
+  padding:8px 16px;border-bottom:1px solid var(--gmail-divider);cursor:pointer;
+}
+.gmail-row:hover{background:var(--gmail-hover)}
+.gmail-row.unread{font-weight:600;background:var(--panel-bg)}
+.gmail-row .check{
+  width:16px;height:16px;border:2px solid var(--muted);border-radius:3px;opacity:.7;
+}
+.gmail-row .star{color:var(--muted);font-size:16px;line-height:1}
+.gmail-row .sender{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gmail-row .subject-cell{display:flex;align-items:center;gap:8px;min-width:0}
+.gmail-row .labels{display:inline-flex;gap:4px;flex-wrap:wrap}
+.gmail-row .subject-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
+.gmail-row .subject-text b{color:var(--text);font-weight:600;margin-right:6px}
+.gmail-row .time{text-align:right;font-size:12px;color:var(--muted)}
+.gmail-label{
+  display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:600;
+  line-height:1.3;white-space:nowrap;
+}
+/* Gmail tier label palette — values are taken VERBATIM from the
+   gmailBackgroundPalette in pkg/email_provider/gmail/label_provider.go
+   (lines 290-299). Each tier maps to the closest semantic colour the
+   Gmail API accepts. */
+.gmail-label.tier-blocked      {background:#fb4c2f;color:#ffffff}
+.gmail-label.tier-highrisk     {background:#cc3a21;color:#ffffff}
+.gmail-label.tier-warning      {background:#ffad47;color:#ffffff}
+.gmail-label.tier-caution      {background:#fad165;color:#000000}
+.gmail-label.tier-informational{background:#4a86e8;color:#ffffff}
+.gmail-label.tier-trusted      {background:#16a766;color:#ffffff}
+
+/* ---------- Outlook inbox list ---------- */
+.outlook-app{
+  background:var(--panel-bg);border:1px solid var(--panel-border);border-radius:12px;
+  overflow:hidden;font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,sans-serif;
+}
+.outlook-topbar{
+  display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--panel-border);
+  background:var(--panel-bg);
+}
+.outlook-logo{font-weight:700;font-size:16px;color:var(--outlook-blue)}
+.outlook-search{flex:1;background:var(--outlook-hover);border-radius:4px;padding:6px 12px;color:var(--muted);font-size:13px}
+.outlook-toolbar{
+  display:flex;align-items:center;gap:12px;padding:6px 16px;border-bottom:1px solid var(--panel-border);
+  font-size:13px;color:var(--muted);
+}
+.outlook-row{
+  display:grid;grid-template-columns:24px 1fr 80px;gap:10px;
+  padding:10px 14px;border-bottom:1px solid var(--outlook-divider);cursor:pointer;
+  border-left:3px solid transparent;
+}
+.outlook-row:hover{background:var(--outlook-hover)}
+.outlook-row.selected{background:var(--outlook-selected-bg);border-left-color:var(--outlook-blue)}
+.outlook-row .from{font-weight:600;font-size:13px;color:var(--text)}
+.outlook-row .subject-row{display:flex;align-items:center;gap:8px;margin-top:1px}
+.outlook-row .subject{color:var(--text);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.outlook-row .snippet{color:var(--muted);font-size:12px;margin-top:2px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.outlook-row .time{text-align:right;font-size:12px;color:var(--muted)}
+.outlook-row .cats{display:flex;flex-direction:column;align-items:flex-end;gap:3px;justify-self:end}
+.outlook-row .cat{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text)}
+.outlook-row .dot{width:10px;height:10px;border-radius:2px;display:inline-block}
+.outlook-row .pill{
+  display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600;color:#fff;
+  line-height:1.4;
+}
+/* Outlook MasterCategory preset approximations.
+   Mapping per the user-provided spec for this mockup:
+     Blocked / HighRisk → Preset0 (Red)
+     Warning           → Preset1 (Orange)
+     Caution           → Preset3 (Yellow)
+     Informational     → Preset7 (Blue)
+     Trusted           → Preset4 (Green)
+   The actual preset-index → tier map in production is defined in
+   internal/service/action/label_colors.go. Outlook only allows one of the
+   25 fixed presets, so any custom RGB is snapped to the nearest preset. */
+.outlook-pill.tier-blocked,
+.outlook-dot.tier-blocked      {background:#d13438;color:#fff}
+.outlook-pill.tier-highrisk,
+.outlook-dot.tier-highrisk     {background:#d13438;color:#fff}
+.outlook-pill.tier-warning,
+.outlook-dot.tier-warning      {background:#ca5010;color:#fff}
+.outlook-pill.tier-caution,
+.outlook-dot.tier-caution      {background:#fce100;color:#3b3a39}
+.outlook-pill.tier-informational,
+.outlook-dot.tier-informational{background:#0078d4;color:#fff}
+.outlook-pill.tier-trusted,
+.outlook-dot.tier-trusted      {background:#107c10;color:#fff}
+
+/* ---------- Reading pane (used by both Gmail and Outlook section 2) ---------- */
+.reading-pane{
+  background:var(--panel-bg);border:1px solid var(--panel-border);border-radius:12px;
+  margin-bottom:20px;overflow:hidden;
+}
+.reading-pane > .rp-header{
+  padding:12px 16px;border-bottom:1px solid var(--panel-border);
+  display:flex;flex-direction:column;gap:4px;
+}
+.reading-pane.gmail > .rp-header{font-family:"Google Sans","Roboto",sans-serif}
+.reading-pane.outlook > .rp-header{font-family:"Segoe UI",sans-serif}
+.reading-pane .rp-subject{font-size:18px;font-weight:700;color:var(--text)}
+.reading-pane .rp-meta{font-size:13px;color:var(--muted)}
+.reading-pane .rp-meta strong{color:var(--text);font-weight:600}
+.reading-pane .rp-body{padding:16px}
+.reading-pane .rp-body .scenario-label{
+  display:inline-block;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;
+  color:var(--muted);margin-bottom:8px;
+}
+.reading-pane .rp-body p{margin:0 0 10px 0;color:var(--text);font-size:14px;line-height:1.55}
+.reading-pane .rp-body p.signoff{color:var(--muted);font-size:13px}
+
+/* The Outlook reading pane gets a small native-category line below the
+   subject to mirror how Outlook surfaces the applied Master Category. */
+.reading-pane.outlook .rp-cats{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap}
+
+/* Two-column grid for the reading panes so 8 scenarios fit comfortably. */
+.scenario-grid{display:grid;grid-template-columns:1fr;gap:16px}
+@media (min-width:980px){.scenario-grid{grid-template-columns:1fr 1fr}}
+
+/* ---------- Print-friendly: keep banners visible on paper ---------- */
+@media print{
+  .toolbar,.tabs{display:none !important}
+  .tab-panel{display:block !important}
+  .scenario-grid{grid-template-columns:1fr 1fr}
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<header class="page">
+  <div>
+    <h1>SN360-ES — Gmail &amp; Outlook banner / label mockup</h1>
+    <div class="subtitle">
+      Visual reference for stakeholders. Banner CSS, HTML template, copy, icons, chip
+      classes, and tier palettes are taken verbatim from the sn360-es codebase
+      (<code>internal/service/action/banner_renderer.go</code>,
+      <code>internal/translation/banners/en.json</code>,
+      <code>internal/constant/{tiers,categories}.go</code>,
+      <code>pkg/email_provider/gmail/label_provider.go</code>).
+    </div>
+  </div>
+  <div class="toolbar">
+    <button type="button" id="theme-light" aria-pressed="true">Light</button>
+    <button type="button" id="theme-dark" aria-pressed="false">Dark</button>
+  </div>
+</header>
+
+<div class="note">
+  <strong>How to read this mockup.</strong> Gmail renders SN360 labels as
+  coloured chips next to the subject; Outlook renders them as coloured
+  category dots/pills at the right of each row. SN360-ES creates these
+  natively via the Gmail Labels API and the Outlook Master Categories API —
+  no custom inbox UI is required. The reading-pane view below shows the
+  HTML banner that gets injected into the message body at delivery time.
+</div>
+
+<!-- ============================================================== -->
+<!-- Section 1: Email List Screen (Inbox View)                       -->
+<!-- ============================================================== -->
+<section class="major" id="section-inbox">
+  <h2>1. Inbox List View</h2>
+
+  <div class="tabs" role="tablist" aria-label="Inbox provider">
+    <button role="tab" id="tab-inbox-gmail"   aria-controls="panel-inbox-gmail"   aria-selected="true">Gmail</button>
+    <button role="tab" id="tab-inbox-outlook" aria-controls="panel-inbox-outlook" aria-selected="false">Outlook</button>
+  </div>
+
+  <!-- ---------- Gmail inbox list ---------- -->
+  <div class="tab-panel is-active" role="tabpanel" id="panel-inbox-gmail" aria-labelledby="tab-inbox-gmail">
+    <div class="gmail-app">
+      <div class="gmail-topbar">
+        <div class="gmail-logo">M</div>
+        <div class="gmail-search">Search mail</div>
+      </div>
+      <div class="gmail-toolbar">
+        <span class="check" style="width:16px;height:16px;border:2px solid var(--muted);border-radius:3px;display:inline-block"></span>
+        <span class="chev">▾</span>
+        <span>↻ Refresh</span>
+        <span style="margin-left:auto">1–8 of 8</span>
+      </div>
+
+      <!-- Row 1: Blocked + Likely phishing -->
+      <div class="gmail-row unread">
+        <span class="check"></span>
+        <span class="star">☆</span>
+        <span class="sender">security@paypa1.com</span>
+        <div class="subject-cell">
+          <span class="labels">
+            <span class="gmail-label tier-blocked">SN360 / Blocked</span>
+            <span class="gmail-label tier-blocked">SN360 / Blocked / Likely Phishing</span>
+          </span>
+          <span class="subject-text"><b>Urgent: verify your PayPal account immediately</b> — Your account has been temporarily suspended. Click the secure link below to restore access…</span>
+        </div>
+        <span class="time">9:42 AM</span>
+      </div>
+
+      <!-- Row 2: HighRisk + BEC impersonation -->
+      <div class="gmail-row unread">
+        <span class="check"></span>
+        <span class="star">☆</span>
+        <span class="sender">CEO Name (external)</span>
+        <div class="subject-cell">
+          <span class="labels">
+            <span class="gmail-label tier-highrisk">SN360 / HighRisk</span>
+            <span class="gmail-label tier-highrisk">SN360 / HighRisk / BEC Impersonation</span>
+          </span>
+          <span class="subject-text"><b>Quick favour — are you at your desk?</b> — Need you to handle a confidential wire transfer before the close of business today…</span>
+        </div>
+        <span class="time">9:18 AM</span>
+      </div>
+
+      <!-- Row 3: HighRisk + Credential harvesting -->
+      <div class="gmail-row unread">
+        <span class="check"></span>
+        <span class="star">☆</span>
+        <span class="sender">IT Support</span>
+        <div class="subject-cell">
+          <span class="labels">
+            <span class="gmail-label tier-highrisk">SN360 / HighRisk</span>
+            <span class="gmail-label tier-highrisk">SN360 / HighRisk / Credential Harvesting</span>
+          </span>
+          <span class="subject-text"><b>[Action required] Re-authenticate your mailbox</b> — Your password will expire in 24 hours. Click here to keep your account active…</span>
+        </div>
+        <span class="time">8:55 AM</span>
+      </div>
+
+      <!-- Row 4: Warning + Lookalike domain -->
+      <div class="gmail-row unread">
+        <span class="check"></span>
+        <span class="star">☆</span>
+        <span class="sender">Amazon Billing</span>
+        <div class="subject-cell">
+          <span class="labels">
+            <span class="gmail-label tier-warning">SN360 / Warning</span>
+            <span class="gmail-label tier-warning">SN360 / Warning / Lookalike Domain</span>
+          </span>
+          <span class="subject-text"><b>Your order #112-8732190 — payment failed</b> — We were unable to charge your card. Please update your billing information…</span>
+        </div>
+        <span class="time">8:31 AM</span>
+      </div>
+
+      <!-- Row 5: Warning + Invoice fraud -->
+      <div class="gmail-row">
+        <span class="check"></span>
+        <span class="star">☆</span>
+        <span class="sender">Accounts &lt;vendor-name.biz&gt;</span>
+        <div class="subject-cell">
+          <span class="labels">
+            <span class="gmail-label tier-warning">SN360 / Warning</span>
+            <span class="gmail-label tier-warning">SN360 / Warning / Invoice Fraud</span>
+          </span>
+          <span class="subject-text"><b>Updated bank details for invoice INV-2047</b> — Please remit future payments to the new account attached…</span>
+        </div>
+        <span class="time">Yesterday</span>
+      </div>
+
+      <!-- Row 6: Caution + Suspicious URL -->
+      <div class="gmail-row">
+        <span class="check"></span>
+        <span class="star">☆</span>
+        <span class="sender">marketing-co.io</span>
+        <div class="subject-cell">
+          <span class="labels">
+            <span class="gmail-label tier-caution">SN360 / Caution</span>
+            <span class="gmail-label tier-caution">SN360 / Caution / Suspicious URL</span>
+          </span>
+          <span class="subject-text"><b>Limited-time offer just for you</b> — Click here to redeem before the link expires…</span>
+        </div>
+        <span class="time">Yesterday</span>
+      </div>
+
+      <!-- Row 7: Informational + First contact -->
+      <div class="gmail-row">
+        <span class="check"></span>
+        <span class="star">☆</span>
+        <span class="sender">Jane Doe</span>
+        <div class="subject-cell">
+          <span class="labels">
+            <span class="gmail-label tier-informational">SN360 / Informational</span>
+            <span class="gmail-label tier-informational">SN360 / Informational / First Contact External</span>
+          </span>
+          <span class="subject-text"><b>Intro — new account manager at NewClient</b> — Hi, just wanted to introduce myself as your new point of contact…</span>
+        </div>
+        <span class="time">Mon</span>
+      </div>
+
+      <!-- Row 8: Trusted + Vendor trusted -->
+      <div class="gmail-row">
+        <span class="check"></span>
+        <span class="star">☆</span>
+        <span class="sender">Known Vendor — Invoices</span>
+        <div class="subject-cell">
+          <span class="labels">
+            <span class="gmail-label tier-trusted">SN360 / Trusted</span>
+            <span class="gmail-label tier-trusted">SN360 / Trusted / Vendor Trusted</span>
+          </span>
+          <span class="subject-text"><b>Invoice INV-9931 for May services</b> — Please find attached the invoice for May. Payment is due net-30…</span>
+        </div>
+        <span class="time">Mon</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ---------- Outlook inbox list ---------- -->
+  <div class="tab-panel" role="tabpanel" id="panel-inbox-outlook" aria-labelledby="tab-inbox-outlook">
+    <div class="outlook-app">
+      <div class="outlook-topbar">
+        <div class="outlook-logo">Outlook</div>
+        <div class="outlook-search">Search</div>
+      </div>
+      <div class="outlook-toolbar">
+        <span>Focused</span>
+        <span style="opacity:.6">Other</span>
+        <span style="margin-left:auto">Filter ▾</span>
+      </div>
+
+      <!-- Row 1 -->
+      <div class="outlook-row selected">
+        <span class="dot tier-blocked outlook-dot tier-blocked"></span>
+        <div>
+          <div class="from">security@paypa1.com</div>
+          <div class="subject-row"><div class="subject">Urgent: verify your PayPal account immediately</div></div>
+          <div class="snippet">Your account has been temporarily suspended. Click the secure link below to restore access…</div>
+        </div>
+        <div class="cats">
+          <span class="pill outlook-pill tier-blocked">SN360 / Blocked</span>
+          <span class="time">9:42 AM</span>
+        </div>
+      </div>
+
+      <!-- Row 2 -->
+      <div class="outlook-row">
+        <span class="dot tier-highrisk outlook-dot tier-highrisk"></span>
+        <div>
+          <div class="from">CEO Name (external)</div>
+          <div class="subject-row"><div class="subject">Quick favour — are you at your desk?</div></div>
+          <div class="snippet">Need you to handle a confidential wire transfer before the close of business today…</div>
+        </div>
+        <div class="cats">
+          <span class="pill outlook-pill tier-highrisk">SN360 / HighRisk</span>
+          <span class="time">9:18 AM</span>
+        </div>
+      </div>
+
+      <!-- Row 3 -->
+      <div class="outlook-row">
+        <span class="dot tier-highrisk outlook-dot tier-highrisk"></span>
+        <div>
+          <div class="from">IT Support</div>
+          <div class="subject-row"><div class="subject">[Action required] Re-authenticate your mailbox</div></div>
+          <div class="snippet">Your password will expire in 24 hours. Click here to keep your account active…</div>
+        </div>
+        <div class="cats">
+          <span class="pill outlook-pill tier-highrisk">SN360 / HighRisk</span>
+          <span class="time">8:55 AM</span>
+        </div>
+      </div>
+
+      <!-- Row 4 -->
+      <div class="outlook-row">
+        <span class="dot tier-warning outlook-dot tier-warning"></span>
+        <div>
+          <div class="from">Amazon Billing</div>
+          <div class="subject-row"><div class="subject">Your order #112-8732190 — payment failed</div></div>
+          <div class="snippet">We were unable to charge your card. Please update your billing information…</div>
+        </div>
+        <div class="cats">
+          <span class="pill outlook-pill tier-warning">SN360 / Warning</span>
+          <span class="time">8:31 AM</span>
+        </div>
+      </div>
+
+      <!-- Row 5 -->
+      <div class="outlook-row">
+        <span class="dot tier-warning outlook-dot tier-warning"></span>
+        <div>
+          <div class="from">Accounts &lt;vendor-name.biz&gt;</div>
+          <div class="subject-row"><div class="subject">Updated bank details for invoice INV-2047</div></div>
+          <div class="snippet">Please remit future payments to the new account attached…</div>
+        </div>
+        <div class="cats">
+          <span class="pill outlook-pill tier-warning">SN360 / Warning</span>
+          <span class="time">Yesterday</span>
+        </div>
+      </div>
+
+      <!-- Row 6 -->
+      <div class="outlook-row">
+        <span class="dot tier-caution outlook-dot tier-caution"></span>
+        <div>
+          <div class="from">marketing-co.io</div>
+          <div class="subject-row"><div class="subject">Limited-time offer just for you</div></div>
+          <div class="snippet">Click here to redeem before the link expires…</div>
+        </div>
+        <div class="cats">
+          <span class="pill outlook-pill tier-caution">SN360 / Caution</span>
+          <span class="time">Yesterday</span>
+        </div>
+      </div>
+
+      <!-- Row 7 -->
+      <div class="outlook-row">
+        <span class="dot tier-informational outlook-dot tier-informational"></span>
+        <div>
+          <div class="from">Jane Doe</div>
+          <div class="subject-row"><div class="subject">Intro — new account manager at NewClient</div></div>
+          <div class="snippet">Hi, just wanted to introduce myself as your new point of contact…</div>
+        </div>
+        <div class="cats">
+          <span class="pill outlook-pill tier-informational">SN360 / Informational</span>
+          <span class="time">Mon</span>
+        </div>
+      </div>
+
+      <!-- Row 8 -->
+      <div class="outlook-row">
+        <span class="dot tier-trusted outlook-dot tier-trusted"></span>
+        <div>
+          <div class="from">Known Vendor — Invoices</div>
+          <div class="subject-row"><div class="subject">Invoice INV-9931 for May services</div></div>
+          <div class="snippet">Please find attached the invoice for May. Payment is due net-30…</div>
+        </div>
+        <div class="cats">
+          <span class="pill outlook-pill tier-trusted">SN360 / Trusted</span>
+          <span class="time">Mon</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================== -->
+<!-- Section 2: Individual Email View (one per tier / category)      -->
+<!-- ============================================================== -->
+<section class="major" id="section-email">
+  <h2>2. Individual Email View</h2>
+
+  <div class="tabs" role="tablist" aria-label="Reading pane provider">
+    <button role="tab" id="tab-email-gmail"   aria-controls="panel-email-gmail"   aria-selected="true">Gmail</button>
+    <button role="tab" id="tab-email-outlook" aria-controls="panel-email-outlook" aria-selected="false">Outlook</button>
+  </div>
+
+  <!-- ---------- Gmail reading panes ---------- -->
+  <div class="tab-panel is-active" role="tabpanel" id="panel-email-gmail" aria-labelledby="tab-email-gmail">
+    <div class="scenario-grid">
+
+      <!-- 1. Blocked + LIKELY_PHISHING -->
+      <article class="reading-pane gmail">
+        <div class="rp-header">
+          <div class="rp-subject">Urgent: verify your PayPal account immediately</div>
+          <div class="rp-meta"><strong>From:</strong> &lt;security@paypa1.com&gt;</div>
+          <div class="rp-meta"><strong>To:</strong> me</div>
+          <div class="rp-meta"><strong>Date:</strong> Today, 9:42 AM</div>
+        </div>
+        <div class="rp-body">
+          <div class="scenario-label">1. Blocked · Likely phishing</div>
+          <div class="sn360-banner sn360-blocked" role="alert" aria-label="Blocked: this message is dangerous" dir="ltr" data-sn360-tier="Blocked" data-sn360-locale="en">
+            <h1><span class="sn360-icon" aria-hidden="true">⛔</span><span class="sn360-sr-only">Blocked: this message is dangerous: </span>Blocked: this message is dangerous</h1>
+            <p>We blocked this email because it is very likely a phishing attempt or other threat. Do not open attachments or click any links.</p>
+            <p><strong>Likely phishing</strong></p>
+            <p class="sn360-reasons">lookalike-domain · credential-harvest</p>
+            <p><span class="sn360-chip sn360-chip-failed" role="img" aria-label="Sender authentication failed">Sender authentication failed</span> <span class="sn360-secondary">paypa1.com</span></p>
+            <div class="sn360-actions" role="group" aria-label="Blocked: this message is dangerous">
+              <a href="#" aria-label="Report phishing">Report phishing</a>
+            </div>
+          </div>
+          <p>Dear customer, we have detected unusual activity on your PayPal account…</p>
+          <p class="signoff">— PayPal Security Team</p>
+        </div>
+      </article>
+
+      <!-- 2. HighRisk + BEC_IMPERSONATION -->
+      <article class="reading-pane gmail">
+        <div class="rp-header">
+          <div class="rp-subject">Quick favour — are you at your desk?</div>
+          <div class="rp-meta"><strong>From:</strong> CEO Name &lt;ceo.name@external-domain.com&gt;</div>
+          <div class="rp-meta"><strong>To:</strong> me</div>
+          <div class="rp-meta"><strong>Date:</strong> Today, 9:18 AM</div>
+        </div>
+        <div class="rp-body">
+          <div class="scenario-label">2. High risk · BEC impersonation</div>
+          <div class="sn360-banner sn360-high" role="alert" aria-label="High risk: do not act on this email" dir="ltr" data-sn360-tier="HighRisk" data-sn360-locale="en">
+            <h1><span class="sn360-icon" aria-hidden="true">⚠</span><span class="sn360-sr-only">High risk: do not act on this email: </span>High risk: do not act on this email</h1>
+            <p>This email shows strong signs of impersonation, fraud, or account compromise. Verify the sender out-of-band before taking any action.</p>
+            <p><strong>Possible impersonation (BEC)</strong></p>
+            <p class="sn360-reasons">display-name-spoof · financial-intent</p>
+            <p><span class="sn360-chip sn360-chip-unverified" role="img" aria-label="Sender not verified">Sender not verified</span> <span class="sn360-secondary">external-domain.com</span></p>
+            <div class="sn360-actions" role="group" aria-label="High risk: do not act on this email">
+              <a href="#" aria-label="Report phishing">Report phishing</a>
+            </div>
+          </div>
+          <p>Are you free for a quick task? I need you to handle something confidential before the close of business…</p>
+          <p class="signoff">— Sent from my iPhone</p>
+        </div>
+      </article>
+
+      <!-- 3. HighRisk + CREDENTIAL_HARVESTING -->
+      <article class="reading-pane gmail">
+        <div class="rp-header">
+          <div class="rp-subject">[Action required] Re-authenticate your mailbox</div>
+          <div class="rp-meta"><strong>From:</strong> IT Support &lt;support@company-reset.net&gt;</div>
+          <div class="rp-meta"><strong>To:</strong> me</div>
+          <div class="rp-meta"><strong>Date:</strong> Today, 8:55 AM</div>
+        </div>
+        <div class="rp-body">
+          <div class="scenario-label">3. High risk · Credential harvesting</div>
+          <div class="sn360-banner sn360-high" role="alert" aria-label="High risk: do not act on this email" dir="ltr" data-sn360-tier="HighRisk" data-sn360-locale="en">
+            <h1><span class="sn360-icon" aria-hidden="true">⚠</span><span class="sn360-sr-only">High risk: do not act on this email: </span>High risk: do not act on this email</h1>
+            <p>This email shows strong signs of impersonation, fraud, or account compromise. Verify the sender out-of-band before taking any action.</p>
+            <p><strong>Credential harvesting</strong></p>
+            <p class="sn360-secondary">Suspicious link</p>
+            <p><span class="sn360-chip sn360-chip-failed" role="img" aria-label="Sender authentication failed">Sender authentication failed</span> <span class="sn360-secondary">company-reset.net</span></p>
+            <div class="sn360-actions" role="group" aria-label="High risk: do not act on this email">
+              <a href="#" aria-label="Report phishing">Report phishing</a>
+            </div>
+          </div>
+          <p>Your mailbox password is set to expire. Re-authenticate at the secure portal below to avoid loss of access…</p>
+          <p class="signoff">— IT Support</p>
+        </div>
+      </article>
+
+      <!-- 4. Warning + LOOKALIKE_DOMAIN -->
+      <article class="reading-pane gmail">
+        <div class="rp-header">
+          <div class="rp-subject">Your order #112-8732190 — payment failed</div>
+          <div class="rp-meta"><strong>From:</strong> Amazon Billing &lt;billing@amaz0n-support.com&gt;</div>
+          <div class="rp-meta"><strong>To:</strong> me</div>
+          <div class="rp-meta"><strong>Date:</strong> Today, 8:31 AM</div>
+        </div>
+        <div class="rp-body">
+          <div class="scenario-label">4. Warning · Lookalike domain</div>
+          <div class="sn360-banner sn360-warning" role="status" aria-label="Warning: this email looks suspicious" dir="ltr" data-sn360-tier="Warning" data-sn360-locale="en">
+            <h1><span class="sn360-icon" aria-hidden="true">!</span><span class="sn360-sr-only">Warning: this email looks suspicious: </span>Warning: this email looks suspicious</h1>
+            <p>This email contains signs that someone may be trying to deceive you. Check the sender carefully before clicking links or replying.</p>
+            <p><strong>Lookalike domain</strong></p>
+            <p class="sn360-reasons">lookalike-domain · suspicious-url</p>
+            <p><span class="sn360-chip sn360-chip-unverified" role="img" aria-label="Sender not verified">Sender not verified</span> <span class="sn360-secondary">amaz0n-support.com</span></p>
+            <div class="sn360-actions" role="group" aria-label="Warning: this email looks suspicious">
+              <a href="#" aria-label="Report phishing">Report phishing</a>
+              <a href="#" aria-label="Mark as safe">Mark as safe</a>
+              <a href="#" aria-label="Trust this sender">Trust this sender</a>
+              <a href="#" aria-label="Learn more">Learn more</a>
+            </div>
+          </div>
+          <p>We were unable to charge your card for the order above. Please update your billing information to avoid cancellation…</p>
+          <p class="signoff">— Amazon Billing</p>
+        </div>
+      </article>
+
+      <!-- 5. Warning + INVOICE_FRAUD -->
+      <article class="reading-pane gmail">
+        <div class="rp-header">
+          <div class="rp-subject">Updated bank details for invoice INV-2047</div>
+          <div class="rp-meta"><strong>From:</strong> Accounts &lt;accounts@vendor-name.biz&gt;</div>
+          <div class="rp-meta"><strong>To:</strong> me</div>
+          <div class="rp-meta"><strong>Date:</strong> Yesterday, 4:12 PM</div>
+        </div>
+        <div class="rp-body">
+          <div class="scenario-label">5. Warning · Invoice fraud</div>
+          <div class="sn360-banner sn360-warning" role="status" aria-label="Warning: this email looks suspicious" dir="ltr" data-sn360-tier="Warning" data-sn360-locale="en">
+            <h1><span class="sn360-icon" aria-hidden="true">!</span><span class="sn360-sr-only">Warning: this email looks suspicious: </span>Warning: this email looks suspicious</h1>
+            <p>This email contains signs that someone may be trying to deceive you. Check the sender carefully before clicking links or replying.</p>
+            <p><strong>Invoice fraud</strong></p>
+            <p class="sn360-secondary">Suspicious attachment</p>
+            <p><span class="sn360-chip sn360-chip-unverified" role="img" aria-label="Sender not verified">Sender not verified</span> <span class="sn360-secondary">vendor-name.biz</span></p>
+            <div class="sn360-actions" role="group" aria-label="Warning: this email looks suspicious">
+              <a href="#" aria-label="Report phishing">Report phishing</a>
+              <a href="#" aria-label="Mark as safe">Mark as safe</a>
+              <a href="#" aria-label="Trust this sender">Trust this sender</a>
+              <a href="#" aria-label="Learn more">Learn more</a>
+            </div>
+          </div>
+          <p>Please note our banking details have changed. All future remittances for invoice INV-2047 onward should be paid to the account in the attached PDF…</p>
+          <p class="signoff">— Accounts, Vendor Name LLC</p>
+        </div>
+      </article>
+
+      <!-- 6. Caution + SUSPICIOUS_URL -->
+      <article class="reading-pane gmail">
+        <div class="rp-header">
+          <div class="rp-subject">Limited-time offer just for you</div>
+          <div class="rp-meta"><strong>From:</strong> &lt;newsletter@marketing-co.io&gt;</div>
+          <div class="rp-meta"><strong>To:</strong> me</div>
+          <div class="rp-meta"><strong>Date:</strong> Yesterday, 11:01 AM</div>
+        </div>
+        <div class="rp-body">
+          <div class="scenario-label">6. Caution · Suspicious URL</div>
+          <div class="sn360-banner sn360-caution" role="status" aria-label="Caution: unusual sender or content" dir="ltr" data-sn360-tier="Caution" data-sn360-locale="en">
+            <h1><span class="sn360-icon" aria-hidden="true">ⓘ</span><span class="sn360-sr-only">Caution: unusual sender or content: </span>Caution: unusual sender or content</h1>
+            <p>Something about this email is unusual. Treat any links, attachments, or requests with care.</p>
+            <p><strong>Suspicious link</strong></p>
+            <p class="sn360-reasons">url-reputation</p>
+            <p><span class="sn360-chip sn360-chip-verified" role="img" aria-label="Sender verified">Sender verified</span> <span class="sn360-secondary">marketing-co.io</span></p>
+            <div class="sn360-actions" role="group" aria-label="Caution: unusual sender or content">
+              <a href="#" aria-label="Mark as safe">Mark as safe</a>
+              <a href="#" aria-label="Trust this sender">Trust this sender</a>
+            </div>
+          </div>
+          <p>Hi there — we wanted to share a one-time offer with you. Tap the button below to redeem before the link expires…</p>
+          <p class="signoff">— Marketing Co.</p>
+        </div>
+      </article>
+
+      <!-- 7. Informational + FIRST_CONTACT_EXTERNAL -->
+      <article class="reading-pane gmail">
+        <div class="rp-header">
+          <div class="rp-subject">Intro — new account manager at NewClient</div>
+          <div class="rp-meta"><strong>From:</strong> Jane Doe &lt;jane.doe@newclient.com&gt;</div>
+          <div class="rp-meta"><strong>To:</strong> me</div>
+          <div class="rp-meta"><strong>Date:</strong> Monday, 2:30 PM</div>
+        </div>
+        <div class="rp-body">
+          <div class="scenario-label">7. Informational · First contact</div>
+          <div class="sn360-banner sn360-info" role="status" aria-label="First-time external sender" dir="ltr" data-sn360-tier="Informational" data-sn360-locale="en">
+            <h1><span class="sn360-icon" aria-hidden="true">ℹ</span><span class="sn360-sr-only">First-time external sender: </span>First-time external sender</h1>
+            <p>This is the first email we've seen from this sender. Confirm their identity before acting on any requests.</p>
+            <p><strong>First contact from outside your organisation</strong></p>
+            <p><span class="sn360-chip sn360-chip-verified" role="img" aria-label="Sender verified">Sender verified</span> <span class="sn360-secondary">newclient.com</span></p>
+            <div class="sn360-actions" role="group" aria-label="First-time external sender">
+              <a href="#" aria-label="Mark as safe">Mark as safe</a>
+              <a href="#" aria-label="Trust this sender">Trust this sender</a>
+            </div>
+          </div>
+          <p>Hi, just wanted to introduce myself as your new point of contact at NewClient. Happy to set up an intro call whenever convenient…</p>
+          <p class="signoff">— Jane Doe, Account Manager, NewClient</p>
+        </div>
+      </article>
+
+      <!-- 8. Trusted + VENDOR_TRUSTED -->
+      <article class="reading-pane gmail">
+        <div class="rp-header">
+          <div class="rp-subject">Invoice INV-9931 for May services</div>
+          <div class="rp-meta"><strong>From:</strong> &lt;invoices@known-vendor.com&gt;</div>
+          <div class="rp-meta"><strong>To:</strong> me</div>
+          <div class="rp-meta"><strong>Date:</strong> Monday, 9:00 AM</div>
+        </div>
+        <div class="rp-body">
+          <div class="scenario-label">8. Trusted · Trusted vendor</div>
+          <div class="sn360-banner sn360-trusted" role="status" aria-label="Trusted sender" dir="ltr" data-sn360-tier="Trusted" data-sn360-locale="en">
+            <h1><span class="sn360-icon" aria-hidden="true">✓</span><span class="sn360-sr-only">Trusted sender: </span>Trusted sender</h1>
+            <p>This message comes from a sender your organisation already trusts. No action required.</p>
+            <p><strong>Trusted vendor</strong></p>
+            <p><span class="sn360-chip sn360-chip-verified" role="img" aria-label="Sender verified">Sender verified</span> <span class="sn360-secondary">known-vendor.com</span></p>
+            <div class="sn360-actions" role="group" aria-label="Trusted sender"></div>
+          </div>
+          <p>Please find attached the invoice for May. Payment is due net-30 to the usual account on file…</p>
+          <p class="signoff">— Known Vendor, Billing</p>
+        </div>
+      </article>
+
+    </div>
+  </div>
+
+  <!-- ---------- Outlook reading panes ---------- -->
+  <div class="tab-panel" role="tabpanel" id="panel-email-outlook" aria-labelledby="tab-email-outlook">
+    <div class="scenario-grid">
+
+      <!-- 1. Blocked + LIKELY_PHISHING -->
+      <article class="reading-pane outlook">
+        <div class="rp-header">
+          <div class="rp-subject">Urgent: verify your PayPal account immediately</div>
+          <div class="rp-meta"><strong>security@paypa1.com</strong> &lt;security@paypa1.com&gt;</div>
+          <div class="rp-meta">To: me · Today, 9:42 AM</div>
+          <div class="rp-cats"><span class="outlook-pill tier-blocked">SN360 / Blocked</span><span class="outlook-pill tier-blocked">SN360 / Blocked / Likely Phishing</span></div>
+        </div>
+        <div class="rp-body">
+          <div class="scenario-label">1. Blocked · Likely phishing</div>
+          <div class="sn360-banner sn360-blocked" role="alert" aria-label="Blocked: this message is dangerous" dir="ltr" data-sn360-tier="Blocked" data-sn360-locale="en">
+            <h1><span class="sn360-icon" aria-hidden="true">⛔</span><span class="sn360-sr-only">Blocked: this message is dangerous: </span>Blocked: this message is dangerous</h1>
+            <p>We blocked this email because it is very likely a phishing attempt or other threat. Do not open attachments or click any links.</p>
+            <p><strong>Likely phishing</strong></p>
+            <p class="sn360-reasons">lookalike-domain · credential-harvest</p>
+            <p><span class="sn360-chip sn360-chip-failed" role="img" aria-label="Sender authentication failed">Sender authentication failed</span> <span class="sn360-secondary">paypa1.com</span></p>
+            <div class="sn360-actions" role="group" aria-label="Blocked: this message is dangerous">
+              <a href="#" aria-label="Report phishing">Report phishing</a>
+            </div>
+          </div>
+          <p>Dear customer, we have detected unusual activity on your PayPal account…</p>
+          <p class="signoff">— PayPal Security Team</p>
+        </div>
+      </article>
+
+      <!-- 2. HighRisk + BEC_IMPERSONATION -->
+      <article class="reading-pane outlook">
+        <div class="rp-header">
+          <div class="rp-subject">Quick favour — are you at your desk?</div>
+          <div class="rp-meta"><strong>CEO Name</strong> &lt;ceo.name@external-domain.com&gt;</div>
+          <div class="rp-meta">To: me · Today, 9:18 AM</div>
+          <div class="rp-cats"><span class="outlook-pill tier-highrisk">SN360 / HighRisk</span><span class="outlook-pill tier-highrisk">SN360 / HighRisk / BEC Impersonation</span></div>
+        </div>
+        <div class="rp-body">
+          <div class="scenario-label">2. High risk · BEC impersonation</div>
+          <div class="sn360-banner sn360-high" role="alert" aria-label="High risk: do not act on this email" dir="ltr" data-sn360-tier="HighRisk" data-sn360-locale="en">
+            <h1><span class="sn360-icon" aria-hidden="true">⚠</span><span class="sn360-sr-only">High risk: do not act on this email: </span>High risk: do not act on this email</h1>
+            <p>This email shows strong signs of impersonation, fraud, or account compromise. Verify the sender out-of-band before taking any action.</p>
+            <p><strong>Possible impersonation (BEC)</strong></p>
+            <p class="sn360-reasons">display-name-spoof · financial-intent</p>
+            <p><span class="sn360-chip sn360-chip-unverified" role="img" aria-label="Sender not verified">Sender not verified</span> <span class="sn360-secondary">external-domain.com</span></p>
+            <div class="sn360-actions" role="group" aria-label="High risk: do not act on this email">
+              <a href="#" aria-label="Report phishing">Report phishing</a>
+            </div>
+          </div>
+          <p>Are you free for a quick task? I need you to handle something confidential before the close of business…</p>
+          <p class="signoff">— Sent from my iPhone</p>
+        </div>
+      </article>
+
+      <!-- 3. HighRisk + CREDENTIAL_HARVESTING -->
+      <article class="reading-pane outlook">
+        <div class="rp-header">
+          <div class="rp-subject">[Action required] Re-authenticate your mailbox</div>
+          <div class="rp-meta"><strong>IT Support</strong> &lt;support@company-reset.net&gt;</div>
+          <div class="rp-meta">To: me · Today, 8:55 AM</div>
+          <div class="rp-cats"><span class="outlook-pill tier-highrisk">SN360 / HighRisk</span><span class="outlook-pill tier-highrisk">SN360 / HighRisk / Credential Harvesting</span></div>
+        </div>
+        <div class="rp-body">
+          <div class="scenario-label">3. High risk · Credential harvesting</div>
+          <div class="sn360-banner sn360-high" role="alert" aria-label="High risk: do not act on this email" dir="ltr" data-sn360-tier="HighRisk" data-sn360-locale="en">
+            <h1><span class="sn360-icon" aria-hidden="true">⚠</span><span class="sn360-sr-only">High risk: do not act on this email: </span>High risk: do not act on this email</h1>
+            <p>This email shows strong signs of impersonation, fraud, or account compromise. Verify the sender out-of-band before taking any action.</p>
+            <p><strong>Credential harvesting</strong></p>
+            <p class="sn360-secondary">Suspicious link</p>
+            <p><span class="sn360-chip sn360-chip-failed" role="img" aria-label="Sender authentication failed">Sender authentication failed</span> <span class="sn360-secondary">company-reset.net</span></p>
+            <div class="sn360-actions" role="group" aria-label="High risk: do not act on this email">
+              <a href="#" aria-label="Report phishing">Report phishing</a>
+            </div>
+          </div>
+          <p>Your mailbox password is set to expire. Re-authenticate at the secure portal below to avoid loss of access…</p>
+          <p class="signoff">— IT Support</p>
+        </div>
+      </article>
+
+      <!-- 4. Warning + LOOKALIKE_DOMAIN -->
+      <article class="reading-pane outlook">
+        <div class="rp-header">
+          <div class="rp-subject">Your order #112-8732190 — payment failed</div>
+          <div class="rp-meta"><strong>Amazon Billing</strong> &lt;billing@amaz0n-support.com&gt;</div>
+          <div class="rp-meta">To: me · Today, 8:31 AM</div>
+          <div class="rp-cats"><span class="outlook-pill tier-warning">SN360 / Warning</span><span class="outlook-pill tier-warning">SN360 / Warning / Lookalike Domain</span></div>
+        </div>
+        <div class="rp-body">
+          <div class="scenario-label">4. Warning · Lookalike domain</div>
+          <div class="sn360-banner sn360-warning" role="status" aria-label="Warning: this email looks suspicious" dir="ltr" data-sn360-tier="Warning" data-sn360-locale="en">
+            <h1><span class="sn360-icon" aria-hidden="true">!</span><span class="sn360-sr-only">Warning: this email looks suspicious: </span>Warning: this email looks suspicious</h1>
+            <p>This email contains signs that someone may be trying to deceive you. Check the sender carefully before clicking links or replying.</p>
+            <p><strong>Lookalike domain</strong></p>
+            <p class="sn360-reasons">lookalike-domain · suspicious-url</p>
+            <p><span class="sn360-chip sn360-chip-unverified" role="img" aria-label="Sender not verified">Sender not verified</span> <span class="sn360-secondary">amaz0n-support.com</span></p>
+            <div class="sn360-actions" role="group" aria-label="Warning: this email looks suspicious">
+              <a href="#" aria-label="Report phishing">Report phishing</a>
+              <a href="#" aria-label="Mark as safe">Mark as safe</a>
+              <a href="#" aria-label="Trust this sender">Trust this sender</a>
+              <a href="#" aria-label="Learn more">Learn more</a>
+            </div>
+          </div>
+          <p>We were unable to charge your card for the order above. Please update your billing information to avoid cancellation…</p>
+          <p class="signoff">— Amazon Billing</p>
+        </div>
+      </article>
+
+      <!-- 5. Warning + INVOICE_FRAUD -->
+      <article class="reading-pane outlook">
+        <div class="rp-header">
+          <div class="rp-subject">Updated bank details for invoice INV-2047</div>
+          <div class="rp-meta"><strong>Accounts</strong> &lt;accounts@vendor-name.biz&gt;</div>
+          <div class="rp-meta">To: me · Yesterday, 4:12 PM</div>
+          <div class="rp-cats"><span class="outlook-pill tier-warning">SN360 / Warning</span><span class="outlook-pill tier-warning">SN360 / Warning / Invoice Fraud</span></div>
+        </div>
+        <div class="rp-body">
+          <div class="scenario-label">5. Warning · Invoice fraud</div>
+          <div class="sn360-banner sn360-warning" role="status" aria-label="Warning: this email looks suspicious" dir="ltr" data-sn360-tier="Warning" data-sn360-locale="en">
+            <h1><span class="sn360-icon" aria-hidden="true">!</span><span class="sn360-sr-only">Warning: this email looks suspicious: </span>Warning: this email looks suspicious</h1>
+            <p>This email contains signs that someone may be trying to deceive you. Check the sender carefully before clicking links or replying.</p>
+            <p><strong>Invoice fraud</strong></p>
+            <p class="sn360-secondary">Suspicious attachment</p>
+            <p><span class="sn360-chip sn360-chip-unverified" role="img" aria-label="Sender not verified">Sender not verified</span> <span class="sn360-secondary">vendor-name.biz</span></p>
+            <div class="sn360-actions" role="group" aria-label="Warning: this email looks suspicious">
+              <a href="#" aria-label="Report phishing">Report phishing</a>
+              <a href="#" aria-label="Mark as safe">Mark as safe</a>
+              <a href="#" aria-label="Trust this sender">Trust this sender</a>
+              <a href="#" aria-label="Learn more">Learn more</a>
+            </div>
+          </div>
+          <p>Please note our banking details have changed. All future remittances for invoice INV-2047 onward should be paid to the account in the attached PDF…</p>
+          <p class="signoff">— Accounts, Vendor Name LLC</p>
+        </div>
+      </article>
+
+      <!-- 6. Caution + SUSPICIOUS_URL -->
+      <article class="reading-pane outlook">
+        <div class="rp-header">
+          <div class="rp-subject">Limited-time offer just for you</div>
+          <div class="rp-meta"><strong>Marketing Co.</strong> &lt;newsletter@marketing-co.io&gt;</div>
+          <div class="rp-meta">To: me · Yesterday, 11:01 AM</div>
+          <div class="rp-cats"><span class="outlook-pill tier-caution">SN360 / Caution</span><span class="outlook-pill tier-caution">SN360 / Caution / Suspicious URL</span></div>
+        </div>
+        <div class="rp-body">
+          <div class="scenario-label">6. Caution · Suspicious URL</div>
+          <div class="sn360-banner sn360-caution" role="status" aria-label="Caution: unusual sender or content" dir="ltr" data-sn360-tier="Caution" data-sn360-locale="en">
+            <h1><span class="sn360-icon" aria-hidden="true">ⓘ</span><span class="sn360-sr-only">Caution: unusual sender or content: </span>Caution: unusual sender or content</h1>
+            <p>Something about this email is unusual. Treat any links, attachments, or requests with care.</p>
+            <p><strong>Suspicious link</strong></p>
+            <p class="sn360-reasons">url-reputation</p>
+            <p><span class="sn360-chip sn360-chip-verified" role="img" aria-label="Sender verified">Sender verified</span> <span class="sn360-secondary">marketing-co.io</span></p>
+            <div class="sn360-actions" role="group" aria-label="Caution: unusual sender or content">
+              <a href="#" aria-label="Mark as safe">Mark as safe</a>
+              <a href="#" aria-label="Trust this sender">Trust this sender</a>
+            </div>
+          </div>
+          <p>Hi there — we wanted to share a one-time offer with you. Tap the button below to redeem before the link expires…</p>
+          <p class="signoff">— Marketing Co.</p>
+        </div>
+      </article>
+
+      <!-- 7. Informational + FIRST_CONTACT_EXTERNAL -->
+      <article class="reading-pane outlook">
+        <div class="rp-header">
+          <div class="rp-subject">Intro — new account manager at NewClient</div>
+          <div class="rp-meta"><strong>Jane Doe</strong> &lt;jane.doe@newclient.com&gt;</div>
+          <div class="rp-meta">To: me · Monday, 2:30 PM</div>
+          <div class="rp-cats"><span class="outlook-pill tier-informational">SN360 / Informational</span><span class="outlook-pill tier-informational">SN360 / Informational / First Contact External</span></div>
+        </div>
+        <div class="rp-body">
+          <div class="scenario-label">7. Informational · First contact</div>
+          <div class="sn360-banner sn360-info" role="status" aria-label="First-time external sender" dir="ltr" data-sn360-tier="Informational" data-sn360-locale="en">
+            <h1><span class="sn360-icon" aria-hidden="true">ℹ</span><span class="sn360-sr-only">First-time external sender: </span>First-time external sender</h1>
+            <p>This is the first email we've seen from this sender. Confirm their identity before acting on any requests.</p>
+            <p><strong>First contact from outside your organisation</strong></p>
+            <p><span class="sn360-chip sn360-chip-verified" role="img" aria-label="Sender verified">Sender verified</span> <span class="sn360-secondary">newclient.com</span></p>
+            <div class="sn360-actions" role="group" aria-label="First-time external sender">
+              <a href="#" aria-label="Mark as safe">Mark as safe</a>
+              <a href="#" aria-label="Trust this sender">Trust this sender</a>
+            </div>
+          </div>
+          <p>Hi, just wanted to introduce myself as your new point of contact at NewClient. Happy to set up an intro call whenever convenient…</p>
+          <p class="signoff">— Jane Doe, Account Manager, NewClient</p>
+        </div>
+      </article>
+
+      <!-- 8. Trusted + VENDOR_TRUSTED -->
+      <article class="reading-pane outlook">
+        <div class="rp-header">
+          <div class="rp-subject">Invoice INV-9931 for May services</div>
+          <div class="rp-meta"><strong>Known Vendor — Invoices</strong> &lt;invoices@known-vendor.com&gt;</div>
+          <div class="rp-meta">To: me · Monday, 9:00 AM</div>
+          <div class="rp-cats"><span class="outlook-pill tier-trusted">SN360 / Trusted</span><span class="outlook-pill tier-trusted">SN360 / Trusted / Vendor Trusted</span></div>
+        </div>
+        <div class="rp-body">
+          <div class="scenario-label">8. Trusted · Trusted vendor</div>
+          <div class="sn360-banner sn360-trusted" role="status" aria-label="Trusted sender" dir="ltr" data-sn360-tier="Trusted" data-sn360-locale="en">
+            <h1><span class="sn360-icon" aria-hidden="true">✓</span><span class="sn360-sr-only">Trusted sender: </span>Trusted sender</h1>
+            <p>This message comes from a sender your organisation already trusts. No action required.</p>
+            <p><strong>Trusted vendor</strong></p>
+            <p><span class="sn360-chip sn360-chip-verified" role="img" aria-label="Sender verified">Sender verified</span> <span class="sn360-secondary">known-vendor.com</span></p>
+            <div class="sn360-actions" role="group" aria-label="Trusted sender"></div>
+          </div>
+          <p>Please find attached the invoice for May. Payment is due net-30 to the usual account on file…</p>
+          <p class="signoff">— Known Vendor, Billing</p>
+        </div>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<footer class="note" style="margin-top:32px">
+  This file is a stakeholder mockup. The banner CSS, HTML template, copy
+  strings, icon glyphs, chip classes and tier slugs are pulled directly
+  from the sn360-es codebase so any future change to those files should
+  be reflected here. The Gmail label colours come from the
+  <code>gmailBackgroundPalette</code> approved by the Gmail Labels API; the
+  Outlook category presets approximate the
+  <code>preset0…preset24</code> values from the Master Categories API.
+</footer>
+
+</div>
+
+<script>
+/* Minimal tab switcher and dark-mode toggle. No external dependencies. */
+(function () {
+  // Tabs: every <button role="tab"> controls a <div role="tabpanel">
+  // via aria-controls; siblings inside the same .tabs container form a
+  // single tablist. Click activates that tab and reveals its panel.
+  document.querySelectorAll('.tabs').forEach(function (group) {
+    var tabs = group.querySelectorAll('button[role="tab"]');
+    tabs.forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        tabs.forEach(function (t) { t.setAttribute('aria-selected', 'false'); });
+        tab.setAttribute('aria-selected', 'true');
+        // Hide every panel referenced by this tablist, then show the target.
+        tabs.forEach(function (t) {
+          var p = document.getElementById(t.getAttribute('aria-controls'));
+          if (p) p.classList.remove('is-active');
+        });
+        var panel = document.getElementById(tab.getAttribute('aria-controls'));
+        if (panel) panel.classList.add('is-active');
+      });
+    });
+  });
+
+  // Dark-mode toggle. Mirrors the prefers-color-scheme:dark rule from
+  // the banner CSS so reviewers can preview without flipping OS theme.
+  var html = document.documentElement;
+  var btnLight = document.getElementById('theme-light');
+  var btnDark  = document.getElementById('theme-dark');
+  function setTheme(name) {
+    html.setAttribute('data-theme', name);
+    btnLight.setAttribute('aria-pressed', String(name === 'light'));
+    btnDark.setAttribute('aria-pressed',  String(name === 'dark'));
+  }
+  btnLight.addEventListener('click', function () { setTheme('light'); });
+  btnDark.addEventListener('click',  function () { setTheme('dark');  });
+})();
+</script>
+</body>
+</html>
