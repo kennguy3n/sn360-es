@@ -14,8 +14,27 @@ import (
 )
 
 // InteractionStore is the persistence surface for per-campaign user
-// interactions. Implementations only need to be append-friendly and
-// support range queries by campaign.
+// interactions.
+//
+// Semantic contract — all implementations MUST satisfy this so that
+// Aggregate's per-action counters are stable across backends and
+// under at-least-once event delivery:
+//
+//   - Append is idempotent per (CampaignID, UserHash, Action). Recording
+//     the same action twice for the same target is a no-op on the
+//     second call (the first OccurredAt is retained, subsequent
+//     observations are dropped). This matches the natural semantic
+//     of a phishing-simulation outcome: "did this target open?" is a
+//     boolean, not a count — replay of the same NATS message must
+//     not inflate the campaign's open rate.
+//   - ListByCampaign returns at most one UserInteraction per
+//     (UserHash, Action) tuple, in deterministic order. The
+//     OccurredAt on each returned entry is the moment the action was
+//     FIRST observed for that target.
+//
+// PostgresInteractionStore satisfies this via its (campaign_id,
+// user_hash) primary key + COALESCE-on-upsert; MemoryInteractionStore
+// and any in-test stubs must explicitly enforce the same dedup.
 type InteractionStore interface {
 	Append(ctx context.Context, i dto.UserInteraction) error
 	ListByCampaign(ctx context.Context, campaignID string) ([]dto.UserInteraction, error)
@@ -127,31 +146,74 @@ func (t *SimulationTracker) Aggregate(ctx context.Context, campaignID string) (d
 
 // --- In-memory store --------------------------------------------------------
 
+// memoryKey indexes the (user_hash, action) tuple used for in-memory
+// dedup. The campaign id is the outer map key on MemoryInteractionStore.
+type memoryKey struct {
+	UserHash string
+	Action   dto.UserInteractionType
+}
+
 // MemoryInteractionStore is a goroutine-safe in-memory InteractionStore.
+//
+// The store enforces the InteractionStore semantic contract: Append is
+// idempotent per (CampaignID, UserHash, Action), and ListByCampaign
+// returns at most one entry per (UserHash, Action) tuple. This keeps
+// Aggregate's per-action counters stable under at-least-once NATS
+// delivery and aligns the in-memory backend with PostgresInteractionStore.
+//
+// The slice-of-keys preserves first-observed insertion order so callers
+// that compare against a deterministic ListByCampaign output (tests,
+// snapshot assertions) get stable iteration regardless of Go's
+// randomised map traversal.
 type MemoryInteractionStore struct {
 	mu    sync.RWMutex
-	items map[string][]dto.UserInteraction
+	items map[string]map[memoryKey]dto.UserInteraction
+	order map[string][]memoryKey
 }
 
 // NewMemoryInteractionStore returns an empty store.
 func NewMemoryInteractionStore() *MemoryInteractionStore {
-	return &MemoryInteractionStore{items: map[string][]dto.UserInteraction{}}
+	return &MemoryInteractionStore{
+		items: map[string]map[memoryKey]dto.UserInteraction{},
+		order: map[string][]memoryKey{},
+	}
 }
 
-// Append implements InteractionStore.
+// Append implements InteractionStore. Subsequent Append calls with the
+// same (CampaignID, UserHash, Action) are dropped — only the first
+// observation's OccurredAt is retained, matching the COALESCE-on-upsert
+// behaviour of PostgresInteractionStore.
 func (s *MemoryInteractionStore) Append(_ context.Context, i dto.UserInteraction) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.items[i.CampaignID] = append(s.items[i.CampaignID], i)
+	bucket, ok := s.items[i.CampaignID]
+	if !ok {
+		bucket = map[memoryKey]dto.UserInteraction{}
+		s.items[i.CampaignID] = bucket
+	}
+	k := memoryKey{UserHash: i.UserHash, Action: i.Action}
+	if _, exists := bucket[k]; exists {
+		// First-observation wins — drop the replay so Aggregate
+		// doesn't double-count under at-least-once delivery.
+		return nil
+	}
+	bucket[k] = i
+	s.order[i.CampaignID] = append(s.order[i.CampaignID], k)
 	return nil
 }
 
-// ListByCampaign implements InteractionStore.
+// ListByCampaign implements InteractionStore. Returns deduped entries
+// in first-observed insertion order.
 func (s *MemoryInteractionStore) ListByCampaign(_ context.Context, campaignID string) ([]dto.UserInteraction, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	in := s.items[campaignID]
-	out := make([]dto.UserInteraction, len(in))
-	copy(out, in)
+	bucket := s.items[campaignID]
+	order := s.order[campaignID]
+	out := make([]dto.UserInteraction, 0, len(order))
+	for _, k := range order {
+		if v, ok := bucket[k]; ok {
+			out = append(out, v)
+		}
+	}
 	return out, nil
 }
