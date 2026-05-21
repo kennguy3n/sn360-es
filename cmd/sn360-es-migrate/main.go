@@ -44,11 +44,19 @@ import (
 // winner has finished. See cmd/sn360-es-migrate/main.go withAdvisoryLock.
 const advisoryLockID int64 = 0x534E333630
 
-// advisoryLockTimeout caps how long withAdvisoryLock will wait for
-// the lock. 5 minutes is more than enough for any production
-// migration we have or anticipate; running longer indicates a
-// migration that is hung or genuinely too slow to run in-band.
-const advisoryLockTimeout = 5 * time.Minute
+// advisoryLockAcquireTimeout caps how long withAdvisoryLock will
+// wait to ACQUIRE the lock. It does NOT bound how long the
+// migration itself runs once the lock is held — once acquired,
+// the migration closure runs to completion (or to its own
+// internal timeout).
+//
+// 5 minutes is the worst-case wait we expect during a normal
+// rolling restart: even if the second pod boots while the first
+// is mid-migration, the first should release well under 5min. A
+// wait longer than that indicates the holder is genuinely stuck
+// and an operator should investigate rather than letting the
+// loser block indefinitely.
+const advisoryLockAcquireTimeout = 5 * time.Minute
 
 func main() {
 	if err := run(); err != nil {
@@ -209,6 +217,13 @@ func envOr(key, def string) string {
 // migration; by then the winner has already advanced the schema so
 // the loser's m.Up() returns ErrNoChange.
 //
+// Timeout scope: advisoryLockAcquireTimeout caps the wait to
+// ACQUIRE the lock; the migration closure fn() itself runs
+// without a context deadline. This matches golang-migrate's API
+// (m.Up()/m.Steps() do not accept a context), so the only
+// timeout we can enforce here is on the lock handshake. A truly
+// runaway migration must be killed by the operator.
+//
 // Note: we open a NEW *sql.DB rather than reusing the migrate-driver's
 // connection because golang-migrate does not expose a stable hook to
 // run arbitrary SQL alongside the migration steps, and we need the
@@ -226,7 +241,7 @@ func withAdvisoryLock(dsn string, fn func() error) (retErr error) {
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), advisoryLockTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), advisoryLockAcquireTimeout)
 	defer cancel()
 
 	// Hold the lock on a single dedicated connection so the
