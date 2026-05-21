@@ -93,10 +93,13 @@ type DLQProcessorConfig struct {
 }
 
 // DefaultSubjects names the DLQ subjects the processor watches by default.
+// Dead-letter subjects live under "es.dlq.<domain>" so the DLQ stream's
+// subject filter (es.dlq.>) does not overlap with the primary streams'
+// wildcards (es.evaluate.>, es.action.>, es.onboarding.>).
 var DefaultSubjects = []string{
-	"es.evaluate.dlq",
-	"es.action.dlq",
-	"es.onboarding.dlq",
+	"es.dlq.evaluate",
+	"es.dlq.action",
+	"es.dlq.onboarding",
 }
 
 // DLQProcessor consumes the ES_DLQ stream and applies the configured

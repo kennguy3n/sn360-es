@@ -91,8 +91,13 @@ func DefaultStreamSpecs(cfg Config) []StreamSpec {
 			Description: "SN360-ES post-evaluation action events",
 		},
 		{
-			Name:        StreamDLQ,
-			Subjects:    []string{"es.evaluate.dlq", "es.action.dlq", "es.onboarding.dlq"},
+			Name: StreamDLQ,
+			// Dead-letter subjects live under a separate top-level
+			// namespace so they do NOT overlap with the wildcard
+			// subjects of the primary streams (es.evaluate.>,
+			// es.action.>, etc.). NATS rejects subject overlap
+			// between streams.
+			Subjects:    []string{"es.dlq.>"},
 			Retention:   jetstream.LimitsPolicy,
 			Storage:     storage,
 			MaxAge:      30 * 24 * time.Hour,
@@ -160,6 +165,8 @@ func EnsureAllStreams(ctx context.Context, js jetstream.JetStream, specs []Strea
 // route DLQ publishes back to the correct stream.
 func StreamForSubject(subject string) string {
 	switch {
+	case strings.HasPrefix(subject, "es.dlq."):
+		return StreamDLQ
 	case strings.HasPrefix(subject, "es.evaluate."):
 		return StreamEvaluate
 	case strings.HasPrefix(subject, "es.onboarding."):
@@ -168,8 +175,6 @@ func StreamForSubject(subject string) string {
 		return StreamEducation
 	case strings.HasPrefix(subject, "es.action."):
 		return StreamAction
-	case strings.HasSuffix(subject, ".dlq"):
-		return StreamDLQ
 	default:
 		return ""
 	}

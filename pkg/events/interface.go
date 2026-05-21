@@ -327,7 +327,11 @@ type SubscribeOptions struct {
 	// MaxAckPending limits the number of un-acked messages per consumer.
 	MaxAckPending int
 	// DLQSubject is the subject to publish to once MaxDeliver is exceeded.
-	// Implementations should default to "<subject>.dlq" when empty.
+	// Implementations should default to "es.dlq.<domain>" when empty —
+	// e.g. an origin subject "es.evaluate.request" routes to
+	// "es.dlq.evaluate". The dedicated es.dlq.> namespace keeps the
+	// DLQ stream's subject filter disjoint from the primary streams'
+	// wildcards (es.evaluate.>, es.action.>, ...).
 	DLQSubject string
 }
 

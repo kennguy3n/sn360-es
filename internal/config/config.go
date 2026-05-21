@@ -817,10 +817,12 @@ func (c Config) validate() error {
 //     longer than the length divided by the alphabet size; the
 //     structural check is a strict superset there.
 //
-// The Shannon threshold (3.0 bits/byte) is well below the ~5.8
-// bits/byte you'd expect from base64-encoded crypto-random output
-// but well above the ~1.5 bits/byte you get from a typical human
-// "passwordpasswordpassword" mistake.
+// The Shannon threshold (2.5 bits/byte) sits below the ~5.8 bits/byte
+// you'd expect from base64-encoded crypto-random output and the
+// ~4 bits/byte from hex-encoded crypto-random output (with the finite-
+// sample variance that pulls 32-char samples down toward 3.0), but
+// well above the ~1.5 bits/byte you get from a typical human
+// "passwordpasswordpassword" mistake or a 2/4-period repeat.
 func isLowEntropy(s string) bool {
 	if s == "" {
 		return false
@@ -839,10 +841,14 @@ func isLowEntropy(s string) bool {
 		p := float64(c) / n
 		entropy -= p * math.Log2(p)
 	}
-	// Tuned threshold: < 3.0 bits/byte means the message could be
-	// described in ≤ 3·n bits of payload, which any random-quality
-	// secret of length ≥ 16 should comfortably exceed.
-	if entropy < 3.0 {
+	// Tuned threshold: < 2.5 bits/byte means the message could be
+	// described in ≤ 2.5·n bits of payload. Random-quality secrets
+	// drawn from a 16-symbol (hex) alphabet have an expected Shannon
+	// of ~4 bits/byte, but a 32-char finite sample can dip to ~3.0
+	// purely from sampling variance. We keep enough margin below that
+	// for legitimate UUIDs while still catching obvious low-entropy
+	// strings (e.g. "passwordpassword" sits near 1.5 bits/byte).
+	if entropy < 2.5 {
 		return true
 	}
 	// (2) Long monotone run: ≥ ceil(len(s)/2) consecutive bytes where

@@ -294,9 +294,11 @@ func startRedis(ctx context.Context, t *testing.T) string {
 
 func startNATS(ctx context.Context, t *testing.T) string {
 	t.Helper()
-	c, err := tcnats.Run(ctx, "nats:2.10-alpine",
-		tcnats.WithArgument("jetstream", ""),
-	)
+	// Note: jetstream is already enabled by the testcontainers nats
+	// module's default Cmd (`-DV -js`). Passing
+	// `WithArgument("jetstream", "")` appends `--jetstream ""` which
+	// nats-server rejects with "unrecognized command".
+	c, err := tcnats.Run(ctx, "nats:2.10-alpine")
 	skipIfNoDocker(t, err)
 	t.Cleanup(func() { _ = c.Terminate(context.Background()) })
 	url, err := c.ConnectionString(ctx)

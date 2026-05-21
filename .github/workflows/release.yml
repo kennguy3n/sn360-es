@@ -56,7 +56,7 @@ jobs:
           tags: ${{ env.GHCR_IMAGE }}:${{ github.ref_name }}
 
       - name: Trivy scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           image-ref: ${{ env.GHCR_IMAGE }}:${{ github.ref_name }}
           format: table

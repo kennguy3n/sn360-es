@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -323,27 +324,32 @@ func (c *Consumer) routeToDLQ(ctx context.Context, jm jetstream.Msg, delivery ui
 	}
 }
 
+// defaultDLQSubject maps an origin subject like "es.evaluate.request" to
+// the stable dead-letter subject "es.dlq.evaluate". The DLQ namespace
+// (es.dlq.>) is kept disjoint from the primary streams' wildcards
+// (es.evaluate.>, es.action.>, ...) so the NATS server does not reject
+// the streams as overlapping.
 func defaultDLQSubject(subject string) string {
-	parts := splitFirstSegment(subject)
-	if parts == "" {
-		return subject + ".dlq"
+	domain := domainSegment(subject)
+	if domain == "" {
+		return "es.dlq.other"
 	}
-	return parts + ".dlq"
+	return "es.dlq." + domain
 }
 
-// splitFirstSegment returns "es.evaluate" for "es.evaluate.request" so we can
-// produce stable DLQ subjects without per-event proliferation.
-func splitFirstSegment(subject string) string {
-	count := 0
-	for i := 0; i < len(subject); i++ {
-		if subject[i] == '.' {
-			count++
-			if count == 2 {
-				return subject[:i]
-			}
-		}
+// domainSegment returns "evaluate" for "es.evaluate.request" — i.e. the
+// second segment of an "es.<domain>.<event>" subject. Returns "" when
+// the subject does not start with "es." or has fewer than two segments.
+func domainSegment(subject string) string {
+	const prefix = "es."
+	if !strings.HasPrefix(subject, prefix) {
+		return ""
 	}
-	return ""
+	rest := subject[len(prefix):]
+	if i := strings.IndexByte(rest, '.'); i >= 0 {
+		return rest[:i]
+	}
+	return rest
 }
 
 // contextFromMessage derives a per-delivery context from the

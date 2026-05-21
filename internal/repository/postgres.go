@@ -492,6 +492,22 @@ func (p *pgEvalResults) Create(ctx context.Context, r *EvaluationResult) error {
 	if r.ID == "" {
 		r.ID = uuid.NewString()
 	}
+	// secondary_categories / reason_codes / degraded_services are NOT NULL
+	// columns with an empty-array default in the schema. pq.Array translates
+	// a nil slice to a Postgres NULL, which would violate the NOT NULL
+	// constraint, so we normalise to an empty slice here.
+	secondary := r.Secondary
+	if secondary == nil {
+		secondary = []string{}
+	}
+	reasons := r.ReasonCodes
+	if reasons == nil {
+		reasons = []string{}
+	}
+	degradedSvcs := r.DegradedServices
+	if degradedSvcs == nil {
+		degradedSvcs = []string{}
+	}
 	_, err := p.db.ExecContext(ctx, `
 INSERT INTO evaluation_results (id, tenant_id, message_id_hash, correlation_id, score, tier,
                                 primary_category, secondary_categories, reason_codes,
@@ -503,8 +519,8 @@ VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,NULLIF($7,''),$8,$9,$10,$11,
         COALESCE($16, NOW()))
 `,
 		r.ID, r.TenantID, r.MessageIDHash, r.CorrelationID, r.Score, r.Tier,
-		r.Primary, pq.Array(r.Secondary), pq.Array(r.ReasonCodes),
-		r.Degraded, pq.Array(r.DegradedServices),
+		r.Primary, pq.Array(secondary), pq.Array(reasons),
+		r.Degraded, pq.Array(degradedSvcs),
 		stringOrEmpty(r.Tier0OutcomeJSON), stringOrEmpty(r.Tier1OutcomeJSON),
 		stringOrEmpty(r.Tier2OutcomeJSON), stringOrEmpty(r.RspamdOutcomeJSON),
 		nullableTime(r.EvaluatedAt),

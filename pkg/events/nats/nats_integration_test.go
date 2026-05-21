@@ -26,9 +26,7 @@ import (
 func startNATS(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
-	c, err := tcnats.Run(ctx, "nats:2.10-alpine",
-		tcnats.WithArgument("jetstream", ""),
-	)
+	c, err := tcnats.Run(ctx, "nats:2.10-alpine")
 	if err != nil {
 		if errors.Is(err, context.Canceled) || isDockerUnavailable(err) {
 			t.Skipf("docker not available, skipping: %v", err)
@@ -193,7 +191,7 @@ func TestNATSIntegration_DLQOnExhaustedDeliveries(t *testing.T) {
 		events.WithDurable("it-fail"),
 		events.WithMaxDeliver(2),
 		events.WithAckWait(500*time.Millisecond),
-		events.WithDLQSubject("es.evaluate.dlq"),
+		events.WithDLQSubject("es.dlq.evaluate"),
 	)
 	if err != nil {
 		t.Fatalf("subscribe primary: %v", err)
@@ -201,7 +199,7 @@ func TestNATSIntegration_DLQOnExhaustedDeliveries(t *testing.T) {
 	defer primary.Close()
 
 	dlq := make(chan events.Message, 1)
-	dlqSub, err := svc.Subscribe(ctx, "es.evaluate.dlq",
+	dlqSub, err := svc.Subscribe(ctx, "es.dlq.evaluate",
 		func(_ context.Context, m events.Message) error {
 			dlq <- m
 			return nil
