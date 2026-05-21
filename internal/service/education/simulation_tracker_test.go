@@ -11,9 +11,14 @@ import (
 	"github.com/kennguy3n/sn360-es/pkg/events"
 )
 
+// stubInteractionStore mirrors the InteractionStore contract that
+// MemoryInteractionStore and PostgresInteractionStore both honour:
+// Append is idempotent per (CampaignID, UserHash, Action) so the
+// tracker tests exercise the same semantics that production code sees.
 type stubInteractionStore struct {
 	mu     sync.Mutex
 	items  []dto.UserInteraction
+	seen   map[string]struct{}
 	apErr  error
 	lstErr error
 }
@@ -24,6 +29,14 @@ func (s *stubInteractionStore) Append(_ context.Context, i dto.UserInteraction) 
 	if s.apErr != nil {
 		return s.apErr
 	}
+	if s.seen == nil {
+		s.seen = map[string]struct{}{}
+	}
+	key := i.CampaignID + "\x00" + i.UserHash + "\x00" + string(i.Action)
+	if _, dup := s.seen[key]; dup {
+		return nil
+	}
+	s.seen[key] = struct{}{}
 	s.items = append(s.items, i)
 	return nil
 }
@@ -149,16 +162,22 @@ func TestRecordInteraction_PublishErrorIsNonFatal(t *testing.T) {
 	}
 }
 
-func TestAggregate_CountsAllOutcomes(t *testing.T) {
+func TestAggregate_CountsAllOutcomesWithReplay(t *testing.T) {
 	store := &stubInteractionStore{}
 	tr, _ := NewSimulationTracker(TrackerConfig{Store: store})
 	ctx := context.Background()
+	// Recording the same action twice for the same target simulates an
+	// at-least-once redelivery of the simulation.result event. The
+	// InteractionStore contract guarantees Append is idempotent per
+	// (CampaignID, UserHash, Action), so Aggregate must NOT inflate
+	// the campaign counters on replay — "did this target click?" is
+	// a boolean, not a count.
 	actions := []dto.UserInteractionType{
 		dto.InteractionDelivered,
-		dto.InteractionDelivered,
+		dto.InteractionDelivered, // replay
 		dto.InteractionOpened,
 		dto.InteractionClickedLink,
-		dto.InteractionClickedLink,
+		dto.InteractionClickedLink, // replay
 		dto.InteractionSubmittedCredentials,
 		dto.InteractionReportedPhishing,
 		dto.InteractionIgnored,
@@ -174,15 +193,15 @@ func TestAggregate_CountsAllOutcomes(t *testing.T) {
 	}
 	want := dto.SimulationResult{
 		CampaignID:           "camp-1",
-		Delivered:            2,
+		Delivered:            1,
 		Opened:               1,
-		Clicked:              2,
+		Clicked:              1,
 		SubmittedCredentials: 1,
 		Reported:             1,
 		Ignored:              1,
 	}
 	if res != want {
-		t.Fatalf("got=%+v want=%+v", res, want)
+		t.Fatalf("got=%+v want=%+v (replay must not double-count)", res, want)
 	}
 }
 
@@ -235,5 +254,44 @@ func TestMemoryInteractionStore_AppendListSeparation(t *testing.T) {
 	again, _ := s.ListByCampaign(ctx, "a")
 	if again[0].UserHash == "tampered" {
 		t.Fatalf("store leaked mutable slice: %+v", again)
+	}
+}
+
+// TestMemoryInteractionStore_IdempotentPerUserAction pins down the
+// in-memory store's dedup behaviour: Append for the same
+// (campaign, user, action) tuple is a no-op after the first call, and
+// the first-observed OccurredAt is preserved on the listed entry.
+// This is the same contract PostgresInteractionStore enforces via
+// (campaign_id, user_hash) primary key + COALESCE-on-upsert, and is
+// required so Aggregate counters are stable under at-least-once
+// NATS redelivery of education.simulation.result events.
+func TestMemoryInteractionStore_IdempotentPerUserAction(t *testing.T) {
+	s := NewMemoryInteractionStore()
+	ctx := context.Background()
+	first := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	second := time.Date(2026, 1, 1, 13, 0, 0, 0, time.UTC)
+	_ = s.Append(ctx, dto.UserInteraction{
+		CampaignID: "c", UserHash: "u1", Action: dto.InteractionOpened, OccurredAt: first,
+	})
+	// Replay of the SAME (user, action) tuple — must be a no-op.
+	_ = s.Append(ctx, dto.UserInteraction{
+		CampaignID: "c", UserHash: "u1", Action: dto.InteractionOpened, OccurredAt: second,
+	})
+	// Different action for the same user must still be retained.
+	_ = s.Append(ctx, dto.UserInteraction{
+		CampaignID: "c", UserHash: "u1", Action: dto.InteractionClickedLink, OccurredAt: second,
+	})
+	// Same action for a DIFFERENT user must still be retained.
+	_ = s.Append(ctx, dto.UserInteraction{
+		CampaignID: "c", UserHash: "u2", Action: dto.InteractionOpened, OccurredAt: second,
+	})
+	items, _ := s.ListByCampaign(ctx, "c")
+	if len(items) != 3 {
+		t.Fatalf("expected 3 deduped entries, got %d: %+v", len(items), items)
+	}
+	for _, it := range items {
+		if it.UserHash == "u1" && it.Action == dto.InteractionOpened && !it.OccurredAt.Equal(first) {
+			t.Fatalf("replay overwrote first OccurredAt: got %v want %v", it.OccurredAt, first)
+		}
 	}
 }

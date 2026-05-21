@@ -105,7 +105,16 @@ func TestOTLPBridge_PreservesTraceTopology(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewOTLPBridge: %v", err)
 	}
+	// Deferred bail-out: only runs if the explicit shutdown below
+	// never executes (e.g. an intermediate t.Fatalf). After the
+	// explicit shutdown we nil the var so this defer is a no-op —
+	// otherwise a future OTel SDK that returns ErrShutdown from a
+	// second Shutdown call would flip the deferred t.Fatalf even
+	// though the test had already passed.
 	defer func() {
+		if shutdown == nil {
+			return
+		}
 		if cerr := shutdown(context.Background()); cerr != nil {
 			t.Fatalf("shutdown: %v", cerr)
 		}
@@ -124,6 +133,7 @@ func TestOTLPBridge_PreservesTraceTopology(t *testing.T) {
 	if err := shutdown(flushCtx); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
+	shutdown = nil
 
 	got := collector.recorded()
 	if len(got) != 2 {
