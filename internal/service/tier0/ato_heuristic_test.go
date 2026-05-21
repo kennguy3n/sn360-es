@@ -248,10 +248,10 @@ func TestATOHeuristic_DisposableDomainHighPrivilege(t *testing.T) {
 	req := dto.EvaluateRequest{
 		Sender: "admin@company.com",
 		Signals: dto.RiskSignals{
-			IsInternal:                 true,
-			SenderDomain:               "company.com",
-			RecipientDomain:            "tempmail.io",
-			SenderSensitivity:          "critical",
+			IsInternal:                  true,
+			SenderDomain:                "company.com",
+			RecipientDomain:             "tempmail.io",
+			SenderSensitivity:           "critical",
 			RecipientIsDisposableDomain: true,
 		},
 	}

@@ -66,5 +66,9 @@ func (h *OrgGraphHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		GroupCount:      snap.GroupCount,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		h.logger.Warn("org_graph: encode response failed",
+			slog.String("tenant_id", tenantID),
+			slog.Any("error", err))
+	}
 }

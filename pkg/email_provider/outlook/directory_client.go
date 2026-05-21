@@ -137,10 +137,10 @@ func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]age
 			var groupIDs []string
 			isAdmin := false
 			for _, m := range u.MemberOf {
-				switch {
-				case m.ODataType == "#microsoft.graph.group":
+				switch m.ODataType {
+				case "#microsoft.graph.group":
 					groupIDs = append(groupIDs, m.ID)
-				case m.ODataType == "#microsoft.graph.directoryRole":
+				case "#microsoft.graph.directoryRole":
 					if strings.Contains(m.DisplayName, "Global Administrator") ||
 						strings.Contains(m.DisplayName, "Exchange Administrator") {
 						isAdmin = true
@@ -311,10 +311,10 @@ func (c *DirectoryClient) ListUsersDelta(ctx context.Context, _ string, deltaTok
 			var groupIDs []string
 			isAdmin := false
 			for _, m := range u.MemberOf {
-				switch {
-				case m.ODataType == "#microsoft.graph.group":
+				switch m.ODataType {
+				case "#microsoft.graph.group":
 					groupIDs = append(groupIDs, m.ID)
-				case m.ODataType == "#microsoft.graph.directoryRole":
+				case "#microsoft.graph.directoryRole":
 					if strings.Contains(m.DisplayName, "Global Administrator") ||
 						strings.Contains(m.DisplayName, "Exchange Administrator") {
 						isAdmin = true

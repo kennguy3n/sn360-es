@@ -103,9 +103,7 @@ func skipIfNoDocker(t *testing.T, err error) {
 
 func startNATSService(t *testing.T) *natsbus.Service {
 	t.Helper()
-	c, err := tcnats.Run(context.Background(), "nats:2.10-alpine",
-		tcnats.WithArgument("jetstream", ""),
-	)
+	c, err := tcnats.Run(context.Background(), "nats:2.10-alpine")
 	skipIfNoDocker(t, err)
 	t.Cleanup(func() { _ = c.Terminate(context.Background()) })
 	url, err := c.ConnectionString(context.Background())

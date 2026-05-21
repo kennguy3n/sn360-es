@@ -36,8 +36,19 @@ cover:
 
 .PHONY: lint
 lint: openapi-check
-	$(GO) vet ./...
-	@out=$$(gofmt -l . 2>&1); if [ -n "$$out" ]; then echo "$$out"; exit 1; fi
+	golangci-lint run ./...
+
+.PHONY: test-e2e
+test-e2e:
+	$(GO) test $(GOTEST_FLAGS) -tags=e2e -timeout 300s ./tests/e2e/...
+
+.PHONY: load-smoke
+load-smoke:
+	k6 run tests/load/smoke.js
+
+.PHONY: load-soak
+load-soak:
+	k6 run tests/load/soak.js
 
 # --- OpenAPI spec sync ---------------------------------------------------
 #

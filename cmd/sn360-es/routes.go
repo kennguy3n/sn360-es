@@ -153,7 +153,7 @@ func buildMux(app *application) (http.Handler, error) {
 // garbage Bearer tokens still gets cut off at the limiter.
 func wrapMiddleware(mux http.Handler, app *application) (http.Handler, error) {
 	logger := app.logger
-	var h http.Handler = mux
+	var h = mux
 
 	// JWT auth: optional. Skipped when no issuer is configured (dev
 	// runs with no banner secret).
@@ -259,19 +259,19 @@ func defaultRouteTemplates() []middleware.RoutePattern {
 // random URLs cannot drive Prometheus series count up unbounded.
 func defaultKnownExactRoutes() map[string]struct{} {
 	return map[string]struct{}{
-		"/v1/banner/action":                  {},
-		"/v1/dashboard/summary":              {},
-		"/v1/predict/recipient":              {},
-		"/v1/predict/open":                   {},
-		"/v1/quarantine/release":             {},
-		"/v1/escalation/resolve":             {},
-		"/v1/onboarding/start":               {},
-		"/v1/onboarding/callback":            {},
-		"/v1/onboarding/status":              {},
-		"/v1/onboarding/revoke":              {},
-		"/v1/onboarding/gws-setup-status":    {},
-		"/v1/vendors":                        {},
-		"/v1/org-graph":                      {},
+		"/v1/banner/action":               {},
+		"/v1/dashboard/summary":           {},
+		"/v1/predict/recipient":           {},
+		"/v1/predict/open":                {},
+		"/v1/quarantine/release":          {},
+		"/v1/escalation/resolve":          {},
+		"/v1/onboarding/start":            {},
+		"/v1/onboarding/callback":         {},
+		"/v1/onboarding/status":           {},
+		"/v1/onboarding/revoke":           {},
+		"/v1/onboarding/gws-setup-status": {},
+		"/v1/vendors":                     {},
+		"/v1/org-graph":                   {},
 	}
 }
 

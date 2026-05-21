@@ -69,7 +69,7 @@ func NewMockKMS(rootKey []byte) (*MockKMS, error) {
 }
 
 // GenerateDataKey implements KMSClient.
-func (m *MockKMS) GenerateDataKey(_ context.Context, keyID string) (plaintext, ciphertext []byte, err error) {
+func (m *MockKMS) GenerateDataKey(ctx context.Context, keyID string) (plaintext, ciphertext []byte, err error) {
 	if keyID == "" {
 		return nil, nil, errors.New("privacy/mockkms: keyID is required")
 	}
@@ -77,7 +77,7 @@ func (m *MockKMS) GenerateDataKey(_ context.Context, keyID string) (plaintext, c
 	if _, err = rand.Read(plaintext); err != nil {
 		return nil, nil, fmt.Errorf("privacy/mockkms: rand: %w", err)
 	}
-	ciphertext, err = m.Encrypt(nil, keyID, plaintext)
+	ciphertext, err = m.Encrypt(ctx, keyID, plaintext)
 	if err != nil {
 		return nil, nil, err
 	}

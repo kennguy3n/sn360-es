@@ -97,10 +97,10 @@ type Exporter interface {
 }
 
 // Tracer is the entry point for span creation. It is safe for
-// concurrent use.
+// concurrent use — its config is immutable after construction and
+// per-span state is owned by *Span.
 type Tracer struct {
 	cfg TracerConfig
-	mu  sync.RWMutex
 }
 
 // SpanData is the immutable representation of a finished span.
@@ -331,10 +331,8 @@ func ParseTraceparent(v string) (SpanContext, error) {
 	if len(parts[2]) != 16 {
 		return SpanContext{}, fmt.Errorf("telemetry: span_id length %d", len(parts[2]))
 	}
-	sampled := false
-	if len(parts[3]) >= 2 && parts[3][1] == '1' {
-		sampled = true
-	}
+	sampled := len(parts[3]) >= 2 && parts[3][1] == '1'
+
 	return SpanContext{TraceID: parts[1], SpanID: parts[2], Sampled: sampled}, nil
 }
 

@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -207,11 +208,11 @@ func (s *Service) Publish(ctx context.Context, subject string, data []byte, opts
 
 	var lastErr error
 	for i := 1; i <= attempts; i++ {
-		if _, err := s.client.XAdd(ctx, args).Result(); err == nil {
+		_, err := s.client.XAdd(ctx, args).Result()
+		if err == nil {
 			return nil
-		} else {
-			lastErr = err
 		}
+		lastErr = err
 		if errors.Is(lastErr, context.Canceled) || errors.Is(lastErr, context.DeadlineExceeded) {
 			return lastErr
 		}
@@ -433,7 +434,7 @@ func (s *subscription) runClaim(ctx context.Context) {
 	ticker := time.NewTicker(orDefault(s.service.cfg.PendingMinIdle, 30*time.Second))
 	defer ticker.Stop()
 
-	var cursor string = "0-0"
+	cursor := "0-0"
 	for {
 		select {
 		case <-ctx.Done():
@@ -492,7 +493,7 @@ func (s *subscription) handle(ctx context.Context, raw goredis.XMessage, logger 
 	if s.opts.MaxDeliver > 0 && delivery >= int64(s.opts.MaxDeliver) {
 		dlq := s.opts.DLQSubject
 		if dlq == "" {
-			dlq = s.subject + ".dlq"
+			dlq = defaultDLQSubject(s.subject)
 		}
 		if dlqErr := s.service.publishToDLQ(ctx, dlq, fields, delivery, err); dlqErr != nil {
 			logger.Error("redis: DLQ publish failed",
@@ -613,4 +614,24 @@ func (m *message) Metadata() (events.MessageMetadata, error) {
 		}
 	}
 	return out, nil
+}
+
+// defaultDLQSubject maps an origin subject like "es.evaluate.request" to
+// the stable dead-letter subject "es.dlq.evaluate". Kept in sync with
+// the NATS bus default — both buses use the same DLQ namespace so
+// downstream consumers (DLQ processor, alerting) don't need to special-case
+// the implementation.
+func defaultDLQSubject(subject string) string {
+	const prefix = "es."
+	if !strings.HasPrefix(subject, prefix) {
+		return "es.dlq.other"
+	}
+	rest := subject[len(prefix):]
+	if i := strings.IndexByte(rest, '.'); i >= 0 {
+		return "es.dlq." + rest[:i]
+	}
+	if rest == "" {
+		return "es.dlq.other"
+	}
+	return "es.dlq." + rest
 }

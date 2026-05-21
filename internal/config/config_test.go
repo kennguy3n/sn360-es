@@ -215,7 +215,7 @@ func TestIsLowEntropy(t *testing.T) {
 		{"two-byte-period", "abababab", true},
 		{"four-byte-period", "abcdabcd", true},
 		// "abcabcabcab" — 3 distinct chars over 11 bytes —
-		// Shannon ≈ 1.58 bits/byte, well below the 3.0 threshold.
+		// Shannon ≈ 1.58 bits/byte, well below the 2.5 threshold.
 		// The function is intentionally aggressive on tiny alphabets
 		// because real openssl-rand secrets have ≥ 30+ distinct bytes.
 		{"non-divisor-period-low-alphabet", "abcabcabcab", true},
@@ -413,7 +413,7 @@ func TestIsLowEntropy_CryptoRandomBytesAreHighEntropy(t *testing.T) {
 // (rather than randomised) because they are the patterns operators
 // type by hand when they don't realise the secret matters.
 //
-// All cases here either (a) fail the Shannon ≥ 3.0 floor, (b) contain
+// All cases here either (a) fail the Shannon ≥ 2.5 floor, (b) contain
 // a monotone run ≥ ceil(len/2), or (c) tile the string with a period
 // that divides len exactly. These are the three structural shapes
 // isLowEntropy is documented to catch. Borderline inputs (e.g. a

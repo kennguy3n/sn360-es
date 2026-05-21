@@ -131,7 +131,12 @@ func NewBannerRenderer(tr Translator) (*BannerRenderer, error) {
 	tmpl, err := template.New("banner").Funcs(template.FuncMap{
 		"hasClass":  hasClass,
 		"chipClass": chipClassFor,
-		"safeCSS":   func(s string) template.CSS { return template.CSS(s) },
+		// safeCSS unconditionally trusts its input — but the only
+		// callers in bannerTemplate feed it the tier slug
+		// (constant.TierBlocked et al) and the constant chip class
+		// names returned by chipClassFor. Neither is attacker-
+		// controlled. The G203 finding is therefore a false positive.
+		"safeCSS": func(s string) template.CSS { return template.CSS(s) }, //nolint:gosec
 	}).Parse(bannerTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("banner: parse template: %w", err)

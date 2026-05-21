@@ -168,13 +168,14 @@ func stripSQLNoise(s string) string {
 				out = append(out, ' ')
 			}
 		case inBlock:
-			if c == '*' && i+1 < len(s) && s[i+1] == '/' {
+			switch {
+			case c == '*' && i+1 < len(s) && s[i+1] == '/':
 				inBlock = false
 				out = append(out, ' ', ' ')
 				i++
-			} else if c == '\n' {
+			case c == '\n':
 				out = append(out, c)
-			} else {
+			default:
 				out = append(out, ' ')
 			}
 		case inStr:
@@ -185,12 +186,13 @@ func stripSQLNoise(s string) string {
 				i++
 				continue
 			}
-			if c == '\'' {
+			switch c {
+			case '\'':
 				inStr = false
 				out = append(out, ' ')
-			} else if c == '\n' {
+			case '\n':
 				out = append(out, c)
-			} else {
+			default:
 				out = append(out, ' ')
 			}
 		default:

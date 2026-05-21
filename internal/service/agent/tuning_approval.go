@@ -141,7 +141,7 @@ func NewApprovalGatedTuningAgent(cfg ApprovalGatedTuningConfig) (*ApprovalGatedT
 	if cfg.ForceApprovalThresholdDelta <= 0 {
 		cfg.ForceApprovalThresholdDelta = 3
 	}
-	log := cfg.TuningConfig.Logger
+	log := cfg.Logger
 	if log == nil {
 		log = slog.Default()
 	}
@@ -259,12 +259,12 @@ func (a *ApprovalGatedTuningAgent) ApproveProposal(ctx context.Context, proposal
 
 	dec := proposal.Decision
 	if dec.NewWeights != nil {
-		if err := a.cfg.TuningConfig.Config.UpdateWeights(ctx, proposal.TenantID, *dec.NewWeights); err != nil {
+		if err := a.cfg.Config.UpdateWeights(ctx, proposal.TenantID, *dec.NewWeights); err != nil {
 			return fmt.Errorf("tuning_approval: apply weights: %w", err)
 		}
 	}
 	if dec.NewThresholds != nil {
-		if err := a.cfg.TuningConfig.Config.UpdateThresholds(ctx, proposal.TenantID, *dec.NewThresholds); err != nil {
+		if err := a.cfg.Config.UpdateThresholds(ctx, proposal.TenantID, *dec.NewThresholds); err != nil {
 			return fmt.Errorf("tuning_approval: apply thresholds: %w", err)
 		}
 	}
@@ -286,27 +286,27 @@ func (a *ApprovalGatedTuningAgent) ListPendingProposals(ctx context.Context, ten
 }
 
 func maxAbs(vals ...float64) float64 {
-	max := 0.0
+	best := 0.0
 	for _, v := range vals {
 		if v < 0 {
 			v = -v
 		}
-		if v > max {
-			max = v
+		if v > best {
+			best = v
 		}
 	}
-	return max
+	return best
 }
 
 func maxAbsInt(vals ...int) int {
-	max := 0
+	best := 0
 	for _, v := range vals {
 		if v < 0 {
 			v = -v
 		}
-		if v > max {
-			max = v
+		if v > best {
+			best = v
 		}
 	}
-	return max
+	return best
 }

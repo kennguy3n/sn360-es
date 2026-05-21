@@ -249,11 +249,11 @@ func (p *QuarantineProvider) ensureQuarantineFolder(ctx context.Context, email s
 func (p *QuarantineProvider) cacheFolderID(email, id string) {
 	p.folderMu.Lock()
 	defer p.folderMu.Unlock()
-	max := p.folderCacheMax
-	if max <= 0 {
-		max = defaultFolderCacheMax
+	limit := p.folderCacheMax
+	if limit <= 0 {
+		limit = defaultFolderCacheMax
 	}
-	if _, exists := p.folderIDCache[email]; !exists && len(p.folderIDCache) >= max {
+	if _, exists := p.folderIDCache[email]; !exists && len(p.folderIDCache) >= limit {
 		for k := range p.folderIDCache {
 			delete(p.folderIDCache, k)
 			break

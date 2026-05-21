@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kennguy3n/sn360-es/pkg/events"
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/kennguy3n/sn360-es/pkg/events"
 )
 
 // DLQReplayer reads messages off the ES_DLQ stream and republishes them
@@ -85,24 +86,22 @@ func (r *DLQReplayer) Replay(ctx context.Context, opts ReplayOptions) (ReplayRes
 
 	// Fetch in modest batches so we never block forever; the OrderedConsumer
 	// streams all messages until exhausted.
-	for {
-		if opts.Limit > 0 && result.Replayed >= opts.Limit {
-			break
-		}
+	for opts.Limit <= 0 || result.Replayed < opts.Limit {
+
 		batch, ferr := consumer.Fetch(50, jetstream.FetchMaxWait(500*time.Millisecond))
 		if ferr != nil {
 			result.Errors = append(result.Errors, ferr)
 			break
 		}
-		any := false
+		drained := false
 		for jm := range batch.Messages() {
-			any = true
+			drained = true
 			result.Inspected++
 			if rerr := r.replayOne(ctx, jm, cutoff, opts.DryRun, &result); rerr != nil {
 				result.Errors = append(result.Errors, rerr)
 			}
 		}
-		if !any {
+		if !drained {
 			break
 		}
 		if err := batch.Error(); err != nil {

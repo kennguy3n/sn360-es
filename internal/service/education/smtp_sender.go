@@ -113,7 +113,12 @@ func (s *SMTPSender) Send(ctx context.Context, target SimulationTarget, rendered
 	if err != nil {
 		return fmt.Errorf("education: smtp dial: %w", err)
 	}
-	defer client.Close()
+	defer func() {
+		if cerr := client.Close(); cerr != nil && s.cfg.Logger != nil {
+			s.cfg.Logger.Warn("education: smtp client close",
+				slog.Any("error", cerr))
+		}
+	}()
 
 	if err := client.Hello(senderHostname(s.cfg.From)); err != nil {
 		return fmt.Errorf("education: smtp HELO: %w", err)
@@ -221,8 +226,14 @@ func defaultDial(ctx context.Context, cfg SMTPConfig) (smtpClient, error) {
 		tlsCfg := &tls.Config{
 			ServerName:         cfg.Host,
 			InsecureSkipVerify: cfg.SkipVerify, //nolint:gosec // gated on opt-in SkipVerify config; see SMTPConfig.SkipVerify comment.
+			MinVersion:         tls.VersionTLS12,
 		}
-		conn, err = tls.DialWithDialer(d, "tcp", addr, tlsCfg)
+		// (*tls.Dialer).DialContext honours the caller's context so
+		// the dial cancels in lock-step with ctx — the legacy
+		// tls.DialWithDialer helper only honours net.Dialer.Timeout
+		// and noctx flags it for that reason.
+		tlsDialer := &tls.Dialer{NetDialer: d, Config: tlsCfg}
+		conn, err = tlsDialer.DialContext(ctx, "tcp", addr)
 	} else {
 		conn, err = d.DialContext(ctx, "tcp", addr)
 	}

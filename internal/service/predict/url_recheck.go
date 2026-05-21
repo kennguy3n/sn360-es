@@ -8,14 +8,6 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/constant"
 )
 
-// URLRecheckResult captures a single URL re-check outcome.
-type URLRecheckResult struct {
-	URL      string `json:"url"`
-	OldScore int    `json:"old_score"`
-	NewScore int    `json:"new_score"`
-	Upgraded bool   `json:"upgraded"`
-}
-
 // URLIntelChecker is the interface the pre-open URL re-checker uses.
 // It is satisfied by the evaluate.URLScanner.
 type URLIntelChecker interface {
@@ -89,8 +81,14 @@ func (s *URLRecheckService) Recheck(ctx context.Context, tenantID, pseudoMessage
 		return nil, nil
 	}
 
+	// We track the worst score across all URLs because the Recheck
+	// upgrade decision is driven by the maximum risk we observe.
+	// Per-URL scores are logged below for traceability rather than
+	// returned — OpenResponse does not currently expose the array,
+	// and previously this loop appended into a results slice that
+	// nothing read (SA4010).
 	maxScore := 0
-	var results []URLRecheckResult
+	scanned := 0
 	for _, u := range urls {
 		score, _, serr := s.scanner.ScanURL(ctx, u)
 		if serr != nil {
@@ -99,14 +97,13 @@ func (s *URLRecheckService) Recheck(ctx context.Context, tenantID, pseudoMessage
 				slog.Any("error", serr))
 			continue
 		}
-		results = append(results, URLRecheckResult{
-			URL:      u,
-			NewScore: score,
-			Upgraded: score >= s.threshold,
-		})
+		scanned++
 		if score > maxScore {
 			maxScore = score
 		}
+	}
+	if scanned == 0 {
+		return nil, nil
 	}
 
 	if maxScore < s.threshold {

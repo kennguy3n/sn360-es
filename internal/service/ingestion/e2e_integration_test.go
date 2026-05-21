@@ -87,9 +87,7 @@ func (f *fakeEvaluator) Evaluate(_ context.Context, req dto.EvaluateRequest, _ d
 
 func startNATSService(t *testing.T) *natsbus.Service {
 	t.Helper()
-	c, err := tcnats.Run(context.Background(), "nats:2.10-alpine",
-		tcnats.WithArgument("jetstream", ""),
-	)
+	c, err := tcnats.Run(context.Background(), "nats:2.10-alpine")
 	if err != nil {
 		if strings.Contains(err.Error(), "docker") || errors.Is(err, context.Canceled) {
 			t.Skipf("docker not available, skipping: %v", err)
@@ -189,9 +187,14 @@ func TestE2E_IngestionToEvaluateToAction(t *testing.T) {
 				"es.action.url_rewrite",
 				"es.action.quarantine",
 			} {
+				// JetStream deduplicates by message-id within the
+				// stream's dedup window. The four action subjects
+				// share the same EvaluateResult.MessageID, so we
+				// derive a unique dedup ID per action subject to
+				// keep all four fan-out messages.
 				if err := svc.Publish(c, action, body,
 					events.WithTenantID(res.TenantID),
-					events.WithMessageID(res.MessageID),
+					events.WithMessageID(res.MessageID+":"+action),
 					events.WithCorrelationID(res.CorrelationID),
 				); err != nil {
 					return err

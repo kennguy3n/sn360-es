@@ -177,19 +177,6 @@ func (r *providerRegistry) lookup(tenant string) *providerEntry {
 	return nil
 }
 
-// snapshot returns a copy of the registry contents for observability.
-// Keys are flattened into "tenant:kind" strings so the result is
-// trivially loggable.
-func (r *providerRegistry) snapshot() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make([]string, 0, len(r.entries))
-	for k := range r.entries {
-		out = append(out, k.tenant+":"+string(k.kind))
-	}
-	return out
-}
-
 // buildProviderRegistry inspects the configured credentials and
 // constructs the registry. Returns an empty (but non-nil) registry
 // when neither provider is configured so callers can use it
@@ -383,8 +370,13 @@ type providerRegistrarAdapter struct {
 	logger   *slog.Logger
 }
 
-// RegisterFromToken implements onboarding.ProviderRegistrar.
-func (a *providerRegistrarAdapter) RegisterFromToken(ctx context.Context, tenantID string, provider onboarding.ProviderType, token onboarding.Token) error {
+// RegisterFromToken implements onboarding.ProviderRegistrar. The
+// `token` parameter is intentionally unused: the runtime provider for
+// Microsoft is wired via the onboarding service's refresh-aware
+// TokenFor method (so the stored token is always the source of
+// truth), and the Google branch ignores tokens entirely because GWS
+// runs through service-account delegation.
+func (a *providerRegistrarAdapter) RegisterFromToken(ctx context.Context, tenantID string, provider onboarding.ProviderType, _ onboarding.Token) error {
 	switch provider {
 	case onboarding.ProviderGoogle:
 		// GWS uses domain-wide-delegation via a service account, not

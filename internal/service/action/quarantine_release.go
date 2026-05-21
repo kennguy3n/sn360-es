@@ -131,15 +131,15 @@ func NewReleaseService(cfg ReleaseConfig) (*ReleaseService, error) {
 	if subject == "" {
 		subject = "es.action.quarantine.release"
 	}
-	min := cfg.MinReleaseTier
-	if !min.Valid() {
-		min = constant.TierBlocked
+	minTier := cfg.MinReleaseTier
+	if !minTier.Valid() {
+		minTier = constant.TierBlocked
 	}
 	// TierTrusted is severity 0, so isStillBlocked(tier, TierTrusted)
 	// is true for every valid tier — every release request is refused.
 	// This is rarely intended; surface a one-time warning rather than
 	// silently disabling the release flow.
-	if min == constant.TierTrusted {
+	if minTier == constant.TierTrusted {
 		logger.Warn(
 			"release: MinReleaseTier is TierTrusted; every release request will be refused. Verify the SecOps configuration.",
 		)
@@ -150,7 +150,7 @@ func NewReleaseService(cfg ReleaseConfig) (*ReleaseService, error) {
 		reevaluator:    cfg.Reevaluator,
 		publisher:      cfg.Publisher,
 		subject:        subject,
-		minReleaseTier: min,
+		minReleaseTier: minTier,
 	}, nil
 }
 

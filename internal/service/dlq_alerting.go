@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -171,7 +172,14 @@ func (s *DLQAlertService) fireAlert(ctx context.Context, alert DLQAlert) {
 		s.log.WarnContext(ctx, "dlq_alert: webhook call failed", slog.Any("error", err))
 		return
 	}
-	resp.Body.Close()
+	// Drain + close to allow HTTP/1.1 connection reuse. We do not
+	// care about the body — the webhook receiver is fire-and-forget.
+	if _, derr := io.Copy(io.Discard, resp.Body); derr != nil {
+		s.log.DebugContext(ctx, "dlq_alert: drain body", slog.Any("error", derr))
+	}
+	if cerr := resp.Body.Close(); cerr != nil {
+		s.log.DebugContext(ctx, "dlq_alert: close body", slog.Any("error", cerr))
+	}
 }
 
 // Stats returns the current DLQ counts per tenant.

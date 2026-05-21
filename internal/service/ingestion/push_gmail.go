@@ -34,7 +34,10 @@ func (g *GmailPushReceiver) Kind() string { return "gmail" }
 
 // Subscribe registers a Gmail push watch for the given tenant.
 // callbackURL is not directly used — Gmail routes through Pub/Sub.
-func (g *GmailPushReceiver) Subscribe(ctx context.Context, tenantID string, callbackURL string) (string, time.Time, error) {
+// tenantID is required by the PushReceiver interface but Gmail's
+// watch API derives the inbox from the OAuth identity, so we ignore
+// it here.
+func (g *GmailPushReceiver) Subscribe(ctx context.Context, _ string, _ string) (string, time.Time, error) {
 	if g.TopicName == "" {
 		return "", time.Time{}, errors.New("gmail push: topic_name is required")
 	}
@@ -75,9 +78,10 @@ func (g *GmailPushReceiver) Subscribe(ctx context.Context, tenantID string, call
 	return resp.HistoryID, expiresAt, nil
 }
 
-// Renew re-registers the Gmail watch (Gmail doesn't support renewal;
-// a new watch replaces the old one).
-func (g *GmailPushReceiver) Renew(ctx context.Context, tenantID, subscriptionID string, callbackURL string) (time.Time, error) {
+// Renew re-registers the Gmail watch. Gmail does not support
+// in-place renewal — a new watch replaces the old one — so the
+// previous subscriptionID is intentionally discarded.
+func (g *GmailPushReceiver) Renew(ctx context.Context, tenantID, _ string, callbackURL string) (time.Time, error) {
 	_, expiresAt, err := g.Subscribe(ctx, tenantID, callbackURL)
 	return expiresAt, err
 }
