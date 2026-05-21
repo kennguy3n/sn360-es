@@ -820,28 +820,156 @@ func TestBannerRendererMSOCommentsUseNamedHelpers(t *testing.T) {
 		}
 	}
 
-	// Contract 3: the legacy `safeHTML` FuncMap entry must NOT exist
-	// any more. We probe by parsing a tiny template that calls it —
-	// the call should fail at template-parse time, not silently
-	// succeed. If a future change adds back a generic safeHTML
-	// helper, this test will start passing the parse and fail the
-	// assertion. We have to construct the probe template via the
-	// real renderer's parsed template tree, because we want the
-	// FuncMap that NewBannerRenderer registered, not a fresh one.
-	probe := template.New("probe").Funcs(template.FuncMap{
-		// Mirror the renderer's FuncMap exactly. If a future edit
-		// adds safeHTML back to NewBannerRenderer, this list must
-		// also be updated — which is the maintenance signal we
-		// want to surface.
-		"hasClass":      hasClass,
-		"chipClass":     chipClassFor,
-		"safeCSS":       func(s string) template.CSS { return template.CSS(s) }, //nolint:gosec
-		"msoIfStart":    func() template.HTML { return msoIfStartHTML },         //nolint:gosec
-		"msoIfEnd":      func() template.HTML { return msoIfEndHTML },           //nolint:gosec
-		"msoIfNotStart": func() template.HTML { return msoIfNotStartHTML },      //nolint:gosec
-		"msoIfNotEnd":   func() template.HTML { return msoIfNotEndHTML },        //nolint:gosec
-	})
-	if _, err := probe.Parse(`{{ safeHTML "x" }}`); err == nil {
-		t.Errorf("safeHTML FuncMap entry must NOT exist any more — found it parsing successfully, which means a future edit re-introduced the generic trust-bypass helper")
+	// Contract 3: the legacy `safeHTML` and `safeCSS` FuncMap
+	// entries must NOT exist any more. We probe by parsing a tiny
+	// template against the REAL renderer's *template.Template (not a
+	// mirrored FuncMap), because template.Template.New() inherits
+	// the FuncMap of its parent. If either `safeHTML` or `safeCSS`
+	// is re-introduced to NewBannerRenderer's FuncMap in the future,
+	// the corresponding probe will succeed and this test will fail.
+	//
+	// Inline CSS in bannerView is now expressed via template.CSS
+	// typed fields (WrapperStyle, ButtonStyle, ButtonStyleMSO,
+	// ChipStyle, IconChipEnd, MSOButtonGap), so neither `safeHTML`
+	// nor `safeCSS` is needed any more. The type system is the trust
+	// boundary, not a FuncMap helper.
+	for _, badFn := range []string{
+		"{{ safeHTML \"x\" }}",
+		"{{ safeCSS \"x\" }}",
+	} {
+		if _, err := r.tmpl.New("probe").Parse(badFn); err == nil {
+			t.Errorf("renderer FuncMap should NOT contain a generic trust-bypass helper, but parsing %q succeeded — a future edit re-introduced the helper", badFn)
+		}
 	}
+}
+
+// TestBannerRendererInlineMirrorMatchesCSS locks in the contract that
+// the per-tier colours emitted as inline style attributes (via the
+// `tierColorsFor` lookup table) are an exact mirror of the same
+// colours used in the `bannerCSS` constant. The Outlook-desktop
+// rendering path depends on inline styles because the Word HTML
+// engine strips the embedded <style> block; modern clients depend on
+// the <style> block because they render off classes alone. If the
+// two sources of truth drift apart, modern clients and Outlook
+// desktop will show different tier colours — a visual divergence
+// that's hard to catch without per-client visual-regression testing.
+//
+// This test enumerates every concrete tier and asserts that each of
+// its `tierColors` hex values appears somewhere in bannerCSS. It does
+// NOT assert the exact CSS rule shape (selector + property), because
+// future refactors may legitimately reorganise the CSS — it only
+// asserts that the same hex literal exists in both places. That's the
+// minimal contract: if you change a colour in `tierColorsFor` without
+// also updating bannerCSS (or vice versa), this test fails.
+func TestBannerRendererInlineMirrorMatchesCSS(t *testing.T) {
+	cases := []struct {
+		name string
+		tier constant.Tier
+	}{
+		{"blocked", constant.TierBlocked},
+		{"high risk", constant.TierHighRisk},
+		{"warning", constant.TierWarning},
+		{"caution", constant.TierCaution},
+		{"informational", constant.TierInformational},
+		{"trusted", constant.TierTrusted},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := tierColorsFor(tc.tier)
+			// Background, Border, Text, and Button must all appear
+			// verbatim in bannerCSS. The CSS rules are:
+			//   .sn360-{tier}{background:Background;border-color:Border;color:Text}
+			//   .sn360-{tier} .sn360-actions a{background:Button}
+			// If any of these hex values is missing from bannerCSS,
+			// the inline-style mirror has drifted from the CSS rule
+			// and modern clients will render a different colour from
+			// Outlook desktop for that tier.
+			//
+			// ButtonText is intentionally omitted from this check
+			// because it is invariant across every tier
+			// (`tierColorsFor(*).ButtonText == "#ffffff"`) and the
+			// CSS rule expresses it as `#fff` (3-digit shorthand) on
+			// the shared `.sn360-banner .sn360-actions a{color:#fff}`
+			// selector — so a byte-equal match would always fail
+			// even though the two are semantically identical. Drift
+			// risk on a constant white text colour is negligible.
+			for _, want := range []string{c.Background, c.Border, c.Text, c.Button} {
+				if !strings.Contains(bannerCSS, want) {
+					t.Errorf("tier=%s: bannerCSS missing colour %q from tierColorsFor() — inline-style mirror and CSS rule have drifted; modern clients will paint this tier differently from Outlook desktop", tc.tier, want)
+				}
+			}
+		})
+	}
+
+	// The chip colours (.sn360-chip-verified / -failed / -unverified
+	// / -unknown) also have an inline mirror in chipInlineStyle. Lock
+	// the same contract: every chip-colour hex used by
+	// chipInlineStyle must appear in bannerCSS.
+	chipCases := []struct {
+		name string
+		v    AuthVerdict
+	}{
+		{"verified", AuthVerified},
+		{"failed", AuthFailed},
+		{"unverified", AuthUnverified},
+		{"unknown", AuthUnknown},
+	}
+	for _, cc := range chipCases {
+		t.Run("chip_"+cc.name, func(t *testing.T) {
+			inline := string(chipInlineStyle(cc.v))
+			// chipInlineStyle always returns "background:#XXXXXX;color:#YYYYYY".
+			// Extract the hex literals (one for background, one for
+			// color) and assert each is present in bannerCSS.
+			//
+			// `#ffffff` is filtered out for the same reason ButtonText
+			// is filtered out above: every chip uses white text and
+			// the CSS expresses it as `#fff` (3-digit shorthand) on
+			// the shared `.sn360-banner .sn360-chip{color:#fff}`
+			// selector. A byte-equal contains check would always
+			// fail on the constant white text colour.
+			for _, want := range hexLiteralsIn(inline) {
+				if want == "#ffffff" {
+					continue
+				}
+				if !strings.Contains(bannerCSS, want) {
+					t.Errorf("chip verdict=%s: bannerCSS missing colour %q from chipInlineStyle() — modern-CSS chip will paint differently from Outlook desktop inline chip", cc.v, want)
+				}
+			}
+		})
+	}
+}
+
+// hexLiteralsIn extracts CSS hex colour literals (#rrggbb form) from
+// an inline-style declaration string. Used by
+// TestBannerRendererInlineMirrorMatchesCSS to assert that every hex
+// emitted by chipInlineStyle also exists in bannerCSS without having
+// to hardcode the chip palette in two places.
+func hexLiteralsIn(s string) []string {
+	var out []string
+	for i := 0; i < len(s); i++ {
+		if s[i] != '#' {
+			continue
+		}
+		// A CSS hex literal is # followed by exactly 6 hex digits
+		// in our renderer (we don't use 3-digit shorthand or 8-digit
+		// alpha form). Anything shorter or longer is not a valid
+		// banner palette literal and we skip it.
+		if i+7 > len(s) {
+			continue
+		}
+		hex := s[i : i+7]
+		ok := true
+		for _, c := range hex[1:] {
+			isHex := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+			if !isHex {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			out = append(out, hex)
+			i += 6
+		}
+	}
+	return out
 }
