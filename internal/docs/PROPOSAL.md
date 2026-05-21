@@ -48,7 +48,7 @@ es.evaluate.>                         # Evaluation pipeline
 es.evaluate.request                   # Evaluate request (ingestion → evaluate)
 es.evaluate.result                    # Evaluate result (evaluate → ingestion + management)
 es.evaluate.result.attachment         # Attachment scan result
-es.evaluate.dlq                       # Dead-letter queue for failed evaluations
+es.dlq.>                              # Dead-letter queue (es.dlq.evaluate, es.dlq.action, es.dlq.onboarding) — disjoint from primary stream wildcards
 es.education.>                        # Education platform
 es.education.simulation.send          # Send phishing simulation
 es.education.simulation.result        # User interaction result
@@ -99,7 +99,7 @@ streams:
     num_replicas: 3
 
   ES_DLQ:
-    subjects: ["es.evaluate.dlq", "es.action.dlq"]
+    subjects: ["es.dlq.>"]            # es.dlq.evaluate, es.dlq.action, es.dlq.onboarding — disjoint from primary stream wildcards
     retention: Limits
     storage: File
     max_age: 30d                   # Keep failed events for investigation

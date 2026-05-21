@@ -121,7 +121,7 @@ caching and distributed locking.
 | `ES_ONBOARDING` | `es.onboarding.>` | WorkQueue | File | User/tenant lifecycle events |
 | `ES_EDUCATION` | `es.education.>` | Limits | File | Education campaign events (retained for analytics) |
 | `ES_ACTION` | `es.action.>` | WorkQueue | File | Post-evaluation remediation actions |
-| `ES_DLQ` | `["es.evaluate.dlq", "es.action.dlq"]` | Limits | File | Dead-letter queue for failed processing |
+| `ES_DLQ` | `["es.dlq.>"]` (`es.dlq.evaluate`, `es.dlq.action`, `es.dlq.onboarding`) | Limits | File | Dead-letter queue for failed processing |
 
 ### Message Flow
 
