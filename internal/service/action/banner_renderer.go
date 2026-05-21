@@ -120,17 +120,26 @@ func tierColorsFor(t constant.Tier) tierColors {
 // an `int` (pixel value) — no caller-controlled string ever flows
 // through these functions, so the conversion is the trust boundary.
 func inlineEndMargin(rtl bool, px int) template.CSS {
+	// gosec G203 nolint rationale: the inputs are a bool and an int, both
+	// fully controlled by the caller (banner_renderer.Render derives
+	// `rtl` from the locale lookup table and passes the hardcoded
+	// literal `6` for `px`). No caller-controlled string ever flows
+	// into the template.CSS conversion — the conversion IS the trust
+	// boundary, by design, replacing the generic safeCSS FuncMap helper
+	// that gosec would (correctly) have flagged as a far wider risk.
 	if rtl {
-		return template.CSS(fmt.Sprintf("margin-left:%dpx", px))
+		return template.CSS(fmt.Sprintf("margin-left:%dpx", px)) //nolint:gosec
 	}
-	return template.CSS(fmt.Sprintf("margin-right:%dpx", px))
+	return template.CSS(fmt.Sprintf("margin-right:%dpx", px)) //nolint:gosec
 }
 
 func inlineEndPadding(rtl bool, px int) template.CSS {
+	// gosec G203 nolint rationale: same as inlineEndMargin above —
+	// inputs are bool + int, no caller-controlled string flows through.
 	if rtl {
-		return template.CSS(fmt.Sprintf("padding-left:%dpx", px))
+		return template.CSS(fmt.Sprintf("padding-left:%dpx", px)) //nolint:gosec
 	}
-	return template.CSS(fmt.Sprintf("padding-right:%dpx", px))
+	return template.CSS(fmt.Sprintf("padding-right:%dpx", px)) //nolint:gosec
 }
 
 // chipInlineStyle returns the inline background colour mirror of the
@@ -407,7 +416,15 @@ type bannerView struct {
 // off the `constant.Tier` enum) — no caller-controlled string ever
 // flows through, so this conversion is the trust boundary.
 func wrapperInlineStyle(c tierColors) template.CSS {
-	return template.CSS("font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;" +
+	// gosec G203 nolint rationale: the only input is `tierColors`,
+	// which is constructed exclusively in `tierColorsFor` from hex
+	// literals keyed off the `constant.Tier` enum (six tiers, six hex
+	// palettes, all source-code constants). No caller-controlled
+	// string can ever reach this template.CSS conversion — the
+	// conversion is the trust boundary, replacing the safeCSS FuncMap
+	// helper that gosec would (correctly) have flagged as a far wider
+	// risk because it accepted any caller-supplied string.
+	return template.CSS("font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;" + //nolint:gosec
 		"font-size:14px;line-height:1.4;padding:12px 16px;margin:8px 0;" +
 		"border-radius:8px;border:1px solid " + c.Border + ";" +
 		"color:" + c.Text + ";background:" + c.Background)
@@ -442,7 +459,11 @@ func buttonInlineStyle(c tierColors, mso bool) template.CSS {
 	} else {
 		base += "mso-padding-alt:0;"
 	}
-	return template.CSS(base)
+	// gosec G203 nolint rationale: inputs are `tierColors` (constructed
+	// exclusively in `tierColorsFor` from hex literals keyed off the
+	// `constant.Tier` enum) and a bool. No caller-controlled string
+	// flows through — the conversion is the trust boundary.
+	return template.CSS(base) //nolint:gosec
 }
 
 // dirFor returns "rtl" for RTL locales and "ltr" otherwise. Always
