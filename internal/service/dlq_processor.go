@@ -95,11 +95,17 @@ type DLQProcessorConfig struct {
 // DefaultSubjects names the DLQ subjects the processor watches by default.
 // Dead-letter subjects live under "es.dlq.<domain>" so the DLQ stream's
 // subject filter (es.dlq.>) does not overlap with the primary streams'
-// wildcards (es.evaluate.>, es.action.>, es.onboarding.>).
+// wildcards (es.evaluate.>, es.action.>, es.onboarding.>,
+// es.education.>). The list must stay in sync with the domains that the
+// consumer-side defaultDLQSubject() helper in pkg/events/nats and
+// pkg/events/redis can route to — otherwise dead-letter messages for
+// the unlisted domain would land in the ES_DLQ stream but never be
+// consumed, accumulating until age-based retention purges them.
 var DefaultSubjects = []string{
 	"es.dlq.evaluate",
 	"es.dlq.action",
 	"es.dlq.onboarding",
+	"es.dlq.education",
 }
 
 // DLQProcessor consumes the ES_DLQ stream and applies the configured
