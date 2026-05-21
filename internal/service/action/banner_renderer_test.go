@@ -833,12 +833,22 @@ func TestBannerRendererMSOCommentsUseNamedHelpers(t *testing.T) {
 	// ChipStyle, IconChipEnd, MSOButtonGap), so neither `safeHTML`
 	// nor `safeCSS` is needed any more. The type system is the trust
 	// boundary, not a FuncMap helper.
-	for _, badFn := range []string{
-		"{{ safeHTML \"x\" }}",
-		"{{ safeCSS \"x\" }}",
+	//
+	// Each probe is given a UNIQUE name so the two Parse calls cannot
+	// interact through Go's template set semantics. `tmpl.New(name)`
+	// returns the *same* *Template object on a repeat call, and
+	// re-parsing into a failed template is implementation-defined; by
+	// using distinct names ("probe_safeHTML", "probe_safeCSS") we
+	// take that variable off the table entirely.
+	for _, bad := range []struct {
+		name string
+		body string
+	}{
+		{"probe_safeHTML", `{{ safeHTML "x" }}`},
+		{"probe_safeCSS", `{{ safeCSS "x" }}`},
 	} {
-		if _, err := r.tmpl.New("probe").Parse(badFn); err == nil {
-			t.Errorf("renderer FuncMap should NOT contain a generic trust-bypass helper, but parsing %q succeeded — a future edit re-introduced the helper", badFn)
+		if _, err := r.tmpl.New(bad.name).Parse(bad.body); err == nil {
+			t.Errorf("renderer FuncMap should NOT contain a generic trust-bypass helper, but parsing %q succeeded — a future edit re-introduced the helper", bad.body)
 		}
 	}
 }
