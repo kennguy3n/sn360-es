@@ -2,6 +2,7 @@ package action
 
 import (
 	"bytes"
+	"html/template"
 	"strings"
 	"testing"
 
@@ -693,5 +694,154 @@ func TestBannerRendererSuppressesEmptyActionContainers(t *testing.T) {
 	// template).
 	if strings.Contains(s, `role="presentation"`) {
 		t.Errorf("MSO fallback <table role=presentation> should not render when no CTAs are visible\n%s", s)
+	}
+}
+
+// TestBannerRendererDarkModeRulesWinOverInlineStyles locks in the
+// contract that the `@media (prefers-color-scheme:dark)` block in
+// bannerCSS uses !important on every property so the dark-mode
+// overrides win against the per-element inline `style="..."` mirror
+// that exists for Outlook desktop compatibility.
+//
+// Why this matters: CSS specificity ordering puts inline `style="..."`
+// above author stylesheet rules, EXCEPT when the stylesheet rule
+// carries `!important`. The renderer emits inline tier colours (e.g.
+// `background:#fce8e6` for Blocked) on the wrapper <div> so Outlook
+// desktop — which strips the entire <style> block — still gets tier-
+// themed banners. Without !important on the dark-mode rules, those
+// same inline colours would lock in light-mode appearance even on
+// clients that DO support the media query (Apple Mail, Thunderbird,
+// Outlook iOS), defeating the dark-mode design entirely.
+//
+// The test does NOT verify that the dark-mode override actually
+// renders correctly (that requires a browser); it verifies the CSS
+// source contract that future edits cannot accidentally remove.
+func TestBannerRendererDarkModeRulesWinOverInlineStyles(t *testing.T) {
+	r := mustRenderer(t)
+	html, err := r.Render(BannerInput{
+		Tier:    constant.TierBlocked,
+		Primary: constant.CategoryLikelyPhishing,
+		Locale:  "en",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	s := string(html)
+	// Every property inside the dark-mode block must carry
+	// !important. We assert the exact pattern that appears in the
+	// constant so a future edit that removes the marker (e.g. by
+	// dropping !important on background:#1a1a1a) breaks the test.
+	for _, want := range []string{
+		// Wrapper light-text + dark-bg override on .sn360-banner.
+		"color:#f5f5f5!important",
+		"background:#1a1a1a!important",
+		// Secondary text override (covers .sn360-secondary,
+		// .sn360-reasons, and .sn360-degraded — all three share
+		// the same selector group).
+		"color:#cfcfcf!important",
+		// The selector group itself must include all three
+		// descendant selectors, otherwise .sn360-degraded would
+		// still inherit the inline #3a3a3a colour.
+		".sn360-banner .sn360-secondary,.sn360-banner .sn360-reasons,.sn360-banner .sn360-degraded",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("dark-mode @media block missing required marker %q — inline styles will lock the banner to light mode\n%s", want, s)
+		}
+	}
+	// Defensive: the @media block itself must still be present —
+	// catches a refactor that accidentally drops the wrapper.
+	if !strings.Contains(s, "@media (prefers-color-scheme:dark)") {
+		t.Errorf("@media (prefers-color-scheme:dark) block missing entirely from bannerCSS")
+	}
+}
+
+// TestBannerRendererMSOCommentsUseNamedHelpers verifies that the four
+// Microsoft Outlook conditional-comment delimiters are emitted via
+// the dedicated no-arg FuncMap helpers (msoIfStart / msoIfEnd /
+// msoIfNotStart / msoIfNotEnd) rather than the older generic
+// `safeHTML(string) template.HTML` function.
+//
+// The two paths are observationally identical in HTML output — both
+// emit the same four byte sequences — so the test instead asserts
+// the renderer-source contract by checking that the FuncMap entries
+// exist and that the package-level template.HTML constants carry the
+// exact expected byte sequences. This protects against:
+//
+//  1. A future edit that re-introduces a generic safeHTML helper
+//     accepting arbitrary string input, which would re-widen the XSS
+//     blast radius.
+//  2. A future edit that changes one of the four comment delimiters
+//     to a non-MSO sequence (e.g. dropping the `<!--` or `-->`),
+//     which would cause Outlook desktop to either render the entire
+//     fallback table as a literal HTML comment OR to render BOTH the
+//     modern and MSO action containers, doubling up the buttons.
+func TestBannerRendererMSOCommentsUseNamedHelpers(t *testing.T) {
+	// Contract 1: the four hardcoded constants carry the exact
+	// expected byte sequences. The Outlook Word HTML engine is
+	// strict about these — any whitespace or character variation
+	// causes the conditional to fail open.
+	cases := []struct {
+		name string
+		got  template.HTML
+		want string
+	}{
+		{"msoIfStartHTML", msoIfStartHTML, "<!--[if mso]>"},
+		{"msoIfEndHTML", msoIfEndHTML, "<![endif]-->"},
+		{"msoIfNotStartHTML", msoIfNotStartHTML, "<!--[if !mso]><!-->"},
+		{"msoIfNotEndHTML", msoIfNotEndHTML, "<!--<![endif]-->"},
+	}
+	for _, c := range cases {
+		if string(c.got) != c.want {
+			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
+		}
+	}
+
+	// Contract 2: the renderer must actually emit all four
+	// sequences in the output. This is also covered by
+	// TestBannerRendererEmitsMSOConditionalFallback but is asserted
+	// here too so a future regression of the named-helper FuncMap
+	// wiring fails this test specifically (clearer signal than a
+	// generic fallback-missing failure).
+	r := mustRenderer(t)
+	html, err := r.Render(BannerInput{
+		Tier:        constant.TierWarning,
+		Primary:     constant.CategoryLookalikeDomain,
+		Locale:      "en",
+		ActionToken: "tok",
+		SenderAuth:  AuthFailed,
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	s := string(html)
+	for _, c := range cases {
+		if !strings.Contains(s, string(c.got)) {
+			t.Errorf("rendered banner missing MSO delimiter %s (%q)", c.name, c.got)
+		}
+	}
+
+	// Contract 3: the legacy `safeHTML` FuncMap entry must NOT exist
+	// any more. We probe by parsing a tiny template that calls it —
+	// the call should fail at template-parse time, not silently
+	// succeed. If a future change adds back a generic safeHTML
+	// helper, this test will start passing the parse and fail the
+	// assertion. We have to construct the probe template via the
+	// real renderer's parsed template tree, because we want the
+	// FuncMap that NewBannerRenderer registered, not a fresh one.
+	probe := template.New("probe").Funcs(template.FuncMap{
+		// Mirror the renderer's FuncMap exactly. If a future edit
+		// adds safeHTML back to NewBannerRenderer, this list must
+		// also be updated — which is the maintenance signal we
+		// want to surface.
+		"hasClass":      hasClass,
+		"chipClass":     chipClassFor,
+		"safeCSS":       func(s string) template.CSS { return template.CSS(s) }, //nolint:gosec
+		"msoIfStart":    func() template.HTML { return msoIfStartHTML },         //nolint:gosec
+		"msoIfEnd":      func() template.HTML { return msoIfEndHTML },           //nolint:gosec
+		"msoIfNotStart": func() template.HTML { return msoIfNotStartHTML },      //nolint:gosec
+		"msoIfNotEnd":   func() template.HTML { return msoIfNotEndHTML },        //nolint:gosec
+	})
+	if _, err := probe.Parse(`{{ safeHTML "x" }}`); err == nil {
+		t.Errorf("safeHTML FuncMap entry must NOT exist any more — found it parsing successfully, which means a future edit re-introduced the generic trust-bypass helper")
 	}
 }

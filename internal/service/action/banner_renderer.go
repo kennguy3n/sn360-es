@@ -222,15 +222,25 @@ func NewBannerRenderer(tr Translator) (*BannerRenderer, error) {
 		// names returned by chipClassFor. Neither is attacker-
 		// controlled. The G203 finding is therefore a false positive.
 		"safeCSS": func(s string) template.CSS { return template.CSS(s) }, //nolint:gosec
-		// safeHTML is used solely to emit the four hardcoded Microsoft
-		// Outlook conditional-comment delimiters (`<!--[if mso]>`,
-		// `<![endif]-->`, `<!--[if !mso]><!-->`, `<!--<![endif]-->`)
-		// that bracket the Outlook-desktop fallback table. Go's
-		// html/template package strips HTML comments by default, which
-		// would silently drop the entire fallback path. Every caller
-		// in bannerTemplate passes a string literal that comes from
-		// this file — none of the input is attacker-controlled.
-		"safeHTML": func(s string) template.HTML { return template.HTML(s) }, //nolint:gosec
+		// The four Microsoft Outlook conditional-comment delimiters
+		// that bracket the Outlook-desktop fallback table are emitted
+		// via dedicated no-arg helpers (msoIfStart / msoIfEnd /
+		// msoIfNotStart / msoIfNotEnd). Each helper returns a hardcoded
+		// template.HTML constant declared in this file, so there is no
+		// way for a future template edit to pipe attacker-controlled
+		// data through the same trust-bypass — the function signatures
+		// accept no arguments at all. This intentionally replaces the
+		// older generic `safeHTML(string) template.HTML` helper, which
+		// would have allowed any string to be marked safe and widened
+		// the XSS blast radius if misused. Go's html/template package
+		// strips HTML comments by default, which is why we have to
+		// inject these four delimiters via template.HTML at all — the
+		// `<style>` block is also kept verbatim through template.HTML
+		// for the same reason (the FuncMap-side helper is below).
+		"msoIfStart":    func() template.HTML { return msoIfStartHTML },    //nolint:gosec
+		"msoIfEnd":      func() template.HTML { return msoIfEndHTML },      //nolint:gosec
+		"msoIfNotStart": func() template.HTML { return msoIfNotStartHTML }, //nolint:gosec
+		"msoIfNotEnd":   func() template.HTML { return msoIfNotEndHTML },   //nolint:gosec
 	}).Parse(bannerTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("banner: parse template: %w", err)
@@ -446,14 +456,48 @@ func hasClass(class string, classes ...string) bool {
 	return false
 }
 
+// msoIfStartHTML / msoIfEndHTML / msoIfNotStartHTML / msoIfNotEndHTML are
+// the four hardcoded Microsoft Outlook conditional-comment delimiters
+// that bracket the Outlook-desktop fallback `<table>` of action buttons.
+//
+// They are declared as package-level `template.HTML` constants and
+// emitted via the no-arg FuncMap helpers `msoIfStart`, `msoIfEnd`,
+// `msoIfNotStart`, and `msoIfNotEnd` (see NewBannerRenderer). Using a
+// closed set of no-arg helpers — instead of a generic
+// `safeHTML(string) template.HTML` function — means there is no way
+// for a future template edit to pipe attacker-controlled data through
+// the same trust-bypass: the helpers accept no arguments at all.
+//
+// Go's `html/template` package strips HTML comments by default, so
+// these markers must be injected as `template.HTML` (rather than as
+// literal template text) to survive parsing. Outside of Outlook
+// desktop these markers are invisible HTML comments and add 49 bytes
+// of payload — the cost of cross-client correctness for the ~50% of
+// business inboxes that still use Outlook 2016/2019/2021.
+const (
+	msoIfStartHTML    template.HTML = "<!--[if mso]>"
+	msoIfEndHTML      template.HTML = "<![endif]-->"
+	msoIfNotStartHTML template.HTML = "<!--[if !mso]><!-->"
+	msoIfNotEndHTML   template.HTML = "<!--<![endif]-->"
+)
+
 // bannerCSS is the inline stylesheet shared by all banner tiers. It is
 // declared separately so the Go file can use a single backtick-quoted
 // string without nesting (Go does not allow nested backtick literals).
 //
 // All color combinations satisfy WCAG 2.1 AA contrast (4.5:1 for normal
-// text, 3:1 for large text and graphical objects). Text colors are
-// darkened relative to the v1 palette so the contrast targets are met
-// in both light and dark modes.
+// text, 3:1 for large text and graphical objects).
+//
+// Dark-mode overrides inside `@media (prefers-color-scheme:dark)` use
+// !important so they win against the per-element inline `style="..."`
+// mirror that exists for Outlook desktop compatibility. Without
+// !important, the inline-style specificity would lock the banner to
+// light-mode colours regardless of the user's system theme on clients
+// that honour the media query (Apple Mail, Thunderbird, Outlook iOS).
+// Outlook 2016 / 2019 / 2021 desktop strips the @media block entirely
+// and renders the light-mode inline-style colours — that path is
+// unchanged because Outlook desktop does not support
+// prefers-color-scheme anyway.
 const bannerCSS = `.sn360-banner{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;font-size:14px;line-height:1.4;border-radius:8px;padding:12px 16px;margin:8px 0;border:1px solid transparent;color:#0a0a0a;background:#f5f5f5}
 .sn360-banner h1{font-size:14px;font-weight:700;margin:0 0 4px 0;letter-spacing:0.01em}
 .sn360-banner p{margin:0 0 6px 0}
@@ -485,7 +529,7 @@ const bannerCSS = `.sn360-banner{font-family:-apple-system,BlinkMacSystemFont,Se
 .sn360-trusted .sn360-actions a{background:#08642f}
 .sn360-degraded{color:#3a3a3a;font-size:11px;margin-top:6px;font-style:italic}
 .sn360-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-@media (prefers-color-scheme:dark){.sn360-banner{color:#f5f5f5;background:#1a1a1a}.sn360-banner .sn360-secondary,.sn360-banner .sn360-reasons,.sn360-degraded{color:#cfcfcf}}`
+@media (prefers-color-scheme:dark){.sn360-banner{color:#f5f5f5!important;background:#1a1a1a!important}.sn360-banner .sn360-secondary,.sn360-banner .sn360-reasons,.sn360-banner .sn360-degraded{color:#cfcfcf!important}}`
 
 // bannerTemplate is the single self-contained template used for all
 // tiers. Variants are switched purely via CSS class. The template
@@ -540,22 +584,22 @@ var bannerTemplate = `<style>` + bannerCSS + `</style>
   {{ if .ReasonCodes }}<p class="sn360-reasons" style="color:#3a3a3a;font-size:12px;margin-top:4px;font-style:italic">{{ range $i, $r := .ReasonCodes }}{{ if $i }} · {{ end }}{{ $r }}{{ end }}</p>{{ end }}
   {{ if .AuthLabel }}<p style="margin:0 0 6px 0"><span class="{{ chipClass .AuthVerdict }}" style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;{{ safeCSS .IconChipEnd }};vertical-align:middle;{{ safeCSS .ChipStyle }}" role="img" aria-label="{{ .AuthLabel }}">{{ .AuthLabel }}</span>{{ if .SenderDomain }} <span class="sn360-secondary" style="color:#3a3a3a;font-size:12px">{{ .SenderDomain }}</span>{{ end }}</p>{{ end }}
   {{ if or .ShowReport .ShowMarkSafe .ShowTrust .MicroLesson }}
-  {{ safeHTML "<!--[if !mso]><!-->" }}
+  {{ msoIfNotStart }}
   <div class="sn360-actions" role="group" aria-label="{{ .AriaLabel }}" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px">
     {{ if .ShowReport }}<a href="https://l.sn360.io/action/report_phishing?token={{ .ActionToken }}" aria-label="{{ .ReportLabel }}" style="{{ safeCSS .ButtonStyle }}">{{ .ReportLabel }}</a>{{ end }}
     {{ if .ShowMarkSafe }}<a href="https://l.sn360.io/action/mark_safe?token={{ .ActionToken }}" aria-label="{{ .MarkSafeLabel }}" style="{{ safeCSS .ButtonStyle }}">{{ .MarkSafeLabel }}</a>{{ end }}
     {{ if .ShowTrust }}<a href="https://l.sn360.io/action/trust_sender?token={{ .ActionToken }}" aria-label="{{ .TrustLabel }}" style="{{ safeCSS .ButtonStyle }}">{{ .TrustLabel }}</a>{{ end }}
     {{ if .MicroLesson }}<a href="{{ .MicroLesson }}" aria-label="{{ .LearnLabel }}" style="{{ safeCSS .ButtonStyle }}">{{ .LearnLabel }}</a>{{ end }}
   </div>
-  {{ safeHTML "<!--<![endif]-->" }}
-  {{ safeHTML "<!--[if mso]>" }}
+  {{ msoIfNotEnd }}
+  {{ msoIfStart }}
   <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;border-collapse:collapse" aria-hidden="true"><tr>
     {{ if .ShowReport }}<td style="{{ safeCSS .MSOButtonGap }}"><a href="https://l.sn360.io/action/report_phishing?token={{ .ActionToken }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .ReportLabel }}</a></td>{{ end }}
     {{ if .ShowMarkSafe }}<td style="{{ safeCSS .MSOButtonGap }}"><a href="https://l.sn360.io/action/mark_safe?token={{ .ActionToken }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .MarkSafeLabel }}</a></td>{{ end }}
     {{ if .ShowTrust }}<td style="{{ safeCSS .MSOButtonGap }}"><a href="https://l.sn360.io/action/trust_sender?token={{ .ActionToken }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .TrustLabel }}</a></td>{{ end }}
     {{ if .MicroLesson }}<td style="{{ safeCSS .MSOButtonGap }}"><a href="{{ .MicroLesson }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .LearnLabel }}</a></td>{{ end }}
   </tr></table>
-  {{ safeHTML "<![endif]-->" }}
+  {{ msoIfEnd }}
   {{ end }}
   {{ if .Degraded }}<p class="sn360-degraded" style="color:#3a3a3a;font-size:11px;margin-top:6px;font-style:italic">{{ .DegradedLabel }}</p>{{ end }}
 </div>
