@@ -85,21 +85,35 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if or .Values.affinity (and .Values.podHA .Values.podHA.enabled) }}
+      {{- /*
+        Build the final affinity dict by deep-merging the chart's
+        auto-generated podAntiAffinity preferred rule into whatever
+        the operator supplied via .Values.affinity. We MUST do the
+        merge in Helm dict-space (not by rendering both halves under
+        a single `affinity:` key with toYaml) — emitting
+        `podAntiAffinity:` twice produces a YAML document with
+        duplicate mapping keys, and kubectl silently drops the user's
+        rules. mustMerge prefers values from the FIRST dict it sees,
+        so the operator's preferred-list is preserved and the chart's
+        rule is appended only when the operator did NOT already
+        provide one for this hostname spread.
+      */ -}}
+      {{- $haOn := and .Values.podHA .Values.podHA.enabled -}}
+      {{- $aff := deepCopy (default (dict) .Values.affinity) -}}
+      {{- if $haOn -}}
+        {{- $haPref := dict "weight" (int .Values.podHA.podAntiAffinity.weight)
+              "podAffinityTerm" (dict
+                "labelSelector" (dict "matchLabels" (fromYaml (include "sn360-es.selectorLabels" .)))
+                "topologyKey" .Values.podHA.podAntiAffinity.topologyKey) -}}
+        {{- $existingPA := default (dict) (get $aff "podAntiAffinity") -}}
+        {{- $existingPref := default (list) (get $existingPA "preferredDuringSchedulingIgnoredDuringExecution") -}}
+        {{- $mergedPref := append $existingPref $haPref -}}
+        {{- $_ := set $existingPA "preferredDuringSchedulingIgnoredDuringExecution" $mergedPref -}}
+        {{- $_ := set $aff "podAntiAffinity" $existingPA -}}
+      {{- end }}
+      {{- if $aff }}
       affinity:
-        {{- with .Values.affinity }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
-        {{- if and .Values.podHA .Values.podHA.enabled }}
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: {{ .Values.podHA.podAntiAffinity.weight }}
-              podAffinityTerm:
-                labelSelector:
-                  matchLabels:
-                    {{- include "sn360-es.selectorLabels" . | nindent 20 }}
-                topologyKey: {{ .Values.podHA.podAntiAffinity.topologyKey }}
-        {{- end }}
+        {{- toYaml $aff | nindent 8 }}
       {{- end }}
       {{- if or .Values.topologySpreadConstraints (and .Values.podHA .Values.podHA.enabled) }}
       topologySpreadConstraints:
