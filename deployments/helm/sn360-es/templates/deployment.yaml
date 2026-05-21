@@ -86,17 +86,29 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- /*
-        Build the final affinity dict by deep-merging the chart's
-        auto-generated podAntiAffinity preferred rule into whatever
-        the operator supplied via .Values.affinity. We MUST do the
-        merge in Helm dict-space (not by rendering both halves under
-        a single `affinity:` key with toYaml) — emitting
-        `podAntiAffinity:` twice produces a YAML document with
+        Build the final affinity dict by merging the chart's
+        auto-generated podAntiAffinity rule into whatever the operator
+        supplied via .Values.affinity. We MUST do the merge in Helm
+        dict-space (not by rendering both halves under a single
+        `affinity:` key with two `toYaml`s) — emitting
+        `podAntiAffinity:` twice would produce a YAML document with
         duplicate mapping keys, and kubectl silently drops the user's
-        rules. mustMerge prefers values from the FIRST dict it sees,
-        so the operator's preferred-list is preserved and the chart's
-        rule is appended only when the operator did NOT already
-        provide one for this hostname spread.
+        rules.
+
+        Merge semantics:
+          1. deepCopy .Values.affinity so we never mutate the values
+             tree (Helm reuses the same object across renders).
+          2. Append the chart's HA rule to
+             podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution
+             — the operator's preferred-list (and any other affinity
+             keys like nodeAffinity / podAffinity / required rules)
+             pass through intact. The chart's rule is appended
+             UNCONDITIONALLY when podHA is on; if the operator also
+             provided a hostname-spread preferred rule of their own,
+             both entries coexist (Kubernetes treats duplicate
+             preferred rules as reinforcement, which is harmless and
+             safer than trying to deep-equal-compare topologyKey +
+             labelSelector to dedup them in template logic).
       */ -}}
       {{- $haOn := and .Values.podHA .Values.podHA.enabled -}}
       {{- $aff := deepCopy (default (dict) .Values.affinity) -}}
