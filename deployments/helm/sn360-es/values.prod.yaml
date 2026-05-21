@@ -39,3 +39,30 @@ serviceMonitor:
   enabled: true
 ingress:
   enabled: false
+# Spread replicas across availability zones so a single zonal outage
+# never takes the entire fleet offline. DoNotSchedule is deliberate:
+# the HPA may want to add a fourth replica, but if there are only
+# three zones available it would land on an over-loaded zone, which
+# defeats the purpose of HA. maxSkew=1 keeps the distribution tight
+# without preventing scale-up when zones are healthy.
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: sn360-es
+# Pod anti-affinity is a hostname-level companion to the zonal
+# spread above: prefer (not require) different nodes per replica so
+# a single node loss does not evict half the fleet. Preferred rather
+# than required so a tightly-packed cluster can still schedule new
+# replicas during a burst.
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: sn360-es
+          topologyKey: kubernetes.io/hostname
