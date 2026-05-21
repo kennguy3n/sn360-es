@@ -578,6 +578,92 @@ func TestBannerRendererAuthUnknownChipClassIsConsistent(t *testing.T) {
 	}
 }
 
+// TestBannerRendererInlineRTLEndSide locks in that the icon margin,
+// chip margin, and MSO-fallback <td> padding flip from the right side
+// to the left side in RTL locales. Inline style attributes win over
+// the .sn360-banner[dir="rtl"] CSS overrides, and Outlook desktop's
+// Word HTML engine has no CSS-logical-property support — meaning the
+// only way to express "end-side margin/padding" portably is to compute
+// the physical side in Go. Without this, RTL deployments (Arabic,
+// Hebrew, Farsi) would render the icon + chip + MSO-button gap on the
+// wrong side in Outlook desktop while looking correct in every other
+// client (because non-Outlook clients still get the CSS override).
+//
+// We assert the RTL output:
+//   - contains margin-left:6px (for icon + chip)
+//   - contains padding-left:8px (for MSO <td>)
+//   - does NOT contain hardcoded margin-right:6px or padding-right:8px
+//     in the inline-style attributes (the CSS string in <style> still
+//     legitimately has margin-right rules for the LTR default — we
+//     only check the inline-style attributes by anchoring on the
+//     surrounding inline-only context).
+func TestBannerRendererInlineRTLEndSide(t *testing.T) {
+	r := mustRenderer(t)
+	html, err := r.Render(BannerInput{
+		Tier:        constant.TierWarning,
+		Primary:     constant.CategoryLikelyPhishing,
+		Locale:      "ar",
+		SenderAuth:  AuthFailed,
+		ActionToken: "tok",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	s := string(html)
+	if !strings.Contains(s, `dir="rtl"`) {
+		t.Fatalf("expected dir=rtl on root for ar locale\n%s", s)
+	}
+	// Icon inline style: must use margin-left.
+	if !strings.Contains(s, `<span class="sn360-icon" aria-hidden="true" style="display:inline-block;margin-left:6px;`) {
+		t.Errorf("RTL: icon inline style should use margin-left:6px instead of margin-right:6px\n%s", s)
+	}
+	// Chip inline style: must use margin-left after font-weight:700.
+	if !strings.Contains(s, `font-weight:700;margin-left:6px;vertical-align:middle;`) {
+		t.Errorf("RTL: chip inline style should use margin-left:6px instead of margin-right:6px\n%s", s)
+	}
+	// MSO fallback <td> elements: must use padding-left:8px instead of
+	// padding-right:8px so the inter-button gap appears on the correct
+	// side in Outlook desktop's Word engine (which has no CSS logical
+	// property support and no [dir="rtl"] selector inheritance through
+	// the conditional-comment fallback table).
+	if !strings.Contains(s, `<td style="padding-left:8px">`) {
+		t.Errorf("RTL: MSO fallback <td> should use padding-left:8px instead of padding-right:8px\n%s", s)
+	}
+	if strings.Contains(s, `<td style="padding-right:8px">`) {
+		t.Errorf("RTL: stray padding-right:8px <td> attribute should not appear in RTL output\n%s", s)
+	}
+}
+
+// TestBannerRendererInlineLTREndSide is the LTR counterpart to the
+// RTL test above and exists so a future refactor cannot accidentally
+// flip the LTR default by treating the RTL path as the only branch.
+func TestBannerRendererInlineLTREndSide(t *testing.T) {
+	r := mustRenderer(t)
+	html, err := r.Render(BannerInput{
+		Tier:        constant.TierWarning,
+		Primary:     constant.CategoryLikelyPhishing,
+		Locale:      "en",
+		SenderAuth:  AuthFailed,
+		ActionToken: "tok",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	s := string(html)
+	if !strings.Contains(s, `dir="ltr"`) {
+		t.Fatalf("expected dir=ltr on root for en locale\n%s", s)
+	}
+	if !strings.Contains(s, `<span class="sn360-icon" aria-hidden="true" style="display:inline-block;margin-right:6px;`) {
+		t.Errorf("LTR: icon inline style should use margin-right:6px\n%s", s)
+	}
+	if !strings.Contains(s, `font-weight:700;margin-right:6px;vertical-align:middle;`) {
+		t.Errorf("LTR: chip inline style should use margin-right:6px\n%s", s)
+	}
+	if !strings.Contains(s, `<td style="padding-right:8px">`) {
+		t.Errorf("LTR: MSO fallback <td> should use padding-right:8px\n%s", s)
+	}
+}
+
 // TestBannerRendererSuppressesEmptyActionContainers verifies that
 // when no interactive CTAs are visible (no ActionToken supplied AND
 // no MicroLessonURL), neither the modern <div class="sn360-actions">

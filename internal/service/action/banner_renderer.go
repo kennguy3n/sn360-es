@@ -103,6 +103,30 @@ func tierColorsFor(t constant.Tier) tierColors {
 	return tierColors{"#f5f5f5", "transparent", "#0a0a0a", "#262626", "#ffffff"}
 }
 
+// inlineEndMargin / inlineEndPadding return the right-or-left inline
+// margin / padding declaration based on text direction. We need these
+// because inline style attributes win over the
+// `.sn360-banner[dir="rtl"] .sn360-icon{margin-right:0;margin-left:6px}`
+// CSS overrides — meaning a hardcoded `margin-right:6px` inline style
+// would always mirror the icon/chip on the wrong side in RTL locales,
+// and the CSS override couldn't take it back. The Word HTML engine in
+// Outlook desktop additionally has no CSS-logical-property support, so
+// the only portable way to express "end-side margin" is to compute the
+// physical side in Go.
+func inlineEndMargin(rtl bool, px int) string {
+	if rtl {
+		return fmt.Sprintf("margin-left:%dpx", px)
+	}
+	return fmt.Sprintf("margin-right:%dpx", px)
+}
+
+func inlineEndPadding(rtl bool, px int) string {
+	if rtl {
+		return fmt.Sprintf("padding-left:%dpx", px)
+	}
+	return fmt.Sprintf("padding-right:%dpx", px)
+}
+
 // chipInlineStyle returns the inline background colour mirror of the
 // .sn360-chip-* CSS classes in bannerCSS. Used so Outlook desktop
 // renders the auth-verdict chip with the correct colour even when the
@@ -231,6 +255,7 @@ func (r *BannerRenderer) Render(in BannerInput) ([]byte, error) {
 	// The micro-lesson link is unrelated to feedback and stays visible.
 	hasToken := in.ActionToken != ""
 	colors := tierColorsFor(in.Tier)
+	rtl := isRTLLocale(locale)
 	view := bannerView{
 		Tier:           in.Tier,
 		TierClass:      tierClassFor(in.Tier),
@@ -238,6 +263,8 @@ func (r *BannerRenderer) Render(in BannerInput) ([]byte, error) {
 		ButtonStyle:    buttonInlineStyle(colors, false),
 		ButtonStyleMSO: buttonInlineStyle(colors, true),
 		ChipStyle:      chipInlineStyle(in.SenderAuth),
+		IconChipEnd:    inlineEndMargin(rtl, 6),
+		MSOButtonGap:   inlineEndPadding(rtl, 8),
 		Title:          title,
 		Body:           r.tr.Translate(locale, "tier."+string(in.Tier)+".body"),
 		Primary:        in.Primary,
@@ -285,33 +312,46 @@ type bannerView struct {
 	ButtonStyle    string
 	ButtonStyleMSO string
 	ChipStyle      string
-	Title          string
-	Body           string
-	Primary        constant.Category
-	PrimaryCopy    string
-	Secondary      []constant.Category
-	SecondaryCopy  []string
-	ReasonCodes    []string
-	AuthVerdict    AuthVerdict
-	AuthLabel      string
-	SenderDisplay  string
-	SenderDomain   string
-	Locale         string
-	Dir            string
-	AriaRole       string
-	AriaLabel      string
-	IconGlyph      string
-	ActionToken    string
-	ShowReport     bool
-	ShowMarkSafe   bool
-	ShowTrust      bool
-	MicroLesson    string
-	Degraded       bool
-	ReportLabel    string
-	MarkSafeLabel  string
-	TrustLabel     string
-	LearnLabel     string
-	DegradedLabel  string
+	// IconChipEnd is the inline end-side margin used for the icon
+	// and auth-verdict chip — `margin-right:6px` for LTR locales and
+	// `margin-left:6px` for RTL. Inline styles win over the CSS
+	// `[dir="rtl"]` overrides, so the physical side must be computed
+	// in Go (Outlook desktop's Word engine has no CSS-logical-
+	// property support either, so `margin-inline-end` is not an
+	// option).
+	IconChipEnd string
+	// MSOButtonGap is the inline end-side padding used on each <td>
+	// in the Outlook fallback table to space the action buttons —
+	// `padding-right:8px` LTR / `padding-left:8px` RTL. Same
+	// rationale as IconChipEnd above.
+	MSOButtonGap  string
+	Title         string
+	Body          string
+	Primary       constant.Category
+	PrimaryCopy   string
+	Secondary     []constant.Category
+	SecondaryCopy []string
+	ReasonCodes   []string
+	AuthVerdict   AuthVerdict
+	AuthLabel     string
+	SenderDisplay string
+	SenderDomain  string
+	Locale        string
+	Dir           string
+	AriaRole      string
+	AriaLabel     string
+	IconGlyph     string
+	ActionToken   string
+	ShowReport    bool
+	ShowMarkSafe  bool
+	ShowTrust     bool
+	MicroLesson   string
+	Degraded      bool
+	ReportLabel   string
+	MarkSafeLabel string
+	TrustLabel    string
+	LearnLabel    string
+	DegradedLabel string
 }
 
 // wrapperInlineStyle composes the wrapper-element inline style that
@@ -493,12 +533,12 @@ const bannerCSS = `.sn360-banner{font-family:-apple-system,BlinkMacSystemFont,Se
 //     flexbox <div role="group"> path. No duplicate-announcement risk.
 var bannerTemplate = `<style>` + bannerCSS + `</style>
 <div class="{{ .TierClass }}" style="{{ safeCSS .WrapperStyle }}" role="{{ .AriaRole }}" aria-label="{{ .AriaLabel }}" dir="{{ .Dir }}" data-sn360-tier="{{ .Tier }}" data-sn360-locale="{{ .Locale }}">
-  <h1 style="font-size:14px;font-weight:700;margin:0 0 4px 0;letter-spacing:0.01em">{{ if .IconGlyph }}<span class="sn360-icon" aria-hidden="true" style="display:inline-block;margin-right:6px;font-size:16px;line-height:1;vertical-align:middle;font-weight:700">{{ .IconGlyph }}</span>{{ end }}<span class="sn360-sr-only" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0">{{ .AriaLabel }}: </span>{{ .Title }}</h1>
+  <h1 style="font-size:14px;font-weight:700;margin:0 0 4px 0;letter-spacing:0.01em">{{ if .IconGlyph }}<span class="sn360-icon" aria-hidden="true" style="display:inline-block;{{ safeCSS .IconChipEnd }};font-size:16px;line-height:1;vertical-align:middle;font-weight:700">{{ .IconGlyph }}</span>{{ end }}<span class="sn360-sr-only" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0">{{ .AriaLabel }}: </span>{{ .Title }}</h1>
   <p style="margin:0 0 6px 0">{{ .Body }}</p>
   {{ if .PrimaryCopy }}<p style="margin:0 0 6px 0"><strong>{{ .PrimaryCopy }}</strong></p>{{ end }}
   {{ if .SecondaryCopy }}<p class="sn360-secondary" style="color:#3a3a3a;font-size:12px;margin-top:4px">{{ range $i, $s := .SecondaryCopy }}{{ if $i }} · {{ end }}{{ $s }}{{ end }}</p>{{ end }}
   {{ if .ReasonCodes }}<p class="sn360-reasons" style="color:#3a3a3a;font-size:12px;margin-top:4px;font-style:italic">{{ range $i, $r := .ReasonCodes }}{{ if $i }} · {{ end }}{{ $r }}{{ end }}</p>{{ end }}
-  {{ if .AuthLabel }}<p style="margin:0 0 6px 0"><span class="{{ chipClass .AuthVerdict }}" style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;margin-right:6px;vertical-align:middle;{{ safeCSS .ChipStyle }}" role="img" aria-label="{{ .AuthLabel }}">{{ .AuthLabel }}</span>{{ if .SenderDomain }} <span class="sn360-secondary" style="color:#3a3a3a;font-size:12px">{{ .SenderDomain }}</span>{{ end }}</p>{{ end }}
+  {{ if .AuthLabel }}<p style="margin:0 0 6px 0"><span class="{{ chipClass .AuthVerdict }}" style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;{{ safeCSS .IconChipEnd }};vertical-align:middle;{{ safeCSS .ChipStyle }}" role="img" aria-label="{{ .AuthLabel }}">{{ .AuthLabel }}</span>{{ if .SenderDomain }} <span class="sn360-secondary" style="color:#3a3a3a;font-size:12px">{{ .SenderDomain }}</span>{{ end }}</p>{{ end }}
   {{ if or .ShowReport .ShowMarkSafe .ShowTrust .MicroLesson }}
   {{ safeHTML "<!--[if !mso]><!-->" }}
   <div class="sn360-actions" role="group" aria-label="{{ .AriaLabel }}" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px">
@@ -510,10 +550,10 @@ var bannerTemplate = `<style>` + bannerCSS + `</style>
   {{ safeHTML "<!--<![endif]-->" }}
   {{ safeHTML "<!--[if mso]>" }}
   <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;border-collapse:collapse" aria-hidden="true"><tr>
-    {{ if .ShowReport }}<td style="padding-right:8px"><a href="https://l.sn360.io/action/report_phishing?token={{ .ActionToken }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .ReportLabel }}</a></td>{{ end }}
-    {{ if .ShowMarkSafe }}<td style="padding-right:8px"><a href="https://l.sn360.io/action/mark_safe?token={{ .ActionToken }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .MarkSafeLabel }}</a></td>{{ end }}
-    {{ if .ShowTrust }}<td style="padding-right:8px"><a href="https://l.sn360.io/action/trust_sender?token={{ .ActionToken }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .TrustLabel }}</a></td>{{ end }}
-    {{ if .MicroLesson }}<td style="padding-right:8px"><a href="{{ .MicroLesson }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .LearnLabel }}</a></td>{{ end }}
+    {{ if .ShowReport }}<td style="{{ safeCSS .MSOButtonGap }}"><a href="https://l.sn360.io/action/report_phishing?token={{ .ActionToken }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .ReportLabel }}</a></td>{{ end }}
+    {{ if .ShowMarkSafe }}<td style="{{ safeCSS .MSOButtonGap }}"><a href="https://l.sn360.io/action/mark_safe?token={{ .ActionToken }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .MarkSafeLabel }}</a></td>{{ end }}
+    {{ if .ShowTrust }}<td style="{{ safeCSS .MSOButtonGap }}"><a href="https://l.sn360.io/action/trust_sender?token={{ .ActionToken }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .TrustLabel }}</a></td>{{ end }}
+    {{ if .MicroLesson }}<td style="{{ safeCSS .MSOButtonGap }}"><a href="{{ .MicroLesson }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .LearnLabel }}</a></td>{{ end }}
   </tr></table>
   {{ safeHTML "<![endif]-->" }}
   {{ end }}
