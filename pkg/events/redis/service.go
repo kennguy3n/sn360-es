@@ -207,11 +207,11 @@ func (s *Service) Publish(ctx context.Context, subject string, data []byte, opts
 
 	var lastErr error
 	for i := 1; i <= attempts; i++ {
-		if _, err := s.client.XAdd(ctx, args).Result(); err == nil {
+		_, err := s.client.XAdd(ctx, args).Result()
+		if err == nil {
 			return nil
-		} else {
-			lastErr = err
 		}
+		lastErr = err
 		if errors.Is(lastErr, context.Canceled) || errors.Is(lastErr, context.DeadlineExceeded) {
 			return lastErr
 		}
@@ -433,7 +433,7 @@ func (s *subscription) runClaim(ctx context.Context) {
 	ticker := time.NewTicker(orDefault(s.service.cfg.PendingMinIdle, 30*time.Second))
 	defer ticker.Stop()
 
-	var cursor string = "0-0"
+	cursor := "0-0"
 	for {
 		select {
 		case <-ctx.Done():

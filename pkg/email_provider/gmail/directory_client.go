@@ -240,10 +240,10 @@ func (c *DirectoryClient) ListUsers(ctx context.Context, tenantID string) ([]age
 	return out, nil
 }
 
-// ListUsersSince returns users modified after the given timestamp.
+// listUsersSince returns users modified after the given timestamp.
 // The Admin SDK supports filtering users by updatedMin parameter.
 // Deleted users are included when showDeleted=true.
-func (c *DirectoryClient) ListUsersSince(ctx context.Context, since time.Time) ([]directoryUser, error) {
+func (c *DirectoryClient) listUsersSince(ctx context.Context, since time.Time) ([]directoryUser, error) {
 	var rawUsers []directoryUser
 	page := ""
 	for {
@@ -298,7 +298,7 @@ func (c *DirectoryClient) ListUsersDelta(ctx context.Context, tenantID string, d
 		return users, syncStart.Format(time.RFC3339), nil
 	}
 
-	rawUsers, err := c.ListUsersSince(ctx, since)
+	rawUsers, err := c.listUsersSince(ctx, since)
 	if err != nil {
 		return nil, "", fmt.Errorf("gmail: delta sync: %w", err)
 	}

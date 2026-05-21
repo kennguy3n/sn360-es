@@ -308,11 +308,10 @@ func (j *DirectorySyncJob) fetchUsers(ctx context.Context, tenantID string) ([]a
 	}
 
 	// Determine provider name for checkpoint key.
-	provider := "unknown"
-	switch j.cfg.Directory.(type) {
-	case interface{ Kind() string }:
-		provider = j.cfg.Directory.(interface{ Kind() string }).Kind()
-	default:
+	var provider string
+	if kinder, ok := j.cfg.Directory.(interface{ Kind() string }); ok {
+		provider = kinder.Kind()
+	} else {
 		// Heuristic: package path would distinguish, but using a
 		// simple type name suffix for now.
 		provider = fmt.Sprintf("%T", j.cfg.Directory)

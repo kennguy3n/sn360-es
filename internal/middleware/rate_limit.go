@@ -263,8 +263,8 @@ func (b *bucket) take(now time.Time, rate float64, burst int) bool {
 	elapsed := now.Sub(b.lastFill).Seconds()
 	if elapsed > 0 {
 		b.tokens += elapsed * rate
-		if max := float64(burst); b.tokens > max {
-			b.tokens = max
+		if ceiling := float64(burst); b.tokens > ceiling {
+			b.tokens = ceiling
 		}
 		b.lastFill = now
 	}

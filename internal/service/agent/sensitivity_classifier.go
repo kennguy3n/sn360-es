@@ -213,15 +213,6 @@ func KeywordClassifyInput(u UserClassifyInput) Sensitivity {
 	return SensitivityDefault
 }
 
-func containsAnyInput(haystack string, needles ...string) bool {
-	for _, n := range needles {
-		if strings.Contains(haystack, n) {
-			return true
-		}
-	}
-	return false
-}
-
 // ClassifyResult is the output of sensitivity classification.
 type ClassifyResult struct {
 	Sensitivity Sensitivity
@@ -592,11 +583,14 @@ func classifyCacheKey(u UserClassifyInput) string {
 	h, _ := blake2b.New256(nil)
 	// Length-prefixed encoding prevents field-boundary collisions
 	// (e.g. Title="VP|Finance" vs Title="VP", Dept="Finance").
-	fmt.Fprintf(h, "%d:%s", len(u.JobTitle), u.JobTitle)
-	fmt.Fprintf(h, "%d:%s", len(u.Department), u.Department)
-	fmt.Fprintf(h, "%d:%s", len(u.DisplayName), u.DisplayName)
+	// hash.Hash.Write is documented to never error, but fmt.Fprintf
+	// still surfaces it through the io.Writer contract — discard
+	// explicitly so errcheck stops flagging the call sites.
+	_, _ = fmt.Fprintf(h, "%d:%s", len(u.JobTitle), u.JobTitle)
+	_, _ = fmt.Fprintf(h, "%d:%s", len(u.Department), u.Department)
+	_, _ = fmt.Fprintf(h, "%d:%s", len(u.DisplayName), u.DisplayName)
 	for _, g := range u.GroupNames {
-		fmt.Fprintf(h, "%d:%s", len(g), g)
+		_, _ = fmt.Fprintf(h, "%d:%s", len(g), g)
 	}
 	if u.IsAdmin {
 		h.Write([]byte("admin"))

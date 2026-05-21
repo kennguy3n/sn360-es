@@ -360,14 +360,14 @@ func TestQuarantineHandler_PropagatesCorrelationID(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed quarantine: %v", err)
 	}
-	cap := &qhCapturingPublisher{}
+	captured := &qhCapturingPublisher{}
 	rsvc, err := action.NewReleaseService(action.ReleaseConfig{
 		Quarantine: qsvc,
 		Reevaluator: qhFakeReevaluator{verdict: dto.EvaluateResult{
 			Tier:    constant.TierInformational,
 			Primary: constant.CategoryFirstContactExternal,
 		}},
-		Publisher: cap,
+		Publisher: captured,
 	})
 	if err != nil {
 		t.Fatalf("release svc: %v", err)
@@ -388,23 +388,23 @@ func TestQuarantineHandler_PropagatesCorrelationID(t *testing.T) {
 	}
 
 	// Header: must be propagated as a bus option.
-	if cap.opts.CorrelationID != "cid-http-test" {
-		t.Fatalf("bus correlation_id=%q want %q", cap.opts.CorrelationID, "cid-http-test")
+	if captured.opts.CorrelationID != "cid-http-test" {
+		t.Fatalf("bus correlation_id=%q want %q", captured.opts.CorrelationID, "cid-http-test")
 	}
 	// JSON body: must include correlation_id alongside the existing
 	// release fields. We decode into a loose map so the test stays
 	// resilient to future fields being added to the envelope.
 	var env map[string]any
-	if err := json.Unmarshal(cap.payload, &env); err != nil {
-		t.Fatalf("decode published envelope: %v body=%s", err, string(cap.payload))
+	if err := json.Unmarshal(captured.payload, &env); err != nil {
+		t.Fatalf("decode published envelope: %v body=%s", err, string(captured.payload))
 	}
 	if got, _ := env["correlation_id"].(string); got != "cid-http-test" {
 		t.Fatalf("envelope correlation_id=%q want %q", got, "cid-http-test")
 	}
 	// Subject sanity-check: should still be the canonical release
 	// outcome subject — the fix must not have shifted it.
-	if cap.subject != "es.action.quarantine.release" {
-		t.Fatalf("publish subject=%q", cap.subject)
+	if captured.subject != "es.action.quarantine.release" {
+		t.Fatalf("publish subject=%q", captured.subject)
 	}
 }
 

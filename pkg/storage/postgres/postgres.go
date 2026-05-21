@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"time"
 
+	// Register the pgx/v5 stdlib driver so callers can Open() with
+	// driver=pgx without an extra import in every consumer.
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/kennguy3n/sn360-es/internal/config"

@@ -79,8 +79,7 @@ func run() error {
 		return errors.New("missing command")
 	}
 
-	switch args[0] {
-	case "check":
+	if args[0] == "check" {
 		return checkMigrations(*pathFlag)
 	}
 
@@ -251,7 +250,14 @@ func withAdvisoryLock(dsn string, fn func() error) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("advisory lock: checkout conn: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		// Returning the conn to the pool — failure here is informational
+		// (the conn will be reaped) but we still surface it so an
+		// operator notices a wedged pool.
+		if cerr := conn.Close(); cerr != nil && retErr == nil {
+			retErr = fmt.Errorf("advisory lock: close conn: %w", cerr)
+		}
+	}()
 
 	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", advisoryLockID); err != nil {
 		return fmt.Errorf("advisory lock: acquire: %w", err)

@@ -68,7 +68,7 @@ func NewRateLimitedEventService(inner EventService, cfg RateLimitConfig) *RateLi
 		cfg.Logger = slog.Default()
 	}
 	if cfg.Clock == nil {
-		cfg.Clock = func() time.Time { return time.Now() }
+		cfg.Clock = time.Now
 	}
 	return &RateLimitedEventService{
 		inner:   inner,

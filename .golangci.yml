@@ -1,0 +1,121 @@
+# golangci-lint configuration for sn360-es.
+#
+# Written against the golangci-lint v2 schema (v2.5.x). Renaming notes:
+#   * gofmt + goimports moved to a dedicated `formatters` section.
+#   * exportloopref was removed because Go 1.22 closed the loopvar
+#     capture issue at the language level; no replacement is needed.
+#   * The legacy `issues.exclude-use-default` was replaced by the
+#     `linters.exclusions` block. We leave the v1-equivalent intent
+#     (no default exclusion presets) by setting `presets: []`.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - staticcheck
+    - gosec
+    - govet
+    - ineffassign
+    - unused
+    - gocritic
+    - misspell
+    - revive
+    - bodyclose
+    - noctx
+  settings:
+    errcheck:
+      # Suppress only the canonical Close / Fprintf-to-stdio idioms
+      # where checking the error has no actionable outcome. Every
+      # other unchecked error must be handled.
+      exclude-functions:
+        - (io.Closer).Close
+        - (*database/sql.Rows).Close
+        - (*github.com/jackc/pgx/v5.Rows).Close
+        - (net.Conn).Close
+        - fmt.Fprintf(os.Stdout)
+        - fmt.Fprintf(os.Stderr)
+        - fmt.Fprintln(os.Stdout)
+        - fmt.Fprintln(os.Stderr)
+        - fmt.Fprint(os.Stdout)
+        - fmt.Fprint(os.Stderr)
+    revive:
+      # Disable revive's default policy and curate an explicit rule
+      # set. The standard "exported requires a comment" rule fires on
+      # every grouped const block in this repo and adds no signal —
+      # the codebase has its own (looser) documentation convention.
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: unused-parameter
+          # Test helpers frequently receive parameters they ignore
+          # (HTTP handler signatures, callback shapes). The default
+          # "_" rename helps in product code but is pure churn in
+          # tests, so we leave the noise off there with an exclusion
+          # rule below.
+        - name: var-declaration
+        - name: var-naming
+    gosec:
+      excludes:
+        # G115 (integer overflow conversion) fires on dozens of safe
+        # int -> int32/uint conversions for timestamps, score caps,
+        # and Prometheus counters. The codebase doesn't accept
+        # untrusted numeric input on those paths.
+        - G115
+        # G304 (file inclusion via variable) is the wrong tool for
+        # this codebase: the only callers are config loaders / migration
+        # runners that read operator-supplied paths by design.
+        - G304
+  exclusions:
+    # No default preset exclusions — every finding is opt-in.
+    presets: []
+    rules:
+      - path: _test\.go$
+        linters:
+          - gosec
+          - errcheck
+          - bodyclose
+          - noctx
+      - path: _test\.go$
+        text: unused-parameter
+      - path: scripts/corpus_generator/
+        linters:
+          - gosec
+      # Benchmarks and corpus generators legitimately use math/rand
+      # for reproducibility and ignore HTTP response bodies inside
+      # measurement loops.
+      - path: cmd/gen-corpus/
+        linters:
+          - gosec
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/kennguy3n/sn360-es
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

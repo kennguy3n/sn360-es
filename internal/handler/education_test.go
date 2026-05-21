@@ -12,13 +12,6 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/education"
 )
 
-// noOpPublisher silently accepts publishes so the education service
-// doesn't fail when serving with a tenant_id.
-type noOpPublisher struct{}
-
-func (noOpPublisher) Publish(string, []byte) error                        { return nil }
-func (noOpPublisher) PublishWithCorrelation(string, []byte, string) error { return nil }
-
 func newTestEducationService(t *testing.T) *education.MicroLessonService {
 	t.Helper()
 	store := education.NewStaticLessonStore(map[string]map[constant.Category]education.MicroLesson{

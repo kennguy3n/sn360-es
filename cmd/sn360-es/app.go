@@ -77,10 +77,10 @@ type application struct {
 	// state, not just on pgDB == nil.
 	usingMemoryCampaignStore    bool
 	usingMemoryInteractionStore bool
-	dashboardGen      *dashboard.DashboardGenerator
-	recipientSvc      *predict.RecipientService
-	openSvc           *predict.OpenService
-	escalationSvc     *agent.EscalationService
+	dashboardGen                *dashboard.DashboardGenerator
+	recipientSvc                *predict.RecipientService
+	openSvc                     *predict.OpenService
+	escalationSvc               *agent.EscalationService
 
 	// Provider-side action machinery.
 	providers     *providerRegistry
@@ -545,8 +545,8 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 
 	// Optional Tier 1 batch orchestrator.
 	if cfg.Tier1.BatchEnabled {
-		switch {
-		case app.tier1Raw == nil:
+		switch app.tier1Raw {
+		case nil:
 			logger.Warn("sn360-es: TIER1_BATCH_ENABLED set but tier1 client unavailable; batch orchestrator disabled")
 		default:
 			natsSvc, ok := app.eventBus.(*natsbus.Service)

@@ -286,12 +286,12 @@ func NewHybridIngestion(cfg HybridPollerConfig) (*Poller, *PushManager, error) {
 	case ModePush:
 		push, err = NewPushManager(PushConfig{
 			Receivers:       cfg.PushReceivers,
-			Publisher:       cfg.PollerConfig.Publisher,
-			Logger:          cfg.PollerConfig.Logger,
-			Normalizer:      cfg.PollerConfig.Normalizer,
+			Publisher:       cfg.Publisher,
+			Logger:          cfg.Logger,
+			Normalizer:      cfg.Normalizer,
 			CallbackBaseURL: cfg.CallbackBaseURL,
-			Subject:         cfg.PollerConfig.Subject,
-			TenantIDs:       cfg.PollerConfig.TenantIDs,
+			Subject:         cfg.Subject,
+			TenantIDs:       cfg.TenantIDs,
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("push ingestion: %w", err)
@@ -303,12 +303,12 @@ func NewHybridIngestion(cfg HybridPollerConfig) (*Poller, *PushManager, error) {
 		}
 		push, err = NewPushManager(PushConfig{
 			Receivers:       cfg.PushReceivers,
-			Publisher:       cfg.PollerConfig.Publisher,
-			Logger:          cfg.PollerConfig.Logger,
-			Normalizer:      cfg.PollerConfig.Normalizer,
+			Publisher:       cfg.Publisher,
+			Logger:          cfg.Logger,
+			Normalizer:      cfg.Normalizer,
 			CallbackBaseURL: cfg.CallbackBaseURL,
-			Subject:         cfg.PollerConfig.Subject,
-			TenantIDs:       cfg.PollerConfig.TenantIDs,
+			Subject:         cfg.Subject,
+			TenantIDs:       cfg.TenantIDs,
 		})
 		if err != nil {
 			return poller, nil, fmt.Errorf("hybrid push: %w", err)

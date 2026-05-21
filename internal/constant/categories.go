@@ -17,14 +17,16 @@ const (
 	CategoryFirstContactExternal     Category = "FIRST_CONTACT_EXTERNAL"
 	CategoryAccountTakeoverSuspected Category = "ACCOUNT_TAKEOVER_SUSPECTED"
 	CategoryVendorCompromise         Category = "VENDOR_COMPROMISE"
-	CategoryCredentialHarvesting     Category = "CREDENTIAL_HARVESTING"
-	CategoryInvoiceFraud             Category = "INVOICE_FRAUD"
-	CategoryQRPhishing               Category = "QR_PHISHING"
-	CategoryScamFraud                Category = "SCAM_FRAUD"
-	CategoryAuthFailed               Category = "AUTH_FAILED"
-	CategoryInternalTrusted          Category = "INTERNAL_TRUSTED"
-	CategoryVendorTrusted            Category = "VENDOR_TRUSTED"
-	CategoryNewsletter               Category = "NEWSLETTER"
+	// G101 false positive: the literal "CREDENTIAL_HARVESTING" is a
+	// detection category label, not a credential.
+	CategoryCredentialHarvesting Category = "CREDENTIAL_HARVESTING" //nolint:gosec
+	CategoryInvoiceFraud         Category = "INVOICE_FRAUD"
+	CategoryQRPhishing           Category = "QR_PHISHING"
+	CategoryScamFraud            Category = "SCAM_FRAUD"
+	CategoryAuthFailed           Category = "AUTH_FAILED"
+	CategoryInternalTrusted      Category = "INTERNAL_TRUSTED"
+	CategoryVendorTrusted        Category = "VENDOR_TRUSTED"
+	CategoryNewsletter           Category = "NEWSLETTER"
 )
 
 // AllCategories lists every category in a fixed order. Tests iterate this

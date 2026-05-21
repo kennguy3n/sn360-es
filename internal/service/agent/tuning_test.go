@@ -336,10 +336,10 @@ func TestClampThresholds_PreservesOrdering(t *testing.T) {
 		BannerInfo:     88,
 	}
 	got := clampThresholds(in)
-	if !(got.BannerBlocked > got.BannerHighRisk &&
-		got.BannerHighRisk > got.BannerWarning &&
-		got.BannerWarning > got.BannerCaution &&
-		got.BannerCaution > got.BannerInfo) {
+	if got.BannerBlocked <= got.BannerHighRisk ||
+		got.BannerHighRisk <= got.BannerWarning ||
+		got.BannerWarning <= got.BannerCaution ||
+		got.BannerCaution <= got.BannerInfo {
 		t.Fatalf("ordering broken: %+v", got)
 	}
 }

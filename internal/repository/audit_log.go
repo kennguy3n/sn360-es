@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
 )
 

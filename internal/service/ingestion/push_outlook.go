@@ -73,8 +73,11 @@ func (o *OutlookPushReceiver) Subscribe(ctx context.Context, tenantID string, ca
 	return resp.ID, expiresAt, nil
 }
 
-// Renew extends an existing Graph subscription.
-func (o *OutlookPushReceiver) Renew(ctx context.Context, tenantID, subscriptionID string, callbackURL string) (time.Time, error) {
+// Renew extends an existing Graph subscription. tenantID and
+// callbackURL are part of the PushReceiver contract but Graph's PATCH
+// /subscriptions/{id} only takes the new expiration — both are
+// intentionally ignored.
+func (o *OutlookPushReceiver) Renew(ctx context.Context, _, subscriptionID string, _ string) (time.Time, error) {
 	endpoint := fmt.Sprintf("%s/v1.0/subscriptions/%s", o.baseURL(), url.PathEscape(subscriptionID))
 
 	expiresAt := time.Now().UTC().Add(48 * time.Hour)

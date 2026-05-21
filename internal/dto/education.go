@@ -6,8 +6,10 @@ import "time"
 type AttackType string
 
 const (
-	AttackTypeBEC                AttackType = "bec"
-	AttackTypeCredentialPhishing AttackType = "credential_phishing"
+	AttackTypeBEC AttackType = "bec"
+	// G101 false positive: this enum tags the *kind* of phishing
+	// simulation, not a real credential.
+	AttackTypeCredentialPhishing AttackType = "credential_phishing" //nolint:gosec
 	AttackTypeQRPhishing         AttackType = "qr_phishing"
 	AttackTypeInvoiceFraud       AttackType = "invoice_fraud"
 	AttackTypeLookalikeDomain    AttackType = "lookalike_domain"

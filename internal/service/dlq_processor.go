@@ -146,7 +146,14 @@ func (p *DLQProcessor) Start(ctx context.Context) error {
 		)
 		if err != nil {
 			// Best-effort: close any subs we already created.
-			p.closeAll()
+			// Log closure failures rather than swallowing them
+			// silently so an operator can spot a stuck unsubscribe
+			// even when the original subscribe error is what
+			// surfaces to the caller.
+			if cerr := p.closeAll(); cerr != nil && p.log != nil {
+				p.log.Warn("dlq: best-effort close after subscribe failure",
+					slog.Any("error", cerr))
+			}
 			return fmt.Errorf("dlq: subscribe %q: %w", subj, err)
 		}
 		p.subs = append(p.subs, sub)

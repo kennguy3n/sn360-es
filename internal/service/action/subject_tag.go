@@ -75,7 +75,7 @@ func NewSubjectTagger(cfg SubjectTagConfig) (*SubjectTagger, error) {
 	}
 	if cfg.Enabled {
 		// At least one tier at or above MinTier must have a label.
-		var any bool
+		var hasMatch bool
 		for t, label := range cfg.Labels {
 			if !t.Valid() {
 				return nil, fmt.Errorf("subject_tag: invalid label tier %q", t)
@@ -84,10 +84,10 @@ func NewSubjectTagger(cfg SubjectTagConfig) (*SubjectTagger, error) {
 				return nil, fmt.Errorf("subject_tag: empty label for tier %q", t)
 			}
 			if t.Severity() >= cfg.MinTier.Severity() {
-				any = true
+				hasMatch = true
 			}
 		}
-		if !any {
+		if !hasMatch {
 			return nil, errors.New("subject_tag: no label defined at or above min tier")
 		}
 	}
