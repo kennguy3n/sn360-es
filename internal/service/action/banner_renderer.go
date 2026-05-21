@@ -106,7 +106,10 @@ func tierColorsFor(t constant.Tier) tierColors {
 // chipInlineStyle returns the inline background colour mirror of the
 // .sn360-chip-* CSS classes in bannerCSS. Used so Outlook desktop
 // renders the auth-verdict chip with the correct colour even when the
-// <style> block is stripped.
+// <style> block is stripped. The default branch must produce the same
+// colour as the .sn360-chip-unknown CSS rule so AuthUnknown chips look
+// the same on modern clients (which read the class rule) and Outlook
+// desktop (which only sees this inline attribute).
 func chipInlineStyle(v AuthVerdict) string {
 	switch v {
 	case AuthVerified:
@@ -116,6 +119,10 @@ func chipInlineStyle(v AuthVerdict) string {
 	case AuthUnverified:
 		return "background:#595959;color:#ffffff"
 	}
+	// Default case mirrors .sn360-chip-unknown. The colour is the same
+	// neutral grey we use for Unverified, because AuthUnknown means "we
+	// have no rspamd outcome at all" which is functionally weaker than
+	// Unverified but should not be visually alarming.
 	return "background:#595959;color:#ffffff"
 }
 
@@ -322,9 +329,16 @@ func wrapperInlineStyle(c tierColors) string {
 }
 
 // buttonInlineStyle composes the inline style applied to action <a>
-// elements. The mso=true variant omits border-radius (Word ignores it
-// anyway) and uses a slightly thicker padding so the buttons remain
-// tap-target sized even when the engine drops display:inline-block.
+// elements. The mso=true variant omits border-radius (the Word HTML
+// engine ignores it and would render as a square corner anyway) and
+// adds mso-padding-alt:0 — an Outlook-specific declaration that tells
+// the Word engine not to layer its own implicit cell padding on top of
+// the padding we already supplied, which would otherwise inflate the
+// button height and break vertical alignment with adjacent buttons.
+// The border colour is set to match the background (rather than the
+// CSS rule's `transparent`) because the Word engine sometimes collapses
+// transparent borders to zero height, shrinking the button; a matching
+// solid border is visually identical and stays a stable size.
 func buttonInlineStyle(c tierColors, mso bool) string {
 	base := "display:inline-block;padding:6px 12px;text-decoration:none;" +
 		"font-weight:600;font-size:12px;" +
@@ -376,8 +390,10 @@ func chipClassFor(v AuthVerdict) string {
 		return "sn360-chip sn360-chip-failed"
 	case AuthUnverified:
 		return "sn360-chip sn360-chip-unverified"
+	case AuthUnknown:
+		return "sn360-chip sn360-chip-unknown"
 	default:
-		return "sn360-chip"
+		return "sn360-chip sn360-chip-unknown"
 	}
 }
 
@@ -414,6 +430,7 @@ const bannerCSS = `.sn360-banner{font-family:-apple-system,BlinkMacSystemFont,Se
 .sn360-banner .sn360-chip-verified{background:#08642f}
 .sn360-banner .sn360-chip-failed{background:#9b0019}
 .sn360-banner .sn360-chip-unverified{background:#595959}
+.sn360-banner .sn360-chip-unknown{background:#595959}
 .sn360-blocked{background:#fce8e6;border-color:#9b0019;color:#3d0010}
 .sn360-blocked .sn360-actions a{background:#9b0019}
 .sn360-high{background:#fff1e5;border-color:#a64600;color:#3d1900}
@@ -482,6 +499,7 @@ var bannerTemplate = `<style>` + bannerCSS + `</style>
   {{ if .SecondaryCopy }}<p class="sn360-secondary" style="color:#3a3a3a;font-size:12px;margin-top:4px">{{ range $i, $s := .SecondaryCopy }}{{ if $i }} · {{ end }}{{ $s }}{{ end }}</p>{{ end }}
   {{ if .ReasonCodes }}<p class="sn360-reasons" style="color:#3a3a3a;font-size:12px;margin-top:4px;font-style:italic">{{ range $i, $r := .ReasonCodes }}{{ if $i }} · {{ end }}{{ $r }}{{ end }}</p>{{ end }}
   {{ if .AuthLabel }}<p style="margin:0 0 6px 0"><span class="{{ chipClass .AuthVerdict }}" style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;margin-right:6px;vertical-align:middle;{{ safeCSS .ChipStyle }}" role="img" aria-label="{{ .AuthLabel }}">{{ .AuthLabel }}</span>{{ if .SenderDomain }} <span class="sn360-secondary" style="color:#3a3a3a;font-size:12px">{{ .SenderDomain }}</span>{{ end }}</p>{{ end }}
+  {{ if or .ShowReport .ShowMarkSafe .ShowTrust .MicroLesson }}
   {{ safeHTML "<!--[if !mso]><!-->" }}
   <div class="sn360-actions" role="group" aria-label="{{ .AriaLabel }}" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px">
     {{ if .ShowReport }}<a href="https://l.sn360.io/action/report_phishing?token={{ .ActionToken }}" aria-label="{{ .ReportLabel }}" style="{{ safeCSS .ButtonStyle }}">{{ .ReportLabel }}</a>{{ end }}
@@ -498,6 +516,7 @@ var bannerTemplate = `<style>` + bannerCSS + `</style>
     {{ if .MicroLesson }}<td style="padding-right:8px"><a href="{{ .MicroLesson }}" style="{{ safeCSS .ButtonStyleMSO }}">{{ .LearnLabel }}</a></td>{{ end }}
   </tr></table>
   {{ safeHTML "<![endif]-->" }}
+  {{ end }}
   {{ if .Degraded }}<p class="sn360-degraded" style="color:#3a3a3a;font-size:11px;margin-top:6px;font-style:italic">{{ .DegradedLabel }}</p>{{ end }}
 </div>
 `

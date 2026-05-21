@@ -525,6 +525,11 @@ func TestBannerRendererInlineChipStyle(t *testing.T) {
 		{"verified -> green", AuthVerified, "background:#08642f"},
 		{"failed -> red", AuthFailed, "background:#9b0019"},
 		{"unverified -> gray", AuthUnverified, "background:#595959"},
+		// AuthUnknown maps to the same neutral gray as Unverified.
+		// The chip class (sn360-chip-unknown) and inline style must
+		// agree so the modern-CSS and Outlook-desktop paths render
+		// the chip identically. See chipClassFor + bannerCSS.
+		{"unknown -> gray", AuthUnknown, "background:#595959"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -542,5 +547,65 @@ func TestBannerRendererInlineChipStyle(t *testing.T) {
 				t.Errorf("missing inline chip style %q for verdict=%s\n%s", tc.want, tc.verd, html)
 			}
 		})
+	}
+}
+
+// TestBannerRendererAuthUnknownChipClassIsConsistent locks in that the
+// chip class for AuthUnknown is sn360-chip-unknown — matching a real
+// CSS rule in bannerCSS — rather than the bare sn360-chip class (which
+// has no background rule and would render as white text on the banner
+// background in modern clients while the inline-style mirror still
+// emitted a gray background, creating a visual divergence between the
+// two render paths).
+func TestBannerRendererAuthUnknownChipClassIsConsistent(t *testing.T) {
+	r := mustRenderer(t)
+	html, err := r.Render(BannerInput{
+		Tier:        constant.TierCaution,
+		Primary:     constant.CategoryFirstContactExternal,
+		Locale:      "en",
+		SenderAuth:  AuthUnknown,
+		ActionToken: "tok",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	s := string(html)
+	if !strings.Contains(s, `class="sn360-chip sn360-chip-unknown"`) {
+		t.Errorf("AuthUnknown chip should carry the sn360-chip-unknown CSS class so the modern-CSS path matches the inline-style mirror\n%s", s)
+	}
+	if !strings.Contains(s, ".sn360-chip-unknown{background:#595959}") {
+		t.Errorf("bannerCSS must include the .sn360-chip-unknown rule so modern clients also paint the chip gray\n%s", s)
+	}
+}
+
+// TestBannerRendererSuppressesEmptyActionContainers verifies that
+// when no interactive CTAs are visible (no ActionToken supplied AND
+// no MicroLessonURL), neither the modern <div class="sn360-actions">
+// nor the MSO <table> fallback is emitted. Without this guard the
+// banner would carry 8 + 8 = 16px of dead vertical space (one per
+// path) — visually broken in clients that strip the comments and
+// see both containers anyway, and wasteful even when only one
+// container is rendered.
+func TestBannerRendererSuppressesEmptyActionContainers(t *testing.T) {
+	r := mustRenderer(t)
+	html, err := r.Render(BannerInput{
+		Tier:    constant.TierWarning,
+		Primary: constant.CategoryLikelyPhishing,
+		Locale:  "en",
+		// No ActionToken, no MicroLessonURL — no CTAs are visible.
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	s := string(html)
+	// Modern path: <div class="sn360-actions"> must not appear.
+	if strings.Contains(s, `class="sn360-actions"`) {
+		t.Errorf("modern .sn360-actions container should not render when no CTAs are visible\n%s", s)
+	}
+	// MSO path: <table role="presentation" ...> for the fallback
+	// must not appear either (it is the only such table in the
+	// template).
+	if strings.Contains(s, `role="presentation"`) {
+		t.Errorf("MSO fallback <table role=presentation> should not render when no CTAs are visible\n%s", s)
 	}
 }
