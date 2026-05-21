@@ -112,7 +112,7 @@ jobs:
         run: docker build -t sn360-es:ci .
 
       - name: Trivy scan
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: sn360-es:ci
           format: table
@@ -200,14 +200,25 @@ jobs:
       - name: Start app + dependencies (compose)
         run: |
           docker compose up -d --build
-          # Give the stack a moment to come up before driving load.
+          # Wait for the stack to come up. If healthz never responds we
+          # must fail this step rather than fall through into the k6
+          # job — k6 would otherwise blow past its http_req_failed
+          # threshold against a dead service and the failure would read
+          # as "load test threshold exceeded" instead of the real cause.
+          healthy=false
           for i in $(seq 1 30); do
             if curl -fsS http://localhost:8080/healthz >/dev/null 2>&1; then
               echo "app is healthy"
+              healthy=true
               break
             fi
             sleep 2
           done
+          if [ "$healthy" != "true" ]; then
+            echo "app failed to become healthy within 60s"
+            docker compose logs
+            exit 1
+          fi
 
       - name: k6 smoke (load harness)
         env:
