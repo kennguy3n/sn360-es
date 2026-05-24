@@ -71,6 +71,13 @@ type fakePushReceiver struct {
 
 func (f *fakePushReceiver) Kind() string { return f.kind }
 
+func (f *fakePushReceiver) Tenants() []string {
+	if f.tenant == "" {
+		return nil
+	}
+	return []string{f.tenant}
+}
+
 func (f *fakePushReceiver) Subscribe(_ context.Context, _ string, _ string) (string, time.Time, error) {
 	return "sub-" + f.kind, time.Now().Add(24 * time.Hour), nil
 }

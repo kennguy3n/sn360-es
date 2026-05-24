@@ -21,6 +21,15 @@ type OutlookPushReceiver struct {
 	HTTPClient  *http.Client
 	TokenSource OutlookTokenSource
 
+	// TenantList is the set of Azure AD tenant IDs this receiver
+	// covers. Production wiring populates this from cfg.O365.TenantID.
+	// Used by [PushManager.SetupSubscriptions] to avoid
+	// cross-producting Outlook's tenant namespace with Gmail's
+	// domain namespace — every cross-product element would produce
+	// either an invalid callback URL or a duplicate Graph
+	// subscription that double-publishes notifications.
+	TenantList []string
+
 	// ClientStateForTenant returns the value the receiver should
 	// stamp on subscription-create requests as clientState, and the
 	// value it expects on inbound notification entries. It MUST be
@@ -37,6 +46,11 @@ type OutlookPushReceiver struct {
 	// clientState is not derivable from the tenant ID alone.
 	ClientStateForTenant func(tenantID string) string
 }
+
+// Tenants returns the Azure AD tenant IDs this receiver covers. See
+// [PushReceiver.Tenants] for the contract — in particular, no empty
+// strings.
+func (o *OutlookPushReceiver) Tenants() []string { return o.TenantList }
 
 // clientStateFor returns the clientState the receiver expects for a
 // given tenant. Centralised so Subscribe and HandleNotification

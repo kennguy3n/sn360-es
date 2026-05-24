@@ -798,6 +798,17 @@ func (c Config) validate() error {
 	if c.HTTP.Port <= 0 || c.HTTP.Port > 65535 {
 		return fmt.Errorf("HTTP_PORT out of range: %d", c.HTTP.Port)
 	}
+	// INGESTION_MODE must be one of the documented values. Without
+	// this check, a typo (e.g. "polll", "Push") silently falls
+	// through both PollEnabled() and PushEnabled(), leaving the
+	// service running but ingesting nothing — exactly the kind of
+	// failure that's invisible until a downstream queue stays empty.
+	switch c.Ingestion.Mode {
+	case "", "poll", "push", "hybrid":
+		// ok
+	default:
+		return fmt.Errorf("INGESTION_MODE: invalid value %q (expected one of: poll, push, hybrid, or empty)", c.Ingestion.Mode)
+	}
 	if c.Score.Blocked <= c.Score.HighRisk ||
 		c.Score.HighRisk <= c.Score.Warning ||
 		c.Score.Warning <= c.Score.Caution ||

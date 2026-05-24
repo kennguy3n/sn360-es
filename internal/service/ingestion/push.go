@@ -27,6 +27,22 @@ const (
 type PushReceiver interface {
 	// Kind returns a stable identifier ("gmail" / "outlook").
 	Kind() string
+	// Tenants returns the tenant identifiers this receiver covers.
+	// Each provider has its own namespace (Gmail uses GWS domain;
+	// Outlook uses Azure AD tenant ID), so the PushManager iterates
+	// receiver-by-receiver against its own Tenants() rather than
+	// taking a cross-product against a global tenant list — that
+	// would issue mismatched-namespace subscriptions and, on
+	// Outlook, create duplicate Graph subscriptions whose
+	// notifications double-publish into the event bus.
+	//
+	// An empty slice means "no tenants are configured for this
+	// provider" and the PushManager skips it with a warning. The
+	// receiver MUST NOT return a slice containing an empty string
+	// — a missing tenant segment would form an invalid callback URL
+	// (/v1/push/{provider}/) that the webhook handler 400-rejects,
+	// breaking the Microsoft Graph validation handshake.
+	Tenants() []string
 	// Subscribe registers push notification delivery with the
 	// provider. For Gmail this is a Pub/Sub watch; for Outlook it
 	// creates a Graph Change Notification subscription.
@@ -53,9 +69,6 @@ type PushConfig struct {
 	RenewalBuffer time.Duration
 	// Subject is the JetStream subject for emitted events.
 	Subject string
-	// TenantIDs are the tenants to subscribe to. When empty,
-	// subscriptions are created for all known tenants.
-	TenantIDs []string
 }
 
 // PushSubscription tracks a live push subscription.
@@ -106,17 +119,28 @@ func NewPushManager(cfg PushConfig) (*PushManager, error) {
 	}, nil
 }
 
-// SetupSubscriptions registers push subscriptions for all configured
-// tenants and receivers. Should be called at startup.
+// SetupSubscriptions registers push subscriptions for every
+// (receiver, tenant) pair the receivers declare via Tenants(). It
+// MUST NOT cross-product receivers against a shared tenant list —
+// each provider has its own tenant namespace (Gmail GWS domain vs.
+// Outlook Azure AD tenant ID), so subscribing one provider with the
+// other's tenant ID produces invalid callback URLs or, worse,
+// duplicate Graph subscriptions that double-publish notifications.
 func (m *PushManager) SetupSubscriptions(ctx context.Context) error {
-	tenants := m.cfg.TenantIDs
-	if len(tenants) == 0 {
-		tenants = []string{""}
-	}
-
 	var errs []error
 	for _, recv := range m.cfg.Receivers {
+		tenants := recv.Tenants()
+		if len(tenants) == 0 {
+			m.log.Warn("push: receiver has no tenants configured; skipping",
+				slog.String("provider", recv.Kind()))
+			continue
+		}
 		for _, tenant := range tenants {
+			if tenant == "" {
+				m.log.Warn("push: receiver returned empty tenant; skipping",
+					slog.String("provider", recv.Kind()))
+				continue
+			}
 			callbackURL := fmt.Sprintf("%s/v1/push/%s/%s", m.cfg.CallbackBaseURL, recv.Kind(), tenant)
 			subID, expiresAt, err := recv.Subscribe(ctx, tenant, callbackURL)
 			if err != nil {
@@ -291,7 +315,6 @@ func NewHybridIngestion(cfg HybridPollerConfig) (*Poller, *PushManager, error) {
 			Normalizer:      cfg.Normalizer,
 			CallbackBaseURL: cfg.CallbackBaseURL,
 			Subject:         cfg.Subject,
-			TenantIDs:       cfg.TenantIDs,
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("push ingestion: %w", err)
@@ -308,7 +331,6 @@ func NewHybridIngestion(cfg HybridPollerConfig) (*Poller, *PushManager, error) {
 			Normalizer:      cfg.Normalizer,
 			CallbackBaseURL: cfg.CallbackBaseURL,
 			Subject:         cfg.Subject,
-			TenantIDs:       cfg.TenantIDs,
 		})
 		if err != nil {
 			return poller, nil, fmt.Errorf("hybrid push: %w", err)

@@ -22,7 +22,18 @@ type GmailPushReceiver struct {
 	TopicName   string
 	HTTPClient  *http.Client
 	TokenSource GmailTokenSource
+	// TenantList is the set of GWS domains (tenant IDs) this
+	// receiver covers. Production wiring populates this from
+	// cfg.GWS.Domain. Used by [PushManager.SetupSubscriptions] to
+	// avoid cross-producting Gmail's domain namespace with
+	// Outlook's Azure-AD tenant namespace.
+	TenantList []string
 }
+
+// Tenants returns the GWS domains this receiver covers. See
+// [PushReceiver.Tenants] for the contract — in particular, no empty
+// strings.
+func (g *GmailPushReceiver) Tenants() []string { return g.TenantList }
 
 // GmailTokenSource provides OAuth2 tokens for Gmail API calls.
 type GmailTokenSource interface {

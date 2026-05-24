@@ -372,49 +372,79 @@ func buildPushManager(ctx context.Context, cfg *config.Config, logger *slog.Logg
 // configured credentials. Each provider is wired independently so a
 // half-configured deployment still delivers push for whichever
 // provider IS fully configured.
+//
+// Closed-by-default gating: each receiver is built only when its
+// credentials AND its edge-verifier requirements are both present.
+// Building a receiver without its verifier (e.g. Gmail topic set but
+// PushGoogleAudience missing) would create subscriptions whose
+// callbacks the edge verifier rejects, producing a stuck pipeline
+// that's hard to diagnose from outside.
 func buildPushReceivers(ctx context.Context, cfg *config.Config, logger *slog.Logger) []ingestion.PushReceiver {
 	out := make([]ingestion.PushReceiver, 0, 2)
 	if cfg.GWS.HasGmail() {
-		if cfg.Ingestion.PushGmailTopic == "" {
+		switch {
+		case cfg.GWS.Domain == "":
+			logger.Warn("sn360-es: gmail push receiver skipped; GWS_DOMAIN is unset, no tenant identifier for callback URL")
+		case cfg.Ingestion.PushGmailTopic == "":
 			logger.Warn("sn360-es: gmail push receiver skipped; INGESTION_PUSH_GMAIL_TOPIC is unset")
-		} else if sa, err := gmail.LoadServiceAccount(cfg.GWS.ServiceAccountJSON); err != nil {
-			logger.Warn("sn360-es: gmail push receiver skipped; service-account load failed",
-				slog.Any("error", err))
-		} else if tokens, terr := gmail.NewJWTBearerSource(gmail.JWTBearerConfig{
-			ServiceAccount:   sa,
-			ImpersonatedUser: cfg.GWS.DelegatedAdmin,
-		}); terr != nil {
-			logger.Warn("sn360-es: gmail push receiver skipped; token source init failed",
-				slog.Any("error", terr))
-		} else {
-			out = append(out, &ingestion.GmailPushReceiver{
-				BaseURL:     cfg.GWS.BaseURL,
-				TopicName:   cfg.Ingestion.PushGmailTopic,
-				TokenSource: tokens,
-			})
-			logger.Info("sn360-es: gmail push receiver wired",
-				slog.String("topic", cfg.Ingestion.PushGmailTopic))
+		case cfg.Ingestion.PushGoogleAudience == "":
+			// The Gmail Pub/Sub callback is gated at the edge by
+			// [handler.GoogleOIDCVerifier], which requires the
+			// configured audience to validate the bearer token.
+			// Building the receiver without an audience would
+			// register watches whose notifications the verifier
+			// 401-rejects — orphaned subscriptions on Google's
+			// side, stuck pipeline on ours. Skip with a loud
+			// warning instead.
+			logger.Warn("sn360-es: gmail push receiver skipped; INGESTION_PUSH_GOOGLE_AUDIENCE is unset (verifier would reject every callback)")
+		default:
+			if sa, err := gmail.LoadServiceAccount(cfg.GWS.ServiceAccountJSON); err != nil {
+				logger.Warn("sn360-es: gmail push receiver skipped; service-account load failed",
+					slog.Any("error", err))
+			} else if tokens, terr := gmail.NewJWTBearerSource(gmail.JWTBearerConfig{
+				ServiceAccount:   sa,
+				ImpersonatedUser: cfg.GWS.DelegatedAdmin,
+			}); terr != nil {
+				logger.Warn("sn360-es: gmail push receiver skipped; token source init failed",
+					slog.Any("error", terr))
+			} else {
+				out = append(out, &ingestion.GmailPushReceiver{
+					BaseURL:     cfg.GWS.BaseURL,
+					TopicName:   cfg.Ingestion.PushGmailTopic,
+					TokenSource: tokens,
+					TenantList:  []string{cfg.GWS.Domain},
+				})
+				logger.Info("sn360-es: gmail push receiver wired",
+					slog.String("topic", cfg.Ingestion.PushGmailTopic),
+					slog.String("tenant", cfg.GWS.Domain))
+			}
 		}
 	}
 	if cfg.O365.HasOutlook() {
-		if cfg.Ingestion.PushMicrosoftClientStateSecret == "" {
+		switch {
+		case cfg.O365.TenantID == "":
+			logger.Warn("sn360-es: outlook push receiver skipped; O365_TENANT_ID is unset, no tenant identifier for callback URL")
+		case cfg.Ingestion.PushMicrosoftClientStateSecret == "":
 			logger.Warn("sn360-es: outlook push receiver skipped; INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET is unset")
-		} else if tokens, terr := outlook.NewClientCredentialsSource(outlook.ClientCredentialsConfig{
-			TenantID:     cfg.O365.TenantID,
-			ClientID:     cfg.O365.ClientID,
-			ClientSecret: cfg.O365.ClientSecret,
-			TokenURL:     cfg.O365.TokenURL,
-		}); terr != nil {
-			logger.Warn("sn360-es: outlook push receiver skipped; token source init failed",
-				slog.Any("error", terr))
-		} else {
-			out = append(out, &ingestion.OutlookPushReceiver{
-				BaseURL:              cfg.O365.BaseURL,
-				TokenSource:          tokens,
-				ClientStateForTenant: outlookClientStateForTenant(cfg.Ingestion.PushMicrosoftClientStateSecret),
-			})
-			logger.Info("sn360-es: outlook push receiver wired",
-				slog.String("tenant", cfg.O365.TenantID))
+		default:
+			if tokens, terr := outlook.NewClientCredentialsSource(outlook.ClientCredentialsConfig{
+				TenantID:     cfg.O365.TenantID,
+				ClientID:     cfg.O365.ClientID,
+				ClientSecret: cfg.O365.ClientSecret,
+				TokenURL:     cfg.O365.TokenURL,
+			}); terr != nil {
+				logger.Warn("sn360-es: outlook push receiver skipped; token source init failed",
+					slog.Any("error", terr))
+			} else {
+				out = append(out, &ingestion.OutlookPushReceiver{
+					BaseURL:              cfg.O365.BaseURL,
+					TokenSource:          tokens,
+					TenantList:           []string{cfg.O365.TenantID},
+					ClientStateForTenant: outlookClientStateForTenant(cfg.Ingestion.PushMicrosoftClientStateSecret),
+				})
+				logger.Info("sn360-es: outlook push receiver wired",
+					slog.String("tenant", cfg.O365.TenantID))
+			}
 		}
 	}
 	_ = ctx

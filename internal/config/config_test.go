@@ -196,6 +196,35 @@ func validProdConfig() Config {
 	}
 }
 
+// TestValidate_IngestionMode_RejectsInvalidValues pins the
+// fail-fast guard against typos in INGESTION_MODE. Without it,
+// "polll" (or any other non-empty unknown value) silently falls
+// through PollEnabled() and PushEnabled(), leaving the service up
+// but ingesting nothing — a failure that's invisible until a
+// downstream queue stays empty.
+func TestValidate_IngestionMode_RejectsInvalidValues(t *testing.T) {
+	for _, bad := range []string{"polll", "Push", "POLL", "both", "x"} {
+		cfg := validProdConfig()
+		cfg.Ingestion.Mode = bad
+		if err := cfg.validate(); err == nil {
+			t.Errorf("validate() accepted bogus INGESTION_MODE=%q", bad)
+		}
+	}
+}
+
+// TestValidate_IngestionMode_AcceptsDocumentedValues pins the
+// supported set so future refactors don't accidentally tighten
+// validation past the documented contract.
+func TestValidate_IngestionMode_AcceptsDocumentedValues(t *testing.T) {
+	for _, good := range []string{"", "poll", "push", "hybrid"} {
+		cfg := validProdConfig()
+		cfg.Ingestion.Mode = good
+		if err := cfg.validate(); err != nil {
+			t.Errorf("validate() rejected documented INGESTION_MODE=%q: %v", good, err)
+		}
+	}
+}
+
 func TestValidate_KMSUseMockBlockedInProd(t *testing.T) {
 	cfg := validProdConfig()
 	cfg.AWS.KMSUseMock = true
