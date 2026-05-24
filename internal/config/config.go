@@ -365,8 +365,14 @@ func (o O365) HasOutlook() bool {
 	return o.ClientID != "" && o.ClientSecret != "" && o.TenantID != ""
 }
 
-// Ingestion holds the per-mailbox poller tuning knobs.
+// Ingestion holds the per-mailbox poller and push-notification tuning knobs.
 type Ingestion struct {
+	// Mode controls how the service acquires messages. Valid values:
+	//   "poll"   — pull-based polling only (default).
+	//   "push"   — push-notification webhooks only.
+	//   "hybrid" — both push and poll run concurrently.
+	// An empty value is treated as "poll".
+	Mode string
 	// Enabled gates the entire poller. Default false so a deployment
 	// without provider credentials never starts a noop ticker.
 	Enabled bool
@@ -383,13 +389,44 @@ type Ingestion struct {
 	// InitialBackfill is how far back to look on first poll (when no
 	// checkpoint exists yet). Default 1h.
 	InitialBackfill time.Duration
+	// PushCallbackBaseURL is the externally-reachable URL prefix
+	// that providers will POST push notifications to. The handler
+	// appends /{provider}/{tenant} as a path suffix.
+	// Required when Mode is "push" or "hybrid".
+	PushCallbackBaseURL string
+	// PushGmailTopic is the fully-qualified Google Cloud Pub/Sub
+	// topic that Gmail's users.watch API publishes to (e.g.
+	// "projects/<project-id>/topics/sn360-gmail-push"). Required to
+	// wire the Gmail push receiver; when empty, the Gmail half of
+	// the push manager is skipped while Outlook remains operational.
+	PushGmailTopic string
 	// PushGoogleAudience is the expected `aud` claim on Google
 	// Pub/Sub OIDC bearer tokens accompanying push deliveries.
 	// Typically the absolute push endpoint URL configured on the
-	// subscription (e.g. "https://api.sn360.example.com/v1/push/gws").
+	// subscription (e.g. "https://api.sn360.example.com/v1/push/gmail").
 	// When empty, the Google push verifier rejects all callbacks —
 	// preserving the closed-by-default invariant.
 	PushGoogleAudience string
+	// PushMicrosoftClientStateSecret is the shared secret used to
+	// validate Microsoft Graph change notification callbacks. Each
+	// subscription is created with this value as clientState, and
+	// the verifier confirms inbound notifications carry the
+	// matching value via constant-time comparison.
+	// Required when Mode is "push" or "hybrid" and an Outlook
+	// provider is configured.
+	PushMicrosoftClientStateSecret string
+}
+
+// PushEnabled returns true when the ingestion mode includes push
+// notification handling ("push" or "hybrid").
+func (i Ingestion) PushEnabled() bool {
+	return i.Mode == "push" || i.Mode == "hybrid"
+}
+
+// PollEnabled returns true when the ingestion mode includes polling
+// ("poll", "hybrid", or empty/default).
+func (i Ingestion) PollEnabled() bool {
+	return i.Mode == "" || i.Mode == "poll" || i.Mode == "hybrid"
 }
 
 // Worker holds the periodic-worker tuning knobs.
@@ -653,13 +690,17 @@ func Load() (Config, error) {
 			ResolveNestedGroups: getBool("O365_RESOLVE_NESTED_GROUPS", true),
 		},
 		Ingestion: Ingestion{
-			Enabled:            getBool("INGESTION_ENABLED", false),
-			Interval:           getDuration("INGESTION_INTERVAL", 30*time.Second),
-			BatchSize:          getInt("INGESTION_BATCH_SIZE", 50),
-			Concurrency:        getInt("INGESTION_CONCURRENCY", 10),
-			LockTTL:            getDuration("INGESTION_LOCK_TTL", 45*time.Second),
-			InitialBackfill:    getDuration("INGESTION_INITIAL_BACKFILL", time.Hour),
-			PushGoogleAudience: strings.TrimSpace(getStr("INGESTION_PUSH_GOOGLE_AUDIENCE", "")),
+			Mode:                           strings.ToLower(strings.TrimSpace(getStr("INGESTION_MODE", "poll"))),
+			Enabled:                        getBool("INGESTION_ENABLED", false),
+			Interval:                       getDuration("INGESTION_INTERVAL", 30*time.Second),
+			BatchSize:                      getInt("INGESTION_BATCH_SIZE", 50),
+			Concurrency:                    getInt("INGESTION_CONCURRENCY", 10),
+			LockTTL:                        getDuration("INGESTION_LOCK_TTL", 45*time.Second),
+			InitialBackfill:                getDuration("INGESTION_INITIAL_BACKFILL", time.Hour),
+			PushCallbackBaseURL:            strings.TrimRight(strings.TrimSpace(getStr("INGESTION_PUSH_CALLBACK_BASE_URL", "")), "/"),
+			PushGmailTopic:                 strings.TrimSpace(getStr("INGESTION_PUSH_GMAIL_TOPIC", "")),
+			PushGoogleAudience:             strings.TrimSpace(getStr("INGESTION_PUSH_GOOGLE_AUDIENCE", "")),
+			PushMicrosoftClientStateSecret: getStr("INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET", ""),
 		},
 		Worker: Worker{
 			RelationshipInterval:    getDuration("WORKER_RELATIONSHIP_INTERVAL", 4*time.Hour),

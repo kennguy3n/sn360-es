@@ -75,6 +75,24 @@ func buildMux(app *application) (http.Handler, error) {
 		mux.Handle("/l/", interstitialH)
 	}
 
+	// Push-notification webhook (Gmail Pub/Sub + Microsoft Graph).
+	//
+	// The route is only mounted when BOTH the PushManager and the
+	// PushSignatureVerifier wired up successfully. The handler
+	// validates the signature on every request before invoking the
+	// manager, so a misconfigured verifier would fail-closed at the
+	// handler — but we still gate at wiring time to keep the
+	// public surface area honest: /v1/push/ is only advertised
+	// when push ingestion is genuinely ready.
+	if app.pushManager != nil && app.pushSignatureVerifier != nil {
+		pushH := &handler.PushWebhookHandler{
+			Manager:           app.pushManager,
+			Logger:            logger,
+			SignatureVerifier: app.pushSignatureVerifier,
+		}
+		mux.Handle("/v1/push/", pushH)
+	}
+
 	// Onboarding OAuth consent flow.
 	if app.onboardingSvc != nil {
 		adapter := &onboardingServiceAdapter{
@@ -248,6 +266,7 @@ func defaultRouteTemplates() []middleware.RoutePattern {
 		{Prefix: "/l/", Label: "/l/:token"},
 		{Prefix: "/v1/education/lesson/", Label: "/v1/education/lesson/:id"},
 		{Prefix: "/v1/vendors/", Label: "/v1/vendors/:id"},
+		{Prefix: "/v1/push/", Label: "/v1/push/:provider/:tenant"},
 	}
 }
 
@@ -311,6 +330,12 @@ func defaultRateLimitSkipPaths() []string {
 }
 
 // defaultAuthSkipPaths returns the paths that bypass JWT auth.
+//
+// /v1/push/ is included because push-webhook callbacks authenticate
+// using a provider-specific scheme (Google Pub/Sub OIDC bearer for
+// Gmail, Microsoft Graph clientState for Outlook) verified inside
+// the PushWebhookHandler itself — not a Bearer JWT issued by us.
+// The handler still fails-closed without the verifier wired.
 func defaultAuthSkipPaths() []string {
 	return []string{
 		"/healthz",
@@ -324,5 +349,6 @@ func defaultAuthSkipPaths() []string {
 		"/v1/quarantine/release",
 		"/v1/education/lesson/",
 		"/v1/onboarding/callback",
+		"/v1/push/",
 	}
 }

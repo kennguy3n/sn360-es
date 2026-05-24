@@ -342,14 +342,15 @@ deterministic fallback.
 - **Provider clients** — `pkg/email_provider/{gmail,outlook}/` —
   concrete `LabelProvider`, `BannerInjector`, `QuarantineProvider`,
   `DirectoryClient`, and `MailboxProvider` implementations.
-- **Push-notification receivers** (implemented, not yet routed) —
+- **Push-notification receivers** —
   `internal/service/ingestion/push.go` (PushManager + receivers) and
   `internal/handler/push_webhook.go` (`POST /v1/push/{provider}/{tenant}`)
   with Google Pub/Sub OIDC + Microsoft Graph clientState verification
-  in `internal/handler/push_signature.go`. The handler is unit-tested
-  but the route is intentionally not mounted in
-  `cmd/sn360-es/routes.go` yet — see
-  [ARCHITECTURE.md §5.1.2](./ARCHITECTURE.md#512-push-notification-receivers-implemented-not-yet-routed).
+  in `internal/handler/push_signature.go`. Wired into
+  `cmd/sn360-es/routes.go`; gated by `INGESTION_MODE=push` (or
+  `hybrid`) plus `INGESTION_PUSH_CALLBACK_BASE_URL` so the route is
+  only mounted when push delivery can be answered end-to-end. See
+  [ARCHITECTURE.md §5.1.2](./ARCHITECTURE.md#512-push-notification-receivers).
 
 ## Periodic Workers
 

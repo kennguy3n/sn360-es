@@ -78,6 +78,95 @@ func TestLoad_RedisFetchBatchSize_IndependentOfNATS(t *testing.T) {
 	}
 }
 
+// TestLoad_IngestionMode_DefaultsToPoll pins the poll-only default so
+// a deployment that does not opt in to push ingestion never starts
+// the subscription/renewal goroutines or mounts the /v1/push route.
+func TestLoad_IngestionMode_DefaultsToPoll(t *testing.T) {
+	withEnv(t, map[string]string{
+		"APP_NAME":    "sn360-es-test",
+		"ENVIRONMENT": "local",
+	})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Ingestion.Mode != "poll" {
+		t.Fatalf("Ingestion.Mode = %q, want %q", cfg.Ingestion.Mode, "poll")
+	}
+	if cfg.Ingestion.PushEnabled() {
+		t.Fatal("PushEnabled() = true on default; expected false")
+	}
+	if !cfg.Ingestion.PollEnabled() {
+		t.Fatal("PollEnabled() = false on default; expected true")
+	}
+}
+
+// TestLoad_IngestionMode_NormalisesAndReadsPushFields pins the
+// env-var contract for the push-ingestion knobs added alongside the
+// /v1/push route wiring. INGESTION_MODE is lowercased and trimmed so
+// "Push " is treated as "push"; the callback base URL has any
+// trailing slash stripped so the handler builds well-formed
+// /{provider}/{tenant} URLs.
+func TestLoad_IngestionMode_NormalisesAndReadsPushFields(t *testing.T) {
+	withEnv(t, map[string]string{
+		"APP_NAME":                                     "sn360-es-test",
+		"ENVIRONMENT":                                  "local",
+		"INGESTION_MODE":                               "  Push ",
+		"INGESTION_PUSH_CALLBACK_BASE_URL":             "https://es.example.com/",
+		"INGESTION_PUSH_GMAIL_TOPIC":                   "projects/p1/topics/sn360-gmail",
+		"INGESTION_PUSH_GOOGLE_AUDIENCE":               "https://es.example.com/v1/push/gmail",
+		"INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET": "deadbeef-deadbeef-deadbeef-deadbeef",
+	})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Ingestion.Mode != "push" {
+		t.Errorf("Ingestion.Mode = %q, want %q (lower-cased + trimmed)",
+			cfg.Ingestion.Mode, "push")
+	}
+	if !cfg.Ingestion.PushEnabled() {
+		t.Error("PushEnabled() = false for INGESTION_MODE=push")
+	}
+	if cfg.Ingestion.PollEnabled() {
+		t.Error("PollEnabled() = true for INGESTION_MODE=push (push-only mode)")
+	}
+	if got := cfg.Ingestion.PushCallbackBaseURL; got != "https://es.example.com" {
+		t.Errorf("PushCallbackBaseURL = %q, want trailing-slash stripped %q",
+			got, "https://es.example.com")
+	}
+	if got := cfg.Ingestion.PushGmailTopic; got != "projects/p1/topics/sn360-gmail" {
+		t.Errorf("PushGmailTopic = %q, want %q", got, "projects/p1/topics/sn360-gmail")
+	}
+	if got := cfg.Ingestion.PushGoogleAudience; got != "https://es.example.com/v1/push/gmail" {
+		t.Errorf("PushGoogleAudience = %q, want %q", got, "https://es.example.com/v1/push/gmail")
+	}
+	if got := cfg.Ingestion.PushMicrosoftClientStateSecret; got != "deadbeef-deadbeef-deadbeef-deadbeef" {
+		t.Errorf("PushMicrosoftClientStateSecret = %q, want the env value", got)
+	}
+}
+
+// TestLoad_IngestionMode_HybridEnablesBoth confirms hybrid mode does
+// not turn the poller off — both flags must read true so the binary
+// runs polling AND push subscriptions concurrently.
+func TestLoad_IngestionMode_HybridEnablesBoth(t *testing.T) {
+	withEnv(t, map[string]string{
+		"APP_NAME":       "sn360-es-test",
+		"ENVIRONMENT":    "local",
+		"INGESTION_MODE": "hybrid",
+	})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Ingestion.PushEnabled() {
+		t.Error("PushEnabled() = false for hybrid mode")
+	}
+	if !cfg.Ingestion.PollEnabled() {
+		t.Error("PollEnabled() = false for hybrid mode")
+	}
+}
+
 // withEnv sets each key in m via t.Setenv (which auto-restores on
 // test cleanup) and clears any env var the test relies on being
 // unset. It also unsets REDIS_FETCH_BATCH_SIZE / NATS_FETCH_BATCH_SIZE
