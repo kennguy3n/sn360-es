@@ -82,11 +82,31 @@ type PushSubscription struct {
 
 // PushManager manages push notification subscriptions and processes
 // incoming notifications. It is the push counterpart to the Poller.
+//
+// Lock ordering invariant: when both reconcileMu and mu are needed,
+// reconcileMu MUST be acquired first. mu is only ever held for the
+// duration of a single map operation (Subscriptions read,
+// subscribeOne write, renewOne write). HandleNotification reads
+// receivers without holding either lock (m.cfg.Receivers is
+// immutable after construction).
 type PushManager struct {
-	cfg  PushConfig
-	mu   sync.RWMutex
-	subs map[string]*PushSubscription // keyed by provider:tenant
-	log  *slog.Logger
+	cfg PushConfig
+	// reconcileMu serialises reconcile() passes. SetupSubscriptions
+	// (one-shot on boot) and RenewLoop (every minute) both call
+	// reconcile, and on a slow provider API SetupSubscriptions can
+	// exceed 60s. Without single-flight semantics, two reconcile
+	// passes would race on the same (provider, tenant) key, double
+	// Subscribe on the provider side, and orphan one of the two
+	// resulting subscription IDs. Holding this mutex for the
+	// duration of a reconcile pass is acceptable because:
+	//   - HandleNotification does NOT take it (push delivery is not
+	//     blocked by a long-running reconcile)
+	//   - Subscriptions() does NOT take it (callers can observe a
+	//     mid-reconcile snapshot without waiting)
+	reconcileMu sync.Mutex
+	mu          sync.RWMutex
+	subs        map[string]*PushSubscription // keyed by provider:tenant
+	log         *slog.Logger
 }
 
 // NewPushManager creates a PushManager and validates the config.
@@ -179,7 +199,18 @@ func (m *PushManager) RenewLoop(ctx context.Context) {
 // Renews (when nearing expiry). Errors are aggregated and returned
 // to the caller; individual failures are also logged at WARN so the
 // timer-driven path doesn't have to inspect the return.
+//
+// reconcile is single-flight: concurrent calls (e.g. a slow
+// SetupSubscriptions overlapping with a RenewLoop tick) serialise
+// on reconcileMu so the "read m.subs → decide Subscribe vs. Renew
+// → write m.subs" sequence is atomic with respect to other reconcile
+// passes. Without this, two passes could both observe a key as
+// unsubscribed, both call Subscribe on the provider, and orphan
+// one of the resulting subscription IDs.
 func (m *PushManager) reconcile(ctx context.Context) error {
+	m.reconcileMu.Lock()
+	defer m.reconcileMu.Unlock()
+
 	var errs []error
 	for _, recv := range m.cfg.Receivers {
 		tenants := recv.Tenants()
@@ -197,6 +228,16 @@ func (m *PushManager) reconcile(ctx context.Context) error {
 			key := recv.Kind() + ":" + tenant
 			m.mu.RLock()
 			sub, alreadySubscribed := m.subs[key]
+			// Snapshot ExpiresAt under the read lock so the
+			// renewal-buffer check below doesn't race with a
+			// concurrent renewOne writer mutating sub.ExpiresAt
+			// on a different goroutine (e.g. HandleNotification
+			// has no path to mutate it today, but the field is
+			// otherwise unprotected).
+			var expiresAt time.Time
+			if alreadySubscribed {
+				expiresAt = sub.ExpiresAt
+			}
 			m.mu.RUnlock()
 			if !alreadySubscribed {
 				if err := m.subscribeOne(ctx, recv, tenant); err != nil {
@@ -204,7 +245,7 @@ func (m *PushManager) reconcile(ctx context.Context) error {
 				}
 				continue
 			}
-			if time.Until(sub.ExpiresAt) < m.cfg.RenewalBuffer {
+			if time.Until(expiresAt) < m.cfg.RenewalBuffer {
 				if err := m.renewOne(ctx, recv, sub); err != nil {
 					errs = append(errs, err)
 				}
@@ -338,6 +379,18 @@ func (m *PushManager) Subscriptions() []PushSubscription {
 }
 
 // HybridPollerConfig extends PollerConfig with push settings.
+//
+// Note on tenant scoping: PollerConfig.TenantIDs (embedded) governs
+// ONLY the polling half of hybrid ingestion. The push half sources
+// its tenant set from each PushReceiver's Tenants() method (each
+// provider has its own namespace — Gmail uses GWS domain, Outlook
+// uses Azure AD tenant ID — and cross-namespace subscriptions would
+// either 400 at the provider or create orphaned Graph subscriptions
+// that double-publish callbacks). If a deployment needs the push
+// half to cover a different tenant subset than the poll half, it
+// must construct the PushReceivers with the desired TenantList
+// directly; HybridPollerConfig does NOT expose a push-only tenant
+// override.
 type HybridPollerConfig struct {
 	PollerConfig
 	PushReceivers   []PushReceiver

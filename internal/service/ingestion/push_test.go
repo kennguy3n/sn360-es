@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -240,6 +241,131 @@ func TestReconcile_ResubscribesFailedTenantsOnNextTick(t *testing.T) {
 	}
 	if flakey.subscribeCalls != 2 {
 		t.Fatalf("idempotent reconcile pass made extra Subscribe calls; total=%d, want 2", flakey.subscribeCalls)
+	}
+}
+
+// slowSubscribeReceiver blocks inside Subscribe on a shared channel
+// so a test can hold one reconcile pass mid-Subscribe while a second
+// reconcile call observes the manager state. Used to prove the
+// single-flight reconcile invariant: only one Subscribe per
+// (provider, tenant) pair across concurrent reconcile callers.
+type slowSubscribeReceiver struct {
+	kind    string
+	tenants []string
+
+	// gate is read inside Subscribe; the test sends on it when it
+	// wants Subscribe to return. Each Subscribe call consumes one
+	// value, so the test controls per-call timing.
+	gate chan struct{}
+
+	mu             sync.Mutex
+	subscribeCalls int
+}
+
+func (s *slowSubscribeReceiver) Kind() string      { return s.kind }
+func (s *slowSubscribeReceiver) Tenants() []string { return s.tenants }
+
+func (s *slowSubscribeReceiver) Subscribe(ctx context.Context, tenantID string, _ string) (string, time.Time, error) {
+	s.mu.Lock()
+	s.subscribeCalls++
+	n := s.subscribeCalls
+	s.mu.Unlock()
+
+	// Block until the test releases this Subscribe call (or the
+	// context cancels).
+	select {
+	case <-s.gate:
+	case <-ctx.Done():
+		return "", time.Time{}, ctx.Err()
+	}
+	return fmt.Sprintf("sub-%s-%s-%d", s.kind, tenantID, n), time.Now().Add(24 * time.Hour), nil
+}
+
+func (s *slowSubscribeReceiver) Renew(_ context.Context, _, _ string, _ string) (time.Time, error) {
+	return time.Now().Add(24 * time.Hour), nil
+}
+
+func (s *slowSubscribeReceiver) HandleNotification(_ context.Context, _ string, _ json.RawMessage) ([]RawEmail, error) {
+	return nil, nil
+}
+
+func (s *slowSubscribeReceiver) calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.subscribeCalls
+}
+
+// TestReconcile_SingleFlightUnderConcurrentCallers proves that two
+// concurrent reconcile callers (e.g. SetupSubscriptions still
+// running while RenewLoop's 60s ticker fires) do NOT both
+// Subscribe the same (provider, tenant) pair. Without the
+// reconcileMu in PushManager, both passes would see an empty m.subs
+// for the key, both call Subscribe, and the provider would issue
+// two subscriptions — only one of which the manager tracks. The
+// orphan would silently double-publish notifications until natural
+// expiry.
+func TestReconcile_SingleFlightUnderConcurrentCallers(t *testing.T) {
+	slow := &slowSubscribeReceiver{
+		kind:    "outlook",
+		tenants: []string{"azure-tenant-abc"},
+		gate:    make(chan struct{}, 8),
+	}
+
+	mgr, err := NewPushManager(PushConfig{
+		Receivers:       []PushReceiver{slow},
+		Publisher:       &capturingBus{},
+		Logger:          discardLogger(),
+		CallbackBaseURL: "https://es.example.com",
+	})
+	if err != nil {
+		t.Fatalf("NewPushManager: %v", err)
+	}
+
+	// Launch two concurrent reconcile passes. The first to enter
+	// reconcileMu wins, blocks inside slow.Subscribe; the second
+	// must wait on reconcileMu until the first completes. After
+	// the first finishes its single Subscribe, the second will
+	// see m.subs already populated for the key and skip Subscribe
+	// entirely.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	errCh := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+			errCh <- mgr.SetupSubscriptions(context.Background())
+		}()
+	}
+
+	// Release exactly two Subscribe calls' worth of gates so that
+	// IF both reconciles slipped past the mutex (the bug), both
+	// could complete instead of deadlocking. With the fix only
+	// the first reconcile reaches Subscribe; the second never
+	// calls Subscribe at all, so the second gate value is unused
+	// (the buffered channel absorbs it without panicking).
+	slow.gate <- struct{}{}
+	slow.gate <- struct{}{}
+
+	// Allow both goroutines to finish.
+	doneCh := make(chan struct{})
+	go func() { wg.Wait(); close(doneCh) }()
+	select {
+	case <-doneCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reconcile callers did not finish within 5s; reconcileMu may be deadlocked")
+	}
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Errorf("concurrent reconcile returned error: %v", err)
+		}
+	}
+
+	if got := slow.calls(); got != 1 {
+		t.Fatalf("concurrent reconcile callers issued %d Subscribe calls; want exactly 1 (single-flight)", got)
+	}
+	if subs := mgr.Subscriptions(); len(subs) != 1 {
+		t.Fatalf("expected exactly 1 tracked subscription; got %d (%+v)", len(subs), subs)
 	}
 }
 
