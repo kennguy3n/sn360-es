@@ -3,6 +3,7 @@ package ingestion
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -228,8 +229,19 @@ func (o *OutlookPushReceiver) HandleNotification(ctx context.Context, tenantID s
 
 	var emails []RawEmail
 	for _, v := range notif.Value {
-		if v.ClientState != expectedState {
-			return nil, fmt.Errorf("outlook push: clientState mismatch: got %q, want %q", v.ClientState, expectedState)
+		// Use a constant-time comparison even though [handler.MicrosoftClientStateVerifier]
+		// has already verified the clientState at the HTTP edge with
+		// crypto/subtle.ConstantTimeCompare. This branch is defense-in-
+		// depth for call paths that reach HandleNotification without
+		// passing through the edge verifier (unit tests, future internal
+		// callers); matching the edge's timing-safety keeps the two
+		// halves of the validation pipeline consistent so a future
+		// refactor that drops the edge check does not silently reopen
+		// a timing oracle. The error intentionally elides both the got
+		// and want values so log scrapes cannot observe partial-match
+		// progress across replays.
+		if subtle.ConstantTimeCompare([]byte(v.ClientState), []byte(expectedState)) != 1 {
+			return nil, errors.New("outlook push: clientState mismatch")
 		}
 		if v.ChangeType != "created" {
 			continue
