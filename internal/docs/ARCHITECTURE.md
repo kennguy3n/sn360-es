@@ -434,9 +434,13 @@ Change Notifications):
       JWKS refreshes via `singleflight.Group` to defeat
       thundering-herd on key rotation.
     - `MicrosoftClientStateVerifier` confirms each
-      `value[i].clientState` matches the per-tenant secret using
+      `value[i].clientState` matches the per-tenant value using
       `crypto/subtle.ConstantTimeCompare` so the comparison does not
-      leak timing oracles.
+      leak timing oracles. The expected clientState is derived as
+      `"sn360-es-" + base64url(HMAC-SHA256(INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET,
+      tenantID))[:32]` and the same closure is wired into
+      `OutlookPushReceiver.ClientStateForTenant` so subscription-create
+      and inbound verification cannot drift apart.
     - `PushSignatureRouter` dispatches verification based on the
       `provider` path segment and returns `400` (not a misleading
       `401`) for unknown provider names.

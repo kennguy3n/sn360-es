@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -154,8 +156,15 @@ func newQuarantineStore(client *redis.Client) action.QuarantineStore {
 // ---------------------------------------------------------------------
 
 func buildPoller(ctx context.Context, cfg *config.Config, logger *slog.Logger, app *application) *ingestion.Poller {
-	if !cfg.Ingestion.Enabled {
-		logger.Info("sn360-es: ingestion polling disabled via config")
+	// The legacy INGESTION_ENABLED bool gates polling for deployments
+	// predating the INGESTION_MODE knob. INGESTION_MODE=hybrid is an
+	// explicit operator opt-in to running polling alongside push, so
+	// we treat it as Enabled=true regardless of the bool — requiring
+	// operators to set BOTH would defeat the point of having a single
+	// mode switch.
+	if !cfg.Ingestion.Enabled && cfg.Ingestion.Mode != "hybrid" {
+		logger.Info("sn360-es: ingestion polling disabled via config",
+			slog.String("mode", cfg.Ingestion.Mode))
 		return nil
 	}
 
@@ -400,8 +409,9 @@ func buildPushReceivers(ctx context.Context, cfg *config.Config, logger *slog.Lo
 				slog.Any("error", terr))
 		} else {
 			out = append(out, &ingestion.OutlookPushReceiver{
-				BaseURL:     cfg.O365.BaseURL,
-				TokenSource: tokens,
+				BaseURL:              cfg.O365.BaseURL,
+				TokenSource:          tokens,
+				ClientStateForTenant: outlookClientStateForTenant(cfg.Ingestion.PushMicrosoftClientStateSecret),
 			})
 			logger.Info("sn360-es: outlook push receiver wired",
 				slog.String("tenant", cfg.O365.TenantID))
@@ -411,13 +421,50 @@ func buildPushReceivers(ctx context.Context, cfg *config.Config, logger *slog.Lo
 	return out
 }
 
+// outlookClientStateForTenant returns a function that maps tenantID
+// to the clientState the Outlook push pipeline stamps on subscription-
+// create requests and expects on inbound notifications.
+//
+// The value is HMAC-SHA256(secret, tenantID) prefixed with "sn360-es-"
+// and truncated to fit comfortably inside Microsoft Graph's 128-character
+// clientState limit. Two properties matter:
+//
+//   - Deterministic per (secret, tenantID): the same function is
+//     consulted by [ingestion.OutlookPushReceiver] (Subscribe +
+//     HandleNotification) AND by [handler.MicrosoftClientStateVerifier]
+//     (ExpectedFor) so the subscription-create payload, the inbound
+//     notification, and the verifier all agree on a single string.
+//
+//   - Unguessable without the secret: a stale tenantID is not enough
+//     for an attacker to forge a notification, because the clientState
+//     embeds an HMAC keyed by the deployment-scoped secret.
+//
+// When secret is empty the function returns the legacy obscured-only-
+// by-the-prefix value to keep test fixtures and dev wiring (where the
+// receiver is constructed directly without setting ClientStateForTenant)
+// compatible. Production wiring MUST supply a non-empty secret — the
+// buildPushReceivers / buildPushSignatureVerifier callers already gate
+// on PushMicrosoftClientStateSecret != "" before invoking this helper.
+func outlookClientStateForTenant(secret string) func(tenantID string) string {
+	if secret == "" {
+		return func(tenantID string) string { return "sn360-es-" + tenantID }
+	}
+	return func(tenantID string) string {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(tenantID))
+		// 32-char base64url payload → final value is well under
+		// Graph's 128-char clientState limit ("sn360-es-" + 32).
+		return "sn360-es-" + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))[:32]
+	}
+}
+
 // buildPushSignatureVerifier constructs the [handler.PushSignatureVerifier]
 // the webhook handler uses to authenticate inbound /v1/push callbacks
 // BEFORE they reach the push manager.
 //
-// Two per-provider verifiers are wired:
+// Two per-provider verifiers are wired, keyed by [ingestion.PushReceiver.Kind]:
 //
-//   - "gmail":     [handler.GoogleOIDCVerifier] validates the OIDC
+//   - "gmail":   [handler.GoogleOIDCVerifier] validates the OIDC
 //     bearer token Google Pub/Sub attaches to push deliveries. The
 //     audience is read from cfg.Ingestion.PushGoogleAudience (env
 //     INGESTION_PUSH_GOOGLE_AUDIENCE) — typically the absolute push
@@ -425,14 +472,12 @@ func buildPushReceivers(ctx context.Context, cfg *config.Config, logger *slog.Lo
 //     audience is empty the verifier rejects every Gmail callback,
 //     preserving the closed-by-default invariant.
 //
-//   - "microsoft": [handler.MicrosoftClientStateVerifier] confirms
-//     each value[i].clientState matches the tenant-scoped secret
-//     issued at subscription-create time. ExpectedFor returns the
-//     same INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET for every
-//     tenant — i.e. it is a per-deployment, not per-tenant, secret —
-//     which matches the OutlookPushReceiver implementation that
-//     stamps "sn360-es-<tenantID>" on the subscription record but
-//     does not currently allocate a unique clientState per tenant.
+//   - "outlook": [handler.MicrosoftClientStateVerifier] confirms
+//     each value[i].clientState matches the tenant-scoped value
+//     issued at subscription-create time. ExpectedFor is wired to
+//     the same outlookClientStateForTenant closure passed to the
+//     OutlookPushReceiver, so the subscription side and the
+//     verification side cannot drift apart.
 //
 // Returns nil only when both halves are unconfigured (no audience
 // AND no client-state secret). That branch is unreachable from the
@@ -452,11 +497,14 @@ func buildPushSignatureVerifier(cfg *config.Config, logger *slog.Logger) handler
 		logger.Warn("sn360-es: push signature verifier missing audience; gmail push will be rejected (set INGESTION_PUSH_GOOGLE_AUDIENCE)")
 	}
 	if cfg.Ingestion.PushMicrosoftClientStateSecret != "" {
-		secret := cfg.Ingestion.PushMicrosoftClientStateSecret
-		verifiers["microsoft"] = &handler.MicrosoftClientStateVerifier{
-			ExpectedFor: func(_ string) string { return secret },
+		// Keyed by the OutlookPushReceiver.Kind() string ("outlook"),
+		// which the router uses to look up the verifier when the
+		// inbound request URL is /v1/push/outlook/{tenant}. Wiring
+		// under any other key would 400 every legitimate callback.
+		verifiers["outlook"] = &handler.MicrosoftClientStateVerifier{
+			ExpectedFor: outlookClientStateForTenant(cfg.Ingestion.PushMicrosoftClientStateSecret),
 		}
-		logger.Info("sn360-es: push signature verifier wired (microsoft)")
+		logger.Info("sn360-es: push signature verifier wired (outlook)")
 	} else {
 		logger.Warn("sn360-es: push signature verifier missing microsoft client-state secret; outlook push will be rejected (set INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET)")
 	}

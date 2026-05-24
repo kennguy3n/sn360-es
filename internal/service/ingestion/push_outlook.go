@@ -20,6 +20,32 @@ type OutlookPushReceiver struct {
 	BaseURL     string
 	HTTPClient  *http.Client
 	TokenSource OutlookTokenSource
+
+	// ClientStateForTenant returns the value the receiver should
+	// stamp on subscription-create requests as clientState, and the
+	// value it expects on inbound notification entries. It MUST be
+	// the same function the edge-level signature verifier
+	// ([handler.MicrosoftClientStateVerifier].ExpectedFor) consults,
+	// otherwise the verifier rejects legitimate callbacks while
+	// HandleNotification — invoked after verification — would accept
+	// them, leaving the two halves out of sync.
+	//
+	// When nil, the receiver falls back to the legacy unguessable-only-
+	// by-obscurity "sn360-es-"+tenantID string. Production wiring MUST
+	// supply a function that mixes a deployment secret in (see
+	// wire_infra.go's outlookClientStateForTenant helper) so the
+	// clientState is not derivable from the tenant ID alone.
+	ClientStateForTenant func(tenantID string) string
+}
+
+// clientStateFor returns the clientState the receiver expects for a
+// given tenant. Centralised so Subscribe and HandleNotification
+// cannot drift from each other.
+func (o *OutlookPushReceiver) clientStateFor(tenantID string) string {
+	if o.ClientStateForTenant != nil {
+		return o.ClientStateForTenant(tenantID)
+	}
+	return "sn360-es-" + tenantID
 }
 
 // OutlookTokenSource provides OAuth2 tokens for Graph API calls.
@@ -52,7 +78,7 @@ func (o *OutlookPushReceiver) Subscribe(ctx context.Context, tenantID string, ca
 		NotificationURL:    callbackURL,
 		Resource:           "users/messages",
 		ExpirationDateTime: expiresAt.Format(time.RFC3339),
-		ClientState:        "sn360-es-" + tenantID,
+		ClientState:        o.clientStateFor(tenantID),
 	}
 
 	var resp struct {
@@ -129,7 +155,7 @@ func (o *OutlookPushReceiver) HandleNotification(ctx context.Context, tenantID s
 		return nil, fmt.Errorf("outlook push: unmarshal: %w", err)
 	}
 
-	expectedState := "sn360-es-" + tenantID
+	expectedState := o.clientStateFor(tenantID)
 
 	var emails []RawEmail
 	for _, v := range notif.Value {
