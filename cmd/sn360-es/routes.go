@@ -318,6 +318,32 @@ func rateLimitRouteLabel(path string, patterns []middleware.RoutePattern, knownE
 // defaultRateLimitSkipPaths returns the paths that bypass the rate
 // limiter entirely. These are mostly probes and docs the operator
 // always needs to be able to hit.
+//
+// /v1/push/ is also skipped because push-webhook callbacks from
+// Google Pub/Sub and Microsoft Graph all originate from a small
+// pool of provider-owned IPs and, behind a load balancer without
+// RATE_LIMIT_TRUSTED_PROXIES configured, would share a single
+// token bucket keyed on the LB's IP. During a Pub/Sub batch
+// fan-out or a Graph notification burst, legitimate callbacks
+// would 429 and force the provider into its exponential retry
+// schedule — Gmail Pub/Sub retries up to 7 days with backoff,
+// Graph retries 4 times over ~10 minutes — visibly delaying email
+// ingestion and inflating provider error metrics.
+//
+// Skipping rate-limiting on /v1/push/ is safe because the handler
+// is closed-by-default and provider-authenticated:
+//   - Google Pub/Sub callbacks must carry a valid OIDC bearer
+//     whose `aud` matches PushGoogleAudience and whose `iss` is
+//     accounts.google.com (verified by buildPushSignatureVerifier
+//     via JWKS).
+//   - Microsoft Graph callbacks must carry a clientState that
+//     constant-time-matches PushMicrosoftClientStateSecret.
+//   - If either verifier is unwired (missing secret), the push
+//     manager itself is never registered and the route 404s.
+//
+// An unauthenticated DoS would therefore still be rejected at the
+// signature-verification layer (cheap), and the upstream JetStream
+// publisher applies its own backpressure for the authenticated path.
 func defaultRateLimitSkipPaths() []string {
 	return []string{
 		"/healthz",
@@ -326,6 +352,7 @@ func defaultRateLimitSkipPaths() []string {
 		"/docs",
 		"/docs/",
 		"/openapi.yaml",
+		"/v1/push/",
 	}
 }
 

@@ -89,6 +89,54 @@ func TestDefaultKnownExactRoutes_ReferentialIntegrity(t *testing.T) {
 	}
 }
 
+// TestDefaultRateLimitSkipPaths_PushIsBypassed pins the invariant
+// that the push-webhook prefix is exempt from per-IP rate-limiting.
+// Without this exemption, push callbacks from Google Pub/Sub and
+// Microsoft Graph would share a single token bucket behind a load
+// balancer (the LB's IP is the bucket key when
+// RATE_LIMIT_TRUSTED_PROXIES is unconfigured), and a notification
+// burst would 429 legitimate provider traffic — forcing both
+// providers into their retry schedules and visibly delaying email
+// ingestion. The signature-verification layer in the push handler
+// remains the closed-by-default defense against unauthenticated
+// traffic, so skipping rate-limiting here does not weaken the DoS
+// posture.
+func TestDefaultRateLimitSkipPaths_PushIsBypassed(t *testing.T) {
+	paths := defaultRateLimitSkipPaths()
+	var hasPushPrefix bool
+	for _, p := range paths {
+		if p == "/v1/push/" {
+			hasPushPrefix = true
+			break
+		}
+	}
+	if !hasPushPrefix {
+		t.Fatalf("defaultRateLimitSkipPaths() must include the prefix-style entry %q so push webhooks bypass the rate limiter; got %v", "/v1/push/", paths)
+	}
+}
+
+// TestDefaultAuthSkipPaths_PushIsBypassed pins the parallel invariant
+// for JWT authentication: /v1/push/ MUST bypass the JWT middleware
+// because provider callbacks authenticate via OIDC bearer (Google
+// Pub/Sub) or clientState constant-time comparison (Microsoft
+// Graph) — not a Bearer JWT this service issues. If this entry is
+// ever removed, every push callback would 401 at the auth middleware
+// before reaching the signature verifier, silently disabling push
+// ingestion until an operator notices the missing email traffic.
+func TestDefaultAuthSkipPaths_PushIsBypassed(t *testing.T) {
+	paths := defaultAuthSkipPaths()
+	var hasPushPrefix bool
+	for _, p := range paths {
+		if p == "/v1/push/" {
+			hasPushPrefix = true
+			break
+		}
+	}
+	if !hasPushPrefix {
+		t.Fatalf("defaultAuthSkipPaths() must include the prefix-style entry %q so push webhooks bypass JWT auth; got %v", "/v1/push/", paths)
+	}
+}
+
 func synthPath(i int) string {
 	// Stable but unique per i; no chance any pattern or known-exact
 	// entry happens to match.
