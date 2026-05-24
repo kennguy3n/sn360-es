@@ -417,14 +417,40 @@ type Ingestion struct {
 	PushMicrosoftClientStateSecret string
 }
 
-// PushEnabled returns true when the ingestion mode includes push
-// notification handling ("push" or "hybrid").
+// PushEnabled reports whether the configured INGESTION_MODE
+// INCLUDES push-notification handling — i.e. "push" or "hybrid".
+//
+// It is a mode predicate, NOT an active-runtime gate. Returning
+// true means the wiring layer should attempt to build a
+// [ingestion.PushManager]; the manager itself may still end up nil
+// at runtime if no provider receiver could be built (missing
+// credentials, missing push topic / audience / client-state secret,
+// or buildPushManager could not initialise the OAuth token source).
+// Callers that need "is the push pipeline ACTIVE right now?"
+// should check the wired application.pushManager handle directly
+// instead.
 func (i Ingestion) PushEnabled() bool {
 	return i.Mode == "push" || i.Mode == "hybrid"
 }
 
-// PollEnabled returns true when the ingestion mode includes polling
-// ("poll", "hybrid", or empty/default).
+// PollEnabled reports whether the configured INGESTION_MODE
+// INCLUDES the legacy polling pipeline — i.e. "", "poll", or
+// "hybrid". The empty-string default is treated as "poll" for
+// backwards compatibility with deployments that pre-date the
+// INGESTION_MODE variable.
+//
+// It is a mode predicate, NOT an active-runtime gate. PollEnabled()
+// returning true means the wiring layer should attempt to build a
+// poller; the poller itself only actually runs when (a) PollEnabled
+// is true AND (b) Ingestion.Enabled is set (the legacy
+// INGESTION_ENABLED flag, retained as the explicit off-switch for
+// poll-mode deployments). A deployment with Mode="poll" and
+// Enabled=false still returns true here but produces a nil poller
+// at runtime — by design, so push-only deployments don't have to
+// also disable poll mode through two separate flags.
+//
+// Callers that need "is the poller ACTIVELY running right now?"
+// should check the wired application.poller handle directly instead.
 func (i Ingestion) PollEnabled() bool {
 	return i.Mode == "" || i.Mode == "poll" || i.Mode == "hybrid"
 }

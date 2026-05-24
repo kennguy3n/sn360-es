@@ -23,8 +23,8 @@ type OutlookPushReceiver struct {
 
 	// TenantList is the set of Azure AD tenant IDs this receiver
 	// covers. Production wiring populates this from cfg.O365.TenantID.
-	// Used by [PushManager.SetupSubscriptions] to avoid
-	// cross-producting Outlook's tenant namespace with Gmail's
+	// Used by [PushManager.SetupSubscriptions] to avoid taking a
+	// cross-product of Outlook's tenant namespace with Gmail's
 	// domain namespace — every cross-product element would produce
 	// either an invalid callback URL or a duplicate Graph
 	// subscription that double-publishes notifications.

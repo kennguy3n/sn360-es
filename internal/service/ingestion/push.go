@@ -119,14 +119,67 @@ func NewPushManager(cfg PushConfig) (*PushManager, error) {
 	}, nil
 }
 
-// SetupSubscriptions registers push subscriptions for every
-// (receiver, tenant) pair the receivers declare via Tenants(). It
-// MUST NOT cross-product receivers against a shared tenant list —
-// each provider has its own tenant namespace (Gmail GWS domain vs.
-// Outlook Azure AD tenant ID), so subscribing one provider with the
-// other's tenant ID produces invalid callback URLs or, worse,
-// duplicate Graph subscriptions that double-publish notifications.
+// SetupSubscriptions runs an initial reconciliation pass: every
+// (receiver, tenant) pair the receivers declare via Tenants() that
+// is not already subscribed is Subscribed; any already-subscribed
+// pair that is nearing expiry is Renewed. It is safe to call
+// repeatedly — it is the synchronous fast-path counterpart to
+// RenewLoop, which calls the same reconciliation primitive on a
+// timer.
+//
+// SetupSubscriptions MUST NOT cross-product receivers against a
+// shared tenant list — each provider has its own tenant namespace
+// (Gmail GWS domain vs. Outlook Azure AD tenant ID), so subscribing
+// one provider with the other's tenant ID produces invalid callback
+// URLs or, worse, duplicate Graph subscriptions that double-publish
+// notifications.
 func (m *PushManager) SetupSubscriptions(ctx context.Context) error {
+	return m.reconcile(ctx)
+}
+
+// RenewLoop runs the subscription reconciliation loop until context
+// is cancelled. Checks every minute and, on each tick:
+//
+//   - Subscribes any (receiver, tenant) pair declared by the
+//     receivers but not currently tracked in m.subs. This recovers
+//     from transient SetupSubscriptions failures (e.g. a Graph 503
+//     during initial boot) without requiring a process restart.
+//   - Renews any tracked subscription whose ExpiresAt is within
+//     RenewalBuffer of now.
+//
+// Without the auto-resubscribe behaviour, a one-shot SetupSubscriptions
+// error would leave the tenant permanently un-subscribed until the
+// pod is restarted — a failure mode that's invisible from outside
+// and that an operator would only notice via missing-traffic
+// alerting on the downstream queue.
+func (m *PushManager) RenewLoop(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := m.reconcile(ctx); err != nil {
+				// Per-(provider, tenant) errors are already logged
+				// at WARN inside subscribeOne / renewOne. The
+				// aggregated error returned here is consumed only
+				// by SetupSubscriptions' caller; in the loop we
+				// just want the next tick to retry, so drop it.
+				_ = err
+			}
+		}
+	}
+}
+
+// reconcile is the closed-loop primitive shared by SetupSubscriptions
+// (initial pass) and RenewLoop (periodic). Each call walks every
+// (receiver, tenant) pair and either Subscribes (when missing) or
+// Renews (when nearing expiry). Errors are aggregated and returned
+// to the caller; individual failures are also logged at WARN so the
+// timer-driven path doesn't have to inspect the return.
+func (m *PushManager) reconcile(ctx context.Context) error {
 	var errs []error
 	for _, recv := range m.cfg.Receivers {
 		tenants := recv.Tenants()
@@ -141,87 +194,86 @@ func (m *PushManager) SetupSubscriptions(ctx context.Context) error {
 					slog.String("provider", recv.Kind()))
 				continue
 			}
-			callbackURL := fmt.Sprintf("%s/v1/push/%s/%s", m.cfg.CallbackBaseURL, recv.Kind(), tenant)
-			subID, expiresAt, err := recv.Subscribe(ctx, tenant, callbackURL)
-			if err != nil {
-				m.log.Warn("push: subscribe failed",
-					slog.String("provider", recv.Kind()),
-					slog.String("tenant", tenant),
-					slog.Any("error", err))
-				errs = append(errs, err)
+			key := recv.Kind() + ":" + tenant
+			m.mu.RLock()
+			sub, alreadySubscribed := m.subs[key]
+			m.mu.RUnlock()
+			if !alreadySubscribed {
+				if err := m.subscribeOne(ctx, recv, tenant); err != nil {
+					errs = append(errs, err)
+				}
 				continue
 			}
-			key := recv.Kind() + ":" + tenant
-			m.mu.Lock()
-			m.subs[key] = &PushSubscription{
-				Provider:       recv.Kind(),
-				TenantID:       tenant,
-				SubscriptionID: subID,
-				ExpiresAt:      expiresAt,
-				CallbackURL:    callbackURL,
+			if time.Until(sub.ExpiresAt) < m.cfg.RenewalBuffer {
+				if err := m.renewOne(ctx, recv, sub); err != nil {
+					errs = append(errs, err)
+				}
 			}
-			m.mu.Unlock()
-			m.log.Info("push: subscription registered",
-				slog.String("provider", recv.Kind()),
-				slog.String("tenant", tenant),
-				slog.String("subscription_id", subID),
-				slog.Time("expires_at", expiresAt))
 		}
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf("push: %d subscription(s) failed", len(errs))
+		return fmt.Errorf("push: %d subscription op(s) failed", len(errs))
 	}
 	return nil
 }
 
-// RenewLoop runs the subscription renewal loop until context is
-// cancelled. Checks every minute for subscriptions nearing expiry.
-func (m *PushManager) RenewLoop(ctx context.Context) {
-	ticker := time.NewTicker(1 * time.Minute)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			m.renewExpiring(ctx)
-		}
+// subscribeOne registers a single (receiver, tenant) subscription
+// and records it in m.subs on success. Errors are logged at WARN
+// and returned so the reconciliation loop can aggregate them; a
+// failed Subscribe leaves m.subs unchanged so the next reconcile
+// tick will retry it automatically.
+func (m *PushManager) subscribeOne(ctx context.Context, recv PushReceiver, tenant string) error {
+	callbackURL := fmt.Sprintf("%s/v1/push/%s/%s", m.cfg.CallbackBaseURL, recv.Kind(), tenant)
+	subID, expiresAt, err := recv.Subscribe(ctx, tenant, callbackURL)
+	if err != nil {
+		m.log.Warn("push: subscribe failed; will retry on next reconcile tick",
+			slog.String("provider", recv.Kind()),
+			slog.String("tenant", tenant),
+			slog.Any("error", err))
+		return err
 	}
+	key := recv.Kind() + ":" + tenant
+	m.mu.Lock()
+	m.subs[key] = &PushSubscription{
+		Provider:       recv.Kind(),
+		TenantID:       tenant,
+		SubscriptionID: subID,
+		ExpiresAt:      expiresAt,
+		CallbackURL:    callbackURL,
+	}
+	m.mu.Unlock()
+	m.log.Info("push: subscription registered",
+		slog.String("provider", recv.Kind()),
+		slog.String("tenant", tenant),
+		slog.String("subscription_id", subID),
+		slog.Time("expires_at", expiresAt))
+	return nil
 }
 
-func (m *PushManager) renewExpiring(ctx context.Context) {
-	m.mu.RLock()
-	now := time.Now()
-	var toRenew []*PushSubscription
-	for _, s := range m.subs {
-		if s.ExpiresAt.Sub(now) < m.cfg.RenewalBuffer {
-			toRenew = append(toRenew, s)
-		}
+// renewOne refreshes a single subscription's ExpiresAt. Failures
+// are logged but not removed from m.subs — the subscription remains
+// tracked so it can be retried on the next tick (and HandleNotification
+// continues to dispatch through the receiver). If the provider has
+// hard-revoked the subscription, the next Renew will surface the
+// 404; an operator-driven path would need to evict from m.subs to
+// force a Subscribe on the following tick.
+func (m *PushManager) renewOne(ctx context.Context, recv PushReceiver, sub *PushSubscription) error {
+	newExpiry, err := recv.Renew(ctx, sub.TenantID, sub.SubscriptionID, sub.CallbackURL)
+	if err != nil {
+		m.log.Warn("push: renew failed; will retry on next reconcile tick",
+			slog.String("provider", sub.Provider),
+			slog.String("tenant", sub.TenantID),
+			slog.Any("error", err))
+		return err
 	}
-	m.mu.RUnlock()
-
-	for _, s := range toRenew {
-		recv := m.findReceiver(s.Provider)
-		if recv == nil {
-			continue
-		}
-		newExpiry, err := recv.Renew(ctx, s.TenantID, s.SubscriptionID, s.CallbackURL)
-		if err != nil {
-			m.log.Warn("push: renew failed",
-				slog.String("provider", s.Provider),
-				slog.String("tenant", s.TenantID),
-				slog.Any("error", err))
-			continue
-		}
-		m.mu.Lock()
-		s.ExpiresAt = newExpiry
-		m.mu.Unlock()
-		m.log.Info("push: subscription renewed",
-			slog.String("provider", s.Provider),
-			slog.String("tenant", s.TenantID),
-			slog.Time("new_expiry", newExpiry))
-	}
+	m.mu.Lock()
+	sub.ExpiresAt = newExpiry
+	m.mu.Unlock()
+	m.log.Info("push: subscription renewed",
+		slog.String("provider", sub.Provider),
+		slog.String("tenant", sub.TenantID),
+		slog.Time("new_expiry", newExpiry))
+	return nil
 }
 
 func (m *PushManager) findReceiver(kind string) PushReceiver {

@@ -661,8 +661,8 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	// Push-notification ingestion. The manager + verifier are built
 	// in lock-step: if either fails we drop both so the /v1/push
 	// route is never mounted with a half-functional pipeline.
-	if mgr := buildPushManager(ctx, cfg, logger, app); mgr != nil {
-		verifier := buildPushSignatureVerifier(cfg, logger)
+	if mgr, receivers := buildPushManager(ctx, cfg, logger, app); mgr != nil {
+		verifier := buildPushSignatureVerifier(cfg, receivers, logger)
 		if verifier == nil {
 			logger.Warn("sn360-es: push manager built but signature verifier could not be wired; push disabled")
 		} else {

@@ -77,8 +77,13 @@ func TestPushSignatureVerifier_RegistersOutlookKey(t *testing.T) {
 		},
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// Both receivers present so both verifier halves wire.
+	receivers := []ingestion.PushReceiver{
+		&ingestion.GmailPushReceiver{},
+		&ingestion.OutlookPushReceiver{},
+	}
 
-	v := buildPushSignatureVerifier(cfg, logger)
+	v := buildPushSignatureVerifier(cfg, receivers, logger)
 	if v == nil {
 		t.Fatal("buildPushSignatureVerifier returned nil with both providers configured")
 	}
@@ -91,6 +96,65 @@ func TestPushSignatureVerifier_RegistersOutlookKey(t *testing.T) {
 	}
 	if _, ok := router.Verifiers["microsoft"]; ok {
 		t.Fatalf("router registered legacy \"microsoft\" key; only \"outlook\" should be present (keys=%v)", keysOf(router.Verifiers))
+	}
+}
+
+// TestPushSignatureVerifier_SkipsVerifiersForUnbuiltProviders confirms
+// that a single-provider deployment (e.g. Gmail-only) does not log
+// noisy "missing outlook secret" warnings or wire a stray verifier
+// for a provider whose receiver was never built. Verifier
+// construction is driven by the receiver list, so the absence of an
+// Outlook receiver means no Outlook verifier — even if the unrelated
+// Microsoft secret happens to be set in config.
+func TestPushSignatureVerifier_SkipsVerifiersForUnbuiltProviders(t *testing.T) {
+	cfg := &config.Config{
+		Ingestion: config.Ingestion{
+			PushGoogleAudience: "https://es.example.com/v1/push/gmail",
+			// Microsoft secret deliberately set even though we
+			// won't pass an Outlook receiver; the verifier MUST
+			// NOT wire an outlook entry because there's no
+			// receiver to gate.
+			PushMicrosoftClientStateSecret: "irrelevant-secret",
+		},
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	receivers := []ingestion.PushReceiver{&ingestion.GmailPushReceiver{}}
+
+	v := buildPushSignatureVerifier(cfg, receivers, logger)
+	if v == nil {
+		t.Fatal("buildPushSignatureVerifier returned nil with gmail receiver present")
+	}
+	router, ok := v.(*handler.PushSignatureRouter)
+	if !ok {
+		t.Fatalf("buildPushSignatureVerifier returned %T, want *PushSignatureRouter", v)
+	}
+	if _, ok := router.Verifiers["gmail"]; !ok {
+		t.Fatalf("router missing gmail verifier; keys=%v", keysOf(router.Verifiers))
+	}
+	if _, ok := router.Verifiers["outlook"]; ok {
+		t.Fatalf("router wired outlook verifier despite no OutlookPushReceiver in receivers slice; keys=%v", keysOf(router.Verifiers))
+	}
+}
+
+// TestPushSignatureVerifier_ReturnsNilForEmptyReceivers locks the
+// invariant that the verifier returns nil when there are no
+// receivers to gate. Wiring an empty router would cause the
+// PushWebhookHandler to 401 every inbound request with no useful
+// signal to the operator.
+func TestPushSignatureVerifier_ReturnsNilForEmptyReceivers(t *testing.T) {
+	cfg := &config.Config{
+		Ingestion: config.Ingestion{
+			PushGoogleAudience:             "https://es.example.com/v1/push/gmail",
+			PushMicrosoftClientStateSecret: "deployment-secret",
+		},
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	if v := buildPushSignatureVerifier(cfg, nil, logger); v != nil {
+		t.Fatalf("buildPushSignatureVerifier(nil receivers) = %T, want nil", v)
+	}
+	if v := buildPushSignatureVerifier(cfg, []ingestion.PushReceiver{}, logger); v != nil {
+		t.Fatalf("buildPushSignatureVerifier(empty receivers) = %T, want nil", v)
 	}
 }
 

@@ -25,8 +25,8 @@ type GmailPushReceiver struct {
 	// TenantList is the set of GWS domains (tenant IDs) this
 	// receiver covers. Production wiring populates this from
 	// cfg.GWS.Domain. Used by [PushManager.SetupSubscriptions] to
-	// avoid cross-producting Gmail's domain namespace with
-	// Outlook's Azure-AD tenant namespace.
+	// avoid taking a cross-product of Gmail's domain namespace
+	// with Outlook's Azure-AD tenant namespace.
 	TenantList []string
 }
 

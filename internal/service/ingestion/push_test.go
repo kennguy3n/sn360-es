@@ -3,6 +3,7 @@ package ingestion
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -139,5 +140,200 @@ func TestSetupSubscriptions_SkipsEmptyTenantString(t *testing.T) {
 	}
 	if len(leaky.subscribe) != 0 {
 		t.Errorf("receiver with empty-string tenant was subscribed: %+v", leaky.subscribe)
+	}
+}
+
+// flakeyReceiver is a Subscribe implementation that fails the first
+// N calls and succeeds afterwards. It models a transient provider
+// outage (e.g. a Microsoft Graph 503 during initial subscription
+// boot) so we can prove the reconciliation loop retries failed
+// (provider, tenant) pairs on subsequent passes without requiring
+// a process restart.
+type flakeyReceiver struct {
+	kind    string
+	tenants []string
+
+	mu              sync.Mutex
+	failuresRemain  int
+	subscribeCalls  int
+	successfulCalls []subscribeCall
+}
+
+func (f *flakeyReceiver) Kind() string      { return f.kind }
+func (f *flakeyReceiver) Tenants() []string { return f.tenants }
+
+func (f *flakeyReceiver) Subscribe(_ context.Context, tenantID string, callbackURL string) (string, time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.subscribeCalls++
+	if f.failuresRemain > 0 {
+		f.failuresRemain--
+		return "", time.Time{}, errors.New("simulated transient subscribe failure")
+	}
+	f.successfulCalls = append(f.successfulCalls, subscribeCall{TenantID: tenantID, CallbackURL: callbackURL})
+	return "sub-" + f.kind + "-" + tenantID, time.Now().Add(24 * time.Hour), nil
+}
+
+func (f *flakeyReceiver) Renew(_ context.Context, _, _ string, _ string) (time.Time, error) {
+	return time.Now().Add(24 * time.Hour), nil
+}
+
+func (f *flakeyReceiver) HandleNotification(_ context.Context, _ string, _ json.RawMessage) ([]RawEmail, error) {
+	return nil, nil
+}
+
+// TestReconcile_ResubscribesFailedTenantsOnNextTick is the
+// regression for the subscription-retry gap: if SetupSubscriptions
+// fails for a tenant on first boot, the next reconcile tick MUST
+// attempt Subscribe again. Without this, a transient provider
+// outage at boot would leave the tenant permanently unsubscribed
+// until the pod restarted — a failure mode invisible from outside.
+func TestReconcile_ResubscribesFailedTenantsOnNextTick(t *testing.T) {
+	flakey := &flakeyReceiver{
+		kind:           "outlook",
+		tenants:        []string{"azure-tenant-abc"},
+		failuresRemain: 1, // fail once, succeed on retry
+	}
+
+	mgr, err := NewPushManager(PushConfig{
+		Receivers:       []PushReceiver{flakey},
+		Publisher:       &capturingBus{},
+		Logger:          discardLogger(),
+		CallbackBaseURL: "https://es.example.com",
+	})
+	if err != nil {
+		t.Fatalf("NewPushManager: %v", err)
+	}
+
+	// First pass: SetupSubscriptions returns the aggregated error
+	// because the only tenant's Subscribe failed. m.subs MUST NOT
+	// contain an entry — that's the invariant the reconciliation
+	// pattern relies on to know "this tenant still needs a
+	// Subscribe call".
+	if err := mgr.SetupSubscriptions(context.Background()); err == nil {
+		t.Fatal("SetupSubscriptions should have returned an error on the first call")
+	}
+	if got := mgr.Subscriptions(); len(got) != 0 {
+		t.Fatalf("after failed Subscribe, m.subs should be empty; got %+v", got)
+	}
+
+	// Second reconciliation pass — same code path RenewLoop calls
+	// every minute. Now Subscribe succeeds, so the tenant gets
+	// registered without operator intervention.
+	if err := mgr.SetupSubscriptions(context.Background()); err != nil {
+		t.Fatalf("SetupSubscriptions retry: %v", err)
+	}
+	subs := mgr.Subscriptions()
+	if len(subs) != 1 || subs[0].TenantID != "azure-tenant-abc" {
+		t.Fatalf("after retry, expected one subscription for tenant azure-tenant-abc; got %+v", subs)
+	}
+	if flakey.subscribeCalls != 2 {
+		t.Fatalf("expected 2 Subscribe attempts (1 failure + 1 success); got %d", flakey.subscribeCalls)
+	}
+
+	// Third pass MUST be a no-op for an already-subscribed,
+	// not-yet-expiring tenant. Otherwise reconciliation would
+	// re-Subscribe on every tick, blowing through provider quotas
+	// and creating duplicate Graph subscriptions.
+	if err := mgr.SetupSubscriptions(context.Background()); err != nil {
+		t.Fatalf("SetupSubscriptions idempotent pass: %v", err)
+	}
+	if flakey.subscribeCalls != 2 {
+		t.Fatalf("idempotent reconcile pass made extra Subscribe calls; total=%d, want 2", flakey.subscribeCalls)
+	}
+}
+
+// renewTrackingReceiver counts Renew invocations so we can assert
+// that reconcile renews subscriptions whose ExpiresAt has slipped
+// inside the renewal buffer window.
+type renewTrackingReceiver struct {
+	kind    string
+	tenants []string
+
+	mu          sync.Mutex
+	subscribed  bool
+	renewCalls  int
+	newExpiry   time.Time
+	subscribeAt time.Time
+}
+
+func (r *renewTrackingReceiver) Kind() string      { return r.kind }
+func (r *renewTrackingReceiver) Tenants() []string { return r.tenants }
+
+func (r *renewTrackingReceiver) Subscribe(_ context.Context, tenantID string, _ string) (string, time.Time, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.subscribed = true
+	r.subscribeAt = time.Now()
+	// Return an ExpiresAt that's already inside the renewal
+	// buffer so the next reconcile tick must renew immediately.
+	return "sub-" + r.kind + "-" + tenantID, time.Now().Add(30 * time.Second), nil
+}
+
+func (r *renewTrackingReceiver) Renew(_ context.Context, _, _ string, _ string) (time.Time, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.renewCalls++
+	r.newExpiry = time.Now().Add(24 * time.Hour)
+	return r.newExpiry, nil
+}
+
+func (r *renewTrackingReceiver) HandleNotification(_ context.Context, _ string, _ json.RawMessage) ([]RawEmail, error) {
+	return nil, nil
+}
+
+// TestReconcile_RenewsSubscriptionsInsideRenewalBuffer is the
+// regression for the second half of the reconciliation contract:
+// once a tenant is subscribed, subsequent reconcile passes must
+// renew the subscription before its ExpiresAt slips past
+// RenewalBuffer. Without this, a long-lived deployment would let
+// every Graph subscription expire silently and stop receiving
+// callbacks.
+func TestReconcile_RenewsSubscriptionsInsideRenewalBuffer(t *testing.T) {
+	r := &renewTrackingReceiver{kind: "outlook", tenants: []string{"acme-tenant"}}
+
+	mgr, err := NewPushManager(PushConfig{
+		Receivers:       []PushReceiver{r},
+		Publisher:       &capturingBus{},
+		Logger:          discardLogger(),
+		CallbackBaseURL: "https://es.example.com",
+		// RenewalBuffer of 1h means any ExpiresAt within 1h of
+		// now triggers a Renew on the next tick. The receiver
+		// returns ExpiresAt at now+30s, so the very next
+		// reconcile call must renew.
+		RenewalBuffer: 1 * time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("NewPushManager: %v", err)
+	}
+
+	if err := mgr.SetupSubscriptions(context.Background()); err != nil {
+		t.Fatalf("initial SetupSubscriptions: %v", err)
+	}
+	if !r.subscribed {
+		t.Fatal("initial reconcile failed to Subscribe")
+	}
+	if r.renewCalls != 0 {
+		t.Fatalf("initial reconcile should not Renew; got renewCalls=%d", r.renewCalls)
+	}
+
+	// Second reconcile pass: ExpiresAt is now+30s which is
+	// inside the 1h RenewalBuffer, so Renew must fire.
+	if err := mgr.SetupSubscriptions(context.Background()); err != nil {
+		t.Fatalf("renewal reconcile: %v", err)
+	}
+	if r.renewCalls != 1 {
+		t.Fatalf("expected exactly 1 Renew call after expiring-soon subscription; got %d", r.renewCalls)
+	}
+
+	// Third reconcile pass: Renew refreshed ExpiresAt to now+24h
+	// (well past RenewalBuffer), so the next pass must NOT renew
+	// again. This proves the renewal trigger is gated on the
+	// updated ExpiresAt, not on a per-tick fixed schedule.
+	if err := mgr.SetupSubscriptions(context.Background()); err != nil {
+		t.Fatalf("post-renewal reconcile: %v", err)
+	}
+	if r.renewCalls != 1 {
+		t.Fatalf("Renew should NOT have fired again after ExpiresAt was refreshed; got renewCalls=%d", r.renewCalls)
 	}
 }
