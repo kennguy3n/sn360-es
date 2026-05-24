@@ -283,6 +283,71 @@ func TestValidate_BannerTokenSecretEmptyAllowedInProd(t *testing.T) {
 	}
 }
 
+// TestValidate_PushMicrosoftClientStateSecretTooShortInDev pins the
+// cross-environment 16-byte floor on the Microsoft Graph
+// clientState HMAC key. The floor applies in dev/staging as well as
+// production because a leaked weak-secret scheme in a low
+// environment trivially extrapolates to a production .env (operators
+// reuse patterns).
+func TestValidate_PushMicrosoftClientStateSecretTooShortInDev(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Environment = EnvironmentDev
+	cfg.Ingestion.PushMicrosoftClientStateSecret = "tooshort"
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for short INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET even in dev")
+	}
+}
+
+// TestValidate_PushMicrosoftClientStateSecretTooShortInProd pins
+// the stricter 32-byte floor that applies only in production
+// environments — same threshold as BANNER_TOKEN_SECRET (the other
+// HMAC-keyed secret in this service).
+func TestValidate_PushMicrosoftClientStateSecretTooShortInProd(t *testing.T) {
+	cfg := validProdConfig()
+	// 16 bytes passes the cross-env floor but trips the prod-only
+	// 32-byte floor below.
+	cfg.Ingestion.PushMicrosoftClientStateSecret = "sixteen-bytes-ok"
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for 16-byte INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET in prod (needs 32+)")
+	}
+}
+
+// TestValidate_PushMicrosoftClientStateSecretLowEntropyInProd pins
+// the production-only entropy gate so an operator who satisfies
+// length with a repeated pattern (e.g. "aaaaaaaa…") gets caught at
+// boot rather than shipping a trivially-brute-forceable HMAC key.
+func TestValidate_PushMicrosoftClientStateSecretLowEntropyInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Ingestion.PushMicrosoftClientStateSecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected low-entropy rejection for INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET in prod")
+	}
+}
+
+// TestValidate_PushMicrosoftClientStateSecretGoodInProd is the
+// happy-path counterpart — a 48-byte high-entropy value (the kind
+// `openssl rand -base64 48` would produce) MUST pass.
+func TestValidate_PushMicrosoftClientStateSecretGoodInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Ingestion.PushMicrosoftClientStateSecret = "kQ7Xp4mV9zL2eR8jB6nC1tH3yU5oA0sF7iD4gW8hJ2lP6vM9"
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("valid INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET should pass: %v", err)
+	}
+}
+
+// TestValidate_PushMicrosoftClientStateSecretEmptyAllowedInProd
+// pins the "feature-off" path: when push ingestion isn't wired,
+// the secret can be empty without tripping validation. The
+// buildPushReceivers gate in wire_infra.go separately ensures an
+// empty secret disables the Outlook half at boot.
+func TestValidate_PushMicrosoftClientStateSecretEmptyAllowedInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Ingestion.PushMicrosoftClientStateSecret = ""
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("empty INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET should be allowed: %v", err)
+	}
+}
+
 func TestValidate_BannerTokenSecretLowEntropyRejected(t *testing.T) {
 	cases := map[string]string{
 		"all-same":            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

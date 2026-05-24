@@ -97,6 +97,26 @@ func (g *GmailPushReceiver) Renew(ctx context.Context, tenantID, _ string, callb
 	return expiresAt, err
 }
 
+// Unsubscribe stops the Gmail push watch on shutdown. Gmail's
+// users.stop endpoint is per-user (derived from the OAuth identity,
+// same as users.watch), so tenantID and subscriptionID are required
+// by the PushReceiver contract but Gmail itself ignores them.
+//
+// users.stop is idempotent: calling it when no watch is active
+// returns 204 the same as cancelling a live watch. Treating that
+// as success keeps Close() side-effect-free if the watch already
+// expired naturally before shutdown.
+func (g *GmailPushReceiver) Unsubscribe(ctx context.Context, _, _ string) error {
+	endpoint := fmt.Sprintf("%s/gmail/v1/users/me/stop", g.baseURL())
+	// users.stop expects no body and returns 204 (or 200 in some
+	// API versions). The shared `do` accepts any 2xx — both shapes
+	// flow through as success.
+	if err := g.do(ctx, http.MethodPost, endpoint, nil, nil); err != nil {
+		return fmt.Errorf("gmail push: stop watch: %w", err)
+	}
+	return nil
+}
+
 // gmailPubSubMessage is the Pub/Sub push delivery wrapper.
 type gmailPubSubMessage struct {
 	Message struct {

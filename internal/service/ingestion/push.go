@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,6 +50,19 @@ type PushReceiver interface {
 	Subscribe(ctx context.Context, tenantID string, callbackURL string) (subscriptionID string, expiresAt time.Time, err error)
 	// Renew refreshes an existing subscription before it expires.
 	Renew(ctx context.Context, tenantID, subscriptionID string, callbackURL string) (expiresAt time.Time, err error)
+	// Unsubscribe tears down a provider-side subscription so it
+	// stops delivering notifications. Implementations MUST be
+	// idempotent — Close() may invoke Unsubscribe for a
+	// subscription the provider has already evicted, and we want
+	// that to be a logged no-op rather than a hard error.
+	//
+	// Gmail: POST /gmail/v1/users/me/stop (cancels the watch
+	//        derived from the OAuth identity; tenantID/subscriptionID
+	//        are required by the interface but ignored by Gmail).
+	// Outlook: DELETE /v1.0/subscriptions/{subscriptionID} (returns
+	//        204 on success and 404 if already evicted — both are
+	//        treated as success).
+	Unsubscribe(ctx context.Context, tenantID, subscriptionID string) error
 	// HandleNotification processes an incoming push notification
 	// payload and returns the raw messages to evaluate.
 	HandleNotification(ctx context.Context, tenantID string, payload json.RawMessage) ([]RawEmail, error)
@@ -317,9 +331,19 @@ func (m *PushManager) renewOne(ctx context.Context, recv PushReceiver, sub *Push
 	return nil
 }
 
+// findReceiver looks up a receiver by its Kind() identifier. Lookup
+// is case-insensitive to stay consistent with PushSignatureRouter,
+// which lowercases its provider key (internal/handler/push_signature.go).
+// If a misrouted callback (e.g. /v1/push/Gmail/...) ever reaches the
+// dispatch path with a mixed-case provider segment, both layers
+// agree on the lowercased canonical identifier rather than silently
+// dropping the notification at the manager. Receiver Kind() values
+// are expected to be lowercase ("gmail", "outlook"); the
+// strings.EqualFold here only relaxes the comparison side, not the
+// receiver's reported identity.
 func (m *PushManager) findReceiver(kind string) PushReceiver {
 	for _, r := range m.cfg.Receivers {
-		if r.Kind() == kind {
+		if strings.EqualFold(r.Kind(), kind) {
 			return r
 		}
 	}
@@ -363,6 +387,82 @@ func (m *PushManager) HandleNotification(ctx context.Context, provider, tenantID
 				slog.String("message_id", req.MessageID),
 				slog.Any("error", perr))
 		}
+	}
+	return nil
+}
+
+// Close tears down every tracked provider-side subscription. It is
+// the graceful-shutdown counterpart to SetupSubscriptions: where
+// SetupSubscriptions opens subscriptions on boot, Close unwinds
+// them so a clean shutdown does not leave stale callbacks
+// pointing at a process that no longer exists.
+//
+// Why this matters per-provider:
+//
+//   - Gmail's users.watch is idempotent on re-subscribe (the new
+//     watch replaces the old one), so leaving an old watch alive
+//     after shutdown is recovered automatically on the next boot.
+//     Still, calling users.stop on shutdown is cheap and prevents
+//     Pub/Sub from buffering ~7 days of notifications to a topic
+//     no consumer is draining.
+//
+//   - Outlook POST /subscriptions creates a NEW subscription each
+//     call; without an explicit DELETE on shutdown, the old
+//     subscription survives ~48h and the next boot creates a
+//     second one alongside it, causing duplicate notification
+//     delivery for up to two days. Calling DELETE here closes that
+//     window.
+//
+// Close is best-effort: per-subscription teardown errors are
+// logged but never block subsequent teardowns or the caller's
+// shutdown sequence. The context provided by the caller bounds the
+// total teardown time — application.Close passes a short-lived
+// context derived from the shutdown deadline so a misbehaving
+// provider API cannot stall process exit indefinitely.
+//
+// Close empties m.subs on completion so a re-Start (e.g. in tests)
+// begins from a clean slate. It does NOT take reconcileMu — by the
+// time Close runs, RenewLoop has already exited via ctx.Done() and
+// SetupSubscriptions has long completed; the only remaining writer
+// is Close itself.
+func (m *PushManager) Close(ctx context.Context) error {
+	m.mu.Lock()
+	snapshot := make([]*PushSubscription, 0, len(m.subs))
+	for _, s := range m.subs {
+		snapshot = append(snapshot, s)
+	}
+	m.subs = make(map[string]*PushSubscription)
+	m.mu.Unlock()
+
+	var errs []error
+	for _, sub := range snapshot {
+		recv := m.findReceiver(sub.Provider)
+		if recv == nil {
+			// The manager was reconfigured between Subscribe and
+			// Close — uncommon but defensible: log and move on
+			// rather than failing every other teardown.
+			m.log.Warn("push: skipping unsubscribe; receiver not found for tracked subscription",
+				slog.String("provider", sub.Provider),
+				slog.String("tenant", sub.TenantID),
+				slog.String("subscription_id", sub.SubscriptionID))
+			continue
+		}
+		if err := recv.Unsubscribe(ctx, sub.TenantID, sub.SubscriptionID); err != nil {
+			m.log.Warn("push: unsubscribe failed; provider subscription will expire naturally",
+				slog.String("provider", sub.Provider),
+				slog.String("tenant", sub.TenantID),
+				slog.String("subscription_id", sub.SubscriptionID),
+				slog.Any("error", err))
+			errs = append(errs, err)
+			continue
+		}
+		m.log.Info("push: subscription torn down on shutdown",
+			slog.String("provider", sub.Provider),
+			slog.String("tenant", sub.TenantID),
+			slog.String("subscription_id", sub.SubscriptionID))
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("push: %d unsubscribe op(s) failed", len(errs))
 	}
 	return nil
 }

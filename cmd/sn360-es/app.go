@@ -36,6 +36,18 @@ import (
 	"github.com/kennguy3n/sn360-es/pkg/telemetry"
 )
 
+// pushShutdownTimeout bounds how long the push-manager teardown
+// (DELETE /subscriptions for Outlook, users.stop for Gmail) may take
+// during application.Close. The value is generous enough to absorb
+// a handful of slow provider round-trips serially (the manager
+// processes subscriptions in a single goroutine) but tight enough
+// that a misbehaving Graph or Gmail endpoint cannot stall process
+// exit indefinitely. A leftover subscription on the provider side
+// is recovered on the next boot — either by re-Subscribe (Gmail,
+// idempotent) or by the natural 48h Outlook expiry — so failing
+// fast on shutdown is the right trade-off.
+const pushShutdownTimeout = 10 * time.Second
+
 // application bundles every wired dependency so handlers, middleware,
 // and consumers can read from a single composition root. Each field is
 // optional from the perspective of unit tests; handlers gracefully
@@ -668,6 +680,22 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		} else {
 			app.pushManager = mgr
 			app.pushSignatureVerifier = verifier
+			// Register Close() so graceful shutdown unwinds
+			// every tracked provider-side subscription. Skipping
+			// this leaves Outlook subscriptions delivering for
+			// up to 48h to a process that no longer exists, and
+			// a restart would create a second subscription
+			// alongside the orphan — duplicate notifications for
+			// that whole window. Closers run in reverse order
+			// after bgWG.Wait() so RenewLoop has already exited
+			// when Close fires; the deadline is bounded by the
+			// shutdown context plumbed into application.Close.
+			pushMgr := mgr
+			app.closers = append(app.closers, func() error {
+				teardownCtx, cancel := context.WithTimeout(context.Background(), pushShutdownTimeout)
+				defer cancel()
+				return pushMgr.Close(teardownCtx)
+			})
 		}
 	}
 

@@ -844,6 +844,18 @@ func (c Config) validate() error {
 	if c.Onboarding.StateSecret != "" && len(c.Onboarding.StateSecret) < 16 {
 		return errors.New("ONBOARDING_STATE_SECRET must be at least 16 bytes when set")
 	}
+	// INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET is the HMAC key
+	// used to derive per-tenant Microsoft Graph clientState values.
+	// Enforce a minimum length across ALL environments (not just
+	// production) because a tiny key is just as easy to brute-force
+	// in dev/staging — and a leaked dev clientState scheme is the
+	// kind of thing that quietly migrates into a production .env.
+	// 16 bytes ≥ matches Onboarding.StateSecret's floor (same
+	// HMAC-based threat model). Production gets an additional 32-byte
+	// floor + low-entropy check below to align with BANNER_TOKEN_SECRET.
+	if c.Ingestion.PushMicrosoftClientStateSecret != "" && len(c.Ingestion.PushMicrosoftClientStateSecret) < 16 {
+		return errors.New("INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET must be at least 16 bytes when set")
+	}
 	// B3 + B4: Production-only security validations (UAT + prod).
 	if c.Environment.IsProduction() {
 		if c.AWS.KMSUseMock {
@@ -873,6 +885,20 @@ func (c Config) validate() error {
 		}
 		if c.Onboarding.StateSecret != "" && isLowEntropy(c.Onboarding.StateSecret) {
 			return errors.New("ONBOARDING_STATE_SECRET has low entropy (all-same character, sequential bytes, or repeated short pattern); generate one with: openssl rand -base64 48")
+		}
+		// Microsoft Graph clientState is delivered to providers via
+		// the subscription-create payload (not over wire to clients)
+		// but acts as a shared HMAC key — same threat model as
+		// BANNER_TOKEN_SECRET. Hold it to the same 32-byte floor and
+		// low-entropy check in production environments. The general
+		// 16-byte floor above catches the dev/staging case.
+		if pcss := c.Ingestion.PushMicrosoftClientStateSecret; pcss != "" {
+			if len(pcss) < 32 {
+				return errors.New("INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET must be at least 32 bytes in production environments (UAT/prod)")
+			}
+			if isLowEntropy(pcss) {
+				return errors.New("INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET has low entropy (all-same character, sequential bytes, or repeated short pattern); generate one with: openssl rand -base64 48")
+			}
 		}
 	}
 	return nil

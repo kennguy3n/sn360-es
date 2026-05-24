@@ -17,13 +17,23 @@ type recordingReceiver struct {
 	kind    string
 	tenants []string
 
-	mu        sync.Mutex
-	subscribe []subscribeCall
+	mu          sync.Mutex
+	subscribe   []subscribeCall
+	unsubscribe []unsubscribeCall
+	// unsubscribeErr, when non-nil, is returned by every
+	// Unsubscribe call. Lets tests prove Close keeps going
+	// after a per-subscription teardown failure.
+	unsubscribeErr error
 }
 
 type subscribeCall struct {
 	TenantID    string
 	CallbackURL string
+}
+
+type unsubscribeCall struct {
+	TenantID       string
+	SubscriptionID string
 }
 
 func (r *recordingReceiver) Kind() string      { return r.kind }
@@ -38,6 +48,21 @@ func (r *recordingReceiver) Subscribe(_ context.Context, tenantID string, callba
 
 func (r *recordingReceiver) Renew(_ context.Context, _, _ string, _ string) (time.Time, error) {
 	return time.Now().Add(24 * time.Hour), nil
+}
+
+func (r *recordingReceiver) Unsubscribe(_ context.Context, tenantID, subscriptionID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.unsubscribe = append(r.unsubscribe, unsubscribeCall{TenantID: tenantID, SubscriptionID: subscriptionID})
+	return r.unsubscribeErr
+}
+
+func (r *recordingReceiver) unsubscribeCalls() []unsubscribeCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]unsubscribeCall, len(r.unsubscribe))
+	copy(out, r.unsubscribe)
+	return out
 }
 
 func (r *recordingReceiver) HandleNotification(_ context.Context, _ string, _ json.RawMessage) ([]RawEmail, error) {
@@ -144,6 +169,127 @@ func TestSetupSubscriptions_SkipsEmptyTenantString(t *testing.T) {
 	}
 }
 
+// TestClose_UnsubscribesAllTrackedSubscriptions pins the graceful-
+// shutdown contract: every (provider, tenant) pair the manager has
+// Subscribed must receive a matching Unsubscribe call when Close
+// runs, and the internal subs map must be empty afterwards so a
+// post-Close re-Subscribe starts from a clean slate.
+//
+// Without this guarantee, an Outlook subscription opened by
+// SetupSubscriptions outlives the process for ~48h and the next
+// boot creates a second one alongside it — duplicate notification
+// delivery for that whole window. The test asserts the call-shape
+// (tenantID + subscriptionID) so a future refactor that drops one
+// of those args on the way to Unsubscribe is caught here.
+func TestClose_UnsubscribesAllTrackedSubscriptions(t *testing.T) {
+	gmail := &recordingReceiver{kind: "gmail", tenants: []string{"acme.com"}}
+	outlook := &recordingReceiver{kind: "outlook", tenants: []string{"azure-tenant-abc", "azure-tenant-xyz"}}
+
+	mgr, err := NewPushManager(PushConfig{
+		Receivers:       []PushReceiver{gmail, outlook},
+		Publisher:       &capturingBus{},
+		Logger:          discardLogger(),
+		CallbackBaseURL: "https://es.example.com",
+	})
+	if err != nil {
+		t.Fatalf("NewPushManager: %v", err)
+	}
+	if err := mgr.SetupSubscriptions(context.Background()); err != nil {
+		t.Fatalf("SetupSubscriptions: %v", err)
+	}
+	if got := len(mgr.Subscriptions()); got != 3 {
+		t.Fatalf("setup: expected 3 tracked subscriptions; got %d", got)
+	}
+
+	if err := mgr.Close(context.Background()); err != nil {
+		t.Fatalf("Close: unexpected error: %v", err)
+	}
+
+	// Every Subscribe must have a matching Unsubscribe carrying the
+	// same (tenantID, subscriptionID) pair.
+	wantGmail := []unsubscribeCall{{TenantID: "acme.com", SubscriptionID: "sub-gmail-acme.com"}}
+	if got := gmail.unsubscribeCalls(); !equalUnsubscribeCalls(got, wantGmail) {
+		t.Errorf("gmail Unsubscribe calls = %+v; want %+v", got, wantGmail)
+	}
+	wantOutlook := []unsubscribeCall{
+		{TenantID: "azure-tenant-abc", SubscriptionID: "sub-outlook-azure-tenant-abc"},
+		{TenantID: "azure-tenant-xyz", SubscriptionID: "sub-outlook-azure-tenant-xyz"},
+	}
+	if got := outlook.unsubscribeCalls(); !equalUnsubscribeCalls(got, wantOutlook) {
+		t.Errorf("outlook Unsubscribe calls = %+v; want %+v", got, wantOutlook)
+	}
+
+	// Post-Close, the manager's tracked-subs map must be empty so a
+	// re-Setup starts from a clean slate. Without this, a re-Setup
+	// would skip Subscribe (sees the key still tracked) and the
+	// orphaned provider-side subscription would silently win.
+	if subs := mgr.Subscriptions(); len(subs) != 0 {
+		t.Errorf("post-Close: tracked subscriptions = %+v; want empty", subs)
+	}
+}
+
+// TestClose_ContinuesPastPerSubscriptionUnsubscribeFailures pins the
+// best-effort teardown contract: if one provider's Unsubscribe
+// errors (e.g. a Graph 500 during shutdown), Close must continue
+// tearing down every other tracked subscription rather than
+// short-circuiting. The aggregate error is returned to the caller
+// but the side-effects on the healthy receiver still complete.
+//
+// Without this, a single transient provider failure during shutdown
+// would orphan every subscription opened after it in the iteration
+// order — the exact failure mode Close is supposed to prevent.
+func TestClose_ContinuesPastPerSubscriptionUnsubscribeFailures(t *testing.T) {
+	gmail := &recordingReceiver{
+		kind:           "gmail",
+		tenants:        []string{"acme.com"},
+		unsubscribeErr: errors.New("simulated stop watch 500"),
+	}
+	outlook := &recordingReceiver{kind: "outlook", tenants: []string{"azure-tenant-abc"}}
+
+	mgr, err := NewPushManager(PushConfig{
+		Receivers:       []PushReceiver{gmail, outlook},
+		Publisher:       &capturingBus{},
+		Logger:          discardLogger(),
+		CallbackBaseURL: "https://es.example.com",
+	})
+	if err != nil {
+		t.Fatalf("NewPushManager: %v", err)
+	}
+	if err := mgr.SetupSubscriptions(context.Background()); err != nil {
+		t.Fatalf("SetupSubscriptions: %v", err)
+	}
+
+	if err := mgr.Close(context.Background()); err == nil {
+		t.Fatalf("Close: expected aggregate error from failing gmail unsubscribe, got nil")
+	}
+	// The failing receiver still received the call (the error
+	// surfaces from inside Unsubscribe, not from a skipped call).
+	if got := len(gmail.unsubscribeCalls()); got != 1 {
+		t.Errorf("gmail Unsubscribe calls = %d; want 1 (even on error)", got)
+	}
+	// The healthy receiver MUST also receive its call — proves
+	// Close did not short-circuit on the first failure.
+	if got := len(outlook.unsubscribeCalls()); got != 1 {
+		t.Errorf("outlook Unsubscribe calls = %d; want 1 (Close must continue past gmail's failure)", got)
+	}
+}
+
+// equalUnsubscribeCalls is a stable comparison helper: unsubscribeCalls
+// preserves Subscribe iteration order (which is deterministic for
+// recordingReceiver's slice-backed Tenants), so equality is just a
+// per-index field check.
+func equalUnsubscribeCalls(got, want []unsubscribeCall) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // flakeyReceiver is a Subscribe implementation that fails the first
 // N calls and succeeds afterwards. It models a transient provider
 // outage (e.g. a Microsoft Graph 503 during initial subscription
@@ -174,6 +320,8 @@ func (f *flakeyReceiver) Subscribe(_ context.Context, tenantID string, callbackU
 	f.successfulCalls = append(f.successfulCalls, subscribeCall{TenantID: tenantID, CallbackURL: callbackURL})
 	return "sub-" + f.kind + "-" + tenantID, time.Now().Add(24 * time.Hour), nil
 }
+
+func (f *flakeyReceiver) Unsubscribe(_ context.Context, _, _ string) error { return nil }
 
 func (f *flakeyReceiver) Renew(_ context.Context, _, _ string, _ string) (time.Time, error) {
 	return time.Now().Add(24 * time.Hour), nil
@@ -280,6 +428,8 @@ func (s *slowSubscribeReceiver) Subscribe(ctx context.Context, tenantID string, 
 	}
 	return fmt.Sprintf("sub-%s-%s-%d", s.kind, tenantID, n), time.Now().Add(24 * time.Hour), nil
 }
+
+func (s *slowSubscribeReceiver) Unsubscribe(_ context.Context, _, _ string) error { return nil }
 
 func (s *slowSubscribeReceiver) Renew(_ context.Context, _, _ string, _ string) (time.Time, error) {
 	return time.Now().Add(24 * time.Hour), nil
@@ -395,6 +545,8 @@ func (r *renewTrackingReceiver) Subscribe(_ context.Context, tenantID string, _ 
 	// buffer so the next reconcile tick must renew immediately.
 	return "sub-" + r.kind + "-" + tenantID, time.Now().Add(30 * time.Second), nil
 }
+
+func (r *renewTrackingReceiver) Unsubscribe(_ context.Context, _, _ string) error { return nil }
 
 func (r *renewTrackingReceiver) Renew(_ context.Context, _, _ string, _ string) (time.Time, error) {
 	r.mu.Lock()

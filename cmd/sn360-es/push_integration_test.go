@@ -86,6 +86,13 @@ func (f *fakePushReceiver) Renew(_ context.Context, _, _ string, _ string) (time
 	return time.Now().Add(24 * time.Hour), nil
 }
 
+func (f *fakePushReceiver) Unsubscribe(_ context.Context, _, _ string) error {
+	// The integration test does not assert teardown behaviour
+	// (it exercises the live notification path); a no-op
+	// keeps PushReceiver satisfied without coupling to it.
+	return nil
+}
+
 func (f *fakePushReceiver) HandleNotification(_ context.Context, tenantID string, _ json.RawMessage) ([]ingestion.RawEmail, error) {
 	return []ingestion.RawEmail{
 		{

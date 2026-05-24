@@ -145,6 +145,61 @@ func (o *OutlookPushReceiver) Renew(ctx context.Context, _, subscriptionID strin
 	return expiresAt, nil
 }
 
+// Unsubscribe DELETEs an existing Microsoft Graph subscription on
+// shutdown so a restart does not leave a stale subscription
+// delivering callbacks alongside a freshly created one. Graph
+// returns 204 on success and 404 when the subscription has already
+// been evicted (e.g. by natural expiry between the last Renew and
+// now); both are treated as success because the desired post-state
+// — "no subscription with this ID exists on the provider" — is
+// satisfied in both cases.
+//
+// tenantID is part of the PushReceiver contract but Graph's
+// per-subscription DELETE is keyed only by subscriptionID, so it
+// is intentionally unused here.
+func (o *OutlookPushReceiver) Unsubscribe(ctx context.Context, _, subscriptionID string) error {
+	if subscriptionID == "" {
+		// Defensive: PushManager never tracks an empty
+		// subscriptionID, but if something upstream slipped one
+		// in we'd otherwise call DELETE /v1.0/subscriptions/ on
+		// the collection root and that's a different operation
+		// entirely. Refuse loudly instead of guessing.
+		return errors.New("outlook push: unsubscribe requires a non-empty subscription_id")
+	}
+	endpoint := fmt.Sprintf("%s/v1.0/subscriptions/%s", o.baseURL(), url.PathEscape(subscriptionID))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("outlook push: unsubscribe: build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if o.TokenSource != nil {
+		tok, terr := o.TokenSource.Token(ctx)
+		if terr != nil {
+			return fmt.Errorf("outlook push: unsubscribe: acquire token: %w", terr)
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+
+	client := o.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("outlook push: unsubscribe: http: %w", err)
+	}
+	defer resp.Body.Close()
+	// 204 No Content is the documented success response; 404 Not
+	// Found means the subscription is already gone — both leave
+	// the provider in the desired post-state.
+	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	return fmt.Errorf("outlook push: unsubscribe: status %d body %s", resp.StatusCode, string(body))
+}
+
 // graphChangeNotification is the Graph webhook payload.
 type graphChangeNotification struct {
 	Value []struct {
