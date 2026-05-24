@@ -190,22 +190,22 @@ func TestGoogleOIDCVerifier_AcceptsValidToken(t *testing.T) {
 	defer srv.Close()
 
 	v := &GoogleOIDCVerifier{
-		Audience: "https://api.sn360.example.com/v1/push/gws",
+		Audience: "https://api.sn360.example.com/v1/push/gmail",
 		Issuer:   "https://accounts.google.com",
 		JWKSURL:  srv.URL,
 		Now:      time.Now,
 	}
 	tok := signedGoogleToken(t, key, kid, v.Issuer, v.Audience, time.Now().Add(5*time.Minute))
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/push/gws/acme", nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/push/gmail/acme", nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
-	if err := v.VerifyPush(context.Background(), "gws", "acme", req, nil); err != nil {
+	if err := v.VerifyPush(context.Background(), "gmail", "acme", req, nil); err != nil {
 		t.Fatalf("VerifyPush: %v", err)
 	}
 
 	// A second verification should hit the JWKS cache (not the
 	// upstream server) because the cache is still fresh.
-	if err := v.VerifyPush(context.Background(), "gws", "acme", req, nil); err != nil {
+	if err := v.VerifyPush(context.Background(), "gmail", "acme", req, nil); err != nil {
 		t.Fatalf("VerifyPush (cached): %v", err)
 	}
 	if got := atomic.LoadInt64(&hits); got != 1 {
@@ -227,9 +227,9 @@ func TestGoogleOIDCVerifier_RejectsExpiredToken(t *testing.T) {
 	tok := signedGoogleToken(t, key, kid, "https://accounts.google.com", v.Audience,
 		time.Now().Add(-1*time.Minute)) // already expired
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/push/gws/acme", nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/push/gmail/acme", nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
-	err := v.VerifyPush(context.Background(), "gws", "acme", req, nil)
+	err := v.VerifyPush(context.Background(), "gmail", "acme", req, nil)
 	if !errors.Is(err, ErrPushAuthInvalid) {
 		t.Fatalf("err=%v, want ErrPushAuthInvalid for expired token", err)
 	}
@@ -249,9 +249,9 @@ func TestGoogleOIDCVerifier_RejectsWrongAudience(t *testing.T) {
 	tok := signedGoogleToken(t, key, kid, "https://accounts.google.com", "aud-other",
 		time.Now().Add(5*time.Minute))
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/push/gws/acme", nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/push/gmail/acme", nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
-	err := v.VerifyPush(context.Background(), "gws", "acme", req, nil)
+	err := v.VerifyPush(context.Background(), "gmail", "acme", req, nil)
 	if !errors.Is(err, ErrPushAuthInvalid) {
 		t.Fatalf("err=%v, want ErrPushAuthInvalid for wrong audience", err)
 	}
@@ -263,8 +263,8 @@ func TestGoogleOIDCVerifier_RejectsMissingAuthorization(t *testing.T) {
 		JWKSURL:  "http://127.0.0.1:0", // never reached
 		Now:      time.Now,
 	}
-	req := httptest.NewRequest(http.MethodPost, "/v1/push/gws/acme", nil)
-	err := v.VerifyPush(context.Background(), "gws", "acme", req, nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/push/gmail/acme", nil)
+	err := v.VerifyPush(context.Background(), "gmail", "acme", req, nil)
 	if !errors.Is(err, ErrPushAuthMissing) {
 		t.Fatalf("err=%v, want ErrPushAuthMissing for missing Authorization", err)
 	}
@@ -286,9 +286,9 @@ func TestGoogleOIDCVerifier_RejectsWrongSigningKey(t *testing.T) {
 	tok := signedGoogleToken(t, attackerKey, kid, "https://accounts.google.com", v.Audience,
 		time.Now().Add(5*time.Minute))
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/push/gws/acme", nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/push/gmail/acme", nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
-	err := v.VerifyPush(context.Background(), "gws", "acme", req, nil)
+	err := v.VerifyPush(context.Background(), "gmail", "acme", req, nil)
 	if !errors.Is(err, ErrPushAuthInvalid) {
 		t.Fatalf("err=%v, want ErrPushAuthInvalid for wrong signing key", err)
 	}
@@ -308,9 +308,9 @@ func TestGoogleOIDCVerifier_RejectsUnknownKid(t *testing.T) {
 	tok := signedGoogleToken(t, key, "ghost-kid", "https://accounts.google.com", v.Audience,
 		time.Now().Add(5*time.Minute))
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/push/gws/acme", nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/push/gmail/acme", nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
-	err := v.VerifyPush(context.Background(), "gws", "acme", req, nil)
+	err := v.VerifyPush(context.Background(), "gmail", "acme", req, nil)
 	if !errors.Is(err, ErrPushAuthInvalid) {
 		t.Fatalf("err=%v, want ErrPushAuthInvalid for unknown kid", err)
 	}
@@ -341,16 +341,22 @@ func TestPushWebhook_FailsClosedWithoutVerifier(t *testing.T) {
 }
 
 func TestPushSignatureRouter_DispatchesByProvider(t *testing.T) {
+	// The router keys match the canonical [PushReceiver.Kind] strings
+	// returned by [internal/service/ingestion.GmailPushReceiver]
+	// ("gmail") and [internal/service/ingestion.OutlookPushReceiver]
+	// ("outlook"). Mixed-case input on the first call exercises the
+	// lower-casing dispatch in [PushSignatureRouter.VerifyPush] so a
+	// future regression that drops normalization fails this test.
 	called := map[string]int{}
 	router := &PushSignatureRouter{
 		Verifiers: map[string]PushSignatureVerifier{
-			"gws":     acceptVerifier{name: "gws", calls: called},
+			"gmail":   acceptVerifier{name: "gmail", calls: called},
 			"outlook": acceptVerifier{name: "outlook", calls: called},
 		},
 	}
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
-	if err := router.VerifyPush(context.Background(), "GWS", "t1", req, nil); err != nil {
-		t.Fatalf("VerifyPush gws: %v", err)
+	if err := router.VerifyPush(context.Background(), "GMAIL", "t1", req, nil); err != nil {
+		t.Fatalf("VerifyPush gmail: %v", err)
 	}
 	if err := router.VerifyPush(context.Background(), "outlook", "t2", req, nil); err != nil {
 		t.Fatalf("VerifyPush outlook: %v", err)
@@ -359,7 +365,7 @@ func TestPushSignatureRouter_DispatchesByProvider(t *testing.T) {
 	if !errors.Is(err, ErrPushProviderUnknown) {
 		t.Fatalf("err=%v, want ErrPushProviderUnknown", err)
 	}
-	if called["gws"] != 1 || called["outlook"] != 1 {
+	if called["gmail"] != 1 || called["outlook"] != 1 {
 		t.Fatalf("dispatch counts wrong: %+v", called)
 	}
 }
