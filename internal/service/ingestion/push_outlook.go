@@ -20,6 +20,46 @@ type OutlookPushReceiver struct {
 	BaseURL     string
 	HTTPClient  *http.Client
 	TokenSource OutlookTokenSource
+
+	// TenantList is the set of Azure AD tenant IDs this receiver
+	// covers. Production wiring populates this from cfg.O365.TenantID.
+	// Used by [PushManager.SetupSubscriptions] to avoid taking a
+	// cross-product of Outlook's tenant namespace with Gmail's
+	// domain namespace — every cross-product element would produce
+	// either an invalid callback URL or a duplicate Graph
+	// subscription that double-publishes notifications.
+	TenantList []string
+
+	// ClientStateForTenant returns the value the receiver should
+	// stamp on subscription-create requests as clientState, and the
+	// value it expects on inbound notification entries. It MUST be
+	// the same function the edge-level signature verifier
+	// ([handler.MicrosoftClientStateVerifier].ExpectedFor) consults,
+	// otherwise the verifier rejects legitimate callbacks while
+	// HandleNotification — invoked after verification — would accept
+	// them, leaving the two halves out of sync.
+	//
+	// When nil, the receiver falls back to the legacy unguessable-only-
+	// by-obscurity "sn360-es-"+tenantID string. Production wiring MUST
+	// supply a function that mixes a deployment secret in (see
+	// wire_infra.go's outlookClientStateForTenant helper) so the
+	// clientState is not derivable from the tenant ID alone.
+	ClientStateForTenant func(tenantID string) string
+}
+
+// Tenants returns the Azure AD tenant IDs this receiver covers. See
+// [PushReceiver.Tenants] for the contract — in particular, no empty
+// strings.
+func (o *OutlookPushReceiver) Tenants() []string { return o.TenantList }
+
+// clientStateFor returns the clientState the receiver expects for a
+// given tenant. Centralised so Subscribe and HandleNotification
+// cannot drift from each other.
+func (o *OutlookPushReceiver) clientStateFor(tenantID string) string {
+	if o.ClientStateForTenant != nil {
+		return o.ClientStateForTenant(tenantID)
+	}
+	return "sn360-es-" + tenantID
 }
 
 // OutlookTokenSource provides OAuth2 tokens for Graph API calls.
@@ -52,7 +92,7 @@ func (o *OutlookPushReceiver) Subscribe(ctx context.Context, tenantID string, ca
 		NotificationURL:    callbackURL,
 		Resource:           "users/messages",
 		ExpirationDateTime: expiresAt.Format(time.RFC3339),
-		ClientState:        "sn360-es-" + tenantID,
+		ClientState:        o.clientStateFor(tenantID),
 	}
 
 	var resp struct {
@@ -105,6 +145,61 @@ func (o *OutlookPushReceiver) Renew(ctx context.Context, _, subscriptionID strin
 	return expiresAt, nil
 }
 
+// Unsubscribe DELETEs an existing Microsoft Graph subscription on
+// shutdown so a restart does not leave a stale subscription
+// delivering callbacks alongside a freshly created one. Graph
+// returns 204 on success and 404 when the subscription has already
+// been evicted (e.g. by natural expiry between the last Renew and
+// now); both are treated as success because the desired post-state
+// — "no subscription with this ID exists on the provider" — is
+// satisfied in both cases.
+//
+// tenantID is part of the PushReceiver contract but Graph's
+// per-subscription DELETE is keyed only by subscriptionID, so it
+// is intentionally unused here.
+func (o *OutlookPushReceiver) Unsubscribe(ctx context.Context, _, subscriptionID string) error {
+	if subscriptionID == "" {
+		// Defensive: PushManager never tracks an empty
+		// subscriptionID, but if something upstream slipped one
+		// in we'd otherwise call DELETE /v1.0/subscriptions/ on
+		// the collection root and that's a different operation
+		// entirely. Refuse loudly instead of guessing.
+		return errors.New("outlook push: unsubscribe requires a non-empty subscription_id")
+	}
+	endpoint := fmt.Sprintf("%s/v1.0/subscriptions/%s", o.baseURL(), url.PathEscape(subscriptionID))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("outlook push: unsubscribe: build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if o.TokenSource != nil {
+		tok, terr := o.TokenSource.Token(ctx)
+		if terr != nil {
+			return fmt.Errorf("outlook push: unsubscribe: acquire token: %w", terr)
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+
+	client := o.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("outlook push: unsubscribe: http: %w", err)
+	}
+	defer resp.Body.Close()
+	// 204 No Content is the documented success response; 404 Not
+	// Found means the subscription is already gone — both leave
+	// the provider in the desired post-state.
+	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	return fmt.Errorf("outlook push: unsubscribe: status %d body %s", resp.StatusCode, string(body))
+}
+
 // graphChangeNotification is the Graph webhook payload.
 type graphChangeNotification struct {
 	Value []struct {
@@ -129,7 +224,7 @@ func (o *OutlookPushReceiver) HandleNotification(ctx context.Context, tenantID s
 		return nil, fmt.Errorf("outlook push: unmarshal: %w", err)
 	}
 
-	expectedState := "sn360-es-" + tenantID
+	expectedState := o.clientStateFor(tenantID)
 
 	var emails []RawEmail
 	for _, v := range notif.Value {

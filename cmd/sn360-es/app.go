@@ -12,6 +12,7 @@ import (
 
 	"github.com/kennguy3n/sn360-es/internal/config"
 	"github.com/kennguy3n/sn360-es/internal/constant"
+	"github.com/kennguy3n/sn360-es/internal/handler"
 	"github.com/kennguy3n/sn360-es/internal/repository"
 	"github.com/kennguy3n/sn360-es/internal/service"
 	"github.com/kennguy3n/sn360-es/internal/service/action"
@@ -34,6 +35,18 @@ import (
 	"github.com/kennguy3n/sn360-es/pkg/storage/redis"
 	"github.com/kennguy3n/sn360-es/pkg/telemetry"
 )
+
+// pushShutdownTimeout bounds how long the push-manager teardown
+// (DELETE /subscriptions for Outlook, users.stop for Gmail) may take
+// during application.Close. The value is generous enough to absorb
+// a handful of slow provider round-trips serially (the manager
+// processes subscriptions in a single goroutine) but tight enough
+// that a misbehaving Graph or Gmail endpoint cannot stall process
+// exit indefinitely. A leftover subscription on the provider side
+// is recovered on the next boot — either by re-Subscribe (Gmail,
+// idempotent) or by the natural 48h Outlook expiry — so failing
+// fast on shutdown is the right trade-off.
+const pushShutdownTimeout = 10 * time.Second
 
 // application bundles every wired dependency so handlers, middleware,
 // and consumers can read from a single composition root. Each field is
@@ -98,6 +111,16 @@ type application struct {
 
 	// Ingestion polling.
 	poller *ingestion.Poller
+
+	// Push-notification ingestion.
+	//
+	// pushManager is nil unless INGESTION_MODE includes push and at
+	// least one push receiver could be wired (see buildPushManager).
+	// pushSignatureVerifier authenticates inbound /v1/push callbacks
+	// BEFORE they reach pushManager; it is nil iff pushManager is nil
+	// so the route is only mounted when both halves are present.
+	pushManager           *ingestion.PushManager
+	pushSignatureVerifier handler.PushSignatureVerifier
 
 	// Periodic workers.
 	relationshipRunner  *worker.Runner
@@ -640,7 +663,41 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	}
 
 	// Ingestion poller.
-	app.poller = buildPoller(ctx, cfg, logger, app)
+	if cfg.Ingestion.PollEnabled() {
+		app.poller = buildPoller(ctx, cfg, logger, app)
+	} else {
+		logger.Info("sn360-es: ingestion poller skipped via mode",
+			slog.String("mode", cfg.Ingestion.Mode))
+	}
+
+	// Push-notification ingestion. The manager + verifier are built
+	// in lock-step: if either fails we drop both so the /v1/push
+	// route is never mounted with a half-functional pipeline.
+	if mgr, receivers := buildPushManager(ctx, cfg, logger, app); mgr != nil {
+		verifier := buildPushSignatureVerifier(cfg, receivers, logger)
+		if verifier == nil {
+			logger.Warn("sn360-es: push manager built but signature verifier could not be wired; push disabled")
+		} else {
+			app.pushManager = mgr
+			app.pushSignatureVerifier = verifier
+			// Register Close() so graceful shutdown unwinds
+			// every tracked provider-side subscription. Skipping
+			// this leaves Outlook subscriptions delivering for
+			// up to 48h to a process that no longer exists, and
+			// a restart would create a second subscription
+			// alongside the orphan — duplicate notifications for
+			// that whole window. Closers run in reverse order
+			// after bgWG.Wait() so RenewLoop has already exited
+			// when Close fires; the deadline is bounded by the
+			// shutdown context plumbed into application.Close.
+			pushMgr := mgr
+			app.closers = append(app.closers, func() error {
+				teardownCtx, cancel := context.WithTimeout(context.Background(), pushShutdownTimeout)
+				defer cancel()
+				return pushMgr.Close(teardownCtx)
+			})
+		}
+	}
 
 	// Periodic workers.
 	app.relationshipRunner, app.vendorRunner, app.cleanupRunner, app.directorySyncRunner = buildWorkers(cfg, logger, app)
@@ -768,6 +825,29 @@ func (a *application) StartBackground(ctx context.Context) {
 			return nil
 		}
 		return a.poller.Run(ctx)
+	})
+	a.spawn(ctx, "push subscription setup", func(ctx context.Context) error {
+		if a.pushManager == nil {
+			return nil
+		}
+		// SetupSubscriptions performs IO against each provider's
+		// subscription API and may take seconds per tenant. Run it
+		// as a one-shot background goroutine so it doesn't block
+		// the HTTP listener boot — the renewal loop below covers
+		// recovery if a subscription failed to register on this
+		// pass (renew falls through to Subscribe on missing IDs).
+		if err := a.pushManager.SetupSubscriptions(ctx); err != nil {
+			a.logger.Warn("sn360-es: push subscription setup completed with errors",
+				slog.Any("error", err))
+		}
+		return nil
+	})
+	a.spawn(ctx, "push subscription renewal", func(ctx context.Context) error {
+		if a.pushManager == nil {
+			return nil
+		}
+		a.pushManager.RenewLoop(ctx)
+		return nil
 	})
 	a.spawn(ctx, "relationship worker", func(ctx context.Context) error {
 		if a.relationshipRunner == nil {

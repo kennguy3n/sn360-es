@@ -365,8 +365,14 @@ func (o O365) HasOutlook() bool {
 	return o.ClientID != "" && o.ClientSecret != "" && o.TenantID != ""
 }
 
-// Ingestion holds the per-mailbox poller tuning knobs.
+// Ingestion holds the per-mailbox poller and push-notification tuning knobs.
 type Ingestion struct {
+	// Mode controls how the service acquires messages. Valid values:
+	//   "poll"   — pull-based polling only (default).
+	//   "push"   — push-notification webhooks only.
+	//   "hybrid" — both push and poll run concurrently.
+	// An empty value is treated as "poll".
+	Mode string
 	// Enabled gates the entire poller. Default false so a deployment
 	// without provider credentials never starts a noop ticker.
 	Enabled bool
@@ -383,13 +389,70 @@ type Ingestion struct {
 	// InitialBackfill is how far back to look on first poll (when no
 	// checkpoint exists yet). Default 1h.
 	InitialBackfill time.Duration
+	// PushCallbackBaseURL is the externally-reachable URL prefix
+	// that providers will POST push notifications to. The handler
+	// appends /{provider}/{tenant} as a path suffix.
+	// Required when Mode is "push" or "hybrid".
+	PushCallbackBaseURL string
+	// PushGmailTopic is the fully-qualified Google Cloud Pub/Sub
+	// topic that Gmail's users.watch API publishes to (e.g.
+	// "projects/<project-id>/topics/sn360-gmail-push"). Required to
+	// wire the Gmail push receiver; when empty, the Gmail half of
+	// the push manager is skipped while Outlook remains operational.
+	PushGmailTopic string
 	// PushGoogleAudience is the expected `aud` claim on Google
 	// Pub/Sub OIDC bearer tokens accompanying push deliveries.
 	// Typically the absolute push endpoint URL configured on the
-	// subscription (e.g. "https://api.sn360.example.com/v1/push/gws").
+	// subscription (e.g. "https://api.sn360.example.com/v1/push/gmail").
 	// When empty, the Google push verifier rejects all callbacks —
 	// preserving the closed-by-default invariant.
 	PushGoogleAudience string
+	// PushMicrosoftClientStateSecret is the shared secret used to
+	// validate Microsoft Graph change notification callbacks. Each
+	// subscription is created with this value as clientState, and
+	// the verifier confirms inbound notifications carry the
+	// matching value via constant-time comparison.
+	// Required when Mode is "push" or "hybrid" and an Outlook
+	// provider is configured.
+	PushMicrosoftClientStateSecret string
+}
+
+// PushEnabled reports whether the configured INGESTION_MODE
+// INCLUDES push-notification handling — i.e. "push" or "hybrid".
+//
+// It is a mode predicate, NOT an active-runtime gate. Returning
+// true means the wiring layer should attempt to build a
+// [ingestion.PushManager]; the manager itself may still end up nil
+// at runtime if no provider receiver could be built (missing
+// credentials, missing push topic / audience / client-state secret,
+// or buildPushManager could not initialise the OAuth token source).
+// Callers that need "is the push pipeline ACTIVE right now?"
+// should check the wired application.pushManager handle directly
+// instead.
+func (i Ingestion) PushEnabled() bool {
+	return i.Mode == "push" || i.Mode == "hybrid"
+}
+
+// PollEnabled reports whether the configured INGESTION_MODE
+// INCLUDES the legacy polling pipeline — i.e. "", "poll", or
+// "hybrid". The empty-string default is treated as "poll" for
+// backwards compatibility with deployments that pre-date the
+// INGESTION_MODE variable.
+//
+// It is a mode predicate, NOT an active-runtime gate. PollEnabled()
+// returning true means the wiring layer should attempt to build a
+// poller; the poller itself only actually runs when (a) PollEnabled
+// is true AND (b) Ingestion.Enabled is set (the legacy
+// INGESTION_ENABLED flag, retained as the explicit off-switch for
+// poll-mode deployments). A deployment with Mode="poll" and
+// Enabled=false still returns true here but produces a nil poller
+// at runtime — by design, so push-only deployments don't have to
+// also disable poll mode through two separate flags.
+//
+// Callers that need "is the poller ACTIVELY running right now?"
+// should check the wired application.poller handle directly instead.
+func (i Ingestion) PollEnabled() bool {
+	return i.Mode == "" || i.Mode == "poll" || i.Mode == "hybrid"
 }
 
 // Worker holds the periodic-worker tuning knobs.
@@ -653,13 +716,17 @@ func Load() (Config, error) {
 			ResolveNestedGroups: getBool("O365_RESOLVE_NESTED_GROUPS", true),
 		},
 		Ingestion: Ingestion{
-			Enabled:            getBool("INGESTION_ENABLED", false),
-			Interval:           getDuration("INGESTION_INTERVAL", 30*time.Second),
-			BatchSize:          getInt("INGESTION_BATCH_SIZE", 50),
-			Concurrency:        getInt("INGESTION_CONCURRENCY", 10),
-			LockTTL:            getDuration("INGESTION_LOCK_TTL", 45*time.Second),
-			InitialBackfill:    getDuration("INGESTION_INITIAL_BACKFILL", time.Hour),
-			PushGoogleAudience: strings.TrimSpace(getStr("INGESTION_PUSH_GOOGLE_AUDIENCE", "")),
+			Mode:                           strings.ToLower(strings.TrimSpace(getStr("INGESTION_MODE", "poll"))),
+			Enabled:                        getBool("INGESTION_ENABLED", false),
+			Interval:                       getDuration("INGESTION_INTERVAL", 30*time.Second),
+			BatchSize:                      getInt("INGESTION_BATCH_SIZE", 50),
+			Concurrency:                    getInt("INGESTION_CONCURRENCY", 10),
+			LockTTL:                        getDuration("INGESTION_LOCK_TTL", 45*time.Second),
+			InitialBackfill:                getDuration("INGESTION_INITIAL_BACKFILL", time.Hour),
+			PushCallbackBaseURL:            strings.TrimRight(strings.TrimSpace(getStr("INGESTION_PUSH_CALLBACK_BASE_URL", "")), "/"),
+			PushGmailTopic:                 strings.TrimSpace(getStr("INGESTION_PUSH_GMAIL_TOPIC", "")),
+			PushGoogleAudience:             strings.TrimSpace(getStr("INGESTION_PUSH_GOOGLE_AUDIENCE", "")),
+			PushMicrosoftClientStateSecret: getStr("INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET", ""),
 		},
 		Worker: Worker{
 			RelationshipInterval:    getDuration("WORKER_RELATIONSHIP_INTERVAL", 4*time.Hour),
@@ -757,6 +824,17 @@ func (c Config) validate() error {
 	if c.HTTP.Port <= 0 || c.HTTP.Port > 65535 {
 		return fmt.Errorf("HTTP_PORT out of range: %d", c.HTTP.Port)
 	}
+	// INGESTION_MODE must be one of the documented values. Without
+	// this check, a typo (e.g. "polll", "Push") silently falls
+	// through both PollEnabled() and PushEnabled(), leaving the
+	// service running but ingesting nothing — exactly the kind of
+	// failure that's invisible until a downstream queue stays empty.
+	switch c.Ingestion.Mode {
+	case "", "poll", "push", "hybrid":
+		// ok
+	default:
+		return fmt.Errorf("INGESTION_MODE: invalid value %q (expected one of: poll, push, hybrid, or empty)", c.Ingestion.Mode)
+	}
 	if c.Score.Blocked <= c.Score.HighRisk ||
 		c.Score.HighRisk <= c.Score.Warning ||
 		c.Score.Warning <= c.Score.Caution ||
@@ -765,6 +843,18 @@ func (c Config) validate() error {
 	}
 	if c.Onboarding.StateSecret != "" && len(c.Onboarding.StateSecret) < 16 {
 		return errors.New("ONBOARDING_STATE_SECRET must be at least 16 bytes when set")
+	}
+	// INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET is the HMAC key
+	// used to derive per-tenant Microsoft Graph clientState values.
+	// Enforce a minimum length across ALL environments (not just
+	// production) because a tiny key is just as easy to brute-force
+	// in dev/staging — and a leaked dev clientState scheme is the
+	// kind of thing that quietly migrates into a production .env.
+	// 16 bytes ≥ matches Onboarding.StateSecret's floor (same
+	// HMAC-based threat model). Production gets an additional 32-byte
+	// floor + low-entropy check below to align with BANNER_TOKEN_SECRET.
+	if c.Ingestion.PushMicrosoftClientStateSecret != "" && len(c.Ingestion.PushMicrosoftClientStateSecret) < 16 {
+		return errors.New("INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET must be at least 16 bytes when set")
 	}
 	// B3 + B4: Production-only security validations (UAT + prod).
 	if c.Environment.IsProduction() {
@@ -795,6 +885,20 @@ func (c Config) validate() error {
 		}
 		if c.Onboarding.StateSecret != "" && isLowEntropy(c.Onboarding.StateSecret) {
 			return errors.New("ONBOARDING_STATE_SECRET has low entropy (all-same character, sequential bytes, or repeated short pattern); generate one with: openssl rand -base64 48")
+		}
+		// Microsoft Graph clientState is delivered to providers via
+		// the subscription-create payload (not over wire to clients)
+		// but acts as a shared HMAC key — same threat model as
+		// BANNER_TOKEN_SECRET. Hold it to the same 32-byte floor and
+		// low-entropy check in production environments. The general
+		// 16-byte floor above catches the dev/staging case.
+		if pcss := c.Ingestion.PushMicrosoftClientStateSecret; pcss != "" {
+			if len(pcss) < 32 {
+				return errors.New("INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET must be at least 32 bytes in production environments (UAT/prod)")
+			}
+			if isLowEntropy(pcss) {
+				return errors.New("INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET has low entropy (all-same character, sequential bytes, or repeated short pattern); generate one with: openssl rand -base64 48")
+			}
 		}
 	}
 	return nil

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,12 +28,41 @@ const (
 type PushReceiver interface {
 	// Kind returns a stable identifier ("gmail" / "outlook").
 	Kind() string
+	// Tenants returns the tenant identifiers this receiver covers.
+	// Each provider has its own namespace (Gmail uses GWS domain;
+	// Outlook uses Azure AD tenant ID), so the PushManager iterates
+	// receiver-by-receiver against its own Tenants() rather than
+	// taking a cross-product against a global tenant list — that
+	// would issue mismatched-namespace subscriptions and, on
+	// Outlook, create duplicate Graph subscriptions whose
+	// notifications double-publish into the event bus.
+	//
+	// An empty slice means "no tenants are configured for this
+	// provider" and the PushManager skips it with a warning. The
+	// receiver MUST NOT return a slice containing an empty string
+	// — a missing tenant segment would form an invalid callback URL
+	// (/v1/push/{provider}/) that the webhook handler 400-rejects,
+	// breaking the Microsoft Graph validation handshake.
+	Tenants() []string
 	// Subscribe registers push notification delivery with the
 	// provider. For Gmail this is a Pub/Sub watch; for Outlook it
 	// creates a Graph Change Notification subscription.
 	Subscribe(ctx context.Context, tenantID string, callbackURL string) (subscriptionID string, expiresAt time.Time, err error)
 	// Renew refreshes an existing subscription before it expires.
 	Renew(ctx context.Context, tenantID, subscriptionID string, callbackURL string) (expiresAt time.Time, err error)
+	// Unsubscribe tears down a provider-side subscription so it
+	// stops delivering notifications. Implementations MUST be
+	// idempotent — Close() may invoke Unsubscribe for a
+	// subscription the provider has already evicted, and we want
+	// that to be a logged no-op rather than a hard error.
+	//
+	// Gmail: POST /gmail/v1/users/me/stop (cancels the watch
+	//        derived from the OAuth identity; tenantID/subscriptionID
+	//        are required by the interface but ignored by Gmail).
+	// Outlook: DELETE /v1.0/subscriptions/{subscriptionID} (returns
+	//        204 on success and 404 if already evicted — both are
+	//        treated as success).
+	Unsubscribe(ctx context.Context, tenantID, subscriptionID string) error
 	// HandleNotification processes an incoming push notification
 	// payload and returns the raw messages to evaluate.
 	HandleNotification(ctx context.Context, tenantID string, payload json.RawMessage) ([]RawEmail, error)
@@ -53,9 +83,6 @@ type PushConfig struct {
 	RenewalBuffer time.Duration
 	// Subject is the JetStream subject for emitted events.
 	Subject string
-	// TenantIDs are the tenants to subscribe to. When empty,
-	// subscriptions are created for all known tenants.
-	TenantIDs []string
 }
 
 // PushSubscription tracks a live push subscription.
@@ -69,11 +96,31 @@ type PushSubscription struct {
 
 // PushManager manages push notification subscriptions and processes
 // incoming notifications. It is the push counterpart to the Poller.
+//
+// Lock ordering invariant: when both reconcileMu and mu are needed,
+// reconcileMu MUST be acquired first. mu is only ever held for the
+// duration of a single map operation (Subscriptions read,
+// subscribeOne write, renewOne write). HandleNotification reads
+// receivers without holding either lock (m.cfg.Receivers is
+// immutable after construction).
 type PushManager struct {
-	cfg  PushConfig
-	mu   sync.RWMutex
-	subs map[string]*PushSubscription // keyed by provider:tenant
-	log  *slog.Logger
+	cfg PushConfig
+	// reconcileMu serialises reconcile() passes. SetupSubscriptions
+	// (one-shot on boot) and RenewLoop (every minute) both call
+	// reconcile, and on a slow provider API SetupSubscriptions can
+	// exceed 60s. Without single-flight semantics, two reconcile
+	// passes would race on the same (provider, tenant) key, double
+	// Subscribe on the provider side, and orphan one of the two
+	// resulting subscription IDs. Holding this mutex for the
+	// duration of a reconcile pass is acceptable because:
+	//   - HandleNotification does NOT take it (push delivery is not
+	//     blocked by a long-running reconcile)
+	//   - Subscriptions() does NOT take it (callers can observe a
+	//     mid-reconcile snapshot without waiting)
+	reconcileMu sync.Mutex
+	mu          sync.RWMutex
+	subs        map[string]*PushSubscription // keyed by provider:tenant
+	log         *slog.Logger
 }
 
 // NewPushManager creates a PushManager and validates the config.
@@ -106,52 +153,39 @@ func NewPushManager(cfg PushConfig) (*PushManager, error) {
 	}, nil
 }
 
-// SetupSubscriptions registers push subscriptions for all configured
-// tenants and receivers. Should be called at startup.
+// SetupSubscriptions runs an initial reconciliation pass: every
+// (receiver, tenant) pair the receivers declare via Tenants() that
+// is not already subscribed is Subscribed; any already-subscribed
+// pair that is nearing expiry is Renewed. It is safe to call
+// repeatedly — it is the synchronous fast-path counterpart to
+// RenewLoop, which calls the same reconciliation primitive on a
+// timer.
+//
+// SetupSubscriptions MUST NOT cross-product receivers against a
+// shared tenant list — each provider has its own tenant namespace
+// (Gmail GWS domain vs. Outlook Azure AD tenant ID), so subscribing
+// one provider with the other's tenant ID produces invalid callback
+// URLs or, worse, duplicate Graph subscriptions that double-publish
+// notifications.
 func (m *PushManager) SetupSubscriptions(ctx context.Context) error {
-	tenants := m.cfg.TenantIDs
-	if len(tenants) == 0 {
-		tenants = []string{""}
-	}
-
-	var errs []error
-	for _, recv := range m.cfg.Receivers {
-		for _, tenant := range tenants {
-			callbackURL := fmt.Sprintf("%s/v1/push/%s/%s", m.cfg.CallbackBaseURL, recv.Kind(), tenant)
-			subID, expiresAt, err := recv.Subscribe(ctx, tenant, callbackURL)
-			if err != nil {
-				m.log.Warn("push: subscribe failed",
-					slog.String("provider", recv.Kind()),
-					slog.String("tenant", tenant),
-					slog.Any("error", err))
-				errs = append(errs, err)
-				continue
-			}
-			key := recv.Kind() + ":" + tenant
-			m.mu.Lock()
-			m.subs[key] = &PushSubscription{
-				Provider:       recv.Kind(),
-				TenantID:       tenant,
-				SubscriptionID: subID,
-				ExpiresAt:      expiresAt,
-				CallbackURL:    callbackURL,
-			}
-			m.mu.Unlock()
-			m.log.Info("push: subscription registered",
-				slog.String("provider", recv.Kind()),
-				slog.String("tenant", tenant),
-				slog.String("subscription_id", subID),
-				slog.Time("expires_at", expiresAt))
-		}
-	}
-	if len(errs) > 0 {
-		return fmt.Errorf("push: %d subscription(s) failed", len(errs))
-	}
-	return nil
+	return m.reconcile(ctx)
 }
 
-// RenewLoop runs the subscription renewal loop until context is
-// cancelled. Checks every minute for subscriptions nearing expiry.
+// RenewLoop runs the subscription reconciliation loop until context
+// is cancelled. Checks every minute and, on each tick:
+//
+//   - Subscribes any (receiver, tenant) pair declared by the
+//     receivers but not currently tracked in m.subs. This recovers
+//     from transient SetupSubscriptions failures (e.g. a Graph 503
+//     during initial boot) without requiring a process restart.
+//   - Renews any tracked subscription whose ExpiresAt is within
+//     RenewalBuffer of now.
+//
+// Without the auto-resubscribe behaviour, a one-shot SetupSubscriptions
+// error would leave the tenant permanently un-subscribed until the
+// pod is restarted — a failure mode that's invisible from outside
+// and that an operator would only notice via missing-traffic
+// alerting on the downstream queue.
 func (m *PushManager) RenewLoop(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
@@ -161,48 +195,155 @@ func (m *PushManager) RenewLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			m.renewExpiring(ctx)
+			if err := m.reconcile(ctx); err != nil {
+				// Per-(provider, tenant) errors are already logged
+				// at WARN inside subscribeOne / renewOne. The
+				// aggregated error returned here is consumed only
+				// by SetupSubscriptions' caller; in the loop we
+				// just want the next tick to retry, so drop it.
+				_ = err
+			}
 		}
 	}
 }
 
-func (m *PushManager) renewExpiring(ctx context.Context) {
-	m.mu.RLock()
-	now := time.Now()
-	var toRenew []*PushSubscription
-	for _, s := range m.subs {
-		if s.ExpiresAt.Sub(now) < m.cfg.RenewalBuffer {
-			toRenew = append(toRenew, s)
-		}
-	}
-	m.mu.RUnlock()
+// reconcile is the closed-loop primitive shared by SetupSubscriptions
+// (initial pass) and RenewLoop (periodic). Each call walks every
+// (receiver, tenant) pair and either Subscribes (when missing) or
+// Renews (when nearing expiry). Errors are aggregated and returned
+// to the caller; individual failures are also logged at WARN so the
+// timer-driven path doesn't have to inspect the return.
+//
+// reconcile is single-flight: concurrent calls (e.g. a slow
+// SetupSubscriptions overlapping with a RenewLoop tick) serialise
+// on reconcileMu so the "read m.subs → decide Subscribe vs. Renew
+// → write m.subs" sequence is atomic with respect to other reconcile
+// passes. Without this, two passes could both observe a key as
+// unsubscribed, both call Subscribe on the provider, and orphan
+// one of the resulting subscription IDs.
+func (m *PushManager) reconcile(ctx context.Context) error {
+	m.reconcileMu.Lock()
+	defer m.reconcileMu.Unlock()
 
-	for _, s := range toRenew {
-		recv := m.findReceiver(s.Provider)
-		if recv == nil {
+	var errs []error
+	for _, recv := range m.cfg.Receivers {
+		tenants := recv.Tenants()
+		if len(tenants) == 0 {
+			m.log.Warn("push: receiver has no tenants configured; skipping",
+				slog.String("provider", recv.Kind()))
 			continue
 		}
-		newExpiry, err := recv.Renew(ctx, s.TenantID, s.SubscriptionID, s.CallbackURL)
-		if err != nil {
-			m.log.Warn("push: renew failed",
-				slog.String("provider", s.Provider),
-				slog.String("tenant", s.TenantID),
-				slog.Any("error", err))
-			continue
+		for _, tenant := range tenants {
+			if tenant == "" {
+				m.log.Warn("push: receiver returned empty tenant; skipping",
+					slog.String("provider", recv.Kind()))
+				continue
+			}
+			key := recv.Kind() + ":" + tenant
+			m.mu.RLock()
+			sub, alreadySubscribed := m.subs[key]
+			// Snapshot ExpiresAt under the read lock so the
+			// renewal-buffer check below doesn't race with a
+			// concurrent renewOne writer mutating sub.ExpiresAt
+			// on a different goroutine (e.g. HandleNotification
+			// has no path to mutate it today, but the field is
+			// otherwise unprotected).
+			var expiresAt time.Time
+			if alreadySubscribed {
+				expiresAt = sub.ExpiresAt
+			}
+			m.mu.RUnlock()
+			if !alreadySubscribed {
+				if err := m.subscribeOne(ctx, recv, tenant); err != nil {
+					errs = append(errs, err)
+				}
+				continue
+			}
+			if time.Until(expiresAt) < m.cfg.RenewalBuffer {
+				if err := m.renewOne(ctx, recv, sub); err != nil {
+					errs = append(errs, err)
+				}
+			}
 		}
-		m.mu.Lock()
-		s.ExpiresAt = newExpiry
-		m.mu.Unlock()
-		m.log.Info("push: subscription renewed",
-			slog.String("provider", s.Provider),
-			slog.String("tenant", s.TenantID),
-			slog.Time("new_expiry", newExpiry))
 	}
+	if len(errs) > 0 {
+		return fmt.Errorf("push: %d subscription op(s) failed", len(errs))
+	}
+	return nil
 }
 
+// subscribeOne registers a single (receiver, tenant) subscription
+// and records it in m.subs on success. Errors are logged at WARN
+// and returned so the reconciliation loop can aggregate them; a
+// failed Subscribe leaves m.subs unchanged so the next reconcile
+// tick will retry it automatically.
+func (m *PushManager) subscribeOne(ctx context.Context, recv PushReceiver, tenant string) error {
+	callbackURL := fmt.Sprintf("%s/v1/push/%s/%s", m.cfg.CallbackBaseURL, recv.Kind(), tenant)
+	subID, expiresAt, err := recv.Subscribe(ctx, tenant, callbackURL)
+	if err != nil {
+		m.log.Warn("push: subscribe failed; will retry on next reconcile tick",
+			slog.String("provider", recv.Kind()),
+			slog.String("tenant", tenant),
+			slog.Any("error", err))
+		return err
+	}
+	key := recv.Kind() + ":" + tenant
+	m.mu.Lock()
+	m.subs[key] = &PushSubscription{
+		Provider:       recv.Kind(),
+		TenantID:       tenant,
+		SubscriptionID: subID,
+		ExpiresAt:      expiresAt,
+		CallbackURL:    callbackURL,
+	}
+	m.mu.Unlock()
+	m.log.Info("push: subscription registered",
+		slog.String("provider", recv.Kind()),
+		slog.String("tenant", tenant),
+		slog.String("subscription_id", subID),
+		slog.Time("expires_at", expiresAt))
+	return nil
+}
+
+// renewOne refreshes a single subscription's ExpiresAt. Failures
+// are logged but not removed from m.subs — the subscription remains
+// tracked so it can be retried on the next tick (and HandleNotification
+// continues to dispatch through the receiver). If the provider has
+// hard-revoked the subscription, the next Renew will surface the
+// 404; an operator-driven path would need to evict from m.subs to
+// force a Subscribe on the following tick.
+func (m *PushManager) renewOne(ctx context.Context, recv PushReceiver, sub *PushSubscription) error {
+	newExpiry, err := recv.Renew(ctx, sub.TenantID, sub.SubscriptionID, sub.CallbackURL)
+	if err != nil {
+		m.log.Warn("push: renew failed; will retry on next reconcile tick",
+			slog.String("provider", sub.Provider),
+			slog.String("tenant", sub.TenantID),
+			slog.Any("error", err))
+		return err
+	}
+	m.mu.Lock()
+	sub.ExpiresAt = newExpiry
+	m.mu.Unlock()
+	m.log.Info("push: subscription renewed",
+		slog.String("provider", sub.Provider),
+		slog.String("tenant", sub.TenantID),
+		slog.Time("new_expiry", newExpiry))
+	return nil
+}
+
+// findReceiver looks up a receiver by its Kind() identifier. Lookup
+// is case-insensitive to stay consistent with PushSignatureRouter,
+// which lowercases its provider key (internal/handler/push_signature.go).
+// If a misrouted callback (e.g. /v1/push/Gmail/...) ever reaches the
+// dispatch path with a mixed-case provider segment, both layers
+// agree on the lowercased canonical identifier rather than silently
+// dropping the notification at the manager. Receiver Kind() values
+// are expected to be lowercase ("gmail", "outlook"); the
+// strings.EqualFold here only relaxes the comparison side, not the
+// receiver's reported identity.
 func (m *PushManager) findReceiver(kind string) PushReceiver {
 	for _, r := range m.cfg.Receivers {
-		if r.Kind() == kind {
+		if strings.EqualFold(r.Kind(), kind) {
 			return r
 		}
 	}
@@ -250,6 +391,82 @@ func (m *PushManager) HandleNotification(ctx context.Context, provider, tenantID
 	return nil
 }
 
+// Close tears down every tracked provider-side subscription. It is
+// the graceful-shutdown counterpart to SetupSubscriptions: where
+// SetupSubscriptions opens subscriptions on boot, Close unwinds
+// them so a clean shutdown does not leave stale callbacks
+// pointing at a process that no longer exists.
+//
+// Why this matters per-provider:
+//
+//   - Gmail's users.watch is idempotent on re-subscribe (the new
+//     watch replaces the old one), so leaving an old watch alive
+//     after shutdown is recovered automatically on the next boot.
+//     Still, calling users.stop on shutdown is cheap and prevents
+//     Pub/Sub from buffering ~7 days of notifications to a topic
+//     no consumer is draining.
+//
+//   - Outlook POST /subscriptions creates a NEW subscription each
+//     call; without an explicit DELETE on shutdown, the old
+//     subscription survives ~48h and the next boot creates a
+//     second one alongside it, causing duplicate notification
+//     delivery for up to two days. Calling DELETE here closes that
+//     window.
+//
+// Close is best-effort: per-subscription teardown errors are
+// logged but never block subsequent teardowns or the caller's
+// shutdown sequence. The context provided by the caller bounds the
+// total teardown time — application.Close passes a short-lived
+// context derived from the shutdown deadline so a misbehaving
+// provider API cannot stall process exit indefinitely.
+//
+// Close empties m.subs on completion so a re-Start (e.g. in tests)
+// begins from a clean slate. It does NOT take reconcileMu — by the
+// time Close runs, RenewLoop has already exited via ctx.Done() and
+// SetupSubscriptions has long completed; the only remaining writer
+// is Close itself.
+func (m *PushManager) Close(ctx context.Context) error {
+	m.mu.Lock()
+	snapshot := make([]*PushSubscription, 0, len(m.subs))
+	for _, s := range m.subs {
+		snapshot = append(snapshot, s)
+	}
+	m.subs = make(map[string]*PushSubscription)
+	m.mu.Unlock()
+
+	var errs []error
+	for _, sub := range snapshot {
+		recv := m.findReceiver(sub.Provider)
+		if recv == nil {
+			// The manager was reconfigured between Subscribe and
+			// Close — uncommon but defensible: log and move on
+			// rather than failing every other teardown.
+			m.log.Warn("push: skipping unsubscribe; receiver not found for tracked subscription",
+				slog.String("provider", sub.Provider),
+				slog.String("tenant", sub.TenantID),
+				slog.String("subscription_id", sub.SubscriptionID))
+			continue
+		}
+		if err := recv.Unsubscribe(ctx, sub.TenantID, sub.SubscriptionID); err != nil {
+			m.log.Warn("push: unsubscribe failed; provider subscription will expire naturally",
+				slog.String("provider", sub.Provider),
+				slog.String("tenant", sub.TenantID),
+				slog.String("subscription_id", sub.SubscriptionID),
+				slog.Any("error", err))
+			errs = append(errs, err)
+			continue
+		}
+		m.log.Info("push: subscription torn down on shutdown",
+			slog.String("provider", sub.Provider),
+			slog.String("tenant", sub.TenantID),
+			slog.String("subscription_id", sub.SubscriptionID))
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("push: %d unsubscribe op(s) failed", len(errs))
+	}
+	return nil
+}
+
 // Subscriptions returns a snapshot of active subscriptions.
 func (m *PushManager) Subscriptions() []PushSubscription {
 	m.mu.RLock()
@@ -262,6 +479,18 @@ func (m *PushManager) Subscriptions() []PushSubscription {
 }
 
 // HybridPollerConfig extends PollerConfig with push settings.
+//
+// Note on tenant scoping: PollerConfig.TenantIDs (embedded) governs
+// ONLY the polling half of hybrid ingestion. The push half sources
+// its tenant set from each PushReceiver's Tenants() method (each
+// provider has its own namespace — Gmail uses GWS domain, Outlook
+// uses Azure AD tenant ID — and cross-namespace subscriptions would
+// either 400 at the provider or create orphaned Graph subscriptions
+// that double-publish callbacks). If a deployment needs the push
+// half to cover a different tenant subset than the poll half, it
+// must construct the PushReceivers with the desired TenantList
+// directly; HybridPollerConfig does NOT expose a push-only tenant
+// override.
 type HybridPollerConfig struct {
 	PollerConfig
 	PushReceivers   []PushReceiver
@@ -291,7 +520,6 @@ func NewHybridIngestion(cfg HybridPollerConfig) (*Poller, *PushManager, error) {
 			Normalizer:      cfg.Normalizer,
 			CallbackBaseURL: cfg.CallbackBaseURL,
 			Subject:         cfg.Subject,
-			TenantIDs:       cfg.TenantIDs,
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("push ingestion: %w", err)
@@ -308,7 +536,6 @@ func NewHybridIngestion(cfg HybridPollerConfig) (*Poller, *PushManager, error) {
 			Normalizer:      cfg.Normalizer,
 			CallbackBaseURL: cfg.CallbackBaseURL,
 			Subject:         cfg.Subject,
-			TenantIDs:       cfg.TenantIDs,
 		})
 		if err != nil {
 			return poller, nil, fmt.Errorf("hybrid push: %w", err)

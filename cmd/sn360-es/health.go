@@ -59,6 +59,11 @@ func buildHealthCheckers(app *application) []handler.HealthChecker {
 			return nil
 		}})
 	}
+	if app.pushManager != nil {
+		checkers = append(checkers, handler.HealthCheckerFunc{N: "ingestion_push", F: func(_ context.Context) error {
+			return nil
+		}})
+	}
 	if app.relationshipRunner != nil {
 		checkers = append(checkers, handler.HealthCheckerFunc{N: "worker_relationship", F: func(_ context.Context) error {
 			return nil

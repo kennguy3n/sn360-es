@@ -75,6 +75,24 @@ func buildMux(app *application) (http.Handler, error) {
 		mux.Handle("/l/", interstitialH)
 	}
 
+	// Push-notification webhook (Gmail Pub/Sub + Microsoft Graph).
+	//
+	// The route is only mounted when BOTH the PushManager and the
+	// PushSignatureVerifier wired up successfully. The handler
+	// validates the signature on every request before invoking the
+	// manager, so a misconfigured verifier would fail-closed at the
+	// handler — but we still gate at wiring time to keep the
+	// public surface area honest: /v1/push/ is only advertised
+	// when push ingestion is genuinely ready.
+	if app.pushManager != nil && app.pushSignatureVerifier != nil {
+		pushH := &handler.PushWebhookHandler{
+			Manager:           app.pushManager,
+			Logger:            logger,
+			SignatureVerifier: app.pushSignatureVerifier,
+		}
+		mux.Handle("/v1/push/", pushH)
+	}
+
 	// Onboarding OAuth consent flow.
 	if app.onboardingSvc != nil {
 		adapter := &onboardingServiceAdapter{
@@ -248,6 +266,7 @@ func defaultRouteTemplates() []middleware.RoutePattern {
 		{Prefix: "/l/", Label: "/l/:token"},
 		{Prefix: "/v1/education/lesson/", Label: "/v1/education/lesson/:id"},
 		{Prefix: "/v1/vendors/", Label: "/v1/vendors/:id"},
+		{Prefix: "/v1/push/", Label: "/v1/push/:provider/:tenant"},
 	}
 }
 
@@ -299,6 +318,32 @@ func rateLimitRouteLabel(path string, patterns []middleware.RoutePattern, knownE
 // defaultRateLimitSkipPaths returns the paths that bypass the rate
 // limiter entirely. These are mostly probes and docs the operator
 // always needs to be able to hit.
+//
+// /v1/push/ is also skipped because push-webhook callbacks from
+// Google Pub/Sub and Microsoft Graph all originate from a small
+// pool of provider-owned IPs and, behind a load balancer without
+// RATE_LIMIT_TRUSTED_PROXIES configured, would share a single
+// token bucket keyed on the LB's IP. During a Pub/Sub batch
+// fan-out or a Graph notification burst, legitimate callbacks
+// would 429 and force the provider into its exponential retry
+// schedule — Gmail Pub/Sub retries up to 7 days with backoff,
+// Graph retries 4 times over ~10 minutes — visibly delaying email
+// ingestion and inflating provider error metrics.
+//
+// Skipping rate-limiting on /v1/push/ is safe because the handler
+// is closed-by-default and provider-authenticated:
+//   - Google Pub/Sub callbacks must carry a valid OIDC bearer
+//     whose `aud` matches PushGoogleAudience and whose `iss` is
+//     accounts.google.com (verified by buildPushSignatureVerifier
+//     via JWKS).
+//   - Microsoft Graph callbacks must carry a clientState that
+//     constant-time-matches PushMicrosoftClientStateSecret.
+//   - If either verifier is unwired (missing secret), the push
+//     manager itself is never registered and the route 404s.
+//
+// An unauthenticated DoS would therefore still be rejected at the
+// signature-verification layer (cheap), and the upstream JetStream
+// publisher applies its own backpressure for the authenticated path.
 func defaultRateLimitSkipPaths() []string {
 	return []string{
 		"/healthz",
@@ -307,10 +352,17 @@ func defaultRateLimitSkipPaths() []string {
 		"/docs",
 		"/docs/",
 		"/openapi.yaml",
+		"/v1/push/",
 	}
 }
 
 // defaultAuthSkipPaths returns the paths that bypass JWT auth.
+//
+// /v1/push/ is included because push-webhook callbacks authenticate
+// using a provider-specific scheme (Google Pub/Sub OIDC bearer for
+// Gmail, Microsoft Graph clientState for Outlook) verified inside
+// the PushWebhookHandler itself — not a Bearer JWT issued by us.
+// The handler still fails-closed without the verifier wired.
 func defaultAuthSkipPaths() []string {
 	return []string{
 		"/healthz",
@@ -324,5 +376,6 @@ func defaultAuthSkipPaths() []string {
 		"/v1/quarantine/release",
 		"/v1/education/lesson/",
 		"/v1/onboarding/callback",
+		"/v1/push/",
 	}
 }

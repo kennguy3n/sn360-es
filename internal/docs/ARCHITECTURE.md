@@ -407,7 +407,7 @@ from `cmd/sn360-es/main.go`.
   poller is not constructed at all and `StartBackground` becomes a
   no-op.
 
-#### 5.1.2 Push-Notification Receivers (implemented, not yet routed)
+#### 5.1.2 Push-Notification Receivers
 
 Alongside the polling fallback, the codebase contains a push-notification
 ingestion path designed to short-circuit poll latency for tenants whose
@@ -434,21 +434,32 @@ Change Notifications):
       JWKS refreshes via `singleflight.Group` to defeat
       thundering-herd on key rotation.
     - `MicrosoftClientStateVerifier` confirms each
-      `value[i].clientState` matches the per-tenant secret using
+      `value[i].clientState` matches the per-tenant value using
       `crypto/subtle.ConstantTimeCompare` so the comparison does not
-      leak timing oracles.
+      leak timing oracles. The expected clientState is derived as
+      `"sn360-es-" + base64url(HMAC-SHA256(INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET,
+      tenantID))[:32]` and the same closure is wired into
+      `OutlookPushReceiver.ClientStateForTenant` so subscription-create
+      and inbound verification cannot drift apart.
     - `PushSignatureRouter` dispatches verification based on the
       `provider` path segment and returns `400` (not a misleading
       `401`) for unknown provider names.
 
 The verifiers and handler are unit-tested in
 `internal/handler/push_webhook_test.go` (which exercises both the
-HTTP handler and the Google / Microsoft verifiers), but the
-`/v1/push/{provider}/{tenant}` route is intentionally not mounted in
-`cmd/sn360-es/routes.go` yet: the receivers + per-tenant
-`clientState` storage that make push end-to-end are part of work that
-is not yet wired. The poller in §5.1.1 remains the only ingestion
-path in the running binary.
+HTTP handler and the Google / Microsoft verifiers) and the
+`/v1/push/{provider}/{tenant}` route is wired in
+`cmd/sn360-es/routes.go`. Push ingestion is gated at boot by
+`INGESTION_MODE` (one of `poll` — the default —, `push`, or
+`hybrid`): when push is enabled, `buildPushManager` instantiates
+per-provider `PushReceiver`s for any provider whose credentials and
+push-specific secret are configured (Gmail needs
+`INGESTION_PUSH_GMAIL_TOPIC`; Outlook needs
+`INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET`) and starts the
+subscription-setup + renewal goroutines from `StartBackground`. The
+`PushSignatureRouter` is built in lock-step so the route is only
+mounted when both halves are present; otherwise the binary keeps
+running on the poller in §5.1.1 alone.
 
 ### 5.2 Evaluation Domain
 

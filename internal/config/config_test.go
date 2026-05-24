@@ -78,6 +78,95 @@ func TestLoad_RedisFetchBatchSize_IndependentOfNATS(t *testing.T) {
 	}
 }
 
+// TestLoad_IngestionMode_DefaultsToPoll pins the poll-only default so
+// a deployment that does not opt in to push ingestion never starts
+// the subscription/renewal goroutines or mounts the /v1/push route.
+func TestLoad_IngestionMode_DefaultsToPoll(t *testing.T) {
+	withEnv(t, map[string]string{
+		"APP_NAME":    "sn360-es-test",
+		"ENVIRONMENT": "local",
+	})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Ingestion.Mode != "poll" {
+		t.Fatalf("Ingestion.Mode = %q, want %q", cfg.Ingestion.Mode, "poll")
+	}
+	if cfg.Ingestion.PushEnabled() {
+		t.Fatal("PushEnabled() = true on default; expected false")
+	}
+	if !cfg.Ingestion.PollEnabled() {
+		t.Fatal("PollEnabled() = false on default; expected true")
+	}
+}
+
+// TestLoad_IngestionMode_NormalisesAndReadsPushFields pins the
+// env-var contract for the push-ingestion knobs added alongside the
+// /v1/push route wiring. INGESTION_MODE is lowercased and trimmed so
+// "Push " is treated as "push"; the callback base URL has any
+// trailing slash stripped so the handler builds well-formed
+// /{provider}/{tenant} URLs.
+func TestLoad_IngestionMode_NormalisesAndReadsPushFields(t *testing.T) {
+	withEnv(t, map[string]string{
+		"APP_NAME":                                     "sn360-es-test",
+		"ENVIRONMENT":                                  "local",
+		"INGESTION_MODE":                               "  Push ",
+		"INGESTION_PUSH_CALLBACK_BASE_URL":             "https://es.example.com/",
+		"INGESTION_PUSH_GMAIL_TOPIC":                   "projects/p1/topics/sn360-gmail",
+		"INGESTION_PUSH_GOOGLE_AUDIENCE":               "https://es.example.com/v1/push/gmail",
+		"INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET": "deadbeef-deadbeef-deadbeef-deadbeef",
+	})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Ingestion.Mode != "push" {
+		t.Errorf("Ingestion.Mode = %q, want %q (lower-cased + trimmed)",
+			cfg.Ingestion.Mode, "push")
+	}
+	if !cfg.Ingestion.PushEnabled() {
+		t.Error("PushEnabled() = false for INGESTION_MODE=push")
+	}
+	if cfg.Ingestion.PollEnabled() {
+		t.Error("PollEnabled() = true for INGESTION_MODE=push (push-only mode)")
+	}
+	if got := cfg.Ingestion.PushCallbackBaseURL; got != "https://es.example.com" {
+		t.Errorf("PushCallbackBaseURL = %q, want trailing-slash stripped %q",
+			got, "https://es.example.com")
+	}
+	if got := cfg.Ingestion.PushGmailTopic; got != "projects/p1/topics/sn360-gmail" {
+		t.Errorf("PushGmailTopic = %q, want %q", got, "projects/p1/topics/sn360-gmail")
+	}
+	if got := cfg.Ingestion.PushGoogleAudience; got != "https://es.example.com/v1/push/gmail" {
+		t.Errorf("PushGoogleAudience = %q, want %q", got, "https://es.example.com/v1/push/gmail")
+	}
+	if got := cfg.Ingestion.PushMicrosoftClientStateSecret; got != "deadbeef-deadbeef-deadbeef-deadbeef" {
+		t.Errorf("PushMicrosoftClientStateSecret = %q, want the env value", got)
+	}
+}
+
+// TestLoad_IngestionMode_HybridEnablesBoth confirms hybrid mode does
+// not turn the poller off — both flags must read true so the binary
+// runs polling AND push subscriptions concurrently.
+func TestLoad_IngestionMode_HybridEnablesBoth(t *testing.T) {
+	withEnv(t, map[string]string{
+		"APP_NAME":       "sn360-es-test",
+		"ENVIRONMENT":    "local",
+		"INGESTION_MODE": "hybrid",
+	})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Ingestion.PushEnabled() {
+		t.Error("PushEnabled() = false for hybrid mode")
+	}
+	if !cfg.Ingestion.PollEnabled() {
+		t.Error("PollEnabled() = false for hybrid mode")
+	}
+}
+
 // withEnv sets each key in m via t.Setenv (which auto-restores on
 // test cleanup) and clears any env var the test relies on being
 // unset. It also unsets REDIS_FETCH_BATCH_SIZE / NATS_FETCH_BATCH_SIZE
@@ -104,6 +193,35 @@ func validProdConfig() Config {
 		EventBus:    EventBusNATS,
 		HTTP:        HTTP{Port: 8080},
 		Score:       ScoreThresholds{Blocked: 90, HighRisk: 70, Warning: 50, Caution: 30, Info: 10},
+	}
+}
+
+// TestValidate_IngestionMode_RejectsInvalidValues pins the
+// fail-fast guard against typos in INGESTION_MODE. Without it,
+// "polll" (or any other non-empty unknown value) silently falls
+// through PollEnabled() and PushEnabled(), leaving the service up
+// but ingesting nothing — a failure that's invisible until a
+// downstream queue stays empty.
+func TestValidate_IngestionMode_RejectsInvalidValues(t *testing.T) {
+	for _, bad := range []string{"polll", "Push", "POLL", "both", "x"} {
+		cfg := validProdConfig()
+		cfg.Ingestion.Mode = bad
+		if err := cfg.validate(); err == nil {
+			t.Errorf("validate() accepted bogus INGESTION_MODE=%q", bad)
+		}
+	}
+}
+
+// TestValidate_IngestionMode_AcceptsDocumentedValues pins the
+// supported set so future refactors don't accidentally tighten
+// validation past the documented contract.
+func TestValidate_IngestionMode_AcceptsDocumentedValues(t *testing.T) {
+	for _, good := range []string{"", "poll", "push", "hybrid"} {
+		cfg := validProdConfig()
+		cfg.Ingestion.Mode = good
+		if err := cfg.validate(); err != nil {
+			t.Errorf("validate() rejected documented INGESTION_MODE=%q: %v", good, err)
+		}
 	}
 }
 
@@ -162,6 +280,71 @@ func TestValidate_BannerTokenSecretEmptyAllowedInProd(t *testing.T) {
 	cfg.Banner.TokenSecret = ""
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("empty BANNER_TOKEN_SECRET should be allowed (banners just suppress CTAs): %v", err)
+	}
+}
+
+// TestValidate_PushMicrosoftClientStateSecretTooShortInDev pins the
+// cross-environment 16-byte floor on the Microsoft Graph
+// clientState HMAC key. The floor applies in dev/staging as well as
+// production because a leaked weak-secret scheme in a low
+// environment trivially extrapolates to a production .env (operators
+// reuse patterns).
+func TestValidate_PushMicrosoftClientStateSecretTooShortInDev(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Environment = EnvironmentDev
+	cfg.Ingestion.PushMicrosoftClientStateSecret = "tooshort"
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for short INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET even in dev")
+	}
+}
+
+// TestValidate_PushMicrosoftClientStateSecretTooShortInProd pins
+// the stricter 32-byte floor that applies only in production
+// environments — same threshold as BANNER_TOKEN_SECRET (the other
+// HMAC-keyed secret in this service).
+func TestValidate_PushMicrosoftClientStateSecretTooShortInProd(t *testing.T) {
+	cfg := validProdConfig()
+	// 16 bytes passes the cross-env floor but trips the prod-only
+	// 32-byte floor below.
+	cfg.Ingestion.PushMicrosoftClientStateSecret = "sixteen-bytes-ok"
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for 16-byte INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET in prod (needs 32+)")
+	}
+}
+
+// TestValidate_PushMicrosoftClientStateSecretLowEntropyInProd pins
+// the production-only entropy gate so an operator who satisfies
+// length with a repeated pattern (e.g. "aaaaaaaa…") gets caught at
+// boot rather than shipping a trivially-brute-forceable HMAC key.
+func TestValidate_PushMicrosoftClientStateSecretLowEntropyInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Ingestion.PushMicrosoftClientStateSecret = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected low-entropy rejection for INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET in prod")
+	}
+}
+
+// TestValidate_PushMicrosoftClientStateSecretGoodInProd is the
+// happy-path counterpart — a 48-byte high-entropy value (the kind
+// `openssl rand -base64 48` would produce) MUST pass.
+func TestValidate_PushMicrosoftClientStateSecretGoodInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Ingestion.PushMicrosoftClientStateSecret = "kQ7Xp4mV9zL2eR8jB6nC1tH3yU5oA0sF7iD4gW8hJ2lP6vM9"
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("valid INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET should pass: %v", err)
+	}
+}
+
+// TestValidate_PushMicrosoftClientStateSecretEmptyAllowedInProd
+// pins the "feature-off" path: when push ingestion isn't wired,
+// the secret can be empty without tripping validation. The
+// buildPushReceivers gate in wire_infra.go separately ensures an
+// empty secret disables the Outlook half at boot.
+func TestValidate_PushMicrosoftClientStateSecretEmptyAllowedInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Ingestion.PushMicrosoftClientStateSecret = ""
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("empty INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET should be allowed: %v", err)
 	}
 }
 

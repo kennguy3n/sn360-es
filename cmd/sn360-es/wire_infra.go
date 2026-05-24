@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/config"
+	"github.com/kennguy3n/sn360-es/internal/handler"
 	"github.com/kennguy3n/sn360-es/internal/middleware"
 	"github.com/kennguy3n/sn360-es/internal/service/action"
 	"github.com/kennguy3n/sn360-es/internal/service/ingestion"
@@ -153,8 +156,15 @@ func newQuarantineStore(client *redis.Client) action.QuarantineStore {
 // ---------------------------------------------------------------------
 
 func buildPoller(ctx context.Context, cfg *config.Config, logger *slog.Logger, app *application) *ingestion.Poller {
-	if !cfg.Ingestion.Enabled {
-		logger.Info("sn360-es: ingestion polling disabled via config")
+	// The legacy INGESTION_ENABLED bool gates polling for deployments
+	// predating the INGESTION_MODE knob. INGESTION_MODE=hybrid is an
+	// explicit operator opt-in to running polling alongside push, so
+	// we treat it as Enabled=true regardless of the bool — requiring
+	// operators to set BOTH would defeat the point of having a single
+	// mode switch.
+	if !cfg.Ingestion.Enabled && cfg.Ingestion.Mode != "hybrid" {
+		logger.Info("sn360-es: ingestion polling disabled via config",
+			slog.String("mode", cfg.Ingestion.Mode))
 		return nil
 	}
 
@@ -283,6 +293,283 @@ func buildMailboxProviders(ctx context.Context, cfg *config.Config, logger *slog
 	}
 	_ = ctx
 	return out
+}
+
+// ---------------------------------------------------------------------
+// Push-notification ingestion wiring.
+// ---------------------------------------------------------------------
+
+// buildPushManager constructs the PushManager that owns Gmail and
+// Outlook push receivers. It is closed-by-default:
+//
+//   - If the mode does not include push ("poll" or empty), returns
+//     nil so callers can skip the subscription / renewal goroutines.
+//   - If the callback base URL is empty, returns nil and logs a
+//     warning — push deliveries cannot be routed back to us without
+//     it, so wiring the manager would only register doomed
+//     subscriptions and pin tokens.
+//   - Per-provider receivers are built only when both (a) the
+//     provider credentials are configured and (b) the provider-specific
+//     push secret/topic is set. A misconfigured Gmail half does NOT
+//     prevent the Outlook half from initialising, and vice versa, so
+//     partial-tenant rollouts are supported without an all-or-nothing
+//     wire-up.
+//
+// The returned manager has at least one receiver registered; if the
+// caller wired push mode but no provider receiver could be built, we
+// return (nil, nil) with a warning rather than constructing a
+// no-receiver manager that would always fail SetupSubscriptions.
+//
+// The receivers slice is returned alongside the manager so the
+// caller can pass it to buildPushSignatureVerifier without
+// re-running buildPushReceivers (which would log every wiring
+// decision twice and — worse — attempt to re-initialise OAuth
+// token sources).
+func buildPushManager(ctx context.Context, cfg *config.Config, logger *slog.Logger, app *application) (*ingestion.PushManager, []ingestion.PushReceiver) {
+	if !cfg.Ingestion.PushEnabled() {
+		logger.Info("sn360-es: push ingestion disabled via config",
+			slog.String("mode", cfg.Ingestion.Mode))
+		return nil, nil
+	}
+	if cfg.Ingestion.PushCallbackBaseURL == "" {
+		logger.Warn("sn360-es: push ingestion enabled but INGESTION_PUSH_CALLBACK_BASE_URL is unset; manager not wired")
+		return nil, nil
+	}
+	if app.eventBus == nil {
+		// PushManager.NewPushManager requires a non-nil publisher.
+		// In practice the event bus is the only Required dependency
+		// of newApplication, so this branch is defensive — but
+		// keeping it makes wiring failures observable instead of
+		// panicking inside NewPushManager.
+		logger.Warn("sn360-es: push ingestion skipped; event bus not wired")
+		return nil, nil
+	}
+
+	receivers := buildPushReceivers(ctx, cfg, logger)
+	if len(receivers) == 0 {
+		logger.Warn("sn360-es: push ingestion enabled but no push receivers could be built; manager not wired")
+		return nil, nil
+	}
+
+	mgr, err := ingestion.NewPushManager(ingestion.PushConfig{
+		Receivers:       receivers,
+		Publisher:       app.eventBus,
+		Logger:          logger,
+		Normalizer:      ingestion.NewDefaultNormalizer(),
+		CallbackBaseURL: cfg.Ingestion.PushCallbackBaseURL,
+	})
+	if err != nil {
+		logger.Warn("sn360-es: push manager init failed; push disabled",
+			slog.Any("error", err))
+		return nil, nil
+	}
+	kinds := make([]string, 0, len(receivers))
+	for _, r := range receivers {
+		kinds = append(kinds, r.Kind())
+	}
+	logger.Info("sn360-es: push manager wired",
+		slog.String("mode", cfg.Ingestion.Mode),
+		slog.String("callback_base_url", cfg.Ingestion.PushCallbackBaseURL),
+		slog.Any("providers", kinds))
+	return mgr, receivers
+}
+
+// buildPushReceivers builds the per-provider push receivers from
+// configured credentials. Each provider is wired independently so a
+// half-configured deployment still delivers push for whichever
+// provider IS fully configured.
+//
+// Closed-by-default gating: each receiver is built only when its
+// credentials AND its edge-verifier requirements are both present.
+// Building a receiver without its verifier (e.g. Gmail topic set but
+// PushGoogleAudience missing) would create subscriptions whose
+// callbacks the edge verifier rejects, producing a stuck pipeline
+// that's hard to diagnose from outside.
+func buildPushReceivers(ctx context.Context, cfg *config.Config, logger *slog.Logger) []ingestion.PushReceiver {
+	out := make([]ingestion.PushReceiver, 0, 2)
+	// HasGmail / HasOutlook already require Domain / TenantID to be
+	// non-empty, so we don't re-check them here. The provider-specific
+	// switch below only covers fields HasGmail / HasOutlook do NOT
+	// validate (push topic, audience, client-state secret); the tenant
+	// identifier itself is already guaranteed to be present by the
+	// outer predicate.
+	if cfg.GWS.HasGmail() {
+		switch {
+		case cfg.Ingestion.PushGmailTopic == "":
+			logger.Warn("sn360-es: gmail push receiver skipped; INGESTION_PUSH_GMAIL_TOPIC is unset")
+		case cfg.Ingestion.PushGoogleAudience == "":
+			// The Gmail Pub/Sub callback is gated at the edge by
+			// [handler.GoogleOIDCVerifier], which requires the
+			// configured audience to validate the bearer token.
+			// Building the receiver without an audience would
+			// register watches whose notifications the verifier
+			// 401-rejects — orphaned subscriptions on Google's
+			// side, stuck pipeline on ours. Skip with a loud
+			// warning instead.
+			logger.Warn("sn360-es: gmail push receiver skipped; INGESTION_PUSH_GOOGLE_AUDIENCE is unset (verifier would reject every callback)")
+		default:
+			if sa, err := gmail.LoadServiceAccount(cfg.GWS.ServiceAccountJSON); err != nil {
+				logger.Warn("sn360-es: gmail push receiver skipped; service-account load failed",
+					slog.Any("error", err))
+			} else if tokens, terr := gmail.NewJWTBearerSource(gmail.JWTBearerConfig{
+				ServiceAccount:   sa,
+				ImpersonatedUser: cfg.GWS.DelegatedAdmin,
+			}); terr != nil {
+				logger.Warn("sn360-es: gmail push receiver skipped; token source init failed",
+					slog.Any("error", terr))
+			} else {
+				out = append(out, &ingestion.GmailPushReceiver{
+					BaseURL:     cfg.GWS.BaseURL,
+					TopicName:   cfg.Ingestion.PushGmailTopic,
+					TokenSource: tokens,
+					TenantList:  []string{cfg.GWS.Domain},
+				})
+				logger.Info("sn360-es: gmail push receiver wired",
+					slog.String("topic", cfg.Ingestion.PushGmailTopic),
+					slog.String("tenant", cfg.GWS.Domain))
+			}
+		}
+	}
+	if cfg.O365.HasOutlook() {
+		if cfg.Ingestion.PushMicrosoftClientStateSecret == "" {
+			logger.Warn("sn360-es: outlook push receiver skipped; INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET is unset")
+		} else if tokens, terr := outlook.NewClientCredentialsSource(outlook.ClientCredentialsConfig{
+			TenantID:     cfg.O365.TenantID,
+			ClientID:     cfg.O365.ClientID,
+			ClientSecret: cfg.O365.ClientSecret,
+			TokenURL:     cfg.O365.TokenURL,
+		}); terr != nil {
+			logger.Warn("sn360-es: outlook push receiver skipped; token source init failed",
+				slog.Any("error", terr))
+		} else {
+			out = append(out, &ingestion.OutlookPushReceiver{
+				BaseURL:              cfg.O365.BaseURL,
+				TokenSource:          tokens,
+				TenantList:           []string{cfg.O365.TenantID},
+				ClientStateForTenant: outlookClientStateForTenant(cfg.Ingestion.PushMicrosoftClientStateSecret),
+			})
+			logger.Info("sn360-es: outlook push receiver wired",
+				slog.String("tenant", cfg.O365.TenantID))
+		}
+	}
+	_ = ctx
+	return out
+}
+
+// outlookClientStateForTenant returns a function that maps tenantID
+// to the clientState the Outlook push pipeline stamps on subscription-
+// create requests and expects on inbound notifications.
+//
+// The value is HMAC-SHA256(secret, tenantID) prefixed with "sn360-es-"
+// and truncated to fit comfortably inside Microsoft Graph's 128-character
+// clientState limit. Two properties matter:
+//
+//   - Deterministic per (secret, tenantID): the same function is
+//     consulted by [ingestion.OutlookPushReceiver] (Subscribe +
+//     HandleNotification) AND by [handler.MicrosoftClientStateVerifier]
+//     (ExpectedFor) so the subscription-create payload, the inbound
+//     notification, and the verifier all agree on a single string.
+//
+//   - Unguessable without the secret: a stale tenantID is not enough
+//     for an attacker to forge a notification, because the clientState
+//     embeds an HMAC keyed by the deployment-scoped secret.
+//
+// When secret is empty the function returns the legacy obscured-only-
+// by-the-prefix value to keep test fixtures and dev wiring (where the
+// receiver is constructed directly without setting ClientStateForTenant)
+// compatible. Production wiring MUST supply a non-empty secret — the
+// buildPushReceivers / buildPushSignatureVerifier callers already gate
+// on PushMicrosoftClientStateSecret != "" before invoking this helper.
+func outlookClientStateForTenant(secret string) func(tenantID string) string {
+	if secret == "" {
+		return func(tenantID string) string { return "sn360-es-" + tenantID }
+	}
+	return func(tenantID string) string {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write([]byte(tenantID))
+		// 32-char base64url payload → final value is well under
+		// Graph's 128-char clientState limit ("sn360-es-" + 32).
+		return "sn360-es-" + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))[:32]
+	}
+}
+
+// buildPushSignatureVerifier constructs the [handler.PushSignatureVerifier]
+// the webhook handler uses to authenticate inbound /v1/push callbacks
+// BEFORE they reach the push manager.
+//
+// Verifier construction is driven by the receiver list, not by the
+// raw config flags. For every receiver in `receivers`, the matching
+// edge verifier is wired:
+//
+//   - "gmail":   [handler.GoogleOIDCVerifier] validates the OIDC
+//     bearer token Google Pub/Sub attaches to push deliveries. The
+//     audience is read from cfg.Ingestion.PushGoogleAudience (env
+//     INGESTION_PUSH_GOOGLE_AUDIENCE).
+//
+//   - "outlook": [handler.MicrosoftClientStateVerifier] confirms
+//     each value[i].clientState matches the tenant-scoped value
+//     issued at subscription-create time. ExpectedFor is wired to
+//     the same outlookClientStateForTenant closure passed to the
+//     OutlookPushReceiver, so the subscription side and the
+//     verification side cannot drift apart.
+//
+// Because buildPushReceivers refuses to build a Gmail receiver
+// without PushGoogleAudience and refuses to build an Outlook
+// receiver without PushMicrosoftClientStateSecret, the verifier
+// dependency for every receiver in `receivers` is guaranteed to be
+// present. We DO NOT emit "missing verifier secret" warnings for
+// providers whose receivers were never built — those warnings would
+// be pure noise in a single-provider deployment where only one half
+// of the matrix is configured on purpose.
+//
+// Returns nil only when `receivers` is empty (caller should also
+// have refused to wire the PushManager in that case).
+func buildPushSignatureVerifier(cfg *config.Config, receivers []ingestion.PushReceiver, logger *slog.Logger) handler.PushSignatureVerifier {
+	if len(receivers) == 0 {
+		return nil
+	}
+	verifiers := make(map[string]handler.PushSignatureVerifier, len(receivers))
+	for _, r := range receivers {
+		switch r.Kind() {
+		case "gmail":
+			if cfg.Ingestion.PushGoogleAudience == "" {
+				// Should be unreachable: buildPushReceivers gates
+				// the gmail receiver on PushGoogleAudience != "".
+				// Emitted here as a fail-loud signal in case a
+				// future refactor widens the gate without keeping
+				// the verifier dependency in lock-step.
+				logger.Warn("sn360-es: gmail push receiver built but PushGoogleAudience is empty; verifier dropped (this should be unreachable — check buildPushReceivers gating)")
+				continue
+			}
+			verifiers["gmail"] = &handler.GoogleOIDCVerifier{
+				Audience: cfg.Ingestion.PushGoogleAudience,
+			}
+			logger.Info("sn360-es: push signature verifier wired (gmail)",
+				slog.String("audience", cfg.Ingestion.PushGoogleAudience))
+		case "outlook":
+			if cfg.Ingestion.PushMicrosoftClientStateSecret == "" {
+				// Should be unreachable: buildPushReceivers gates
+				// the outlook receiver on PushMicrosoftClientStateSecret != "".
+				logger.Warn("sn360-es: outlook push receiver built but PushMicrosoftClientStateSecret is empty; verifier dropped (this should be unreachable — check buildPushReceivers gating)")
+				continue
+			}
+			// Keyed by the OutlookPushReceiver.Kind() string
+			// ("outlook"), which the router uses to look up the
+			// verifier when the inbound request URL is
+			// /v1/push/outlook/{tenant}.
+			verifiers["outlook"] = &handler.MicrosoftClientStateVerifier{
+				ExpectedFor: outlookClientStateForTenant(cfg.Ingestion.PushMicrosoftClientStateSecret),
+			}
+			logger.Info("sn360-es: push signature verifier wired (outlook)")
+		default:
+			logger.Warn("sn360-es: no edge verifier registered for push receiver kind; callbacks will be rejected",
+				slog.String("kind", r.Kind()))
+		}
+	}
+	if len(verifiers) == 0 {
+		return nil
+	}
+	return &handler.PushSignatureRouter{Verifiers: verifiers}
 }
 
 // ---------------------------------------------------------------------
