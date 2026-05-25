@@ -457,11 +457,20 @@ func (a tuningResultAdapter) CurrentWeights(ctx context.Context, tenantID string
 	if err != nil {
 		return agent.ScoreWeights{}, err
 	}
+	// score_engine stores weights as integer percentages in [0, 100]
+	// (the inverse of clampWeightToPercent in postgresConfigStore).
+	// agent.ScoreWeights, however, is a renormalised float in [0, 1]
+	// — tuning.clampWeights clamps to that range and divides by the
+	// sum. Returning the raw integer here would push clampWeights
+	// out of its operating range: every weight > 1 would clamp to 1
+	// and renormalise to 1/N, silently corrupting the tenant's
+	// learned distribution on the very next tuning pass. Divide by
+	// 100 so the [0, 1] contract is preserved.
 	return agent.ScoreWeights{
-		AI:          float64(row.WeightAI),
-		Rspamd:      float64(row.WeightRspamd),
-		Attachments: float64(row.WeightAttachments),
-		Links:       float64(row.WeightLinks),
+		AI:          float64(row.WeightAI) / 100.0,
+		Rspamd:      float64(row.WeightRspamd) / 100.0,
+		Attachments: float64(row.WeightAttachments) / 100.0,
+		Links:       float64(row.WeightLinks) / 100.0,
 	}, nil
 }
 
@@ -484,21 +493,27 @@ func (a tuningResultAdapter) CurrentThresholds(ctx context.Context, tenantID str
 	}, nil
 }
 
-// postgresConfigStore is the production ConfigStore implementation: a
-// read-modify-write wrapper on top of the score_engine table
-// (repository.ScoreEngineRepository). Every UpdateWeights /
-// UpdateThresholds call loads the current row (or seeds one from the
-// schema defaults if absent), mutates the relevant fields, and
-// re-upserts the row so the tuning / onboarding agents' decisions
-// survive a restart.
+// postgresConfigStore is the production ConfigStore implementation
+// backed by the score_engine table (repository.ScoreEngineRepository).
+// It is safe for concurrent use across AND within a single tenant.
 //
-// The store is safe for concurrent use across tenants because each
-// operation is a single-row read + single-row upsert; per-tenant
-// serialisation is delegated to Postgres' MVCC. Within a single
-// tenant, concurrent UpdateWeights / UpdateThresholds calls may
-// interleave, but the final row will reflect the last write for each
-// field — the agent's caller (tuning / onboarding) is the only writer
-// in practice and runs serially per tenant.
+// Steady-state writes go through column-scoped UPDATEs
+// (repo.UpdateWeights / repo.UpdateThresholds), which set ONLY the
+// columns owned by that write path. A concurrent UpdateWeights and
+// UpdateThresholds against the same tenant therefore cannot
+// overwrite each other — the read-modify-write race that a full-row
+// Upsert would introduce simply does not exist for the steady-state
+// path.
+//
+// First-time seeding (no row yet for the tenant) is detected when
+// the column-scoped UPDATE returns repository.ErrNotFound. We then
+// fall back to loadOrSeed + Upsert to materialise the row from the
+// schema defaults plus the incoming write. The seed path is
+// idempotent under concurrent first-time writers thanks to Postgres'
+// ON CONFLICT (tenant_id) DO UPDATE in pgScoreEngines.Upsert, and
+// because the onboarding agent always seeds before tuning runs in
+// practice, the seed branch is rarely taken at all once a tenant is
+// live.
 type postgresConfigStore struct {
 	repo repository.ScoreEngineRepository
 }
@@ -544,18 +559,40 @@ func (s *postgresConfigStore) UpdateWeights(ctx context.Context, tenantID string
 	if s.repo == nil {
 		return fmt.Errorf("postgres config store: score-engine repository is nil")
 	}
-	row, err := s.loadOrSeed(ctx, tenantID)
-	if err != nil {
-		return fmt.Errorf("postgres config store: load tenant %q: %w", tenantID, err)
-	}
 	// agent.ScoreWeights are floats in [0, 1] (renormalised in
 	// tuning.clampWeights). Persisting them as the integer percentage
 	// keeps wire-compat with the existing score_engine row shape used
 	// by tuningResultAdapter.CurrentWeights below.
-	row.WeightAI = clampWeightToPercent(w.AI)
-	row.WeightRspamd = clampWeightToPercent(w.Rspamd)
-	row.WeightAttachments = clampWeightToPercent(w.Attachments)
-	row.WeightLinks = clampWeightToPercent(w.Links)
+	update := repository.ScoreWeightUpdate{
+		WeightAI:          clampWeightToPercent(w.AI),
+		WeightRspamd:      clampWeightToPercent(w.Rspamd),
+		WeightAttachments: clampWeightToPercent(w.Attachments),
+		WeightLinks:       clampWeightToPercent(w.Links),
+	}
+	// Steady-state path: column-scoped UPDATE so a concurrent
+	// UpdateThresholds against the same tenant cannot clobber these
+	// four columns.
+	err := s.repo.UpdateWeights(ctx, tenantID, update)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		return fmt.Errorf("postgres config store: update tenant %q weights: %w", tenantID, err)
+	}
+	// First-time seed: there is no row yet for this tenant. Fall back
+	// to loadOrSeed + Upsert so the row materialises with the schema
+	// defaults plus the incoming weights. This branch is racy only
+	// against another first-time writer for the same tenant, in which
+	// case Upsert's ON CONFLICT (tenant_id) keeps the table
+	// consistent.
+	row, err := s.loadOrSeed(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("postgres config store: seed tenant %q: %w", tenantID, err)
+	}
+	row.WeightAI = update.WeightAI
+	row.WeightRspamd = update.WeightRspamd
+	row.WeightAttachments = update.WeightAttachments
+	row.WeightLinks = update.WeightLinks
 	if err := s.repo.Upsert(ctx, row); err != nil {
 		return fmt.Errorf("postgres config store: upsert tenant %q weights: %w", tenantID, err)
 	}
@@ -566,17 +603,38 @@ func (s *postgresConfigStore) UpdateThresholds(ctx context.Context, tenantID str
 	if s.repo == nil {
 		return fmt.Errorf("postgres config store: score-engine repository is nil")
 	}
+	update := repository.ScoreThresholdUpdate{
+		Blocked:        t.BannerBlocked,
+		High:           t.BannerHighRisk,
+		Warning:        t.BannerWarning,
+		Caution:        t.BannerCaution,
+		Info:           t.BannerInfo,
+		Tier1PassBelow: t.Tier1PassBelow,
+		Tier1FlagAbove: t.Tier1FlagAbove,
+	}
+	// Steady-state path: column-scoped UPDATE so a concurrent
+	// UpdateWeights cannot clobber these threshold columns and the
+	// schema CHECK on threshold_tier1_pass_below <
+	// threshold_tier1_flag_above (migration 0013) is enforced by the
+	// DB on every write.
+	err := s.repo.UpdateThresholds(ctx, tenantID, update)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		return fmt.Errorf("postgres config store: update tenant %q thresholds: %w", tenantID, err)
+	}
 	row, err := s.loadOrSeed(ctx, tenantID)
 	if err != nil {
-		return fmt.Errorf("postgres config store: load tenant %q: %w", tenantID, err)
+		return fmt.Errorf("postgres config store: seed tenant %q: %w", tenantID, err)
 	}
-	row.ThresholdBlocked = t.BannerBlocked
-	row.ThresholdHigh = t.BannerHighRisk
-	row.ThresholdWarning = t.BannerWarning
-	row.ThresholdCaution = t.BannerCaution
-	row.ThresholdInfo = t.BannerInfo
-	row.ThresholdTier1PassBelow = t.Tier1PassBelow
-	row.ThresholdTier1FlagAbove = t.Tier1FlagAbove
+	row.ThresholdBlocked = update.Blocked
+	row.ThresholdHigh = update.High
+	row.ThresholdWarning = update.Warning
+	row.ThresholdCaution = update.Caution
+	row.ThresholdInfo = update.Info
+	row.ThresholdTier1PassBelow = update.Tier1PassBelow
+	row.ThresholdTier1FlagAbove = update.Tier1FlagAbove
 	if err := s.repo.Upsert(ctx, row); err != nil {
 		return fmt.Errorf("postgres config store: upsert tenant %q thresholds: %w", tenantID, err)
 	}

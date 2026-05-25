@@ -291,6 +291,19 @@ func clampThresholds(t Thresholds) Thresholds {
 	}
 	t.Tier1PassBelow = clamp(t.Tier1PassBelow, 0, 100)
 	t.Tier1FlagAbove = clamp(t.Tier1FlagAbove, 0, 100)
+	// Preserve Tier1 ordering: PassBelow < FlagAbove. This matches
+	// the DB CHECK constraint in
+	// migrations/0013_score_engine_tier1_thresholds.up.sql, so
+	// returning an inverted pair here would cause the column-scoped
+	// UpdateThresholds UPDATE to fail at the DB layer rather than
+	// silently apply.
+	if t.Tier1PassBelow >= t.Tier1FlagAbove {
+		t.Tier1PassBelow = t.Tier1FlagAbove - 1
+		if t.Tier1PassBelow < 0 {
+			t.Tier1PassBelow = 0
+			t.Tier1FlagAbove = 1
+		}
+	}
 	t.BannerBlocked = clamp(t.BannerBlocked, 50, 100)
 	t.BannerHighRisk = clamp(t.BannerHighRisk, 40, 99)
 	t.BannerWarning = clamp(t.BannerWarning, 20, 90)

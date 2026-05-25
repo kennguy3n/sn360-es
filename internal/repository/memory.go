@@ -341,6 +341,41 @@ func (m *memoryScoreEngines) Upsert(_ context.Context, s *ScoreEngine) error {
 	return nil
 }
 
+func (m *memoryScoreEngines) UpdateWeights(_ context.Context, tenantID string, w ScoreWeightUpdate) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row, ok := m.rows[tenantID]
+	if !ok {
+		return ErrNotFound
+	}
+	row.WeightAI = w.WeightAI
+	row.WeightRspamd = w.WeightRspamd
+	row.WeightAttachments = w.WeightAttachments
+	row.WeightLinks = w.WeightLinks
+	row.UpdatedAt = time.Now().UTC()
+	m.rows[tenantID] = row
+	return nil
+}
+
+func (m *memoryScoreEngines) UpdateThresholds(_ context.Context, tenantID string, t ScoreThresholdUpdate) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row, ok := m.rows[tenantID]
+	if !ok {
+		return ErrNotFound
+	}
+	row.ThresholdBlocked = t.Blocked
+	row.ThresholdHigh = t.High
+	row.ThresholdWarning = t.Warning
+	row.ThresholdCaution = t.Caution
+	row.ThresholdInfo = t.Info
+	row.ThresholdTier1PassBelow = t.Tier1PassBelow
+	row.ThresholdTier1FlagAbove = t.Tier1FlagAbove
+	row.UpdatedAt = time.Now().UTC()
+	m.rows[tenantID] = row
+	return nil
+}
+
 // --- email classifications ----------------------------------------------
 
 type memoryClassifications struct {

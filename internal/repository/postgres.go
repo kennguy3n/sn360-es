@@ -330,6 +330,68 @@ SELECT tenant_id, score_base, weight_ai, weight_rspamd, weight_attachments, weig
 	return &s, err
 }
 
+// UpdateWeights writes exactly the four weight columns + updated_at
+// for tenantID in a single SQL UPDATE. Returns ErrNotFound when no
+// row exists so the caller can fall through to Upsert for first-time
+// seeding. This is the column-scoped write that closes the
+// read-modify-write race between concurrent weight and threshold
+// writers; threshold columns are not in the SET list.
+func (p *pgScoreEngines) UpdateWeights(ctx context.Context, tenantID string, w ScoreWeightUpdate) error {
+	res, err := p.db.ExecContext(ctx, `
+UPDATE score_engine SET
+    weight_ai=$2,
+    weight_rspamd=$3,
+    weight_attachments=$4,
+    weight_links=$5,
+    updated_at=NOW()
+  WHERE tenant_id=$1`,
+		tenantID, w.WeightAI, w.WeightRspamd, w.WeightAttachments, w.WeightLinks)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateThresholds writes exactly the banner + Tier 1 threshold
+// columns + updated_at for tenantID in a single SQL UPDATE. Returns
+// ErrNotFound when no row exists. Weight columns are not in the SET
+// list so a concurrent UpdateWeights against the same tenant cannot
+// race; the DB CHECK on threshold_tier1_pass_below <
+// threshold_tier1_flag_above (migration 0013) also stops a
+// misbehaving caller from inserting a logically-inverted row.
+func (p *pgScoreEngines) UpdateThresholds(ctx context.Context, tenantID string, t ScoreThresholdUpdate) error {
+	res, err := p.db.ExecContext(ctx, `
+UPDATE score_engine SET
+    threshold_blocked=$2,
+    threshold_high=$3,
+    threshold_warning=$4,
+    threshold_caution=$5,
+    threshold_info=$6,
+    threshold_tier1_pass_below=$7,
+    threshold_tier1_flag_above=$8,
+    updated_at=NOW()
+  WHERE tenant_id=$1`,
+		tenantID, t.Blocked, t.High, t.Warning, t.Caution, t.Info, t.Tier1PassBelow, t.Tier1FlagAbove)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (p *pgScoreEngines) Upsert(ctx context.Context, s *ScoreEngine) error {
 	_, err := p.db.ExecContext(ctx, `
 INSERT INTO score_engine (tenant_id, score_base, weight_ai, weight_rspamd, weight_attachments, weight_links,

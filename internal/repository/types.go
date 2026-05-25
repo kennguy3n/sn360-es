@@ -238,10 +238,47 @@ type LabelRepository interface {
 	ListByTenant(ctx context.Context, tenantID, provider string) ([]Label, error)
 }
 
+// ScoreWeightUpdate is the column subset written by the tuning /
+// onboarding agents' UpdateWeights path. Each field is the integer
+// percentage already clamped to [0, 100] by the caller; the
+// repository writes exactly these four columns in a single SQL
+// UPDATE so a concurrent ThresholdUpdate against the same row cannot
+// clobber them.
+type ScoreWeightUpdate struct {
+	WeightAI          int
+	WeightRspamd      int
+	WeightAttachments int
+	WeightLinks       int
+}
+
+// ScoreThresholdUpdate is the column subset written by the tuning
+// agent's UpdateThresholds path. Banner + Tier 1 columns only — the
+// row's weights and subject-tag fields stay untouched.
+type ScoreThresholdUpdate struct {
+	Blocked        int
+	High           int
+	Warning        int
+	Caution        int
+	Info           int
+	Tier1PassBelow int
+	Tier1FlagAbove int
+}
+
 // ScoreEngineRepository persists ScoreEngine rows.
+//
+// UpdateWeights / UpdateThresholds are column-scoped UPDATEs that
+// touch only the columns named in their respective update structs.
+// They are the production write path used by the agent ConfigStore
+// (cmd/sn360-es/adapters.go: postgresConfigStore) so concurrent
+// weight + threshold writers against the same tenant cannot
+// overwrite each other through a full-row Upsert. Both return
+// ErrNotFound when no row exists for tenantID; the caller is
+// responsible for first-time seeding via Upsert.
 type ScoreEngineRepository interface {
 	Get(ctx context.Context, tenantID string) (*ScoreEngine, error)
 	Upsert(ctx context.Context, s *ScoreEngine) error
+	UpdateWeights(ctx context.Context, tenantID string, w ScoreWeightUpdate) error
+	UpdateThresholds(ctx context.Context, tenantID string, t ScoreThresholdUpdate) error
 }
 
 // EmailClassificationRepository persists EmailClassification rows.

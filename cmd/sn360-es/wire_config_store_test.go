@@ -12,14 +12,22 @@ import (
 
 // fakeScoreEngineRepo is a deterministic in-process implementation of
 // repository.ScoreEngineRepository used to drive postgresConfigStore
-// in isolation from a real Postgres pool.
+// in isolation from a real Postgres pool. It mirrors the semantics
+// of pgScoreEngines: UpdateWeights / UpdateThresholds return
+// repository.ErrNotFound when no row exists for the tenant, so the
+// caller's seed-then-upsert fallback path is exercised exactly as it
+// would be against Postgres.
 type fakeScoreEngineRepo struct {
-	mu      sync.Mutex
-	rows    map[string]repository.ScoreEngine
-	getErr  error
-	upErr   error
-	getHits int
-	upHits  int
+	mu       sync.Mutex
+	rows     map[string]repository.ScoreEngine
+	getErr   error
+	upErr    error
+	updWErr  error
+	updTErr  error
+	getHits  int
+	upHits   int
+	updWHits int
+	updTHits int
 }
 
 func newFakeScoreEngineRepo() *fakeScoreEngineRepo {
@@ -52,13 +60,56 @@ func (f *fakeScoreEngineRepo) Upsert(_ context.Context, s *repository.ScoreEngin
 	return nil
 }
 
+func (f *fakeScoreEngineRepo) UpdateWeights(_ context.Context, tenantID string, w repository.ScoreWeightUpdate) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updWHits++
+	if f.updWErr != nil {
+		return f.updWErr
+	}
+	row, ok := f.rows[tenantID]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	row.WeightAI = w.WeightAI
+	row.WeightRspamd = w.WeightRspamd
+	row.WeightAttachments = w.WeightAttachments
+	row.WeightLinks = w.WeightLinks
+	f.rows[tenantID] = row
+	return nil
+}
+
+func (f *fakeScoreEngineRepo) UpdateThresholds(_ context.Context, tenantID string, t repository.ScoreThresholdUpdate) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updTHits++
+	if f.updTErr != nil {
+		return f.updTErr
+	}
+	row, ok := f.rows[tenantID]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	row.ThresholdBlocked = t.Blocked
+	row.ThresholdHigh = t.High
+	row.ThresholdWarning = t.Warning
+	row.ThresholdCaution = t.Caution
+	row.ThresholdInfo = t.Info
+	row.ThresholdTier1PassBelow = t.Tier1PassBelow
+	row.ThresholdTier1FlagAbove = t.Tier1FlagAbove
+	f.rows[tenantID] = row
+	return nil
+}
+
 // TestPostgresConfigStore_UpdateWeights_SeedsThenUpserts asserts that
 // the very first UpdateWeights call against a tenant whose row does
 // not exist yet creates a fresh row populated with the schema
 // defaults, overlays the supplied float weights as integer
 // percentages, and upserts it back. The contract matters because the
 // onboarding agent invokes UpdateWeights on first-onboard *before*
-// any other writer has ever touched the score_engine row.
+// any other writer has ever touched the score_engine row. The
+// column-scoped UpdateWeights call must return ErrNotFound first so
+// the seed-then-upsert fallback runs exactly once.
 func TestPostgresConfigStore_UpdateWeights_SeedsThenUpserts(t *testing.T) {
 	repo := newFakeScoreEngineRepo()
 	store := newPostgresConfigStore(repo)
@@ -73,8 +124,11 @@ func TestPostgresConfigStore_UpdateWeights_SeedsThenUpserts(t *testing.T) {
 		t.Fatalf("UpdateWeights: %v", err)
 	}
 
+	if repo.updWHits != 1 {
+		t.Fatalf("expected exactly 1 UpdateWeights attempt before fallback, got %d", repo.updWHits)
+	}
 	if repo.upHits != 1 {
-		t.Fatalf("expected exactly 1 Upsert, got %d", repo.upHits)
+		t.Fatalf("expected exactly 1 Upsert fallback, got %d", repo.upHits)
 	}
 	row, ok := repo.rows["tenant-a"]
 	if !ok {
@@ -151,6 +205,140 @@ func TestPostgresConfigStore_UpdateThresholds_PreservesWeights(t *testing.T) {
 	}
 	if row.ThresholdTier1PassBelow != 25 || row.ThresholdTier1FlagAbove != 65 {
 		t.Fatalf("tier1 thresholds not persisted: %+v", row)
+	}
+	// The column-scoped update path must run (no fallback Upsert) when
+	// the row already exists.
+	if repo.updTHits != 1 {
+		t.Fatalf("expected exactly 1 UpdateThresholds, got %d", repo.updTHits)
+	}
+	if repo.upHits != 0 {
+		t.Fatalf("expected no Upsert fallback when row exists, got %d", repo.upHits)
+	}
+}
+
+// TestPostgresConfigStore_UpdateWeights_NoUpsertWhenRowExists asserts
+// that the column-scoped UpdateWeights path is taken (no full-row
+// Upsert) when a tenant row already exists. This is the production
+// race-free path; falling through to Upsert here would re-introduce
+// the read-modify-write race against UpdateThresholds.
+func TestPostgresConfigStore_UpdateWeights_NoUpsertWhenRowExists(t *testing.T) {
+	repo := newFakeScoreEngineRepo()
+	repo.rows["tenant-d"] = repository.ScoreEngine{
+		TenantID:                "tenant-d",
+		WeightAI:                80,
+		WeightRspamd:            20,
+		ThresholdBlocked:        85,
+		ThresholdHigh:           70,
+		ThresholdWarning:        50,
+		ThresholdCaution:        30,
+		ThresholdInfo:           15,
+		ThresholdTier1PassBelow: 20,
+		ThresholdTier1FlagAbove: 60,
+	}
+	store := newPostgresConfigStore(repo)
+
+	if err := store.UpdateWeights(context.Background(), "tenant-d", agent.ScoreWeights{
+		AI: 0.6, Rspamd: 0.4,
+	}); err != nil {
+		t.Fatalf("UpdateWeights: %v", err)
+	}
+
+	if repo.updWHits != 1 {
+		t.Fatalf("expected 1 UpdateWeights, got %d", repo.updWHits)
+	}
+	if repo.upHits != 0 {
+		t.Fatalf("expected no Upsert fallback when row exists, got %d", repo.upHits)
+	}
+	row := repo.rows["tenant-d"]
+	// Threshold columns must be untouched by the column-scoped
+	// UpdateWeights (this is precisely what kills the cross-column
+	// race the old full-row Upsert had).
+	if row.ThresholdBlocked != 85 || row.ThresholdTier1PassBelow != 20 {
+		t.Fatalf("thresholds were clobbered by UpdateWeights: %+v", row)
+	}
+	if row.WeightAI != 60 || row.WeightRspamd != 40 {
+		t.Fatalf("weights not persisted: %+v", row)
+	}
+}
+
+// TestRoundTrip_CurrentWeightsPreservesScale wires
+// tuningResultAdapter.CurrentWeights + postgresConfigStore.UpdateWeights
+// in series — the same call sequence the tuning agent executes per
+// tenant on every tuning pass. It pins the bug that the previous
+// implementation hit: CurrentWeights cast the integer percent column
+// to float64 without dividing by 100, so the [0, 1] contract that
+// agent.clampWeights expects was violated, every weight clipped to
+// 1.0, and the renormaliser then wrote 1/N back to the DB. After the
+// scale fix in CurrentWeights, this round-trip must preserve the
+// tenant's distribution.
+func TestRoundTrip_CurrentWeightsPreservesScale(t *testing.T) {
+	repo := newFakeScoreEngineRepo()
+	repo.rows["tenant-rt"] = repository.ScoreEngine{
+		TenantID:                "tenant-rt",
+		ScoreBase:               100,
+		WeightAI:                80,
+		WeightRspamd:            20,
+		WeightAttachments:       0,
+		WeightLinks:             0,
+		ThresholdBlocked:        85,
+		ThresholdHigh:           70,
+		ThresholdWarning:        50,
+		ThresholdCaution:        30,
+		ThresholdInfo:           15,
+		ThresholdTier1PassBelow: 20,
+		ThresholdTier1FlagAbove: 60,
+		SubjectTagEnabled:       false,
+		SubjectTagPrefix:        "SN360",
+	}
+
+	repos := &repository.Registry{ScoreEngines: repo}
+	reader := tuningResultAdapter{repos: repos}
+	store := newPostgresConfigStore(repo)
+
+	// Step 1: read the seeded row. Must come back as [0, 1] floats,
+	// NOT raw integers — anything > 1 here is the regression that
+	// motivated this test.
+	w, err := reader.CurrentWeights(context.Background(), "tenant-rt")
+	if err != nil {
+		t.Fatalf("CurrentWeights: %v", err)
+	}
+	if w.AI != 0.80 || w.Rspamd != 0.20 || w.Attachments != 0 || w.Links != 0 {
+		t.Fatalf("CurrentWeights returned unscaled values: %+v (expected AI=0.80 Rspamd=0.20)", w)
+	}
+	for _, v := range []float64{w.AI, w.Rspamd, w.Attachments, w.Links} {
+		if v < 0 || v > 1 {
+			t.Fatalf("CurrentWeights produced out-of-range value %v (must be in [0, 1])", v)
+		}
+	}
+
+	// Step 2: apply a small adjustment in the [0, 1] domain, the
+	// way the tuning agent's Decide() would (renormalised float).
+	wAdjusted := agent.ScoreWeights{
+		AI:          0.75,
+		Rspamd:      0.25,
+		Attachments: 0,
+		Links:       0,
+	}
+	if err := store.UpdateWeights(context.Background(), "tenant-rt", wAdjusted); err != nil {
+		t.Fatalf("UpdateWeights: %v", err)
+	}
+
+	// Step 3: read again. The new values must reflect the adjustment
+	// and still be in [0, 1] — NOT corrupted to 1/N by a missing
+	// scale conversion.
+	w2, err := reader.CurrentWeights(context.Background(), "tenant-rt")
+	if err != nil {
+		t.Fatalf("CurrentWeights (post-update): %v", err)
+	}
+	if w2.AI != 0.75 || w2.Rspamd != 0.25 || w2.Attachments != 0 || w2.Links != 0 {
+		t.Fatalf("CurrentWeights post-update returned %+v, want AI=0.75 Rspamd=0.25", w2)
+	}
+
+	// And thresholds must be untouched by the weight write (the
+	// column-scoped UPDATE contract).
+	row := repo.rows["tenant-rt"]
+	if row.ThresholdBlocked != 85 || row.ThresholdTier1PassBelow != 20 || row.ThresholdTier1FlagAbove != 60 {
+		t.Fatalf("thresholds clobbered by UpdateWeights: %+v", row)
 	}
 }
 
