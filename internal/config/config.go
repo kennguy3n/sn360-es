@@ -862,6 +862,22 @@ func (c Config) validate() error {
 		c.Score.Caution <= c.Score.Info {
 		return errors.New("SCORE_*_THRESHOLD must be strictly decreasing: blocked > high > warning > caution > info")
 	}
+	// TIER1_SUPPRESS_PARTNER is the (typically negative) offset
+	// applied to Tier1 PassBelow / FlagAbove for Partner / Customer
+	// senders. .env.example documents the contract as "Must be <= 0"
+	// — a positive value would RAISE both thresholds (the opposite
+	// of the documented tightening intent) and make Partner /
+	// Customer senders MORE likely to pass without escalation.
+	// tier1.Thresholds.AdjustForRelationship has floor guards on
+	// PassBelow >= 0 / FlagAbove >= PassBelow+1 but no ceiling
+	// guard, so without this validate() check an operator typo (e.g.
+	// "10" instead of "-10") boots cleanly and silently undermines
+	// platform-wide relationship-aware scoring. Fail-fast at config
+	// load so the misconfiguration surfaces during deploy rather
+	// than as a stream of unexpectedly-passed Tier 1 verdicts.
+	if c.Tier1.SuppressPartner > 0 {
+		return fmt.Errorf("TIER1_SUPPRESS_PARTNER must be <= 0; got %d (positive values would raise Partner/Customer thresholds, the opposite of the documented tightening intent)", c.Tier1.SuppressPartner)
+	}
 	if c.Onboarding.StateSecret != "" && len(c.Onboarding.StateSecret) < 16 {
 		return errors.New("ONBOARDING_STATE_SECRET must be at least 16 bytes when set")
 	}

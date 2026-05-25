@@ -96,6 +96,30 @@ func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*ag
 	return onboardA, tuningA, supportA
 }
 
+// ensureTenantScoringConfigAdapter assigns app.tenantScoringConfig
+// the first time it is called when a score_engine repo is wired,
+// and is a no-op on subsequent calls. It exists so newApplication
+// can guarantee the evaluator-side cache is non-nil BEFORE
+// NewEvaluator / NewBatchOrchestrator capture
+// app.tenantScoringConfig at construction time, while still letting
+// buildConfigStore reuse the same instance for the tuning agent's
+// invalidation path. Without this split, buildAgents (which calls
+// buildConfigStore) ran AFTER the evaluator block in newApplication
+// — so app.tenantScoringConfig was nil at line 573 and both the
+// per-message Evaluator and the BatchOrchestrator received a nil
+// TenantConfig, silently collapsing every verdict back onto the
+// static defaults and defeating the entire per-tenant scoring
+// config feature.
+func ensureTenantScoringConfigAdapter(app *application) {
+	if app == nil || app.repos == nil || app.repos.ScoreEngines == nil {
+		return
+	}
+	if app.tenantScoringConfig != nil {
+		return
+	}
+	app.tenantScoringConfig = newTenantScoringConfigAdapter(app.repos.ScoreEngines, 0)
+}
+
 // buildConfigStore returns the ConfigStore used by both the
 // onboarding and tuning agents. It prefers the durable Postgres-
 // backed store (postgresConfigStore on score_engine); only when the
@@ -105,13 +129,16 @@ func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*ag
 // warning to a hard boot error in production.
 func buildConfigStore(logger *slog.Logger, app *application) agent.ConfigStore {
 	if app != nil && app.repos != nil && app.repos.ScoreEngines != nil {
-		// Construct the evaluator-side cache eagerly so the
+		// Construct (or reuse) the evaluator-side cache so the
 		// tuning agent's writes (postgresConfigStore.Update*) can
 		// invalidate the same instance that the evaluator + batch
-		// orchestrator read from. Without this shared handle, a
-		// tuning write would not become visible to verdicts for up
-		// to the cache TTL (60s) after the DB row was updated.
-		app.tenantScoringConfig = newTenantScoringConfigAdapter(app.repos.ScoreEngines, 0)
+		// orchestrator read from. newApplication calls
+		// ensureTenantScoringConfigAdapter BEFORE constructing the
+		// evaluator, so by the time buildConfigStore runs the
+		// adapter is already wired — this idempotent ensure call
+		// preserves the invariant if buildConfigStore is ever
+		// invoked through a different entrypoint.
+		ensureTenantScoringConfigAdapter(app)
 		return newPostgresConfigStore(app.repos.ScoreEngines, app.tenantScoringConfig)
 	}
 	logger.Warn("sn360-es: using in-memory config store; agent config will not survive restarts (set PG_HOST for persistence)")

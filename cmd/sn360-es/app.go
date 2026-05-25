@@ -562,13 +562,26 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	tierDeciderAdapt := tierDeciderAdapter{decider: tierDecider}
 	weights := evaluate.DefaultWeights()
 
-	// tenantScoringConfig is non-nil when buildConfigStore wired a
-	// Postgres-backed agent.ConfigStore — in that case the same
-	// score_engine table the tuning agent writes to is also the
-	// source of per-tenant Weights / Tier1*Threshold overrides for
-	// evaluation. Pass a typed nil through when score_engine is not
-	// wired so the evaluator falls back to its static defaults
-	// instead of dereferencing a nil interface at verdict time.
+	// Pre-build the shared tenantScoringConfig cache so NewEvaluator
+	// and NewBatchOrchestrator capture a non-nil
+	// app.tenantScoringConfig at construction time. buildAgents
+	// (called later, line ~741) reuses the same instance via
+	// buildConfigStore so the tuning agent's writes invalidate the
+	// same cache the evaluator reads from. Before this split,
+	// buildAgents ran AFTER the evaluator block here, so
+	// app.tenantScoringConfig was always nil when the evaluator
+	// captured it — silently collapsing every verdict back onto
+	// the static defaults and defeating the entire per-tenant
+	// scoring config feature.
+	ensureTenantScoringConfigAdapter(app)
+
+	// tenantScoringConfig is non-nil when score_engine is wired —
+	// in that case the same table the tuning agent writes to is
+	// also the source of per-tenant Weights / Tier1*Threshold
+	// overrides for evaluation. Pass a typed nil through when
+	// score_engine is not wired so the evaluator falls back to its
+	// static defaults instead of dereferencing a nil interface at
+	// verdict time.
 	var tenantConfigLoader evaluate.TenantScoringConfigLoader
 	if app.tenantScoringConfig != nil {
 		tenantConfigLoader = app.tenantScoringConfig

@@ -687,3 +687,91 @@ func TestTenantScoringConfigAdapter_RunJanitor(t *testing.T) {
 		t.Fatal("nil-adapter runJanitor did not return promptly")
 	}
 }
+
+// TestEnsureTenantScoringConfigAdapter_WiresAdapterBeforeBuildAgents
+// pins the initialisation-ordering invariant that motivated the
+// extraction of ensureTenantScoringConfigAdapter out of
+// buildConfigStore: NewEvaluator + NewBatchOrchestrator capture
+// app.tenantScoringConfig at construction time, but buildAgents
+// (the only previous caller of buildConfigStore) ran AFTER the
+// evaluator block in newApplication. Without the split, the
+// evaluator captured nil and the entire per-tenant scoring config
+// feature collapsed back onto static defaults.
+//
+// This test calls ensureTenantScoringConfigAdapter directly with a
+// minimal application that has a ScoreEngines repo wired, and
+// asserts the adapter is non-nil afterwards. A second call must
+// be a no-op (preserve the same pointer) so concurrent or
+// alternate-path callers don't overwrite the shared instance.
+func TestEnsureTenantScoringConfigAdapter_WiresAdapterBeforeBuildAgents(t *testing.T) {
+	repo := newFakeScoreEngineRepo()
+	app := &application{
+		repos: &repository.Registry{ScoreEngines: repo},
+	}
+
+	if app.tenantScoringConfig != nil {
+		t.Fatalf("setup: app.tenantScoringConfig already populated")
+	}
+
+	ensureTenantScoringConfigAdapter(app)
+	if app.tenantScoringConfig == nil {
+		t.Fatal("ensureTenantScoringConfigAdapter did not populate app.tenantScoringConfig — the evaluator would capture nil and the per-tenant scoring config feature would be silently disabled")
+	}
+	first := app.tenantScoringConfig
+
+	// Idempotency: a second call must NOT swap the adapter, since
+	// buildConfigStore (called later by buildAgents) reuses the
+	// same instance for tuning-write invalidation. Replacing it
+	// would break the cache-coherence contract between evaluator
+	// reads and tuning agent writes.
+	ensureTenantScoringConfigAdapter(app)
+	if app.tenantScoringConfig != first {
+		t.Fatal("ensureTenantScoringConfigAdapter is not idempotent — a second call replaced the existing adapter, which would break the evaluator-side cache <-> tuning-write invalidation contract")
+	}
+
+	// Verify the adapter actually reads from the wired repo by
+	// seeding a row and loading through the cache. If the
+	// adapter were nil or wired to a different repo, the loader
+	// would return zero values and the test would fail.
+	repo.rows["tenant-wire"] = repository.ScoreEngine{
+		TenantID:                "tenant-wire",
+		WeightAI:                70,
+		WeightRspamd:            30,
+		ThresholdTier1PassBelow: 25,
+		ThresholdTier1FlagAbove: 75,
+	}
+	tc, err := app.tenantScoringConfig.LoadTenantScoringConfig(context.Background(), "tenant-wire")
+	if err != nil {
+		t.Fatalf("LoadTenantScoringConfig: %v", err)
+	}
+	if tc.Weights.AI != 0.70 || tc.Weights.Rspamd != 0.30 {
+		t.Fatalf("adapter not wired to repo: weights = %+v (want AI=0.70 Rspamd=0.30)", tc.Weights)
+	}
+	if tc.Tier1PassThreshold == nil || *tc.Tier1PassThreshold != 25 {
+		t.Fatalf("adapter not wired to repo: Tier1PassThreshold = %v (want 25)", tc.Tier1PassThreshold)
+	}
+}
+
+// TestEnsureTenantScoringConfigAdapter_NoRepoIsNoOp pins the
+// memory-fallback path: when ScoreEngines is nil (the operator has
+// not set PG_HOST), ensureTenantScoringConfigAdapter must leave
+// app.tenantScoringConfig nil so the evaluator falls through to
+// static defaults instead of attempting to read from a nil repo.
+func TestEnsureTenantScoringConfigAdapter_NoRepoIsNoOp(t *testing.T) {
+	cases := []struct {
+		name string
+		app  *application
+	}{
+		{"nil app", nil},
+		{"nil repos", &application{}},
+		{"nil ScoreEngines", &application{repos: &repository.Registry{}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ensureTenantScoringConfigAdapter(tc.app)
+			if tc.app != nil && tc.app.tenantScoringConfig != nil {
+				t.Fatalf("expected tenantScoringConfig to remain nil when ScoreEngines is unwired; got %v", tc.app.tenantScoringConfig)
+			}
+		})
+	}
+}
