@@ -575,21 +575,22 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	}
 
 	app.evaluator = evaluate.NewEvaluator(evaluate.Config{
-		Tier0:              app.tier0Gate,
-		Tier1:              app.tier1Client,
-		Tier2:              app.tier2Client,
-		Rspamd:             app.rspamdClient,
-		Categorizer:        categorizer,
-		TierDecider:        tierDeciderAdapt,
-		Weights:            weights,
-		Tier1PassThreshold: cfg.Tier1.PassThreshold,
-		Tier1FlagThreshold: cfg.Tier1.FlagThreshold,
-		Tier1Timeout:       cfg.Tier1.Timeout,
-		Tier2Timeout:       cfg.AI.Timeout,
-		RspamdTimeout:      cfg.Rspamd.Timeout,
-		TenantConfig:       tenantConfigLoader,
-		Logger:             logger,
-		Observer:           app.metrics.PipelineObserver(),
+		Tier0:                app.tier0Gate,
+		Tier1:                app.tier1Client,
+		Tier2:                app.tier2Client,
+		Rspamd:               app.rspamdClient,
+		Categorizer:          categorizer,
+		TierDecider:          tierDeciderAdapt,
+		Weights:              weights,
+		Tier1PassThreshold:   cfg.Tier1.PassThreshold,
+		Tier1FlagThreshold:   cfg.Tier1.FlagThreshold,
+		Tier1SuppressPartner: cfg.Tier1.SuppressPartner,
+		Tier1Timeout:         cfg.Tier1.Timeout,
+		Tier2Timeout:         cfg.AI.Timeout,
+		RspamdTimeout:        cfg.Rspamd.Timeout,
+		TenantConfig:         tenantConfigLoader,
+		Logger:               logger,
+		Observer:             app.metrics.PipelineObserver(),
 	})
 
 	// Optional Tier 1 batch orchestrator.
@@ -618,6 +619,13 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 					Thresholds: tier1.Thresholds{
 						PassBelow: cfg.Tier1.PassThreshold,
 						FlagAbove: cfg.Tier1.FlagThreshold,
+						// SuppressPartner mirrors the per-message
+						// Evaluator (see Tier1SuppressPartner above).
+						// Reading from cfg.Tier1 ensures both paths
+						// honour the same TIER1_SUPPRESS_PARTNER
+						// override and a Partner/Customer sender gets
+						// the same verdict in per-message and batch.
+						SuppressPartner: cfg.Tier1.SuppressPartner,
 					},
 					// *evaluate.Evaluator now matches
 					// evaluate.MessageEvaluator directly

@@ -239,6 +239,16 @@ type Tier1 struct {
 	BatchSize     int
 	PassThreshold int
 	FlagThreshold int
+	// SuppressPartner is the (typically negative) offset applied to
+	// PassBelow / FlagAbove for senders categorised as Partner or
+	// Customer. See tier1.Thresholds.AdjustForRelationship — the
+	// relationship-aware tightening is platform-wide, not per-tenant,
+	// so the tuning agent never writes it. Threading it through the
+	// repo Config (rather than relying on tier1.DefaultThresholds()
+	// at each call site) keeps the per-message Evaluator and the
+	// BatchOrchestrator reading from a single source so they cannot
+	// produce divergent verdicts for the same input.
+	SuppressPartner int
 	// BatchEnabled selects the batched-orchestrator path on
 	// es.evaluate.request (pulls in batches of up to BatchSize and
 	// calls the encoder's /predict/batch endpoint). When false the
@@ -626,7 +636,13 @@ func Load() (Config, error) {
 			BatchSize:     getInt("TIER1_BATCH_SIZE", 64),
 			PassThreshold: getInt("TIER1_PASS_THRESHOLD", 20),
 			FlagThreshold: getInt("TIER1_FLAG_THRESHOLD", 60),
-			BatchEnabled:  getBool("TIER1_BATCH_ENABLED", false),
+			// Mirrors tier1.DefaultThresholds().SuppressPartner (-10).
+			// Kept as a literal here because internal/config must stay
+			// stdlib-only (see package doc), so we cannot import the
+			// tier1 package. Whenever the platform default changes,
+			// update both locations.
+			SuppressPartner: getInt("TIER1_SUPPRESS_PARTNER", -10),
+			BatchEnabled:    getBool("TIER1_BATCH_ENABLED", false),
 		},
 		SensitivityBonsaiURL:     getStr("SENSITIVITY_BONSAI_URL", ""),
 		SensitivityBonsaiTimeout: getDuration("SENSITIVITY_BONSAI_TIMEOUT", 30*time.Second),
@@ -780,6 +796,11 @@ func Load() (Config, error) {
 		strictErrs = append(strictErrs, err)
 	} else {
 		cfg.Tier1.FlagThreshold = v
+	}
+	if v, err := getIntStrict("TIER1_SUPPRESS_PARTNER", -10); err != nil {
+		strictErrs = append(strictErrs, err)
+	} else {
+		cfg.Tier1.SuppressPartner = v
 	}
 	if v, err := getDurationStrict("AI_TIMEOUT", 30*time.Second); err != nil {
 		strictErrs = append(strictErrs, err)

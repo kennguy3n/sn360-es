@@ -3,10 +3,12 @@ package evaluate
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"testing"
 
 	"github.com/kennguy3n/sn360-es/internal/dto"
+	"github.com/kennguy3n/sn360-es/internal/service/tier1"
 )
 
 // stubTenantLoader is the test double for TenantScoringConfigLoader.
@@ -221,6 +223,52 @@ func TestResolveTenantConfig_SuppressPartnerCarriedFromStatic(t *testing.T) {
 	first := th.AdjustForRelationship(dto.RelationshipFirstTimeExternal)
 	if first.PassBelow != 0 {
 		t.Fatalf("expected FirstTimeExternal to force PassBelow=0, got %d", first.PassBelow)
+	}
+}
+
+// TestBatchOrchestrator_ResolveTenantConfig_PreservesSuppressPartner
+// is the batch-side companion to the per-message parity test above.
+// It guards against a regression where the wire-time construction of
+// BatchOrchestratorConfig.Thresholds omits SuppressPartner (the bug
+// historically present in cmd/sn360-es/app.go) — the resolver must
+// carry whatever was provided through to AdjustForRelationship so the
+// same Partner / Customer sender produces the same Verdict in the
+// per-message and batch paths.
+func TestBatchOrchestrator_ResolveTenantConfig_PreservesSuppressPartner(t *testing.T) {
+	t.Parallel()
+	// Construct the orchestrator directly rather than via
+	// NewBatchOrchestrator: the constructor validates JS != nil and
+	// other production-only fields that are irrelevant to the
+	// resolver under test.
+	o := &BatchOrchestrator{
+		cfg: BatchOrchestratorConfig{
+			Weights: Weights{AI: 0.5, Rspamd: 0.5},
+			Thresholds: tier1.Thresholds{
+				PassBelow:       30,
+				FlagAbove:       80,
+				SuppressPartner: -15,
+			},
+			TenantConfig: stubTenantLoader{
+				tc: TenantScoringConfig{
+					Weights:            Weights{AI: 0.7, Rspamd: 0.3},
+					Tier1PassThreshold: intPtr(25),
+					Tier1FlagThreshold: intPtr(70),
+				},
+			},
+		},
+		log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	_, th := o.resolveTenantConfig(context.Background(), "tenant-batch")
+	if th.SuppressPartner != -15 {
+		t.Fatalf("expected SuppressPartner=-15 preserved through tenant override, got %d", th.SuppressPartner)
+	}
+	if th.PassBelow != 25 || th.FlagAbove != 70 {
+		t.Fatalf("expected tenant override 25/70, got %d/%d", th.PassBelow, th.FlagAbove)
+	}
+	adjusted := th.AdjustForRelationship(dto.RelationshipPartner)
+	if adjusted.PassBelow != 25-15 || adjusted.FlagAbove != 70-15 {
+		t.Fatalf("expected Partner adjustment (10/55), got (%d/%d)", adjusted.PassBelow, adjusted.FlagAbove)
 	}
 }
 
