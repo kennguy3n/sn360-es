@@ -126,8 +126,20 @@ type Config struct {
 	// Customer (see tier1.Thresholds.AdjustForRelationship). It is
 	// kept on Config rather than TenantScoringConfig because it is a
 	// platform-wide relationship-aware adjustment, not a per-tenant
-	// tuned knob — the tuning agent never writes it. Zero defaults to
-	// the platform value (-10) at construction time.
+	// tuned knob — the tuning agent never writes it.
+	//
+	// NewEvaluator does NOT apply a zero-sentinel default here: 0 is
+	// a legitimate operator-chosen value meaning "do not apply any
+	// relationship-aware tightening" and it must round-trip
+	// untouched through construction. The platform default (-10,
+	// matching tier1.DefaultThresholds()) is applied one layer up
+	// in internal/config/config.go — TIER1_SUPPRESS_PARTNER falls
+	// back to -10 there when unset — so by the time we reach
+	// NewEvaluator the field carries either that operator-explicit
+	// value or the platform default, and either way Evaluator
+	// trusts what it received. See
+	// TestNewEvaluator_SuppressPartnerZeroIsRespected for the
+	// regression guard.
 	Tier1SuppressPartner int
 
 	// TenantConfig is the per-tenant scoring config override source.

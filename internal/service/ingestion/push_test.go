@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -274,16 +275,36 @@ func TestClose_ContinuesPastPerSubscriptionUnsubscribeFailures(t *testing.T) {
 	}
 }
 
-// equalUnsubscribeCalls is a stable comparison helper: unsubscribeCalls
-// preserves Subscribe iteration order (which is deterministic for
-// recordingReceiver's slice-backed Tenants), so equality is just a
-// per-index field check.
+// equalUnsubscribeCalls is an order-independent set-equality helper.
+// The contract under test is "every (provider, tenant) pair the
+// PushManager Subscribed must receive a matching Unsubscribe on
+// Close" — the iteration ORDER is intentionally not part of the
+// contract because PushManager.Close walks m.subs, which is a Go
+// map whose iteration order is randomised per-process. Comparing
+// per-index would make this test flake whenever the runtime
+// happens to yield the entries in a different order than Subscribe
+// recorded them. We sort both sides into a canonical (TenantID,
+// SubscriptionID)-lex order and then compare.
 func equalUnsubscribeCalls(got, want []unsubscribeCall) bool {
 	if len(got) != len(want) {
 		return false
 	}
-	for i := range got {
-		if got[i] != want[i] {
+	gs := append([]unsubscribeCall(nil), got...)
+	ws := append([]unsubscribeCall(nil), want...)
+	sort.Slice(gs, func(i, j int) bool {
+		if gs[i].TenantID != gs[j].TenantID {
+			return gs[i].TenantID < gs[j].TenantID
+		}
+		return gs[i].SubscriptionID < gs[j].SubscriptionID
+	})
+	sort.Slice(ws, func(i, j int) bool {
+		if ws[i].TenantID != ws[j].TenantID {
+			return ws[i].TenantID < ws[j].TenantID
+		}
+		return ws[i].SubscriptionID < ws[j].SubscriptionID
+	})
+	for i := range gs {
+		if gs[i] != ws[i] {
 			return false
 		}
 	}
