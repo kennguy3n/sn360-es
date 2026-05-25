@@ -105,7 +105,14 @@ func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*ag
 // warning to a hard boot error in production.
 func buildConfigStore(logger *slog.Logger, app *application) agent.ConfigStore {
 	if app != nil && app.repos != nil && app.repos.ScoreEngines != nil {
-		return newPostgresConfigStore(app.repos.ScoreEngines)
+		// Construct the evaluator-side cache eagerly so the
+		// tuning agent's writes (postgresConfigStore.Update*) can
+		// invalidate the same instance that the evaluator + batch
+		// orchestrator read from. Without this shared handle, a
+		// tuning write would not become visible to verdicts for up
+		// to the cache TTL (60s) after the DB row was updated.
+		app.tenantScoringConfig = newTenantScoringConfigAdapter(app.repos.ScoreEngines, 0)
+		return newPostgresConfigStore(app.repos.ScoreEngines, app.tenantScoringConfig)
 	}
 	logger.Warn("sn360-es: using in-memory config store; agent config will not survive restarts (set PG_HOST for persistence)")
 	if app != nil {

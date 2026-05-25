@@ -56,6 +56,37 @@ type TierDecider interface {
 	Decide(score int, primary constant.Category, signals dto.RiskSignals) constant.Tier
 }
 
+// TenantScoringConfig is the per-tenant projection of score_engine
+// the evaluator consults at decision time. The shape matches the four
+// scoring columns + the two Tier-1 threshold columns; the evaluator
+// uses it to override its static defaults so persisted-by-tuning
+// values actually influence verdicts.
+//
+// All four `Weights` fields default to zero (which the evaluator
+// treats as "fall back to static Weights") and both thresholds
+// default to zero (treated as "fall back to static thresholds"). The
+// adapter populating this struct (cmd/sn360-es/adapters.go:
+// tenantScoringConfigAdapter) is responsible for translating DB
+// integers into the renormalised [0, 1] weight range and for leaving
+// unset rows as zeros.
+type TenantScoringConfig struct {
+	Weights            Weights
+	Tier1PassThreshold int
+	Tier1FlagThreshold int
+}
+
+// TenantScoringConfigLoader returns the per-tenant scoring config
+// the evaluator should apply for the given tenant. Implementations
+// must be safe for concurrent use across many goroutines. Returning
+// (zero TenantScoringConfig, nil) is equivalent to "no per-tenant
+// override; use the static defaults from Config" — callers MUST NOT
+// treat a zero return as an error. A non-nil error is logged at
+// warn level and the evaluator falls back to the static defaults so
+// a transient DB blip never blocks verdict emission.
+type TenantScoringConfigLoader interface {
+	LoadTenantScoringConfig(ctx context.Context, tenantID string) (TenantScoringConfig, error)
+}
+
 // Config bundles the inputs the orchestrator needs at construction time.
 type Config struct {
 	Tier0       Tier0Gate
@@ -79,6 +110,18 @@ type Config struct {
 	// when the per-tenant value is not set.
 	Tier1PassThreshold int
 	Tier1FlagThreshold int
+
+	// TenantConfig is the per-tenant scoring config override source.
+	// When non-nil, Evaluate consults it at the top of each call and
+	// uses the returned (Weights, Tier1Pass/FlagThreshold) instead of
+	// the static fields above. Nil falls back to the static defaults,
+	// which keeps existing tests and dev configurations untouched.
+	//
+	// This is what makes the tuning agent's persisted score_engine
+	// row actually flow into evaluation: without it, the tuning
+	// agent's UpdateWeights / UpdateThresholds writes never reach
+	// the verdict path.
+	TenantConfig TenantScoringConfigLoader
 
 	Logger *slog.Logger
 
@@ -171,6 +214,13 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest, signa
 	defer func() {
 		e.cfg.Observer.ObserveEvaluate(string(res.Tier), time.Since(evalStart))
 	}()
+
+	// 0. Per-tenant scoring config. When the tuning agent has
+	// persisted weights or thresholds for this tenant, they override
+	// the static cfg.Weights / cfg.Tier1*Threshold defaults. Failures
+	// fall back to the static config so a Postgres blip never blocks
+	// verdict emission.
+	weights, passThreshold, flagThreshold := e.resolveTenantConfig(ctx, req.TenantID)
 
 	// 1. Tier 0 gate.
 	if e.cfg.Tier0 == nil {
@@ -281,11 +331,11 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest, signa
 				slog.Any("error", t1.err))
 		} else {
 			outcome := t1.outcome
-			pass := e.cfg.Tier1PassThreshold
+			pass := passThreshold
 			if tier0.Tier1ThresholdOverride > 0 {
 				pass = tier0.Tier1ThresholdOverride
 			}
-			flag := e.cfg.Tier1FlagThreshold
+			flag := flagThreshold
 			outcome.Pass = outcome.Score < pass
 			outcome.Flag = outcome.Score >= flag
 			outcome.Escalate = !outcome.Pass && !outcome.Flag
@@ -337,8 +387,8 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest, signa
 		}
 	}
 
-	// 4. Aggregate.
-	res.Score = ScoreWithAvailability(FromResultEx(&res), e.cfg.Weights)
+	// 4. Aggregate using the per-tenant weights resolved at step 0.
+	res.Score = ScoreWithAvailability(FromResultEx(&res), weights)
 	if e.cfg.Categorizer != nil {
 		primary, secondary, reasons := e.cfg.Categorizer.Categorise(res, signals)
 		res.Primary = primary
@@ -426,6 +476,46 @@ func tier2OutcomeLabel(out dto.Tier2Outcome) string {
 		return "ok"
 	}
 	return "flagged"
+}
+
+// resolveTenantConfig returns the (weights, passThreshold,
+// flagThreshold) tuple the evaluator should apply for tenantID. The
+// per-tenant TenantScoringConfigLoader, when configured, wins over
+// the static cfg.Weights / cfg.Tier1*Threshold defaults — but only
+// for fields it actually populates. Missing or zero fields fall back
+// to the static defaults so a partially-tuned tenant still gets a
+// sensible mix of tuned + default behaviour.
+//
+// Loader errors are downgraded to a warn log + static fallback so
+// any transient DB blip (Postgres recycle, connection-pool churn)
+// never blocks verdict emission. The error is not surfaced upstream
+// because the evaluator's correctness contract is "always produce a
+// verdict"; a tenant whose tuned config is briefly unavailable still
+// gets evaluated against the platform defaults.
+func (e *Evaluator) resolveTenantConfig(ctx context.Context, tenantID string) (Weights, int, int) {
+	weights := e.cfg.Weights
+	pass := e.cfg.Tier1PassThreshold
+	flag := e.cfg.Tier1FlagThreshold
+	if e.cfg.TenantConfig == nil || tenantID == "" {
+		return weights, pass, flag
+	}
+	tc, err := e.cfg.TenantConfig.LoadTenantScoringConfig(ctx, tenantID)
+	if err != nil {
+		e.log.Warn("evaluate: tenant scoring config unavailable; using static defaults",
+			slog.String("tenant_id", tenantID),
+			slog.Any("error", err))
+		return weights, pass, flag
+	}
+	if tc.Weights.Total() > 0 {
+		weights = tc.Weights
+	}
+	if tc.Tier1PassThreshold > 0 {
+		pass = tc.Tier1PassThreshold
+	}
+	if tc.Tier1FlagThreshold > 0 {
+		flag = tc.Tier1FlagThreshold
+	}
+	return weights, pass, flag
 }
 
 // ForcedTierFor maps the categories the Tier 0 gate may force into

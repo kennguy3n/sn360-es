@@ -96,10 +96,17 @@ type application struct {
 	// assertProductionDurableStores so the prod boot gate fires on
 	// the real in-memory state.
 	usingMemoryConfigStore bool
-	dashboardGen           *dashboard.DashboardGenerator
-	recipientSvc           *predict.RecipientService
-	openSvc                *predict.OpenService
-	escalationSvc          *agent.EscalationService
+	// tenantScoringConfig is the shared evaluator-side cache of
+	// per-tenant score_engine rows. It is read by the evaluator and
+	// batch orchestrator at verdict time and invalidated by
+	// postgresConfigStore after every successful tuning write so
+	// the cache cannot return stale values across a tuning pass.
+	// Nil when score_engine is not wired (memoryConfigStore fallback).
+	tenantScoringConfig *tenantScoringConfigAdapter
+	dashboardGen        *dashboard.DashboardGenerator
+	recipientSvc        *predict.RecipientService
+	openSvc             *predict.OpenService
+	escalationSvc       *agent.EscalationService
 
 	// Provider-side action machinery.
 	providers     *providerRegistry
@@ -555,6 +562,18 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	tierDeciderAdapt := tierDeciderAdapter{decider: tierDecider}
 	weights := evaluate.DefaultWeights()
 
+	// tenantScoringConfig is non-nil when buildConfigStore wired a
+	// Postgres-backed agent.ConfigStore — in that case the same
+	// score_engine table the tuning agent writes to is also the
+	// source of per-tenant Weights / Tier1*Threshold overrides for
+	// evaluation. Pass a typed nil through when score_engine is not
+	// wired so the evaluator falls back to its static defaults
+	// instead of dereferencing a nil interface at verdict time.
+	var tenantConfigLoader evaluate.TenantScoringConfigLoader
+	if app.tenantScoringConfig != nil {
+		tenantConfigLoader = app.tenantScoringConfig
+	}
+
 	app.evaluator = evaluate.NewEvaluator(evaluate.Config{
 		Tier0:              app.tier0Gate,
 		Tier1:              app.tier1Client,
@@ -568,6 +587,7 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		Tier1Timeout:       cfg.Tier1.Timeout,
 		Tier2Timeout:       cfg.AI.Timeout,
 		RspamdTimeout:      cfg.Rspamd.Timeout,
+		TenantConfig:       tenantConfigLoader,
 		Logger:             logger,
 		Observer:           app.metrics.PipelineObserver(),
 	})
@@ -608,6 +628,7 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 					Categorizer:   categorizer,
 					TierDecider:   tierDeciderAdapt,
 					Weights:       weights,
+					TenantConfig:  tenantConfigLoader,
 					Sink:          app.eventBus,
 					ResultSubject: "es.evaluate.result",
 					Logger:        logger,

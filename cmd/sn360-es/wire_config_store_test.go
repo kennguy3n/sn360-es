@@ -5,9 +5,11 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/repository"
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
+	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
 )
 
 // fakeScoreEngineRepo is a deterministic in-process implementation of
@@ -112,7 +114,7 @@ func (f *fakeScoreEngineRepo) UpdateThresholds(_ context.Context, tenantID strin
 // the seed-then-upsert fallback runs exactly once.
 func TestPostgresConfigStore_UpdateWeights_SeedsThenUpserts(t *testing.T) {
 	repo := newFakeScoreEngineRepo()
-	store := newPostgresConfigStore(repo)
+	store := newPostgresConfigStore(repo, nil)
 
 	err := store.UpdateWeights(context.Background(), "tenant-a", agent.ScoreWeights{
 		AI:          0.5,
@@ -181,7 +183,7 @@ func TestPostgresConfigStore_UpdateThresholds_PreservesWeights(t *testing.T) {
 		ThresholdCaution:  30,
 		ThresholdInfo:     15,
 	}
-	store := newPostgresConfigStore(repo)
+	store := newPostgresConfigStore(repo, nil)
 
 	err := store.UpdateThresholds(context.Background(), "tenant-b", agent.Thresholds{
 		Tier1PassBelow: 25,
@@ -235,7 +237,7 @@ func TestPostgresConfigStore_UpdateWeights_NoUpsertWhenRowExists(t *testing.T) {
 		ThresholdTier1PassBelow: 20,
 		ThresholdTier1FlagAbove: 60,
 	}
-	store := newPostgresConfigStore(repo)
+	store := newPostgresConfigStore(repo, nil)
 
 	if err := store.UpdateWeights(context.Background(), "tenant-d", agent.ScoreWeights{
 		AI: 0.6, Rspamd: 0.4,
@@ -293,7 +295,7 @@ func TestRoundTrip_CurrentWeightsPreservesScale(t *testing.T) {
 
 	repos := &repository.Registry{ScoreEngines: repo}
 	reader := tuningResultAdapter{repos: repos}
-	store := newPostgresConfigStore(repo)
+	store := newPostgresConfigStore(repo, nil)
 
 	// Step 1: read the seeded row. Must come back as [0, 1] floats,
 	// NOT raw integers — anything > 1 here is the regression that
@@ -351,7 +353,7 @@ func TestPostgresConfigStore_UpdateWeights_LoadError(t *testing.T) {
 	repo := newFakeScoreEngineRepo()
 	boom := errors.New("connection refused")
 	repo.getErr = boom
-	store := newPostgresConfigStore(repo)
+	store := newPostgresConfigStore(repo, nil)
 
 	err := store.UpdateWeights(context.Background(), "tenant-c", agent.ScoreWeights{AI: 1})
 	if err == nil {
@@ -390,5 +392,168 @@ func TestClampWeightToPercent(t *testing.T) {
 				t.Errorf("clampWeightToPercent(%v) = %d, want %d", tc.in, got, tc.out)
 			}
 		})
+	}
+}
+
+// TestTenantScoringConfigAdapter_LoadReadsAndCachesScoreEngine asserts
+// the evaluator-side adapter returns the persisted score_engine row
+// translated into evaluate.TenantScoringConfig (integer percentages
+// divided by 100 to land in [0, 1]) AND that a second Load call
+// within the TTL window does not re-hit the repository. The cache
+// behaviour is the operational contract that keeps verdict-path
+// latency from being dragged onto every Postgres round-trip when
+// the same tenant evaluates thousands of messages per second.
+func TestTenantScoringConfigAdapter_LoadReadsAndCachesScoreEngine(t *testing.T) {
+	repo := newFakeScoreEngineRepo()
+	repo.rows["tenant-x"] = repository.ScoreEngine{
+		TenantID:                "tenant-x",
+		WeightAI:                70,
+		WeightRspamd:            20,
+		WeightAttachments:       10,
+		WeightLinks:             0,
+		ThresholdTier1PassBelow: 25,
+		ThresholdTier1FlagAbove: 65,
+	}
+	adapter := newTenantScoringConfigAdapter(repo, time.Minute)
+
+	got, err := adapter.LoadTenantScoringConfig(context.Background(), "tenant-x")
+	if err != nil {
+		t.Fatalf("LoadTenantScoringConfig: %v", err)
+	}
+	want := evaluate.TenantScoringConfig{
+		Weights:            evaluate.Weights{AI: 0.7, Rspamd: 0.2, Attachments: 0.1, Links: 0},
+		Tier1PassThreshold: 25,
+		Tier1FlagThreshold: 65,
+	}
+	if got != want {
+		t.Fatalf("first load: got %+v want %+v", got, want)
+	}
+	if repo.getHits != 1 {
+		t.Fatalf("expected 1 repo hit, got %d", repo.getHits)
+	}
+
+	if _, err := adapter.LoadTenantScoringConfig(context.Background(), "tenant-x"); err != nil {
+		t.Fatalf("second LoadTenantScoringConfig: %v", err)
+	}
+	if repo.getHits != 1 {
+		t.Fatalf("expected cache hit (still 1 repo hit), got %d", repo.getHits)
+	}
+}
+
+// TestTenantScoringConfigAdapter_InvalidateForcesReread asserts the
+// adapter re-reads from the repository after Invalidate is called.
+// This is the cache-coherence contract postgresConfigStore relies on
+// to make tuning writes visible to evaluation immediately, rather
+// than after a 60s TTL expiry.
+func TestTenantScoringConfigAdapter_InvalidateForcesReread(t *testing.T) {
+	repo := newFakeScoreEngineRepo()
+	repo.rows["tenant-y"] = repository.ScoreEngine{
+		TenantID:     "tenant-y",
+		WeightAI:     50,
+		WeightRspamd: 50,
+	}
+	adapter := newTenantScoringConfigAdapter(repo, time.Hour)
+
+	if _, err := adapter.LoadTenantScoringConfig(context.Background(), "tenant-y"); err != nil {
+		t.Fatalf("first load: %v", err)
+	}
+	if repo.getHits != 1 {
+		t.Fatalf("expected 1 repo hit, got %d", repo.getHits)
+	}
+
+	row := repo.rows["tenant-y"]
+	row.WeightAI = 80
+	row.WeightRspamd = 20
+	repo.rows["tenant-y"] = row
+	adapter.Invalidate("tenant-y")
+
+	got, err := adapter.LoadTenantScoringConfig(context.Background(), "tenant-y")
+	if err != nil {
+		t.Fatalf("post-invalidate load: %v", err)
+	}
+	if got.Weights.AI != 0.8 || got.Weights.Rspamd != 0.2 {
+		t.Fatalf("invalidated cache returned stale weights: %+v", got)
+	}
+	if repo.getHits != 2 {
+		t.Fatalf("expected 2 repo hits after invalidate, got %d", repo.getHits)
+	}
+}
+
+// TestTenantScoringConfigAdapter_NotFoundIsNotAnError asserts the
+// adapter returns (zero TenantScoringConfig, nil) when no row exists
+// for a tenant. This is the contract the evaluator's
+// resolveTenantConfig depends on to fall through to its static
+// defaults for un-tuned tenants without surfacing a noisy error.
+func TestTenantScoringConfigAdapter_NotFoundIsNotAnError(t *testing.T) {
+	repo := newFakeScoreEngineRepo()
+	adapter := newTenantScoringConfigAdapter(repo, time.Minute)
+	got, err := adapter.LoadTenantScoringConfig(context.Background(), "no-such-tenant")
+	if err != nil {
+		t.Fatalf("LoadTenantScoringConfig: unexpected error %v", err)
+	}
+	if got != (evaluate.TenantScoringConfig{}) {
+		t.Fatalf("expected zero TenantScoringConfig, got %+v", got)
+	}
+}
+
+// TestPostgresConfigStore_UpdateInvalidatesCache asserts the
+// production wire-up: postgresConfigStore notifies the adapter after
+// every successful UpdateWeights / UpdateThresholds so the
+// evaluator-side cache cannot return stale values across a tuning
+// pass. The seed-then-upsert fallback path is exercised explicitly
+// (no row exists for tenant-z at start) because it is the only
+// branch that does NOT go through the column-scoped UPDATE.
+func TestPostgresConfigStore_UpdateInvalidatesCache(t *testing.T) {
+	repo := newFakeScoreEngineRepo()
+	adapter := newTenantScoringConfigAdapter(repo, time.Hour)
+	store := newPostgresConfigStore(repo, adapter)
+
+	if err := store.UpdateWeights(context.Background(), "tenant-z", agent.ScoreWeights{
+		AI: 0.6, Rspamd: 0.4,
+	}); err != nil {
+		t.Fatalf("UpdateWeights (seed): %v", err)
+	}
+	tc, err := adapter.LoadTenantScoringConfig(context.Background(), "tenant-z")
+	if err != nil {
+		t.Fatalf("LoadTenantScoringConfig: %v", err)
+	}
+	if tc.Weights.AI != 0.6 || tc.Weights.Rspamd != 0.4 {
+		t.Fatalf("after seed: got %+v want AI=0.6 Rspamd=0.4", tc.Weights)
+	}
+	hitsAfterSeed := repo.getHits
+
+	if err := store.UpdateWeights(context.Background(), "tenant-z", agent.ScoreWeights{
+		AI: 0.8, Rspamd: 0.2,
+	}); err != nil {
+		t.Fatalf("UpdateWeights (steady-state): %v", err)
+	}
+	tc, err = adapter.LoadTenantScoringConfig(context.Background(), "tenant-z")
+	if err != nil {
+		t.Fatalf("LoadTenantScoringConfig (post-update): %v", err)
+	}
+	if tc.Weights.AI != 0.8 || tc.Weights.Rspamd != 0.2 {
+		t.Fatalf("cache returned stale weights after UpdateWeights: %+v", tc.Weights)
+	}
+	if repo.getHits != hitsAfterSeed+1 {
+		t.Fatalf("expected exactly one additional repo hit after invalidation, got %d (was %d)", repo.getHits, hitsAfterSeed)
+	}
+
+	if err := store.UpdateThresholds(context.Background(), "tenant-z", agent.Thresholds{
+		BannerBlocked:  90,
+		BannerHighRisk: 70,
+		BannerWarning:  50,
+		BannerCaution:  30,
+		BannerInfo:     15,
+		Tier1PassBelow: 30,
+		Tier1FlagAbove: 70,
+	}); err != nil {
+		t.Fatalf("UpdateThresholds: %v", err)
+	}
+	tc, err = adapter.LoadTenantScoringConfig(context.Background(), "tenant-z")
+	if err != nil {
+		t.Fatalf("LoadTenantScoringConfig (post-thresholds): %v", err)
+	}
+	if tc.Tier1PassThreshold != 30 || tc.Tier1FlagThreshold != 70 {
+		t.Fatalf("cache returned stale thresholds: %+v", tc)
 	}
 }

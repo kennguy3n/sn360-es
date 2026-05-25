@@ -108,6 +108,12 @@ type BatchOrchestratorConfig struct {
 	// which consumer happened to handle it. Defaults to
 	// DefaultWeights() when zero.
 	Weights Weights
+	// TenantConfig mirrors evaluator.Config.TenantConfig: when set,
+	// the orchestrator consults it once per message to override the
+	// static Weights / Thresholds.PassBelow / Thresholds.FlagAbove
+	// with the tuning agent's persisted score_engine values. Nil
+	// preserves the legacy static-defaults behaviour.
+	TenantConfig TenantScoringConfigLoader
 	// Sink is where verdicts are emitted. The default ResultSubject
 	// is `es.evaluate.result` (mirroring the per-message
 	// handleEvaluateRequest path), so the sink only needs to support
@@ -340,7 +346,8 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 	// Apply Tier 1 thresholds, escalate when needed, publish, ack.
 	for j, idx := range tier1Indices {
 		resp := tier1Out[j]
-		t := o.cfg.Thresholds.AdjustForRelationship(pendings[idx].sig.RelationshipCategory)
+		tenantWeights, tenantThresholds := o.resolveTenantConfig(ctx, pendings[idx].req.TenantID)
+		t := tenantThresholds.AdjustForRelationship(pendings[idx].sig.RelationshipCategory)
 		verdict := t.Decision(resp.Score)
 		res := dto.EvaluateResult{
 			TenantID:      pendings[idx].req.TenantID,
@@ -389,7 +396,7 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 			// exactly the degraded-mode scenario where the safety
 			// net matters most. Mirrors the aggregation step in
 			// evaluator.Evaluate (evaluator.go:278-288).
-			o.aggregateLightweight(&res, pendings[idx].sig)
+			o.aggregateLightweight(&res, pendings[idx].sig, tenantWeights)
 		}
 		dto.BackfillRoutingFields(&res, pendings[idx].req)
 		if err := o.publishResult(ctx, res); err != nil {
@@ -430,16 +437,17 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 // category); a nil TierDecider leaves Tier as the zero value, which
 // is the behaviour callers using a non-`es.evaluate.result` sink may
 // deliberately want.
-func (o *BatchOrchestrator) aggregateLightweight(res *dto.EvaluateResult, sig dto.RiskSignals) {
-	// Recompute the aggregate score with the configured weights so
-	// the batch path and per-message path agree on res.Score for an
-	// identical Tier 1 outcome. Without this, batch verdicts would
-	// publish the raw Tier 1 score (~0-100) while per-message
-	// verdicts published the weighted score (~0-80 for Tier 1-only
-	// outcomes under DefaultWeights), and any TierDecider band
-	// straddling that ratio would classify the same message
-	// differently depending on which consumer handled it.
-	res.Score = ScoreWithAvailability(FromResultEx(res), o.cfg.Weights)
+func (o *BatchOrchestrator) aggregateLightweight(res *dto.EvaluateResult, sig dto.RiskSignals, weights Weights) {
+	// Recompute the aggregate score with the per-tenant weights
+	// (falling back to o.cfg.Weights for tenants without a tuned
+	// score_engine row) so the batch path and per-message path agree
+	// on res.Score for an identical Tier 1 outcome. Without this,
+	// batch verdicts would publish the raw Tier 1 score (~0-100)
+	// while per-message verdicts published the weighted score
+	// (~0-80 for Tier 1-only outcomes under DefaultWeights), and any
+	// TierDecider band straddling that ratio would classify the same
+	// message differently depending on which consumer handled it.
+	res.Score = ScoreWithAvailability(FromResultEx(res), weights)
 	if o.cfg.Categorizer != nil {
 		primary, secondary, reasons := o.cfg.Categorizer.Categorise(*res, sig)
 		res.Primary = primary
@@ -487,6 +495,40 @@ func (o *BatchOrchestrator) publishResult(ctx context.Context, res dto.EvaluateR
 		// unbroken trace across publish → consume.
 		events.WithTraceContext(ctx),
 	)
+}
+
+// resolveTenantConfig returns the (weights, thresholds) pair the
+// batch orchestrator should apply for tenantID. Mirrors
+// Evaluator.resolveTenantConfig: the TenantScoringConfigLoader, when
+// configured, overrides the static cfg.Weights and the
+// PassBelow / FlagAbove fields of cfg.Thresholds; loader errors
+// degrade to the static defaults with a warn log so a transient DB
+// blip never blocks the verdict path. SuppressPartner (the
+// relationship-aware adjustment) is preserved from cfg.Thresholds
+// because it is not a per-tenant tuned value.
+func (o *BatchOrchestrator) resolveTenantConfig(ctx context.Context, tenantID string) (Weights, tier1.Thresholds) {
+	weights := o.cfg.Weights
+	thresholds := o.cfg.Thresholds
+	if o.cfg.TenantConfig == nil || tenantID == "" {
+		return weights, thresholds
+	}
+	tc, err := o.cfg.TenantConfig.LoadTenantScoringConfig(ctx, tenantID)
+	if err != nil {
+		o.log.Warn("evaluate: tenant scoring config unavailable; using static defaults",
+			slog.String("tenant_id", tenantID),
+			slog.Any("error", err))
+		return weights, thresholds
+	}
+	if tc.Weights.Total() > 0 {
+		weights = tc.Weights
+	}
+	if tc.Tier1PassThreshold > 0 {
+		thresholds.PassBelow = tc.Tier1PassThreshold
+	}
+	if tc.Tier1FlagThreshold > 0 {
+		thresholds.FlagAbove = tc.Tier1FlagThreshold
+	}
+	return weights, thresholds
 }
 
 // tier0BypassResult converts a Tier 0 bypass outcome into the published
