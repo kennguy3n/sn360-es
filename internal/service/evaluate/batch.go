@@ -276,11 +276,18 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 	// Decode each message; classify each one through Tier 0; collect
 	// the ones that need Tier 1.
 	type pending struct {
-		msg   events.Message
-		req   dto.EvaluateRequest
-		sig   dto.RiskSignals
-		tier0 dto.EvaluateResult
-		hit0  bool
+		msg events.Message
+		req dto.EvaluateRequest
+		sig dto.RiskSignals
+		// tier0Outcome captures the raw Tier 0 result for every
+		// pending message — bypass and non-bypass alike. The
+		// non-bypass case needs it so the Tier 1 verdict loop can
+		// honour Tier0.Tier1ThresholdOverride (Partner / Customer
+		// senders get a tightened pass threshold) the same way the
+		// per-message evaluator does.
+		tier0Outcome dto.Tier0Outcome
+		tier0Result  dto.EvaluateResult
+		hit0         bool
 	}
 	pendings := make([]pending, 0, len(msgs))
 	for _, m := range msgs {
@@ -295,6 +302,7 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 		p := pending{msg: m, req: bm.Request, sig: bm.Signals}
 		if o.cfg.Tier0 != nil {
 			outcome := o.cfg.Tier0.Apply(bm.Request, bm.Signals)
+			p.tier0Outcome = outcome
 			if outcome.Bypass {
 				// Tier 0 short-circuit: build the published
 				// EvaluateResult here (rather than via an
@@ -302,7 +310,7 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 				// same Tier0Outcome → EvaluateResult shape the
 				// per-message evaluator produces in its bypass
 				// branch.
-				p.tier0 = tier0BypassResult(bm.Request, outcome)
+				p.tier0Result = tier0BypassResult(bm.Request, outcome)
 				p.hit0 = true
 			}
 		}
@@ -348,6 +356,16 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 		resp := tier1Out[j]
 		tenantWeights, tenantThresholds := o.resolveTenantConfig(ctx, pendings[idx].req.TenantID)
 		t := tenantThresholds.AdjustForRelationship(pendings[idx].sig.RelationshipCategory)
+		// Honour Tier 0's Tier1ThresholdOverride for parity with
+		// the per-message evaluator (evaluator.go: Evaluate). When
+		// Tier 0 has identified the sender as Partner / Customer
+		// and tightened the pass threshold, we apply that
+		// override on top of the tenant-resolved thresholds so a
+		// message routed through the batch path produces the same
+		// verdict it would through the per-message path.
+		if pendings[idx].tier0Outcome.Tier1ThresholdOverride > 0 {
+			t.PassBelow = pendings[idx].tier0Outcome.Tier1ThresholdOverride
+		}
 		verdict := t.Decision(resp.Score)
 		res := dto.EvaluateResult{
 			TenantID:      pendings[idx].req.TenantID,
@@ -412,7 +430,7 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 		if !p.hit0 {
 			continue
 		}
-		t0 := p.tier0
+		t0 := p.tier0Result
 		dto.BackfillRoutingFields(&t0, p.req)
 		if err := o.publishResult(ctx, t0); err != nil {
 			o.log.Error("evaluate: publish tier0 result failed", slog.String("err", err.Error()))

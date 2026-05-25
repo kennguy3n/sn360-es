@@ -281,3 +281,54 @@ func (c callCountingLoader) LoadTenantScoringConfig(ctx context.Context, tenantI
 	*c.calls++
 	return c.delegate.LoadTenantScoringConfig(ctx, tenantID)
 }
+
+// TestNewEvaluator_SuppressPartnerZeroIsRespected guards against a
+// regression where NewEvaluator treated Tier1SuppressPartner == 0 as
+// "unset" and overrode it with -10. That zero-sentinel behaviour
+// silently flipped an operator-explicit TIER1_SUPPRESS_PARTNER=0
+// (meaning "do not apply relationship-aware tightening") into -10 in
+// the per-message path while the batch path honored the literal 0,
+// producing divergent verdicts. The platform default of -10 is now
+// applied in internal/config/config.go alone, and NewEvaluator
+// trusts whatever value the operator (or config layer) chose.
+func TestNewEvaluator_SuppressPartnerZeroIsRespected(t *testing.T) {
+	t.Parallel()
+	e := NewEvaluator(Config{
+		Weights:              Weights{AI: 0.5, Rspamd: 0.5},
+		Tier1PassThreshold:   20,
+		Tier1FlagThreshold:   60,
+		Tier1SuppressPartner: 0, // explicit disable
+	})
+	if e.cfg.Tier1SuppressPartner != 0 {
+		t.Fatalf("expected Tier1SuppressPartner=0 to survive NewEvaluator, got %d", e.cfg.Tier1SuppressPartner)
+	}
+
+	// And the static fallback in resolveTenantConfig must surface
+	// the 0 to AdjustForRelationship (no tightening for Partner /
+	// Customer senders).
+	_, th := e.resolveTenantConfig(context.Background(), "tenant-no-suppress")
+	if th.SuppressPartner != 0 {
+		t.Fatalf("expected resolved SuppressPartner=0, got %d", th.SuppressPartner)
+	}
+	adj := th.AdjustForRelationship(dto.RelationshipPartner)
+	if adj.PassBelow != 20 || adj.FlagAbove != 60 {
+		t.Fatalf("expected no Partner suppression (20/60), got (%d/%d)", adj.PassBelow, adj.FlagAbove)
+	}
+}
+
+// TestNewEvaluator_SuppressPartnerExplicitNegativeIsRespected
+// complements the test above by confirming an operator-provided
+// negative value (the production default and the most common
+// non-zero choice) survives NewEvaluator unchanged.
+func TestNewEvaluator_SuppressPartnerExplicitNegativeIsRespected(t *testing.T) {
+	t.Parallel()
+	e := NewEvaluator(Config{
+		Weights:              Weights{AI: 0.5, Rspamd: 0.5},
+		Tier1PassThreshold:   20,
+		Tier1FlagThreshold:   60,
+		Tier1SuppressPartner: -10,
+	})
+	if e.cfg.Tier1SuppressPartner != -10 {
+		t.Fatalf("expected Tier1SuppressPartner=-10 to survive NewEvaluator, got %d", e.cfg.Tier1SuppressPartner)
+	}
+}

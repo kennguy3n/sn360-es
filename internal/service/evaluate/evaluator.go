@@ -205,9 +205,19 @@ func NewEvaluator(cfg Config) *Evaluator {
 	if cfg.Tier1FlagThreshold == 0 {
 		cfg.Tier1FlagThreshold = 60
 	}
-	if cfg.Tier1SuppressPartner == 0 {
-		cfg.Tier1SuppressPartner = tier1.DefaultThresholds().SuppressPartner
-	}
+	// Intentionally no zero-sentinel default for Tier1SuppressPartner.
+	// `0` is a legitimate operator-chosen value meaning "do not apply
+	// any relationship-aware tightening for Partner / Customer
+	// senders" (see .env.example: "Must be <= 0"). Treating 0 as
+	// "unset" here would force -10 onto operators who deliberately
+	// set TIER1_SUPPRESS_PARTNER=0, and it would not be applied by
+	// the symmetric BatchOrchestrator path (which only zero-defaults
+	// the whole tier1.Thresholds struct, not individual fields).
+	// Source of the platform default (currently -10, see
+	// tier1.DefaultThresholds()) is internal/config/config.go where
+	// TIER1_SUPPRESS_PARTNER falls back to -10 when unset — by the
+	// time we reach NewEvaluator the field carries either that
+	// operator-explicit value or the platform default.
 	if cfg.Weights.Total() == 0 {
 		cfg.Weights = DefaultWeights()
 	}
@@ -367,17 +377,23 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest, signa
 				pass = tier0.Tier1ThresholdOverride
 			}
 			flag := flagThreshold
-			outcome.Pass = outcome.Score < pass
-			outcome.Flag = outcome.Score >= flag
-			outcome.Escalate = !outcome.Pass && !outcome.Flag
-			verdict := "escalate"
-			switch {
-			case outcome.Pass:
-				verdict = "pass"
-			case outcome.Flag:
-				verdict = "flag"
-			}
-			e.cfg.Observer.ObserveTier1(verdict, t1.latency)
+			// Use the same tier1.Thresholds.Decision routine the
+			// batch orchestrator uses. Previously this branch used
+			// `score >= flag` while Decision uses `score > flag`,
+			// so a message with score == FlagAbove was Flagged in
+			// the per-message path but Escalated in the batch path.
+			// Routing the decision through Decision() eliminates
+			// the boundary divergence at the source — both paths
+			// now share a single implementation.
+			verdict := tier1.Thresholds{PassBelow: pass, FlagAbove: flag}.Decision(outcome.Score)
+			outcome.Pass = verdict == tier1.VerdictPass
+			outcome.Flag = verdict == tier1.VerdictFlag
+			outcome.Escalate = verdict == tier1.VerdictEscalate
+			// tier1.Verdict is a string newtype with values "pass" /
+			// "flag" / "escalate" — same labels the metrics observer
+			// expects, so the conversion is a direct cast (no switch
+			// translation needed).
+			e.cfg.Observer.ObserveTier1(string(verdict), t1.latency)
 			// Surface the encoder's reason codes on the top-level
 			// result so the Categorizer can rule on them (its
 			// keyword weights look at res.ReasonCodes) and so
