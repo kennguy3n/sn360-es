@@ -542,6 +542,13 @@ func (a *tenantScoringConfigAdapter) LoadTenantScoringConfig(ctx context.Context
 		}
 		return evaluate.TenantScoringConfig{}, err
 	}
+	// score_engine columns are NOT NULL so a found row always
+	// carries thresholds; populate the pointers from the row so the
+	// evaluator distinguishes "row exists with PassBelow=0" from
+	// "no row at all" instead of collapsing both onto the static
+	// defaults.
+	pass := row.ThresholdTier1PassBelow
+	flag := row.ThresholdTier1FlagAbove
 	tc := evaluate.TenantScoringConfig{
 		Weights: evaluate.Weights{
 			AI:          float64(row.WeightAI) / 100.0,
@@ -549,8 +556,8 @@ func (a *tenantScoringConfigAdapter) LoadTenantScoringConfig(ctx context.Context
 			Attachments: float64(row.WeightAttachments) / 100.0,
 			Links:       float64(row.WeightLinks) / 100.0,
 		},
-		Tier1PassThreshold: row.ThresholdTier1PassBelow,
-		Tier1FlagThreshold: row.ThresholdTier1FlagAbove,
+		Tier1PassThreshold: &pass,
+		Tier1FlagThreshold: &flag,
 	}
 	a.store(tenantID, tc)
 	return tc, nil
@@ -575,6 +582,59 @@ func (a *tenantScoringConfigAdapter) store(tenantID string, tc evaluate.TenantSc
 	a.cache[tenantID] = tenantScoringConfigCacheEntry{
 		value:     tc,
 		expiresAt: time.Now().Add(a.ttl),
+	}
+}
+
+// sweepExpired removes every cache entry whose TTL has passed and
+// returns the number of entries evicted so the caller can log it.
+// Matches the memoryLabelCache pattern (lazy eviction on lookup +
+// proactive janitor) so a multi-tenant SaaS with churn does not
+// accumulate entries for deactivated tenants indefinitely.
+func (a *tenantScoringConfigAdapter) sweepExpired(now time.Time) int {
+	if a == nil {
+		return 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	removed := 0
+	for k, e := range a.cache {
+		if now.After(e.expiresAt) {
+			delete(a.cache, k)
+			removed++
+		}
+	}
+	return removed
+}
+
+// tenantScoringConfigJanitorInterval is how often the janitor sweeps
+// expired entries. Two ttls is conservative enough to evict entries
+// well before unbounded growth becomes operationally visible while
+// keeping the wakeup rate near-idle on small deployments.
+const tenantScoringConfigJanitorInterval = 2 * time.Minute
+
+// runJanitor evicts expired entries on a fixed cadence until ctx is
+// cancelled. It is intentionally blocking so callers can wrap it in
+// a tracked goroutine (see application.StartBackground), matching
+// memoryLabelCache.runJanitor.
+func (a *tenantScoringConfigAdapter) runJanitor(ctx context.Context, interval time.Duration, logger *slog.Logger) {
+	if a == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = tenantScoringConfigJanitorInterval
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			if n := a.sweepExpired(now); n > 0 && logger != nil {
+				logger.Debug("sn360-es: tenantScoringConfigAdapter janitor swept entries",
+					slog.Int("evicted", n))
+			}
+		}
 	}
 }
 

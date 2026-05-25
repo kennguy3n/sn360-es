@@ -914,6 +914,13 @@ func (a *application) StartBackground(ctx context.Context) {
 		a.memLabelCache.runJanitor(ctx, memoryLabelCacheJanitorInterval, a.logger)
 		return nil
 	})
+	a.spawn(ctx, "tenantScoringConfig janitor", func(ctx context.Context) error {
+		if a.tenantScoringConfig == nil {
+			return nil
+		}
+		a.tenantScoringConfig.runJanitor(ctx, tenantScoringConfigJanitorInterval, a.logger)
+		return nil
+	})
 }
 
 // spawn launches a tracked background goroutine.

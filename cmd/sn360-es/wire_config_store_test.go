@@ -420,13 +420,15 @@ func TestTenantScoringConfigAdapter_LoadReadsAndCachesScoreEngine(t *testing.T) 
 	if err != nil {
 		t.Fatalf("LoadTenantScoringConfig: %v", err)
 	}
-	want := evaluate.TenantScoringConfig{
-		Weights:            evaluate.Weights{AI: 0.7, Rspamd: 0.2, Attachments: 0.1, Links: 0},
-		Tier1PassThreshold: 25,
-		Tier1FlagThreshold: 65,
+	wantWeights := evaluate.Weights{AI: 0.7, Rspamd: 0.2, Attachments: 0.1, Links: 0}
+	if got.Weights != wantWeights {
+		t.Fatalf("first load weights: got %+v want %+v", got.Weights, wantWeights)
 	}
-	if got != want {
-		t.Fatalf("first load: got %+v want %+v", got, want)
+	if got.Tier1PassThreshold == nil || *got.Tier1PassThreshold != 25 {
+		t.Fatalf("first load Tier1PassThreshold: got %v want 25", got.Tier1PassThreshold)
+	}
+	if got.Tier1FlagThreshold == nil || *got.Tier1FlagThreshold != 65 {
+		t.Fatalf("first load Tier1FlagThreshold: got %v want 65", got.Tier1FlagThreshold)
 	}
 	if repo.getHits != 1 {
 		t.Fatalf("expected 1 repo hit, got %d", repo.getHits)
@@ -553,7 +555,10 @@ func TestPostgresConfigStore_UpdateInvalidatesCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadTenantScoringConfig (post-thresholds): %v", err)
 	}
-	if tc.Tier1PassThreshold != 30 || tc.Tier1FlagThreshold != 70 {
-		t.Fatalf("cache returned stale thresholds: %+v", tc)
+	if tc.Tier1PassThreshold == nil || *tc.Tier1PassThreshold != 30 {
+		t.Fatalf("cache returned stale Tier1PassThreshold: got %v want 30", tc.Tier1PassThreshold)
+	}
+	if tc.Tier1FlagThreshold == nil || *tc.Tier1FlagThreshold != 70 {
+		t.Fatalf("cache returned stale Tier1FlagThreshold: got %v want 70", tc.Tier1FlagThreshold)
 	}
 }

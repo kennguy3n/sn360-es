@@ -522,11 +522,15 @@ func (o *BatchOrchestrator) resolveTenantConfig(ctx context.Context, tenantID st
 	if tc.Weights.Total() > 0 {
 		weights = tc.Weights
 	}
-	if tc.Tier1PassThreshold > 0 {
-		thresholds.PassBelow = tc.Tier1PassThreshold
+	// Threshold overrides use pointer presence rather than a > 0
+	// sentinel so a deliberately-configured PassBelow=0 (legal per
+	// clampThresholds + the schema CHECK constraint) is honoured
+	// instead of silently falling back to the static default.
+	if tc.Tier1PassThreshold != nil {
+		thresholds.PassBelow = *tc.Tier1PassThreshold
 	}
-	if tc.Tier1FlagThreshold > 0 {
-		thresholds.FlagAbove = tc.Tier1FlagThreshold
+	if tc.Tier1FlagThreshold != nil {
+		thresholds.FlagAbove = *tc.Tier1FlagThreshold
 	}
 	return weights, thresholds
 }
