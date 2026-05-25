@@ -316,11 +316,13 @@ func (p *pgScoreEngines) Get(ctx context.Context, tenantID string) (*ScoreEngine
 	row := p.db.QueryRowContext(ctx, `
 SELECT tenant_id, score_base, weight_ai, weight_rspamd, weight_attachments, weight_links,
        threshold_blocked, threshold_high, threshold_warning, threshold_caution, threshold_info,
+       threshold_tier1_pass_below, threshold_tier1_flag_above,
        subject_tag_enabled, subject_tag_prefix, updated_at
   FROM score_engine WHERE tenant_id=$1`, tenantID)
 	var s ScoreEngine
 	err := row.Scan(&s.TenantID, &s.ScoreBase, &s.WeightAI, &s.WeightRspamd, &s.WeightAttachments, &s.WeightLinks,
 		&s.ThresholdBlocked, &s.ThresholdHigh, &s.ThresholdWarning, &s.ThresholdCaution, &s.ThresholdInfo,
+		&s.ThresholdTier1PassBelow, &s.ThresholdTier1FlagAbove,
 		&s.SubjectTagEnabled, &s.SubjectTagPrefix, &s.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -328,12 +330,75 @@ SELECT tenant_id, score_base, weight_ai, weight_rspamd, weight_attachments, weig
 	return &s, err
 }
 
+// UpdateWeights writes exactly the four weight columns + updated_at
+// for tenantID in a single SQL UPDATE. Returns ErrNotFound when no
+// row exists so the caller can fall through to Upsert for first-time
+// seeding. This is the column-scoped write that closes the
+// read-modify-write race between concurrent weight and threshold
+// writers; threshold columns are not in the SET list.
+func (p *pgScoreEngines) UpdateWeights(ctx context.Context, tenantID string, w ScoreWeightUpdate) error {
+	res, err := p.db.ExecContext(ctx, `
+UPDATE score_engine SET
+    weight_ai=$2,
+    weight_rspamd=$3,
+    weight_attachments=$4,
+    weight_links=$5,
+    updated_at=NOW()
+  WHERE tenant_id=$1`,
+		tenantID, w.WeightAI, w.WeightRspamd, w.WeightAttachments, w.WeightLinks)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateThresholds writes exactly the banner + Tier 1 threshold
+// columns + updated_at for tenantID in a single SQL UPDATE. Returns
+// ErrNotFound when no row exists. Weight columns are not in the SET
+// list so a concurrent UpdateWeights against the same tenant cannot
+// race; the DB CHECK on threshold_tier1_pass_below <
+// threshold_tier1_flag_above (migration 0013) also stops a
+// misbehaving caller from inserting a logically-inverted row.
+func (p *pgScoreEngines) UpdateThresholds(ctx context.Context, tenantID string, t ScoreThresholdUpdate) error {
+	res, err := p.db.ExecContext(ctx, `
+UPDATE score_engine SET
+    threshold_blocked=$2,
+    threshold_high=$3,
+    threshold_warning=$4,
+    threshold_caution=$5,
+    threshold_info=$6,
+    threshold_tier1_pass_below=$7,
+    threshold_tier1_flag_above=$8,
+    updated_at=NOW()
+  WHERE tenant_id=$1`,
+		tenantID, t.Blocked, t.High, t.Warning, t.Caution, t.Info, t.Tier1PassBelow, t.Tier1FlagAbove)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (p *pgScoreEngines) Upsert(ctx context.Context, s *ScoreEngine) error {
 	_, err := p.db.ExecContext(ctx, `
 INSERT INTO score_engine (tenant_id, score_base, weight_ai, weight_rspamd, weight_attachments, weight_links,
                           threshold_blocked, threshold_high, threshold_warning, threshold_caution, threshold_info,
+                          threshold_tier1_pass_below, threshold_tier1_flag_above,
                           subject_tag_enabled, subject_tag_prefix)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 ON CONFLICT (tenant_id) DO UPDATE SET
     score_base=EXCLUDED.score_base,
     weight_ai=EXCLUDED.weight_ai,
@@ -345,12 +410,15 @@ ON CONFLICT (tenant_id) DO UPDATE SET
     threshold_warning=EXCLUDED.threshold_warning,
     threshold_caution=EXCLUDED.threshold_caution,
     threshold_info=EXCLUDED.threshold_info,
+    threshold_tier1_pass_below=EXCLUDED.threshold_tier1_pass_below,
+    threshold_tier1_flag_above=EXCLUDED.threshold_tier1_flag_above,
     subject_tag_enabled=EXCLUDED.subject_tag_enabled,
     subject_tag_prefix=EXCLUDED.subject_tag_prefix,
     updated_at=NOW()
 `,
 		s.TenantID, s.ScoreBase, s.WeightAI, s.WeightRspamd, s.WeightAttachments, s.WeightLinks,
 		s.ThresholdBlocked, s.ThresholdHigh, s.ThresholdWarning, s.ThresholdCaution, s.ThresholdInfo,
+		s.ThresholdTier1PassBelow, s.ThresholdTier1FlagAbove,
 		s.SubjectTagEnabled, s.SubjectTagPrefix,
 	)
 	return err

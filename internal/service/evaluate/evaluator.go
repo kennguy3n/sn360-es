@@ -9,6 +9,7 @@ import (
 
 	"github.com/kennguy3n/sn360-es/internal/constant"
 	"github.com/kennguy3n/sn360-es/internal/dto"
+	"github.com/kennguy3n/sn360-es/internal/service/tier1"
 	"github.com/kennguy3n/sn360-es/pkg/telemetry"
 )
 
@@ -56,6 +57,46 @@ type TierDecider interface {
 	Decide(score int, primary constant.Category, signals dto.RiskSignals) constant.Tier
 }
 
+// TenantScoringConfig is the per-tenant projection of score_engine
+// the evaluator consults at decision time. The shape matches the four
+// scoring columns + the two Tier-1 threshold columns; the evaluator
+// uses it to override its static defaults so persisted-by-tuning
+// values actually influence verdicts.
+//
+// `Weights` defaults to its zero value when unset; an all-zero
+// `Weights.Total()==0` is treated as "fall back to static Weights"
+// (an all-zero set has no useful evaluator meaning).
+//
+// The two threshold fields are pointer-typed so the loader can
+// distinguish "not configured" (nil — fall back to static defaults)
+// from a deliberately-configured value of zero (a non-nil pointer to
+// 0). Plain `int` with a `> 0` sentinel would silently swallow the
+// edge case where the tuning agent emits PassBelow=0 (forcing every
+// message into the escalation/flag band), which the DB CHECK
+// constraint and clampThresholds both allow.
+//
+// The adapter populating this struct (cmd/sn360-es/adapters.go:
+// tenantScoringConfigAdapter) is responsible for translating DB
+// integers into the renormalised [0, 1] weight range and for leaving
+// the threshold pointers nil when no row exists for the tenant.
+type TenantScoringConfig struct {
+	Weights            Weights
+	Tier1PassThreshold *int
+	Tier1FlagThreshold *int
+}
+
+// TenantScoringConfigLoader returns the per-tenant scoring config
+// the evaluator should apply for the given tenant. Implementations
+// must be safe for concurrent use across many goroutines. Returning
+// (zero TenantScoringConfig, nil) is equivalent to "no per-tenant
+// override; use the static defaults from Config" — callers MUST NOT
+// treat a zero return as an error. A non-nil error is logged at
+// warn level and the evaluator falls back to the static defaults so
+// a transient DB blip never blocks verdict emission.
+type TenantScoringConfigLoader interface {
+	LoadTenantScoringConfig(ctx context.Context, tenantID string) (TenantScoringConfig, error)
+}
+
 // Config bundles the inputs the orchestrator needs at construction time.
 type Config struct {
 	Tier0       Tier0Gate
@@ -79,6 +120,39 @@ type Config struct {
 	// when the per-tenant value is not set.
 	Tier1PassThreshold int
 	Tier1FlagThreshold int
+
+	// Tier1SuppressPartner is the (typically negative) offset applied
+	// to PassBelow / FlagAbove for senders flagged as Partner or
+	// Customer (see tier1.Thresholds.AdjustForRelationship). It is
+	// kept on Config rather than TenantScoringConfig because it is a
+	// platform-wide relationship-aware adjustment, not a per-tenant
+	// tuned knob — the tuning agent never writes it.
+	//
+	// NewEvaluator does NOT apply a zero-sentinel default here: 0 is
+	// a legitimate operator-chosen value meaning "do not apply any
+	// relationship-aware tightening" and it must round-trip
+	// untouched through construction. The platform default (-10,
+	// matching tier1.DefaultThresholds()) is applied one layer up
+	// in internal/config/config.go — TIER1_SUPPRESS_PARTNER falls
+	// back to -10 there when unset — so by the time we reach
+	// NewEvaluator the field carries either that operator-explicit
+	// value or the platform default, and either way Evaluator
+	// trusts what it received. See
+	// TestNewEvaluator_SuppressPartnerZeroIsRespected for the
+	// regression guard.
+	Tier1SuppressPartner int
+
+	// TenantConfig is the per-tenant scoring config override source.
+	// When non-nil, Evaluate consults it at the top of each call and
+	// uses the returned (Weights, Tier1Pass/FlagThreshold) instead of
+	// the static fields above. Nil falls back to the static defaults,
+	// which keeps existing tests and dev configurations untouched.
+	//
+	// This is what makes the tuning agent's persisted score_engine
+	// row actually flow into evaluation: without it, the tuning
+	// agent's UpdateWeights / UpdateThresholds writes never reach
+	// the verdict path.
+	TenantConfig TenantScoringConfigLoader
 
 	Logger *slog.Logger
 
@@ -143,6 +217,19 @@ func NewEvaluator(cfg Config) *Evaluator {
 	if cfg.Tier1FlagThreshold == 0 {
 		cfg.Tier1FlagThreshold = 60
 	}
+	// Intentionally no zero-sentinel default for Tier1SuppressPartner.
+	// `0` is a legitimate operator-chosen value meaning "do not apply
+	// any relationship-aware tightening for Partner / Customer
+	// senders" (see .env.example: "Must be <= 0"). Treating 0 as
+	// "unset" here would force -10 onto operators who deliberately
+	// set TIER1_SUPPRESS_PARTNER=0, and it would not be applied by
+	// the symmetric BatchOrchestrator path (which only zero-defaults
+	// the whole tier1.Thresholds struct, not individual fields).
+	// Source of the platform default (currently -10, see
+	// tier1.DefaultThresholds()) is internal/config/config.go where
+	// TIER1_SUPPRESS_PARTNER falls back to -10 when unset — by the
+	// time we reach NewEvaluator the field carries either that
+	// operator-explicit value or the platform default.
 	if cfg.Weights.Total() == 0 {
 		cfg.Weights = DefaultWeights()
 	}
@@ -171,6 +258,22 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest, signa
 	defer func() {
 		e.cfg.Observer.ObserveEvaluate(string(res.Tier), time.Since(evalStart))
 	}()
+
+	// 0. Per-tenant scoring config. When the tuning agent has
+	// persisted weights or thresholds for this tenant, they override
+	// the static cfg.Weights / cfg.Tier1*Threshold defaults. Failures
+	// fall back to the static config so a Postgres blip never blocks
+	// verdict emission.
+	//
+	// AdjustForRelationship is applied after resolution so Partner /
+	// Customer / FirstTimeExternal senders get the same
+	// relationship-aware threshold shift the batch path applies —
+	// without it, this per-message path was silently stricter (or
+	// more lenient) than batch for the same input.
+	weights, baseThresholds := e.resolveTenantConfig(ctx, req.TenantID)
+	adjustedThresholds := baseThresholds.AdjustForRelationship(signals.RelationshipCategory)
+	passThreshold := adjustedThresholds.PassBelow
+	flagThreshold := adjustedThresholds.FlagAbove
 
 	// 1. Tier 0 gate.
 	if e.cfg.Tier0 == nil {
@@ -281,22 +384,28 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest, signa
 				slog.Any("error", t1.err))
 		} else {
 			outcome := t1.outcome
-			pass := e.cfg.Tier1PassThreshold
+			pass := passThreshold
 			if tier0.Tier1ThresholdOverride > 0 {
 				pass = tier0.Tier1ThresholdOverride
 			}
-			flag := e.cfg.Tier1FlagThreshold
-			outcome.Pass = outcome.Score < pass
-			outcome.Flag = outcome.Score >= flag
-			outcome.Escalate = !outcome.Pass && !outcome.Flag
-			verdict := "escalate"
-			switch {
-			case outcome.Pass:
-				verdict = "pass"
-			case outcome.Flag:
-				verdict = "flag"
-			}
-			e.cfg.Observer.ObserveTier1(verdict, t1.latency)
+			flag := flagThreshold
+			// Use the same tier1.Thresholds.Decision routine the
+			// batch orchestrator uses. Previously this branch used
+			// `score >= flag` while Decision uses `score > flag`,
+			// so a message with score == FlagAbove was Flagged in
+			// the per-message path but Escalated in the batch path.
+			// Routing the decision through Decision() eliminates
+			// the boundary divergence at the source — both paths
+			// now share a single implementation.
+			verdict := tier1.Thresholds{PassBelow: pass, FlagAbove: flag}.Decision(outcome.Score)
+			outcome.Pass = verdict == tier1.VerdictPass
+			outcome.Flag = verdict == tier1.VerdictFlag
+			outcome.Escalate = verdict == tier1.VerdictEscalate
+			// tier1.Verdict is a string newtype with values "pass" /
+			// "flag" / "escalate" — same labels the metrics observer
+			// expects, so the conversion is a direct cast (no switch
+			// translation needed).
+			e.cfg.Observer.ObserveTier1(string(verdict), t1.latency)
 			// Surface the encoder's reason codes on the top-level
 			// result so the Categorizer can rule on them (its
 			// keyword weights look at res.ReasonCodes) and so
@@ -337,8 +446,8 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest, signa
 		}
 	}
 
-	// 4. Aggregate.
-	res.Score = ScoreWithAvailability(FromResultEx(&res), e.cfg.Weights)
+	// 4. Aggregate using the per-tenant weights resolved at step 0.
+	res.Score = ScoreWithAvailability(FromResultEx(&res), weights)
 	if e.cfg.Categorizer != nil {
 		primary, secondary, reasons := e.cfg.Categorizer.Categorise(res, signals)
 		res.Primary = primary
@@ -426,6 +535,64 @@ func tier2OutcomeLabel(out dto.Tier2Outcome) string {
 		return "ok"
 	}
 	return "flagged"
+}
+
+// resolveTenantConfig returns the (weights, thresholds) pair the
+// evaluator should apply for tenantID, exactly mirroring
+// BatchOrchestrator.resolveTenantConfig so both evaluation paths
+// produce identical verdicts for the same input.
+//
+// The returned thresholds carry the per-tenant PassBelow / FlagAbove
+// overrides (when the loader has them) on top of the static
+// SuppressPartner. SuppressPartner is deliberately preserved from the
+// static config because it is a relationship-aware adjustment, not a
+// per-tenant tuned value. Callers MUST follow up with
+// thresholds.AdjustForRelationship(signals.RelationshipCategory) so
+// Partner / Customer / FirstTimeExternal senders get the same
+// tightened thresholds the batch path applies.
+//
+// Override semantics:
+//   - Weights: an all-zero set is "not configured"; any non-zero sum
+//     wins over the static defaults.
+//   - Tier1PassThreshold / Tier1FlagThreshold: a nil pointer is "not
+//     configured"; any non-nil pointer wins over the static default,
+//     including a pointer to 0. This is what makes
+//     clampThresholds-emitted PassBelow=0 visible to the verdict
+//     path.
+//
+// Loader errors are downgraded to a warn log + static fallback so
+// any transient DB blip (Postgres recycle, connection-pool churn)
+// never blocks verdict emission. The error is not surfaced upstream
+// because the evaluator's correctness contract is "always produce a
+// verdict"; a tenant whose tuned config is briefly unavailable still
+// gets evaluated against the platform defaults.
+func (e *Evaluator) resolveTenantConfig(ctx context.Context, tenantID string) (Weights, tier1.Thresholds) {
+	weights := e.cfg.Weights
+	thresholds := tier1.Thresholds{
+		PassBelow:       e.cfg.Tier1PassThreshold,
+		FlagAbove:       e.cfg.Tier1FlagThreshold,
+		SuppressPartner: e.cfg.Tier1SuppressPartner,
+	}
+	if e.cfg.TenantConfig == nil || tenantID == "" {
+		return weights, thresholds
+	}
+	tc, err := e.cfg.TenantConfig.LoadTenantScoringConfig(ctx, tenantID)
+	if err != nil {
+		e.log.Warn("evaluate: tenant scoring config unavailable; using static defaults",
+			slog.String("tenant_id", tenantID),
+			slog.Any("error", err))
+		return weights, thresholds
+	}
+	if tc.Weights.Total() > 0 {
+		weights = tc.Weights
+	}
+	if tc.Tier1PassThreshold != nil {
+		thresholds.PassBelow = *tc.Tier1PassThreshold
+	}
+	if tc.Tier1FlagThreshold != nil {
+		thresholds.FlagAbove = *tc.Tier1FlagThreshold
+	}
+	return weights, thresholds
 }
 
 // ForcedTierFor maps the categories the Tier 0 gate may force into

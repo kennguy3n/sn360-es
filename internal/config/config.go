@@ -239,6 +239,16 @@ type Tier1 struct {
 	BatchSize     int
 	PassThreshold int
 	FlagThreshold int
+	// SuppressPartner is the (typically negative) offset applied to
+	// PassBelow / FlagAbove for senders categorised as Partner or
+	// Customer. See tier1.Thresholds.AdjustForRelationship — the
+	// relationship-aware tightening is platform-wide, not per-tenant,
+	// so the tuning agent never writes it. Threading it through the
+	// repo Config (rather than relying on tier1.DefaultThresholds()
+	// at each call site) keeps the per-message Evaluator and the
+	// BatchOrchestrator reading from a single source so they cannot
+	// produce divergent verdicts for the same input.
+	SuppressPartner int
 	// BatchEnabled selects the batched-orchestrator path on
 	// es.evaluate.request (pulls in batches of up to BatchSize and
 	// calls the encoder's /predict/batch endpoint). When false the
@@ -626,7 +636,13 @@ func Load() (Config, error) {
 			BatchSize:     getInt("TIER1_BATCH_SIZE", 64),
 			PassThreshold: getInt("TIER1_PASS_THRESHOLD", 20),
 			FlagThreshold: getInt("TIER1_FLAG_THRESHOLD", 60),
-			BatchEnabled:  getBool("TIER1_BATCH_ENABLED", false),
+			// Mirrors tier1.DefaultThresholds().SuppressPartner (-10).
+			// Kept as a literal here because internal/config must stay
+			// stdlib-only (see package doc), so we cannot import the
+			// tier1 package. Whenever the platform default changes,
+			// update both locations.
+			SuppressPartner: getInt("TIER1_SUPPRESS_PARTNER", -10),
+			BatchEnabled:    getBool("TIER1_BATCH_ENABLED", false),
 		},
 		SensitivityBonsaiURL:     getStr("SENSITIVITY_BONSAI_URL", ""),
 		SensitivityBonsaiTimeout: getDuration("SENSITIVITY_BONSAI_TIMEOUT", 30*time.Second),
@@ -781,6 +797,11 @@ func Load() (Config, error) {
 	} else {
 		cfg.Tier1.FlagThreshold = v
 	}
+	if v, err := getIntStrict("TIER1_SUPPRESS_PARTNER", -10); err != nil {
+		strictErrs = append(strictErrs, err)
+	} else {
+		cfg.Tier1.SuppressPartner = v
+	}
 	if v, err := getDurationStrict("AI_TIMEOUT", 30*time.Second); err != nil {
 		strictErrs = append(strictErrs, err)
 	} else {
@@ -840,6 +861,22 @@ func (c Config) validate() error {
 		c.Score.Warning <= c.Score.Caution ||
 		c.Score.Caution <= c.Score.Info {
 		return errors.New("SCORE_*_THRESHOLD must be strictly decreasing: blocked > high > warning > caution > info")
+	}
+	// TIER1_SUPPRESS_PARTNER is the (typically negative) offset
+	// applied to Tier1 PassBelow / FlagAbove for Partner / Customer
+	// senders. .env.example documents the contract as "Must be <= 0"
+	// — a positive value would RAISE both thresholds (the opposite
+	// of the documented tightening intent) and make Partner /
+	// Customer senders MORE likely to pass without escalation.
+	// tier1.Thresholds.AdjustForRelationship has floor guards on
+	// PassBelow >= 0 / FlagAbove >= PassBelow+1 but no ceiling
+	// guard, so without this validate() check an operator typo (e.g.
+	// "10" instead of "-10") boots cleanly and silently undermines
+	// platform-wide relationship-aware scoring. Fail-fast at config
+	// load so the misconfiguration surfaces during deploy rather
+	// than as a stream of unexpectedly-passed Tier 1 verdicts.
+	if c.Tier1.SuppressPartner > 0 {
+		return fmt.Errorf("TIER1_SUPPRESS_PARTNER must be <= 0; got %d (positive values would raise Partner/Customer thresholds, the opposite of the documented tightening intent)", c.Tier1.SuppressPartner)
 	}
 	if c.Onboarding.StateSecret != "" && len(c.Onboarding.StateSecret) < 16 {
 		return errors.New("ONBOARDING_STATE_SECRET must be at least 16 bytes when set")

@@ -90,10 +90,23 @@ type application struct {
 	// state, not just on pgDB == nil.
 	usingMemoryCampaignStore    bool
 	usingMemoryInteractionStore bool
-	dashboardGen                *dashboard.DashboardGenerator
-	recipientSvc                *predict.RecipientService
-	openSvc                     *predict.OpenService
-	escalationSvc               *agent.EscalationService
+	// usingMemoryConfigStore records whether buildConfigStore in
+	// wire_services.go had to fall back to memoryConfigStore (i.e.
+	// score_engine repository was unavailable). Read by
+	// assertProductionDurableStores so the prod boot gate fires on
+	// the real in-memory state.
+	usingMemoryConfigStore bool
+	// tenantScoringConfig is the shared evaluator-side cache of
+	// per-tenant score_engine rows. It is read by the evaluator and
+	// batch orchestrator at verdict time and invalidated by
+	// postgresConfigStore after every successful tuning write so
+	// the cache cannot return stale values across a tuning pass.
+	// Nil when score_engine is not wired (memoryConfigStore fallback).
+	tenantScoringConfig *tenantScoringConfigAdapter
+	dashboardGen        *dashboard.DashboardGenerator
+	recipientSvc        *predict.RecipientService
+	openSvc             *predict.OpenService
+	escalationSvc       *agent.EscalationService
 
 	// Provider-side action machinery.
 	providers     *providerRegistry
@@ -549,21 +562,48 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	tierDeciderAdapt := tierDeciderAdapter{decider: tierDecider}
 	weights := evaluate.DefaultWeights()
 
+	// Pre-build the shared tenantScoringConfig cache so NewEvaluator
+	// and NewBatchOrchestrator capture a non-nil
+	// app.tenantScoringConfig at construction time. buildAgents
+	// (called later, line ~741) reuses the same instance via
+	// buildConfigStore so the tuning agent's writes invalidate the
+	// same cache the evaluator reads from. Before this split,
+	// buildAgents ran AFTER the evaluator block here, so
+	// app.tenantScoringConfig was always nil when the evaluator
+	// captured it — silently collapsing every verdict back onto
+	// the static defaults and defeating the entire per-tenant
+	// scoring config feature.
+	ensureTenantScoringConfigAdapter(app)
+
+	// tenantScoringConfig is non-nil when score_engine is wired —
+	// in that case the same table the tuning agent writes to is
+	// also the source of per-tenant Weights / Tier1*Threshold
+	// overrides for evaluation. Pass a typed nil through when
+	// score_engine is not wired so the evaluator falls back to its
+	// static defaults instead of dereferencing a nil interface at
+	// verdict time.
+	var tenantConfigLoader evaluate.TenantScoringConfigLoader
+	if app.tenantScoringConfig != nil {
+		tenantConfigLoader = app.tenantScoringConfig
+	}
+
 	app.evaluator = evaluate.NewEvaluator(evaluate.Config{
-		Tier0:              app.tier0Gate,
-		Tier1:              app.tier1Client,
-		Tier2:              app.tier2Client,
-		Rspamd:             app.rspamdClient,
-		Categorizer:        categorizer,
-		TierDecider:        tierDeciderAdapt,
-		Weights:            weights,
-		Tier1PassThreshold: cfg.Tier1.PassThreshold,
-		Tier1FlagThreshold: cfg.Tier1.FlagThreshold,
-		Tier1Timeout:       cfg.Tier1.Timeout,
-		Tier2Timeout:       cfg.AI.Timeout,
-		RspamdTimeout:      cfg.Rspamd.Timeout,
-		Logger:             logger,
-		Observer:           app.metrics.PipelineObserver(),
+		Tier0:                app.tier0Gate,
+		Tier1:                app.tier1Client,
+		Tier2:                app.tier2Client,
+		Rspamd:               app.rspamdClient,
+		Categorizer:          categorizer,
+		TierDecider:          tierDeciderAdapt,
+		Weights:              weights,
+		Tier1PassThreshold:   cfg.Tier1.PassThreshold,
+		Tier1FlagThreshold:   cfg.Tier1.FlagThreshold,
+		Tier1SuppressPartner: cfg.Tier1.SuppressPartner,
+		Tier1Timeout:         cfg.Tier1.Timeout,
+		Tier2Timeout:         cfg.AI.Timeout,
+		RspamdTimeout:        cfg.Rspamd.Timeout,
+		TenantConfig:         tenantConfigLoader,
+		Logger:               logger,
+		Observer:             app.metrics.PipelineObserver(),
 	})
 
 	// Optional Tier 1 batch orchestrator.
@@ -592,6 +632,13 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 					Thresholds: tier1.Thresholds{
 						PassBelow: cfg.Tier1.PassThreshold,
 						FlagAbove: cfg.Tier1.FlagThreshold,
+						// SuppressPartner mirrors the per-message
+						// Evaluator (see Tier1SuppressPartner above).
+						// Reading from cfg.Tier1 ensures both paths
+						// honour the same TIER1_SUPPRESS_PARTNER
+						// override and a Partner/Customer sender gets
+						// the same verdict in per-message and batch.
+						SuppressPartner: cfg.Tier1.SuppressPartner,
 					},
 					// *evaluate.Evaluator now matches
 					// evaluate.MessageEvaluator directly
@@ -602,6 +649,7 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 					Categorizer:   categorizer,
 					TierDecider:   tierDeciderAdapt,
 					Weights:       weights,
+					TenantConfig:  tenantConfigLoader,
 					Sink:          app.eventBus,
 					ResultSubject: "es.evaluate.result",
 					Logger:        logger,
@@ -782,6 +830,13 @@ func assertProductionDurableStores(cfg *config.Config, app *application, logger 
 			blocker: true,
 		})
 	}
+	if app.usingMemoryConfigStore {
+		inMemory = append(inMemory, memStore{
+			name:    "agent config store",
+			fix:     "configure PG_HOST/PG_DATABASE (and ensure migrations are applied) so onboarding/tuning agent config (score_engine row) survives a restart",
+			blocker: true,
+		})
+	}
 
 	if len(inMemory) == 0 {
 		return nil
@@ -878,6 +933,13 @@ func (a *application) StartBackground(ctx context.Context) {
 			return nil
 		}
 		a.memLabelCache.runJanitor(ctx, memoryLabelCacheJanitorInterval, a.logger)
+		return nil
+	})
+	a.spawn(ctx, "tenantScoringConfig janitor", func(ctx context.Context) error {
+		if a.tenantScoringConfig == nil {
+			return nil
+		}
+		a.tenantScoringConfig.runJanitor(ctx, tenantScoringConfigJanitorInterval, a.logger)
 		return nil
 	})
 }

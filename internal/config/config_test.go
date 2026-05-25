@@ -763,3 +763,40 @@ func TestLoad_StrictEnvParsing_HonoursValidValues(t *testing.T) {
 		t.Fatalf("Tier1.Timeout = %v, want 7s", cfg.Tier1.Timeout)
 	}
 }
+
+// TestValidate_Tier1SuppressPartnerPositiveRejected pins the
+// "must be <= 0" contract documented in .env.example. The offset
+// is subtracted from PassBelow / FlagAbove inside
+// tier1.Thresholds.AdjustForRelationship — a positive value would
+// raise both thresholds, the opposite of the documented
+// "tightening" intent, and silently make Partner / Customer senders
+// MORE likely to pass without escalation. validate() must fail-fast
+// at config load so an operator typo (e.g. "10" instead of "-10")
+// surfaces during deploy rather than as a stream of unexpectedly-
+// passed Tier 1 verdicts.
+func TestValidate_Tier1SuppressPartnerPositiveRejected(t *testing.T) {
+	for _, bad := range []int{1, 5, 10, 100} {
+		cfg := validProdConfig()
+		cfg.Tier1.SuppressPartner = bad
+		if err := cfg.validate(); err == nil {
+			t.Errorf("validate() accepted TIER1_SUPPRESS_PARTNER=%d (must be <= 0)", bad)
+		}
+	}
+}
+
+// TestValidate_Tier1SuppressPartnerAcceptsNonPositive pins the
+// complementary positive path: zero (operator explicitly disabling
+// relationship tightening) and any negative value (the production
+// default of -10 plus values an operator might pick to tighten more
+// aggressively) MUST pass validation. Without this test, a future
+// refactor could over-tighten the validation and reject valid
+// operator configurations.
+func TestValidate_Tier1SuppressPartnerAcceptsNonPositive(t *testing.T) {
+	for _, good := range []int{0, -1, -10, -25, -50} {
+		cfg := validProdConfig()
+		cfg.Tier1.SuppressPartner = good
+		if err := cfg.validate(); err != nil {
+			t.Errorf("validate() rejected TIER1_SUPPRESS_PARTNER=%d: %v", good, err)
+		}
+	}
+}

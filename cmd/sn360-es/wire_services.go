@@ -25,6 +25,7 @@ func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*ag
 	var supportA *agent.SupportAgent
 
 	pub := agentPublisherFromBus(app.eventBus)
+	configStore := buildConfigStore(logger, app)
 
 	// Support agent.
 	if pub != nil {
@@ -63,7 +64,7 @@ func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*ag
 				Persister:             buildUserPersister(app, piiHasher),
 				SensitivityClassifier: buildSensitivityClassifier(cfg, logger),
 				VendorScanner:         buildVendorScanner(app),
-				Config:                newMemoryConfigStore(),
+				Config:                configStore,
 			})
 			if err != nil {
 				logger.Warn("sn360-es: onboarding agent init failed",
@@ -78,10 +79,9 @@ func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*ag
 	// Tuning agent.
 	if app.repos != nil && app.repos.FeedbackEvents != nil {
 		results := tuningResultAdapter{repos: app.repos}
-		store := newMemoryConfigStore()
 		ta, err := agent.NewTuningAgent(agent.TuningConfig{
 			Results: results,
-			Config:  store,
+			Config:  configStore,
 			Audit:   loggingAuditLog{logger: logger},
 			Logger:  logger,
 		})
@@ -94,6 +94,58 @@ func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*ag
 		}
 	}
 	return onboardA, tuningA, supportA
+}
+
+// ensureTenantScoringConfigAdapter assigns app.tenantScoringConfig
+// the first time it is called when a score_engine repo is wired,
+// and is a no-op on subsequent calls. It exists so newApplication
+// can guarantee the evaluator-side cache is non-nil BEFORE
+// NewEvaluator / NewBatchOrchestrator capture
+// app.tenantScoringConfig at construction time, while still letting
+// buildConfigStore reuse the same instance for the tuning agent's
+// invalidation path. Without this split, buildAgents (which calls
+// buildConfigStore) ran AFTER the evaluator block in newApplication
+// — so app.tenantScoringConfig was nil at line 573 and both the
+// per-message Evaluator and the BatchOrchestrator received a nil
+// TenantConfig, silently collapsing every verdict back onto the
+// static defaults and defeating the entire per-tenant scoring
+// config feature.
+func ensureTenantScoringConfigAdapter(app *application) {
+	if app == nil || app.repos == nil || app.repos.ScoreEngines == nil {
+		return
+	}
+	if app.tenantScoringConfig != nil {
+		return
+	}
+	app.tenantScoringConfig = newTenantScoringConfigAdapter(app.repos.ScoreEngines, 0)
+}
+
+// buildConfigStore returns the ConfigStore used by both the
+// onboarding and tuning agents. It prefers the durable Postgres-
+// backed store (postgresConfigStore on score_engine); only when the
+// repository registry / score-engine repo is absent does it fall
+// back to memoryConfigStore. The fallback is recorded on the
+// application so assertProductionDurableStores can promote the
+// warning to a hard boot error in production.
+func buildConfigStore(logger *slog.Logger, app *application) agent.ConfigStore {
+	if app != nil && app.repos != nil && app.repos.ScoreEngines != nil {
+		// Construct (or reuse) the evaluator-side cache so the
+		// tuning agent's writes (postgresConfigStore.Update*) can
+		// invalidate the same instance that the evaluator + batch
+		// orchestrator read from. newApplication calls
+		// ensureTenantScoringConfigAdapter BEFORE constructing the
+		// evaluator, so by the time buildConfigStore runs the
+		// adapter is already wired — this idempotent ensure call
+		// preserves the invariant if buildConfigStore is ever
+		// invoked through a different entrypoint.
+		ensureTenantScoringConfigAdapter(app)
+		return newPostgresConfigStore(app.repos.ScoreEngines, app.tenantScoringConfig)
+	}
+	logger.Warn("sn360-es: using in-memory config store; agent config will not survive restarts (set PG_HOST for persistence)")
+	if app != nil {
+		app.usingMemoryConfigStore = true
+	}
+	return newMemoryConfigStore()
 }
 
 func buildLabelApplier(app *application) agent.LabelApplier {

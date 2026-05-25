@@ -19,6 +19,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/action"
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
 	"github.com/kennguy3n/sn360-es/internal/service/dashboard"
+	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
 	"github.com/kennguy3n/sn360-es/internal/service/onboarding"
 	"github.com/kennguy3n/sn360-es/pkg/events"
 	"github.com/kennguy3n/sn360-es/pkg/privacy"
@@ -457,12 +458,198 @@ func (a tuningResultAdapter) CurrentWeights(ctx context.Context, tenantID string
 	if err != nil {
 		return agent.ScoreWeights{}, err
 	}
+	// score_engine stores weights as integer percentages in [0, 100]
+	// (the inverse of clampWeightToPercent in postgresConfigStore).
+	// agent.ScoreWeights, however, is a renormalised float in [0, 1]
+	// — tuning.clampWeights clamps to that range and divides by the
+	// sum. Returning the raw integer here would push clampWeights
+	// out of its operating range: every weight > 1 would clamp to 1
+	// and renormalise to 1/N, silently corrupting the tenant's
+	// learned distribution on the very next tuning pass. Divide by
+	// 100 so the [0, 1] contract is preserved.
 	return agent.ScoreWeights{
-		AI:          float64(row.WeightAI),
-		Rspamd:      float64(row.WeightRspamd),
-		Attachments: float64(row.WeightAttachments),
-		Links:       float64(row.WeightLinks),
+		AI:          float64(row.WeightAI) / 100.0,
+		Rspamd:      float64(row.WeightRspamd) / 100.0,
+		Attachments: float64(row.WeightAttachments) / 100.0,
+		Links:       float64(row.WeightLinks) / 100.0,
 	}, nil
+}
+
+// tenantScoringConfigAdapter is the evaluate.TenantScoringConfigLoader
+// the production wiring hands to the evaluator and batch
+// orchestrator. It reads the same score_engine row that
+// tuningResultAdapter writes through, translates DB integer
+// percentages back into the [0, 1] float weights the evaluator
+// expects, and caches per-tenant results with a short TTL to keep
+// hot-path latency bounded.
+//
+// The cache is deliberately tiny: hot-path evaluation runs at high
+// QPS but the working set is bounded by the number of active
+// tenants. A 60s TTL means the tuning agent's writes propagate to
+// evaluation inside one minute — well below the per-tenant tuning
+// cadence (which itself is on the order of hours) so latency in
+// propagation is operationally invisible. Failed loads are not
+// cached negatively; instead the evaluator's resolveTenantConfig
+// falls back to the static defaults on error.
+type tenantScoringConfigAdapter struct {
+	repo repository.ScoreEngineRepository
+	ttl  time.Duration
+
+	mu    sync.RWMutex
+	cache map[string]tenantScoringConfigCacheEntry
+}
+
+type tenantScoringConfigCacheEntry struct {
+	value     evaluate.TenantScoringConfig
+	expiresAt time.Time
+}
+
+// newTenantScoringConfigAdapter constructs an adapter with the
+// supplied repo + cache TTL. ttl <= 0 falls back to 60s.
+func newTenantScoringConfigAdapter(repo repository.ScoreEngineRepository, ttl time.Duration) *tenantScoringConfigAdapter {
+	if ttl <= 0 {
+		ttl = 60 * time.Second
+	}
+	return &tenantScoringConfigAdapter{
+		repo:  repo,
+		ttl:   ttl,
+		cache: make(map[string]tenantScoringConfigCacheEntry),
+	}
+}
+
+// LoadTenantScoringConfig implements evaluate.TenantScoringConfigLoader.
+// Returns (zero, nil) on repository.ErrNotFound so the evaluator's
+// resolveTenantConfig falls through to its static defaults — that
+// pattern is documented on the interface as "no override, use the
+// static defaults from Config" and is the desired behaviour for
+// tenants that have not yet been tuned.
+func (a *tenantScoringConfigAdapter) LoadTenantScoringConfig(ctx context.Context, tenantID string) (evaluate.TenantScoringConfig, error) {
+	if a == nil || a.repo == nil || tenantID == "" {
+		return evaluate.TenantScoringConfig{}, nil
+	}
+	if cached, ok := a.lookup(tenantID); ok {
+		return cached, nil
+	}
+	row, err := a.repo.Get(ctx, tenantID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			// Cache the "no row" sentinel so we don't hammer
+			// Postgres for every evaluation of an unconfigured
+			// tenant. The zero value is what the evaluator wants
+			// in that case.
+			a.store(tenantID, evaluate.TenantScoringConfig{})
+			return evaluate.TenantScoringConfig{}, nil
+		}
+		return evaluate.TenantScoringConfig{}, err
+	}
+	// score_engine columns are NOT NULL so a found row always
+	// carries thresholds; populate the pointers from the row so the
+	// evaluator distinguishes "row exists with PassBelow=0" from
+	// "no row at all" instead of collapsing both onto the static
+	// defaults.
+	pass := row.ThresholdTier1PassBelow
+	flag := row.ThresholdTier1FlagAbove
+	tc := evaluate.TenantScoringConfig{
+		Weights: evaluate.Weights{
+			AI:          float64(row.WeightAI) / 100.0,
+			Rspamd:      float64(row.WeightRspamd) / 100.0,
+			Attachments: float64(row.WeightAttachments) / 100.0,
+			Links:       float64(row.WeightLinks) / 100.0,
+		},
+		Tier1PassThreshold: &pass,
+		Tier1FlagThreshold: &flag,
+	}
+	a.store(tenantID, tc)
+	return tc, nil
+}
+
+func (a *tenantScoringConfigAdapter) lookup(tenantID string) (evaluate.TenantScoringConfig, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	entry, ok := a.cache[tenantID]
+	if !ok {
+		return evaluate.TenantScoringConfig{}, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		return evaluate.TenantScoringConfig{}, false
+	}
+	return entry.value, true
+}
+
+func (a *tenantScoringConfigAdapter) store(tenantID string, tc evaluate.TenantScoringConfig) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.cache[tenantID] = tenantScoringConfigCacheEntry{
+		value:     tc,
+		expiresAt: time.Now().Add(a.ttl),
+	}
+}
+
+// sweepExpired removes every cache entry whose TTL has passed and
+// returns the number of entries evicted so the caller can log it.
+// Matches the memoryLabelCache pattern (lazy eviction on lookup +
+// proactive janitor) so a multi-tenant SaaS with churn does not
+// accumulate entries for deactivated tenants indefinitely.
+func (a *tenantScoringConfigAdapter) sweepExpired(now time.Time) int {
+	if a == nil {
+		return 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	removed := 0
+	for k, e := range a.cache {
+		if now.After(e.expiresAt) {
+			delete(a.cache, k)
+			removed++
+		}
+	}
+	return removed
+}
+
+// tenantScoringConfigJanitorInterval is how often the janitor sweeps
+// expired entries. Two ttls is conservative enough to evict entries
+// well before unbounded growth becomes operationally visible while
+// keeping the wakeup rate near-idle on small deployments.
+const tenantScoringConfigJanitorInterval = 2 * time.Minute
+
+// runJanitor evicts expired entries on a fixed cadence until ctx is
+// cancelled. It is intentionally blocking so callers can wrap it in
+// a tracked goroutine (see application.StartBackground), matching
+// memoryLabelCache.runJanitor.
+func (a *tenantScoringConfigAdapter) runJanitor(ctx context.Context, interval time.Duration, logger *slog.Logger) {
+	if a == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = tenantScoringConfigJanitorInterval
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			if n := a.sweepExpired(now); n > 0 && logger != nil {
+				logger.Debug("sn360-es: tenantScoringConfigAdapter janitor swept entries",
+					slog.Int("evicted", n))
+			}
+		}
+	}
+}
+
+// Invalidate drops the cached entry for tenantID so the next
+// LoadTenantScoringConfig call re-reads from the repository. The
+// tuning agent's UpdateWeights / UpdateThresholds path can call this
+// after a successful write so its own subsequent reads see the new
+// values without waiting for TTL expiry.
+func (a *tenantScoringConfigAdapter) Invalidate(tenantID string) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	delete(a.cache, tenantID)
+	a.mu.Unlock()
 }
 
 func (a tuningResultAdapter) CurrentThresholds(ctx context.Context, tenantID string) (agent.Thresholds, error) {
@@ -474,6 +661,8 @@ func (a tuningResultAdapter) CurrentThresholds(ctx context.Context, tenantID str
 		return agent.Thresholds{}, err
 	}
 	return agent.Thresholds{
+		Tier1PassBelow: row.ThresholdTier1PassBelow,
+		Tier1FlagAbove: row.ThresholdTier1FlagAbove,
 		BannerBlocked:  row.ThresholdBlocked,
 		BannerHighRisk: row.ThresholdHigh,
 		BannerWarning:  row.ThresholdWarning,
@@ -482,9 +671,202 @@ func (a tuningResultAdapter) CurrentThresholds(ctx context.Context, tenantID str
 	}, nil
 }
 
-// memoryConfigStore is a tiny in-memory ConfigStore implementation
-// used until the management service exposes a proper score-engine
-// write endpoint.
+// scoringConfigInvalidator is the tiny surface postgresConfigStore
+// needs to evict cached per-tenant scoring config after a write. It
+// is intentionally smaller than tenantScoringConfigAdapter so tests
+// can substitute a fake without dragging in the full cache.
+type scoringConfigInvalidator interface {
+	Invalidate(tenantID string)
+}
+
+// postgresConfigStore is the production ConfigStore implementation
+// backed by the score_engine table (repository.ScoreEngineRepository).
+// It is safe for concurrent use across AND within a single tenant.
+//
+// Steady-state writes go through column-scoped UPDATEs
+// (repo.UpdateWeights / repo.UpdateThresholds), which set ONLY the
+// columns owned by that write path. A concurrent UpdateWeights and
+// UpdateThresholds against the same tenant therefore cannot
+// overwrite each other — the read-modify-write race that a full-row
+// Upsert would introduce simply does not exist for the steady-state
+// path.
+//
+// First-time seeding (no row yet for the tenant) is detected when
+// the column-scoped UPDATE returns repository.ErrNotFound. We then
+// fall back to loadOrSeed + Upsert to materialise the row from the
+// schema defaults plus the incoming write. The seed path is
+// idempotent under concurrent first-time writers thanks to Postgres'
+// ON CONFLICT (tenant_id) DO UPDATE in pgScoreEngines.Upsert, and
+// because the onboarding agent always seeds before tuning runs in
+// practice, the seed branch is rarely taken at all once a tenant is
+// live.
+//
+// invalidator, when non-nil, is notified after every successful
+// UpdateWeights / UpdateThresholds so the evaluator-side cache
+// (tenantScoringConfigAdapter) does not return stale values for the
+// TTL window after a tuning write. Nil is permitted for tests and
+// keeps the store usable without a cache wired in.
+type postgresConfigStore struct {
+	repo        repository.ScoreEngineRepository
+	invalidator scoringConfigInvalidator
+}
+
+func newPostgresConfigStore(repo repository.ScoreEngineRepository, inv scoringConfigInvalidator) *postgresConfigStore {
+	return &postgresConfigStore{repo: repo, invalidator: inv}
+}
+
+func (s *postgresConfigStore) invalidate(tenantID string) {
+	if s.invalidator != nil {
+		s.invalidator.Invalidate(tenantID)
+	}
+}
+
+// loadOrSeed returns the score_engine row for tenantID, falling back
+// to the schema defaults (matching migrations/0001_init.up.sql plus
+// migrations/0013_score_engine_tier1_thresholds.up.sql) if no row
+// exists yet. The seeded row is NOT persisted until the caller does
+// its own Upsert; this keeps row creation idempotent with the rest
+// of the onboarding flow.
+func (s *postgresConfigStore) loadOrSeed(ctx context.Context, tenantID string) (*repository.ScoreEngine, error) {
+	row, err := s.repo.Get(ctx, tenantID)
+	if err == nil {
+		return row, nil
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
+	}
+	return &repository.ScoreEngine{
+		TenantID:                tenantID,
+		ScoreBase:               100,
+		WeightAI:                80,
+		WeightRspamd:            20,
+		WeightAttachments:       0,
+		WeightLinks:             0,
+		ThresholdBlocked:        85,
+		ThresholdHigh:           70,
+		ThresholdWarning:        50,
+		ThresholdCaution:        30,
+		ThresholdInfo:           15,
+		ThresholdTier1PassBelow: 20,
+		ThresholdTier1FlagAbove: 60,
+		SubjectTagEnabled:       false,
+		SubjectTagPrefix:        "SN360",
+	}, nil
+}
+
+func (s *postgresConfigStore) UpdateWeights(ctx context.Context, tenantID string, w agent.ScoreWeights) error {
+	if s.repo == nil {
+		return fmt.Errorf("postgres config store: score-engine repository is nil")
+	}
+	// agent.ScoreWeights are floats in [0, 1] (renormalised in
+	// tuning.clampWeights). Persisting them as the integer percentage
+	// keeps wire-compat with the existing score_engine row shape used
+	// by tuningResultAdapter.CurrentWeights below.
+	update := repository.ScoreWeightUpdate{
+		WeightAI:          clampWeightToPercent(w.AI),
+		WeightRspamd:      clampWeightToPercent(w.Rspamd),
+		WeightAttachments: clampWeightToPercent(w.Attachments),
+		WeightLinks:       clampWeightToPercent(w.Links),
+	}
+	// Steady-state path: column-scoped UPDATE so a concurrent
+	// UpdateThresholds against the same tenant cannot clobber these
+	// four columns.
+	err := s.repo.UpdateWeights(ctx, tenantID, update)
+	if err == nil {
+		s.invalidate(tenantID)
+		return nil
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		return fmt.Errorf("postgres config store: update tenant %q weights: %w", tenantID, err)
+	}
+	// First-time seed: there is no row yet for this tenant. Fall back
+	// to loadOrSeed + Upsert so the row materialises with the schema
+	// defaults plus the incoming weights. This branch is racy only
+	// against another first-time writer for the same tenant, in which
+	// case Upsert's ON CONFLICT (tenant_id) keeps the table
+	// consistent.
+	row, err := s.loadOrSeed(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("postgres config store: seed tenant %q: %w", tenantID, err)
+	}
+	row.WeightAI = update.WeightAI
+	row.WeightRspamd = update.WeightRspamd
+	row.WeightAttachments = update.WeightAttachments
+	row.WeightLinks = update.WeightLinks
+	if err := s.repo.Upsert(ctx, row); err != nil {
+		return fmt.Errorf("postgres config store: upsert tenant %q weights: %w", tenantID, err)
+	}
+	s.invalidate(tenantID)
+	return nil
+}
+
+func (s *postgresConfigStore) UpdateThresholds(ctx context.Context, tenantID string, t agent.Thresholds) error {
+	if s.repo == nil {
+		return fmt.Errorf("postgres config store: score-engine repository is nil")
+	}
+	update := repository.ScoreThresholdUpdate{
+		Blocked:        t.BannerBlocked,
+		High:           t.BannerHighRisk,
+		Warning:        t.BannerWarning,
+		Caution:        t.BannerCaution,
+		Info:           t.BannerInfo,
+		Tier1PassBelow: t.Tier1PassBelow,
+		Tier1FlagAbove: t.Tier1FlagAbove,
+	}
+	// Steady-state path: column-scoped UPDATE so a concurrent
+	// UpdateWeights cannot clobber these threshold columns and the
+	// schema CHECK on threshold_tier1_pass_below <
+	// threshold_tier1_flag_above (migration 0013) is enforced by the
+	// DB on every write.
+	err := s.repo.UpdateThresholds(ctx, tenantID, update)
+	if err == nil {
+		s.invalidate(tenantID)
+		return nil
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		return fmt.Errorf("postgres config store: update tenant %q thresholds: %w", tenantID, err)
+	}
+	row, err := s.loadOrSeed(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("postgres config store: seed tenant %q: %w", tenantID, err)
+	}
+	row.ThresholdBlocked = update.Blocked
+	row.ThresholdHigh = update.High
+	row.ThresholdWarning = update.Warning
+	row.ThresholdCaution = update.Caution
+	row.ThresholdInfo = update.Info
+	row.ThresholdTier1PassBelow = update.Tier1PassBelow
+	row.ThresholdTier1FlagAbove = update.Tier1FlagAbove
+	if err := s.repo.Upsert(ctx, row); err != nil {
+		return fmt.Errorf("postgres config store: upsert tenant %q thresholds: %w", tenantID, err)
+	}
+	s.invalidate(tenantID)
+	return nil
+}
+
+// clampWeightToPercent maps the agent's renormalised float weight
+// (`0 ≤ w ≤ 1`) onto the integer percentage column type used by the
+// score_engine table.
+func clampWeightToPercent(w float64) int {
+	if w <= 0 {
+		return 0
+	}
+	if w >= 1 {
+		return 100
+	}
+	return int(w*100 + 0.5)
+}
+
+// memoryConfigStore is the dev/test-only ConfigStore implementation.
+//
+// It is selected only when Postgres is unreachable (e.g. local
+// `go test` without docker, or a smoke run without PG_HOST set) —
+// production wiring in wire_services.go prefers postgresConfigStore.
+// All state is held in-process and is lost on every restart, so any
+// tuning agent decisions written through this store are forgotten
+// next time the binary starts. The boot gate in
+// assertProductionDurableStores promotes the slog.Warn it emits to a
+// hard error when SN360ES_ENV=production.
 type memoryConfigStore struct {
 	mu         sync.Mutex
 	weights    map[string]agent.ScoreWeights
