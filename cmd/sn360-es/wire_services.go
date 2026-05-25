@@ -25,6 +25,7 @@ func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*ag
 	var supportA *agent.SupportAgent
 
 	pub := agentPublisherFromBus(app.eventBus)
+	configStore := buildConfigStore(logger, app)
 
 	// Support agent.
 	if pub != nil {
@@ -63,7 +64,7 @@ func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*ag
 				Persister:             buildUserPersister(app, piiHasher),
 				SensitivityClassifier: buildSensitivityClassifier(cfg, logger),
 				VendorScanner:         buildVendorScanner(app),
-				Config:                newMemoryConfigStore(),
+				Config:                configStore,
 			})
 			if err != nil {
 				logger.Warn("sn360-es: onboarding agent init failed",
@@ -78,10 +79,9 @@ func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*ag
 	// Tuning agent.
 	if app.repos != nil && app.repos.FeedbackEvents != nil {
 		results := tuningResultAdapter{repos: app.repos}
-		store := newMemoryConfigStore()
 		ta, err := agent.NewTuningAgent(agent.TuningConfig{
 			Results: results,
-			Config:  store,
+			Config:  configStore,
 			Audit:   loggingAuditLog{logger: logger},
 			Logger:  logger,
 		})
@@ -94,6 +94,24 @@ func buildAgents(cfg *config.Config, logger *slog.Logger, app *application) (*ag
 		}
 	}
 	return onboardA, tuningA, supportA
+}
+
+// buildConfigStore returns the ConfigStore used by both the
+// onboarding and tuning agents. It prefers the durable Postgres-
+// backed store (postgresConfigStore on score_engine); only when the
+// repository registry / score-engine repo is absent does it fall
+// back to memoryConfigStore. The fallback is recorded on the
+// application so assertProductionDurableStores can promote the
+// warning to a hard boot error in production.
+func buildConfigStore(logger *slog.Logger, app *application) agent.ConfigStore {
+	if app != nil && app.repos != nil && app.repos.ScoreEngines != nil {
+		return newPostgresConfigStore(app.repos.ScoreEngines)
+	}
+	logger.Warn("sn360-es: using in-memory config store; agent config will not survive restarts (set PG_HOST for persistence)")
+	if app != nil {
+		app.usingMemoryConfigStore = true
+	}
+	return newMemoryConfigStore()
 }
 
 func buildLabelApplier(app *application) agent.LabelApplier {

@@ -102,9 +102,16 @@ type ScoreEngine struct {
 	ThresholdWarning  int
 	ThresholdCaution  int
 	ThresholdInfo     int
-	SubjectTagEnabled bool
-	SubjectTagPrefix  string
-	UpdatedAt         time.Time
+	// ThresholdTier1PassBelow / ThresholdTier1FlagAbove are the
+	// Tier 1 (encoder-stage) gating thresholds: a Tier 1 score below
+	// PassBelow short-circuits to a clear verdict; above FlagAbove
+	// promotes to Tier 2 for the SLM. Persisted by the tuning agent
+	// so its updates survive a restart. See migration 0013.
+	ThresholdTier1PassBelow int
+	ThresholdTier1FlagAbove int
+	SubjectTagEnabled       bool
+	SubjectTagPrefix        string
+	UpdatedAt               time.Time
 }
 
 // EmailClassification represents a domain-level classification list entry.

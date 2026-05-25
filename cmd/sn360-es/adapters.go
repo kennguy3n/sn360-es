@@ -474,6 +474,8 @@ func (a tuningResultAdapter) CurrentThresholds(ctx context.Context, tenantID str
 		return agent.Thresholds{}, err
 	}
 	return agent.Thresholds{
+		Tier1PassBelow: row.ThresholdTier1PassBelow,
+		Tier1FlagAbove: row.ThresholdTier1FlagAbove,
 		BannerBlocked:  row.ThresholdBlocked,
 		BannerHighRisk: row.ThresholdHigh,
 		BannerWarning:  row.ThresholdWarning,
@@ -482,9 +484,128 @@ func (a tuningResultAdapter) CurrentThresholds(ctx context.Context, tenantID str
 	}, nil
 }
 
-// memoryConfigStore is a tiny in-memory ConfigStore implementation
-// used until the management service exposes a proper score-engine
-// write endpoint.
+// postgresConfigStore is the production ConfigStore implementation: a
+// read-modify-write wrapper on top of the score_engine table
+// (repository.ScoreEngineRepository). Every UpdateWeights /
+// UpdateThresholds call loads the current row (or seeds one from the
+// schema defaults if absent), mutates the relevant fields, and
+// re-upserts the row so the tuning / onboarding agents' decisions
+// survive a restart.
+//
+// The store is safe for concurrent use across tenants because each
+// operation is a single-row read + single-row upsert; per-tenant
+// serialisation is delegated to Postgres' MVCC. Within a single
+// tenant, concurrent UpdateWeights / UpdateThresholds calls may
+// interleave, but the final row will reflect the last write for each
+// field — the agent's caller (tuning / onboarding) is the only writer
+// in practice and runs serially per tenant.
+type postgresConfigStore struct {
+	repo repository.ScoreEngineRepository
+}
+
+func newPostgresConfigStore(repo repository.ScoreEngineRepository) *postgresConfigStore {
+	return &postgresConfigStore{repo: repo}
+}
+
+// loadOrSeed returns the score_engine row for tenantID, falling back
+// to the schema defaults (matching migrations/0001_init.up.sql plus
+// migrations/0013_score_engine_tier1_thresholds.up.sql) if no row
+// exists yet. The seeded row is NOT persisted until the caller does
+// its own Upsert; this keeps row creation idempotent with the rest
+// of the onboarding flow.
+func (s *postgresConfigStore) loadOrSeed(ctx context.Context, tenantID string) (*repository.ScoreEngine, error) {
+	row, err := s.repo.Get(ctx, tenantID)
+	if err == nil {
+		return row, nil
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
+	}
+	return &repository.ScoreEngine{
+		TenantID:                tenantID,
+		ScoreBase:               100,
+		WeightAI:                80,
+		WeightRspamd:            20,
+		WeightAttachments:       0,
+		WeightLinks:             0,
+		ThresholdBlocked:        85,
+		ThresholdHigh:           70,
+		ThresholdWarning:        50,
+		ThresholdCaution:        30,
+		ThresholdInfo:           15,
+		ThresholdTier1PassBelow: 20,
+		ThresholdTier1FlagAbove: 60,
+		SubjectTagEnabled:       false,
+		SubjectTagPrefix:        "SN360",
+	}, nil
+}
+
+func (s *postgresConfigStore) UpdateWeights(ctx context.Context, tenantID string, w agent.ScoreWeights) error {
+	if s.repo == nil {
+		return fmt.Errorf("postgres config store: score-engine repository is nil")
+	}
+	row, err := s.loadOrSeed(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("postgres config store: load tenant %q: %w", tenantID, err)
+	}
+	// agent.ScoreWeights are floats in [0, 1] (renormalised in
+	// tuning.clampWeights). Persisting them as the integer percentage
+	// keeps wire-compat with the existing score_engine row shape used
+	// by tuningResultAdapter.CurrentWeights below.
+	row.WeightAI = clampWeightToPercent(w.AI)
+	row.WeightRspamd = clampWeightToPercent(w.Rspamd)
+	row.WeightAttachments = clampWeightToPercent(w.Attachments)
+	row.WeightLinks = clampWeightToPercent(w.Links)
+	if err := s.repo.Upsert(ctx, row); err != nil {
+		return fmt.Errorf("postgres config store: upsert tenant %q weights: %w", tenantID, err)
+	}
+	return nil
+}
+
+func (s *postgresConfigStore) UpdateThresholds(ctx context.Context, tenantID string, t agent.Thresholds) error {
+	if s.repo == nil {
+		return fmt.Errorf("postgres config store: score-engine repository is nil")
+	}
+	row, err := s.loadOrSeed(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("postgres config store: load tenant %q: %w", tenantID, err)
+	}
+	row.ThresholdBlocked = t.BannerBlocked
+	row.ThresholdHigh = t.BannerHighRisk
+	row.ThresholdWarning = t.BannerWarning
+	row.ThresholdCaution = t.BannerCaution
+	row.ThresholdInfo = t.BannerInfo
+	row.ThresholdTier1PassBelow = t.Tier1PassBelow
+	row.ThresholdTier1FlagAbove = t.Tier1FlagAbove
+	if err := s.repo.Upsert(ctx, row); err != nil {
+		return fmt.Errorf("postgres config store: upsert tenant %q thresholds: %w", tenantID, err)
+	}
+	return nil
+}
+
+// clampWeightToPercent maps the agent's renormalised float weight
+// (`0 ≤ w ≤ 1`) onto the integer percentage column type used by the
+// score_engine table.
+func clampWeightToPercent(w float64) int {
+	if w <= 0 {
+		return 0
+	}
+	if w >= 1 {
+		return 100
+	}
+	return int(w*100 + 0.5)
+}
+
+// memoryConfigStore is the dev/test-only ConfigStore implementation.
+//
+// It is selected only when Postgres is unreachable (e.g. local
+// `go test` without docker, or a smoke run without PG_HOST set) —
+// production wiring in wire_services.go prefers postgresConfigStore.
+// All state is held in-process and is lost on every restart, so any
+// tuning agent decisions written through this store are forgotten
+// next time the binary starts. The boot gate in
+// assertProductionDurableStores promotes the slog.Warn it emits to a
+// hard error when SN360ES_ENV=production.
 type memoryConfigStore struct {
 	mu         sync.Mutex
 	weights    map[string]agent.ScoreWeights

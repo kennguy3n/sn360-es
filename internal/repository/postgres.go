@@ -316,11 +316,13 @@ func (p *pgScoreEngines) Get(ctx context.Context, tenantID string) (*ScoreEngine
 	row := p.db.QueryRowContext(ctx, `
 SELECT tenant_id, score_base, weight_ai, weight_rspamd, weight_attachments, weight_links,
        threshold_blocked, threshold_high, threshold_warning, threshold_caution, threshold_info,
+       threshold_tier1_pass_below, threshold_tier1_flag_above,
        subject_tag_enabled, subject_tag_prefix, updated_at
   FROM score_engine WHERE tenant_id=$1`, tenantID)
 	var s ScoreEngine
 	err := row.Scan(&s.TenantID, &s.ScoreBase, &s.WeightAI, &s.WeightRspamd, &s.WeightAttachments, &s.WeightLinks,
 		&s.ThresholdBlocked, &s.ThresholdHigh, &s.ThresholdWarning, &s.ThresholdCaution, &s.ThresholdInfo,
+		&s.ThresholdTier1PassBelow, &s.ThresholdTier1FlagAbove,
 		&s.SubjectTagEnabled, &s.SubjectTagPrefix, &s.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -332,8 +334,9 @@ func (p *pgScoreEngines) Upsert(ctx context.Context, s *ScoreEngine) error {
 	_, err := p.db.ExecContext(ctx, `
 INSERT INTO score_engine (tenant_id, score_base, weight_ai, weight_rspamd, weight_attachments, weight_links,
                           threshold_blocked, threshold_high, threshold_warning, threshold_caution, threshold_info,
+                          threshold_tier1_pass_below, threshold_tier1_flag_above,
                           subject_tag_enabled, subject_tag_prefix)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 ON CONFLICT (tenant_id) DO UPDATE SET
     score_base=EXCLUDED.score_base,
     weight_ai=EXCLUDED.weight_ai,
@@ -345,12 +348,15 @@ ON CONFLICT (tenant_id) DO UPDATE SET
     threshold_warning=EXCLUDED.threshold_warning,
     threshold_caution=EXCLUDED.threshold_caution,
     threshold_info=EXCLUDED.threshold_info,
+    threshold_tier1_pass_below=EXCLUDED.threshold_tier1_pass_below,
+    threshold_tier1_flag_above=EXCLUDED.threshold_tier1_flag_above,
     subject_tag_enabled=EXCLUDED.subject_tag_enabled,
     subject_tag_prefix=EXCLUDED.subject_tag_prefix,
     updated_at=NOW()
 `,
 		s.TenantID, s.ScoreBase, s.WeightAI, s.WeightRspamd, s.WeightAttachments, s.WeightLinks,
 		s.ThresholdBlocked, s.ThresholdHigh, s.ThresholdWarning, s.ThresholdCaution, s.ThresholdInfo,
+		s.ThresholdTier1PassBelow, s.ThresholdTier1FlagAbove,
 		s.SubjectTagEnabled, s.SubjectTagPrefix,
 	)
 	return err

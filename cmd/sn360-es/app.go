@@ -90,10 +90,16 @@ type application struct {
 	// state, not just on pgDB == nil.
 	usingMemoryCampaignStore    bool
 	usingMemoryInteractionStore bool
-	dashboardGen                *dashboard.DashboardGenerator
-	recipientSvc                *predict.RecipientService
-	openSvc                     *predict.OpenService
-	escalationSvc               *agent.EscalationService
+	// usingMemoryConfigStore records whether buildConfigStore in
+	// wire_services.go had to fall back to memoryConfigStore (i.e.
+	// score_engine repository was unavailable). Read by
+	// assertProductionDurableStores so the prod boot gate fires on
+	// the real in-memory state.
+	usingMemoryConfigStore bool
+	dashboardGen           *dashboard.DashboardGenerator
+	recipientSvc           *predict.RecipientService
+	openSvc                *predict.OpenService
+	escalationSvc          *agent.EscalationService
 
 	// Provider-side action machinery.
 	providers     *providerRegistry
@@ -779,6 +785,13 @@ func assertProductionDurableStores(cfg *config.Config, app *application, logger 
 		inMemory = append(inMemory, memStore{
 			name:    "simulation interaction store",
 			fix:     "configure PG_HOST/PG_DATABASE (and ensure migrations are applied) so simulation interactions survive a restart",
+			blocker: true,
+		})
+	}
+	if app.usingMemoryConfigStore {
+		inMemory = append(inMemory, memStore{
+			name:    "agent config store",
+			fix:     "configure PG_HOST/PG_DATABASE (and ensure migrations are applied) so onboarding/tuning agent config (score_engine row) survives a restart",
 			blocker: true,
 		})
 	}
