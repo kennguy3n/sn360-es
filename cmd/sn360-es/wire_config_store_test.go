@@ -562,3 +562,128 @@ func TestPostgresConfigStore_UpdateInvalidatesCache(t *testing.T) {
 		t.Fatalf("cache returned stale Tier1FlagThreshold: got %v want 70", tc.Tier1FlagThreshold)
 	}
 }
+
+// TestTenantScoringConfigAdapter_SweepExpired pins the eviction
+// invariant: entries past their expiresAt timestamp are removed and
+// counted, fresh entries are preserved, and a nil receiver is safe
+// (mirrors memoryLabelCache.sweepExpired). Without this sweep, a
+// multi-tenant SaaS with churn would accumulate entries for
+// deactivated tenants indefinitely — the cache map only ever grows
+// because store() overwrites the same slot it occupied before.
+func TestTenantScoringConfigAdapter_SweepExpired(t *testing.T) {
+	repo := newFakeScoreEngineRepo()
+	a := newTenantScoringConfigAdapter(repo, 100*time.Millisecond)
+
+	// Seed three entries: two will expire, one is fresh.
+	a.store("tenant-old-1", evaluate.TenantScoringConfig{})
+	a.store("tenant-old-2", evaluate.TenantScoringConfig{})
+	a.store("tenant-fresh", evaluate.TenantScoringConfig{})
+	if got := len(a.cache); got != 3 {
+		t.Fatalf("setup: cache has %d entries, want 3", got)
+	}
+
+	// Walk the clock forward past the TTL.
+	now := time.Now().Add(200 * time.Millisecond)
+
+	// Re-stamp the fresh entry so it survives the sweep — simulates
+	// a recent LoadTenantScoringConfig call.
+	a.mu.Lock()
+	a.cache["tenant-fresh"] = tenantScoringConfigCacheEntry{
+		value:     evaluate.TenantScoringConfig{},
+		expiresAt: now.Add(60 * time.Second),
+	}
+	a.mu.Unlock()
+
+	evicted := a.sweepExpired(now)
+	if evicted != 2 {
+		t.Fatalf("sweepExpired returned %d, want 2", evicted)
+	}
+	if got := len(a.cache); got != 1 {
+		t.Fatalf("post-sweep: cache has %d entries, want 1", got)
+	}
+	if _, ok := a.cache["tenant-fresh"]; !ok {
+		t.Fatalf("post-sweep: fresh entry was incorrectly evicted")
+	}
+
+	// Idempotency: a second sweep at the same wall-clock evicts nothing.
+	if evicted := a.sweepExpired(now); evicted != 0 {
+		t.Fatalf("second sweepExpired returned %d, want 0 (idempotent)", evicted)
+	}
+
+	// Nil-receiver safety: a panic here would be a regression of the
+	// nil guard in sweepExpired (matches memoryLabelCache contract).
+	var nilAdapter *tenantScoringConfigAdapter
+	if got := nilAdapter.sweepExpired(now); got != 0 {
+		t.Fatalf("nil receiver sweepExpired returned %d, want 0", got)
+	}
+}
+
+// TestTenantScoringConfigAdapter_RunJanitor pins the background-loop
+// contract: the janitor sweeps expired entries on the supplied
+// interval and exits cleanly when the context is cancelled. This
+// guards against two real regressions — (1) the janitor never
+// actually evicting anything (e.g. ticker channel never read),
+// and (2) the janitor leaking past ctx cancellation.
+func TestTenantScoringConfigAdapter_RunJanitor(t *testing.T) {
+	repo := newFakeScoreEngineRepo()
+	a := newTenantScoringConfigAdapter(repo, 10*time.Millisecond)
+
+	// Plant an already-expired entry so the very first tick will
+	// have something to remove.
+	a.mu.Lock()
+	a.cache["tenant-expired"] = tenantScoringConfigCacheEntry{
+		value:     evaluate.TenantScoringConfig{},
+		expiresAt: time.Now().Add(-time.Hour),
+	}
+	a.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		a.runJanitor(ctx, 5*time.Millisecond, nil)
+		close(done)
+	}()
+
+	// Poll until the janitor has removed the expired entry, with a
+	// generous overall deadline to avoid flake on loaded CI hosts.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		a.mu.RLock()
+		empty := len(a.cache) == 0
+		a.mu.RUnlock()
+		if empty {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatal("janitor did not evict expired entry within 2s")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case <-done:
+		// runJanitor returned, as required.
+	case <-time.After(time.Second):
+		t.Fatal("janitor did not exit within 1s of ctx cancellation")
+	}
+
+	// Nil-receiver safety: a janitor on a nil adapter must return
+	// immediately without panicking or spinning.
+	nilCtx, nilCancel := context.WithCancel(context.Background())
+	defer nilCancel()
+	nilDone := make(chan struct{})
+	var nilAdapter *tenantScoringConfigAdapter
+	go func() {
+		nilAdapter.runJanitor(nilCtx, 5*time.Millisecond, nil)
+		close(nilDone)
+	}()
+	select {
+	case <-nilDone:
+		// expected
+	case <-time.After(time.Second):
+		t.Fatal("nil-adapter runJanitor did not return promptly")
+	}
+}

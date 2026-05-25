@@ -344,6 +344,112 @@ func TestClampThresholds_PreservesOrdering(t *testing.T) {
 	}
 }
 
+// TestClampThresholds_PreservesTier1Ordering pins the Tier1
+// pass/flag ordering invariant that mirrors the DB-side CHECK in
+// migrations/0013_score_engine_tier1_thresholds.up.sql. Without the
+// application-side clamp, a future iteration of the tuning agent's
+// Decide() that adjusted Tier1 thresholds independently could write
+// an inverted pair (PassBelow >= FlagAbove), which the column-scoped
+// UpdateThresholds UPDATE would reject at the DB layer with a CHECK
+// constraint violation. The clamp lets the agent surface a clamped
+// pair instead of a hard write failure.
+func TestClampThresholds_PreservesTier1Ordering(t *testing.T) {
+	cases := []struct {
+		name             string
+		in               Thresholds
+		wantPassLessThan int // PassBelow must be strictly less than this value
+		wantFlagMin      int // FlagAbove must be >= this value
+		wantPassNonNeg   bool
+		wantFlagInRange  bool
+	}{
+		{
+			name: "equal pair shifts pass-below down",
+			in: Thresholds{
+				Tier1PassBelow: 50,
+				Tier1FlagAbove: 50,
+				BannerBlocked:  85, BannerHighRisk: 70, BannerWarning: 50, BannerCaution: 30, BannerInfo: 15,
+			},
+			wantPassLessThan: 50,
+			wantFlagMin:      50,
+			wantPassNonNeg:   true,
+			wantFlagInRange:  true,
+		},
+		{
+			name: "inverted pair (pass above flag) recovers ordering",
+			in: Thresholds{
+				Tier1PassBelow: 80,
+				Tier1FlagAbove: 30,
+				BannerBlocked:  85, BannerHighRisk: 70, BannerWarning: 50, BannerCaution: 30, BannerInfo: 15,
+			},
+			wantPassLessThan: 30,
+			wantFlagMin:      30,
+			wantPassNonNeg:   true,
+			wantFlagInRange:  true,
+		},
+		{
+			name: "both at zero floor — promote flag to keep ordering valid",
+			in: Thresholds{
+				Tier1PassBelow: 0,
+				Tier1FlagAbove: 0,
+				BannerBlocked:  85, BannerHighRisk: 70, BannerWarning: 50, BannerCaution: 30, BannerInfo: 15,
+			},
+			wantPassLessThan: 1,
+			wantFlagMin:      1,
+			wantPassNonNeg:   true,
+			wantFlagInRange:  true,
+		},
+		{
+			name: "valid pair untouched",
+			in: Thresholds{
+				Tier1PassBelow: 20,
+				Tier1FlagAbove: 60,
+				BannerBlocked:  85, BannerHighRisk: 70, BannerWarning: 50, BannerCaution: 30, BannerInfo: 15,
+			},
+			wantPassLessThan: 60,
+			wantFlagMin:      60,
+			wantPassNonNeg:   true,
+			wantFlagInRange:  true,
+		},
+		{
+			name: "out-of-range values clamped first then re-ordered",
+			in: Thresholds{
+				Tier1PassBelow: 150,
+				Tier1FlagAbove: -10,
+				BannerBlocked:  85, BannerHighRisk: 70, BannerWarning: 50, BannerCaution: 30, BannerInfo: 15,
+			},
+			// clamp sets PassBelow=100, FlagAbove=0, then the ordering pass shifts both
+			// to (0, 1) since 100-1 < 0 would underflow the second guard.
+			wantPassLessThan: 1,
+			wantFlagMin:      1,
+			wantPassNonNeg:   true,
+			wantFlagInRange:  true,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := clampThresholds(tc.in)
+			if got.Tier1PassBelow >= got.Tier1FlagAbove {
+				t.Fatalf("Tier1 ordering broken after clamp: PassBelow=%d FlagAbove=%d (must satisfy DB CHECK pass_below < flag_above)",
+					got.Tier1PassBelow, got.Tier1FlagAbove)
+			}
+			if got.Tier1PassBelow >= tc.wantPassLessThan {
+				t.Errorf("Tier1PassBelow=%d not strictly less than %d", got.Tier1PassBelow, tc.wantPassLessThan)
+			}
+			if got.Tier1FlagAbove < tc.wantFlagMin {
+				t.Errorf("Tier1FlagAbove=%d below minimum %d", got.Tier1FlagAbove, tc.wantFlagMin)
+			}
+			if tc.wantPassNonNeg && got.Tier1PassBelow < 0 {
+				t.Errorf("Tier1PassBelow=%d must be >= 0 (DB column is INT NOT NULL CHECK >= 0)", got.Tier1PassBelow)
+			}
+			if tc.wantFlagInRange && (got.Tier1FlagAbove < 0 || got.Tier1FlagAbove > 100) {
+				t.Errorf("Tier1FlagAbove=%d outside [0,100]", got.Tier1FlagAbove)
+			}
+		})
+	}
+}
+
 func TestClampWeights_NormalisesAndClips(t *testing.T) {
 	got := clampWeights(ScoreWeights{AI: 1.4, Rspamd: -0.2, Attachments: 0.5, Links: 0.5})
 	sum := got.AI + got.Rspamd + got.Attachments + got.Links
