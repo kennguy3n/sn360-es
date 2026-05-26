@@ -133,22 +133,23 @@ func extractHTMLBody(raw []byte) (string, error) {
 }
 
 // findFirstHTMLPart returns the text/html body of the first matching
-// MIME part, with the part's Content-Transfer-Encoding header
-// inspected only to decide whether to decode (currently we
-// pass-through; Fastmail typically uses 7bit or quoted-printable
-// which are renderable as UTF-8).
+// MIME part. The function auto-detects the message's line-ending
+// style (CRLF per RFC 5322, or LF-only which JMAP blobs sometimes
+// ship) and uses the same separator for both the top-level header/
+// body split and each sub-part's header/body split. Content-Transfer-
+// Encoding is currently pass-through (Fastmail messages are typically
+// 7bit or quoted-printable which render as UTF-8).
 func findFirstHTMLPart(raw []byte) (string, bool) {
-	idx := bytesIndex(raw, []byte("\r\n\r\n"))
-	if idx < 0 {
+	header, body, sepStyle, err := splitHeaderBody(raw)
+	if err != nil || len(body) == 0 {
 		return "", false
 	}
-	header := string(raw[:idx])
-	body := raw[idx+4:]
-	ctIdx := indexCI(header, "Content-Type:")
+	headerStr := string(header)
+	ctIdx := indexCI(headerStr, "Content-Type:")
 	if ctIdx < 0 {
 		return "", false
 	}
-	rest := header[ctIdx+len("Content-Type:"):]
+	rest := headerStr[ctIdx+len("Content-Type:"):]
 	newline := indexAnyOf(rest, "\r\n")
 	if newline < 0 {
 		newline = len(rest)
@@ -164,10 +165,11 @@ func findFirstHTMLPart(raw []byte) (string, bool) {
 	if boundary == "" {
 		return "", false
 	}
+	partSep := []byte(sepStyle + sepStyle)
 	sep := []byte("--" + boundary)
 	parts := bytesSplit(body, sep)
 	for _, p := range parts {
-		i := bytesIndex(p, []byte("\r\n\r\n"))
+		i := bytesIndex(p, partSep)
 		if i < 0 {
 			continue
 		}
@@ -175,27 +177,34 @@ func findFirstHTMLPart(raw []byte) (string, bool) {
 		if !strings.Contains(strings.ToLower(hdr), "text/html") {
 			continue
 		}
-		return string(p[i+4:]), true
+		return string(p[i+len(partSep):]), true
 	}
 	return "", false
 }
 
 // replaceHTMLBody returns a new RFC822 with the first text/html part
-// replaced by newHTML.
+// replaced by newHTML. The function auto-detects the message's line-
+// ending style (CRLF or LF-only) via splitHeaderBody and re-uses that
+// style for both the top-level header/body separator and each sub-
+// part's header/body separator. The rebuilt message preserves the
+// original line-ending style so LF-only inputs round-trip without
+// CRLF contamination.
 func replaceHTMLBody(raw, newHTML []byte) ([]byte, error) {
-	idx := bytesIndex(raw, []byte("\r\n\r\n"))
-	if idx < 0 {
+	header, body, sepStyle, err := splitHeaderBody(raw)
+	if err != nil {
+		return nil, fmt.Errorf("fastmail: %w", err)
+	}
+	if len(header) == 0 && len(body) == 0 {
 		return nil, errors.New("fastmail: missing header/body separator")
 	}
-	header := raw[:idx]
-	body := raw[idx+4:]
+	blank := []byte(sepStyle + sepStyle)
 	headerStr := string(header)
 	ctIdx := indexCI(headerStr, "Content-Type:")
 	if ctIdx < 0 {
 		// Treat as text/plain and replace whole body.
 		var out []byte
 		out = append(out, header...)
-		out = append(out, []byte("\r\n\r\n")...)
+		out = append(out, blank...)
 		out = append(out, newHTML...)
 		return out, nil
 	}
@@ -208,14 +217,14 @@ func replaceHTMLBody(raw, newHTML []byte) ([]byte, error) {
 	if strings.HasPrefix(strings.ToLower(contentType), "text/html") {
 		var out []byte
 		out = append(out, header...)
-		out = append(out, []byte("\r\n\r\n")...)
+		out = append(out, blank...)
 		out = append(out, newHTML...)
 		return out, nil
 	}
 	if !strings.HasPrefix(strings.ToLower(contentType), "multipart/") {
 		var out []byte
 		out = append(out, header...)
-		out = append(out, []byte("\r\n\r\n")...)
+		out = append(out, blank...)
 		out = append(out, newHTML...)
 		return out, nil
 	}
@@ -227,7 +236,7 @@ func replaceHTMLBody(raw, newHTML []byte) ([]byte, error) {
 	parts := bytesSplit(body, sep)
 	replaced := false
 	for i, p := range parts {
-		j := bytesIndex(p, []byte("\r\n\r\n"))
+		j := bytesIndex(p, blank)
 		if j < 0 {
 			continue
 		}
@@ -235,8 +244,9 @@ func replaceHTMLBody(raw, newHTML []byte) ([]byte, error) {
 		if !strings.Contains(strings.ToLower(hdr), "text/html") {
 			continue
 		}
+		hdrEnd := j + len(blank)
 		var rebuilt []byte
-		rebuilt = append(rebuilt, p[:j+4]...)
+		rebuilt = append(rebuilt, p[:hdrEnd]...)
 		rebuilt = append(rebuilt, newHTML...)
 		parts[i] = rebuilt
 		replaced = true
@@ -247,7 +257,7 @@ func replaceHTMLBody(raw, newHTML []byte) ([]byte, error) {
 	}
 	var out []byte
 	out = append(out, header...)
-	out = append(out, []byte("\r\n\r\n")...)
+	out = append(out, blank...)
 	out = append(out, joinParts(parts, sep)...)
 	return out, nil
 }

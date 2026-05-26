@@ -30,17 +30,29 @@ type HTTPPostConsentValidator struct {
 	ZohoExpectedOrgID string
 }
 
-// NewHTTPPostConsentValidator constructs a validator.
-func NewHTTPPostConsentValidator(client *http.Client, gwsDomain string) *HTTPPostConsentValidator {
+// NewHTTPPostConsentValidator constructs a validator. zohoAPIBaseURL
+// is the regional Zoho Mail REST endpoint (e.g.
+// https://mail.zoho.com/api, https://mail.zoho.eu/api). Zoho's six
+// data centres are isolated — an EU tenant's token is rejected by
+// the US endpoint with a 401, so the caller MUST supply the endpoint
+// that matches cfg.Zoho.DataCenter. Pass an empty string only when
+// Zoho is not configured for this deployment; the field will fall
+// through to the US default at call time to keep tests using
+// httptest servers ergonomic (those tests override the field
+// directly), but production wiring is expected to pass a real URL.
+func NewHTTPPostConsentValidator(client *http.Client, gwsDomain, zohoAPIBaseURL string) *HTTPPostConsentValidator {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	if zohoAPIBaseURL == "" {
+		zohoAPIBaseURL = "https://mail.zoho.com/api"
 	}
 	return &HTTPPostConsentValidator{
 		client:                client,
 		gwsDomain:             gwsDomain,
 		GoogleAdminBaseURL:    "https://admin.googleapis.com",
 		MicrosoftGraphBaseURL: "https://graph.microsoft.com",
-		ZohoAPIBaseURL:        "https://mail.zoho.com/api",
+		ZohoAPIBaseURL:        zohoAPIBaseURL,
 	}
 }
 

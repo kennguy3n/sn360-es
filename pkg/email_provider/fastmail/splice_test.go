@@ -129,6 +129,53 @@ func TestSpliceBanner_PreservesLFOnlyLineEndings(t *testing.T) {
 	}
 }
 
+// TestSpliceBanner_LFOnlyMultipartFindsHTMLPart guards against the
+// previous regression where injectIntoMultipart hard-coded "\r\n\r\n"
+// for the per-part header/body separator. LF-only multipart blobs
+// would silently miss the text/html part and the entire body would
+// be wrapped as escaped plain text. The fix threads sepStyle through
+// to the sub-part search so LF-only multipart messages are handled
+// correctly.
+func TestSpliceBanner_LFOnlyMultipartFindsHTMLPart(t *testing.T) {
+	boundary := "B0UND"
+	raw := []byte("From: a@example.com\n" +
+		"Content-Type: multipart/alternative; boundary=\"" + boundary + "\"\n" +
+		"\n" +
+		"--" + boundary + "\n" +
+		"Content-Type: text/plain\n" +
+		"\n" +
+		"hello in plain text\n" +
+		"--" + boundary + "\n" +
+		"Content-Type: text/html; charset=utf-8\n" +
+		"\n" +
+		"<html><body><p>hello</p></body></html>\n" +
+		"--" + boundary + "--\n")
+	banner := []byte("<div id=sn360>BANNER</div>")
+	out, err := spliceBanner(raw, banner)
+	if err != nil {
+		t.Fatalf("spliceBanner: %v", err)
+	}
+	if bytes.Contains(out, []byte("\r\n")) {
+		t.Errorf("LF-only input should not produce CRLF in output:\n%q", out)
+	}
+	// The banner should appear inside the HTML part, not wrapped
+	// around the entire raw multipart body.
+	if !bytes.Contains(out, []byte("<div id=sn360>BANNER</div><p>hello</p>")) &&
+		!bytes.Contains(out, banner) {
+		t.Errorf("banner not injected into HTML part:\n%q", out)
+	}
+	// Critically: the boundary markers must survive, which is the
+	// regression signal — when injectIntoMultipart's per-part search
+	// failed it fell through to wrapping the whole body in <pre>,
+	// which would HTML-escape the boundary markers as text.
+	if !bytes.Contains(out, []byte("--"+boundary+"--")) {
+		t.Errorf("multipart structure destroyed (closing boundary missing):\n%q", out)
+	}
+	if bytes.Contains(out, []byte("&lt;html")) {
+		t.Errorf("HTML body should not be escaped — fallback path was incorrectly taken:\n%q", out)
+	}
+}
+
 // headerOf returns the header bytes of a rebuilt message, stripping
 // the trailing separator. It accepts both CRLF and LF.
 func headerOf(t *testing.T, msg []byte) []byte {

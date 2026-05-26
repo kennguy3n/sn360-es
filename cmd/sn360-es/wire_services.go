@@ -423,7 +423,12 @@ func buildOnboardingService(cfg *config.Config, logger *slog.Logger, app *applic
 		nonces = onboarding.NewInMemoryNonceStore()
 	}
 
-	validator := onboarding.NewHTTPPostConsentValidator(nil, cfg.GWS.Domain)
+	// Resolve the regional Zoho Mail REST endpoint up front so the
+	// post-consent validator hits the data centre that matches the
+	// operator's ZOHO_DATA_CENTER setting (e.g. .eu, .in). Zoho's
+	// six data centres are isolated, so a US-default validator would
+	// silently 401 every non-US tenant.
+	validator := onboarding.NewHTTPPostConsentValidator(nil, cfg.GWS.Domain, zoho.MailBaseURL(cfg.Zoho.DataCenter))
 	exch := onboarding.NewHTTPExchanger(nil)
 
 	providers := make(map[onboarding.ProviderType]onboarding.ProviderConfig)

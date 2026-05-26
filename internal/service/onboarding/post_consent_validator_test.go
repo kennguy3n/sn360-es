@@ -165,6 +165,29 @@ func TestHTTPPostConsentValidator_Zoho_WrongOrgID(t *testing.T) {
 	}
 }
 
+// TestNewHTTPPostConsentValidator_HonoursZohoBaseURL guards against
+// the previous regression where the constructor hard-coded
+// ZohoAPIBaseURL to the US endpoint regardless of cfg.Zoho.DataCenter.
+// Non-US tenants would have their freshly-minted refresh tokens
+// validated against mail.zoho.com (US), which returns 401, breaking
+// onboarding silently. The fix accepts the regional URL as a
+// constructor argument so the wiring layer must explicitly supply it.
+func TestNewHTTPPostConsentValidator_HonoursZohoBaseURL(t *testing.T) {
+	const euURL = "https://mail.zoho.eu/api"
+	v := NewHTTPPostConsentValidator(nil, "acme.example", euURL)
+	if v.ZohoAPIBaseURL != euURL {
+		t.Fatalf("ZohoAPIBaseURL = %q, want %q", v.ZohoAPIBaseURL, euURL)
+	}
+	// Empty input must still produce the documented US fallback so
+	// deployments without Zoho configured don't end up with an empty
+	// URL that would fail with a malformed-request error on first
+	// use.
+	v2 := NewHTTPPostConsentValidator(nil, "acme.example", "")
+	if v2.ZohoAPIBaseURL != "https://mail.zoho.com/api" {
+		t.Fatalf("empty input fallback = %q, want %q", v2.ZohoAPIBaseURL, "https://mail.zoho.com/api")
+	}
+}
+
 func TestHTTPPostConsentValidator_FastmailWorkmail_AlwaysOK(t *testing.T) {
 	// Fastmail (static token) and WorkMail (IAM SigV4) bypass OAuth
 	// post-consent validation; the validator should return nil so the

@@ -279,7 +279,7 @@ func spliceBanner(raw, banner []byte) ([]byte, error) {
 	rewriteContentType := ""
 	switch {
 	case strings.HasPrefix(strings.ToLower(ct), "multipart/"):
-		mutated, err = injectIntoMultipart(parsed.Header, ct, bodyBytes, banner)
+		mutated, err = injectIntoMultipart(parsed.Header, ct, bodyBytes, banner, sepStyle)
 		if err != nil {
 			return nil, err
 		}
@@ -360,20 +360,29 @@ func rewriteHeaderLine(headerBytes []byte, name, value, sepStyle string) []byte 
 
 // injectIntoMultipart finds the first text/html (or text/plain) sub
 // part and inlines the banner. The boundary is extracted from the
-// Content-Type header.
-func injectIntoMultipart(_ mail.Header, contentType string, body, banner []byte) ([]byte, error) {
+// Content-Type header. sepStyle is the line-ending style detected at
+// the top level ("\r\n" or "\n"); each sub-part is searched for its
+// own header/body separator using the same style so that LF-only
+// JMAP blobs are handled correctly (real-world JMAP downloads
+// sometimes ship LF-only even though RFC 5322 mandates CRLF).
+func injectIntoMultipart(_ mail.Header, contentType string, body, banner []byte, sepStyle string) ([]byte, error) {
 	boundary := extractBoundary(contentType)
 	if boundary == "" {
 		// Fall back: pretend it's plain text.
 		text := htmlEscape(string(body))
 		return []byte(string(banner) + "<hr/><pre>" + text + "</pre>"), nil
 	}
+	if sepStyle == "" {
+		sepStyle = "\r\n"
+	}
+	partSep := []byte(sepStyle + sepStyle)
 	sep := []byte("--" + boundary)
 	parts := bytes.Split(body, sep)
 	mutated := false
 	for i, part := range parts {
-		// Find the first text/html part.
-		idx := bytes.Index(part, []byte("\r\n\r\n"))
+		// Find the first text/html part — search using the line-
+		// ending style detected at the top level.
+		idx := bytes.Index(part, partSep)
 		if idx < 0 {
 			continue
 		}
@@ -381,9 +390,10 @@ func injectIntoMultipart(_ mail.Header, contentType string, body, banner []byte)
 		if !strings.Contains(strings.ToLower(hdr), "text/html") {
 			continue
 		}
-		partBody := part[idx+4:]
+		hdrEnd := idx + len(partSep)
+		partBody := part[hdrEnd:]
 		spliced := spliceHTMLBanner(string(partBody), string(banner))
-		parts[i] = append(part[:idx+4], []byte(spliced)...)
+		parts[i] = append(append([]byte(nil), part[:hdrEnd]...), []byte(spliced)...)
 		mutated = true
 		break
 	}
