@@ -284,10 +284,10 @@ Weights per category (configurable per tenant):
 
 | Category | Default Weight | Source |
 |---|---|---|
-| `ai` (Tier 1 or Tier 2) | 80% | Encoder or SLM score |
-| `rspamd` | 20% | Heuristic score |
-| `attachments` | 0% (reserved) | ShieldNet sandbox |
-| `links` | 0% (reserved) | URL threat intel |
+| `ai` (Tier 1 or Tier 2) | 60% | Encoder or SLM score |
+| `rspamd` | 10% | Heuristic score |
+| `attachments` | 15% | ShieldNet sandbox |
+| `links` | 15% | URL threat intel |
 
 Formula: `final_score = Σ(category_weight × normalized_category_score)`, clamped to `[0, 100]`
 
@@ -535,13 +535,44 @@ falls back to direct `memberOf` on per-user errors. Controlled by
 The relationship aggregation worker populates per-(user, sender-domain)
 baselines during its 4 h cycle:
 
-- Typical send hours (hour-of-day distribution)
+- Typical send hours (hour-of-day distribution, accumulated across
+  cycles — the worker loads the existing
+  `user_behavioral_baselines.typical_send_hours` array, appends the
+  current row's `LastSeenAt` hour, and FIFO-trims to a 168-entry cap
+  so the distribution does not grow unbounded across years of cycles).
+  Each comm-history row contributes a sample only when its
+  `LastSeenAt` has advanced past the worker's previous-cycle
+  watermark — without this gate, the default `Window=30d`/`Interval=4h`
+  pairing would re-sample the same unchanged `LastSeenAt` up to ~180
+  times for a single underlying message, saturating the 168-entry FIFO
+  with one pair's timestamp and destroying the histogram's
+  representativeness. The watermark is **per-tenant**: a tenant whose
+  `Communications.ListByTenant` fails mid-cycle keeps its previous
+  watermark, so the next cycle still samples every in-window row
+  that has not yet been recorded for that tenant. A peer tenant's
+  transient outage cannot cost a tenant histogram samples it would
+  otherwise have collected.
 - Device types
-- Average messages per week
+- Average messages per week (derived from `count_30d / 4.0`)
 
 Stored in `user_behavioral_baselines` via `UserBehavioralBaselineRepository`.
 The timing anomaly checker (`relationship/timing.go`) compares inbound
 message timing against these baselines to detect send-time deviations.
+
+After accumulating the new distribution, the worker computes the
+**modal (most-frequent) hour** and mirrors it onto
+`communication_histories.typical_hour` via the same optimistic-concurrency
+CAS write that updates the relationship label. The Tier 0 ATO heuristic's
+`checkTimingAnomaly()` reads this column on the hot path — tracking the
+modal hour (rather than just the last-seen hour) gives the heuristic a
+representative baseline that does not flap with every off-hour outlier.
+The `typical_hour` column carries the migration-0007 default `-1`
+("no baseline yet") until the worker has at least one in-range sample
+to evict it. The heuristic guards on `TypicalSendHour < 0 ||
+TypicalSendHour >= 24` rather than the weaker `== 0` check, so the
+sentinel value cannot leak through the signal builder and produce a
+spurious `hourDistance(-1, currentHour)` reading on internal
+messages whose pairs the worker has not yet sampled.
 
 #### Org Graph Persistence
 
@@ -673,7 +704,7 @@ leader via a Redis lock so only one replica runs them at a time.
 - **Tool**: `golang-migrate/migrate` v4 (PostgreSQL driver).
 - **CLI**: `cmd/sn360-es-migrate/` wraps the library so deployments can run migrations as a Kubernetes Job (template included in the Helm chart).
 - **Make targets**: `make migrate-up`, `make migrate-down`, `make migrate-check` (validates SQL syntax in CI).
-- **Schema**: `migrations/0001_init.{up,down}.sql` provisions the base 14 tables (tenants, users, groups, group_memberships, labels, score_engine, email_classifications, vendors, evaluation_results, communication_histories, campaigns, simulation_results, escalation_tickets, audit_logs). Subsequent migrations (0002–0012) add five more tables — feedback_events (0002), oauth_tokens (0005), sync_checkpoints (0008), user_behavioral_baselines (0009), org_graphs (0010) — and seven `ALTER` migrations evolve existing tables (escalation resolution code, communication-history sender domain / timing, sensitivity confidence + admin review, tenant FK cascade, expanded sensitivity tiers). Nineteen tables total at HEAD.
+- **Schema**: `migrations/0001_init.{up,down}.sql` provisions the base 14 tables (tenants, users, groups, group_memberships, labels, score_engine, email_classifications, vendors, evaluation_results, communication_histories, campaigns, simulation_results, escalation_tickets, audit_logs). Subsequent migrations (0002–0014) add five more tables — feedback_events (0002), oauth_tokens (0005), sync_checkpoints (0008), user_behavioral_baselines (0009), org_graphs (0010) — and `ALTER` migrations evolve existing tables (escalation resolution code, communication-history sender domain / timing, sensitivity confidence + admin review, tenant FK cascade, expanded sensitivity tiers, Tier 1 score-engine thresholds, and the score-engine default-weight realignment in 0014 that aligns `weight_ai`/`weight_rspamd`/`weight_attachments`/`weight_links` defaults with the onboarding agent's 60/10/15/15 seed). Nineteen tables total at HEAD.
 
 ### 6.5 Deployment Artifacts
 

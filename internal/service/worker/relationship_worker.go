@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"log/slog"
 	"strings"
@@ -62,8 +63,20 @@ type RelationshipJobConfig struct {
 	// send-hour distributions from CommunicationHistory rows and
 	// upserts them during each aggregation cycle.
 	Baselines repository.UserBehavioralBaselineRepository
-	// Hasher produces PII-safe hashes for the baseline keys.
-	// Required when Baselines is non-nil.
+	// Hasher is a configuration-level parity guard: the worker
+	// writes per-(tenant, recipient_hash, sender_domain_hash)
+	// rows into BehavioralBaselines using the already-hashed
+	// columns on CommunicationHistory, so the function itself is
+	// never invoked inside Run. It is required to be non-nil only
+	// to ensure the deployment has wired the same PII hasher that
+	// (a) the ingestion pipeline used to produce h.RecipientHash
+	// and h.SenderDomainHash, and (b) the read side (e.g. the
+	// Tier 0 ATO heuristic looking up a baseline by hashed
+	// recipient) will use to query these rows back. Without that
+	// guarantee the worker's writes would land in keys nothing
+	// can ever look up; the guard surfaces the misconfiguration
+	// at job-construction time instead of producing silently
+	// orphaned rows. Required when Baselines is non-nil.
 	Hasher func(tenantID, input string) ([]byte, error)
 }
 
@@ -115,6 +128,52 @@ type RelationshipJob struct {
 	maxPerTenant int
 	logger       *slog.Logger
 	classifier   *relationship.Classifier
+
+	// lastCycleStartedAt is a per-tenant map of "the wall-clock
+	// start time of the last cycle that completed processing for
+	// this tenant." The baseline-accumulation path uses the
+	// per-tenant value as the lower bound for "this row has
+	// genuinely new activity since we last sampled it": a
+	// comm-history row whose LastSeenAt has not advanced past this
+	// watermark must already have been sampled by an earlier
+	// cycle, so re-appending would inflate the histogram with a
+	// duplicate of an existing event. Without the watermark, the
+	// default Window=30d / Interval=4h pairing would re-sample the
+	// same LastSeenAt up to ~180 times for a single underlying
+	// message — saturating the 168-sample FIFO cap with one pair's
+	// stale timestamp and destroying the histogram's ability to
+	// represent the actual message-time distribution that
+	// relationship.BaselineAnomalyCheck consumes.
+	//
+	// Per-tenant rather than global: if tenant A succeeds but
+	// tenant B's ListByTenant fails partway through a cycle, only
+	// A's watermark advances. B's stays at its previous value so
+	// the next cycle re-evaluates B's rows from the last
+	// successful watermark — no histogram samples are lost just
+	// because a peer tenant failed.
+	//
+	// Process-local rather than persisted: a worker restart resets
+	// the map to empty, which means the first post-restart cycle
+	// re-samples every in-window row once per tenant. That bounded
+	// double-count (one extra sample per row per restart) is
+	// preferable to the chronic over-sampling described above, and
+	// it remains capped by the 168-entry FIFO. Persisting the
+	// watermark in a config table would harden this further but is
+	// out of scope for the baseline-accumulation fix.
+	//
+	// Lifecycle: at the bottom of each Run we prune entries whose
+	// tenant ID no longer appears in the active Tenants.List set,
+	// so deleted/deactivated tenants do not accumulate zombie
+	// watermarks across years of cycles. The pruning is keyed on
+	// the canonical Tenants.List output (the same source the row
+	// loop iterates), so a transient failure in a peer tenant's
+	// ListByTenant call (handled above) does NOT cause that tenant
+	// to be pruned — the tenant is still present in `tenants`, only
+	// its ListByTenant returned an error.
+	//
+	// Concurrency: Run is invoked serially by the scheduler so the
+	// map needs no mutex; one writer, no concurrent readers.
+	lastCycleStartedAt map[string]time.Time
 }
 
 // NewRelationshipJob constructs the job and applies defaults.
@@ -144,12 +203,13 @@ func NewRelationshipJob(cfg RelationshipJobConfig) (*RelationshipJob, error) {
 		logger = slog.Default()
 	}
 	return &RelationshipJob{
-		cfg:          cfg,
-		interval:     cfg.Interval,
-		window:       window,
-		maxPerTenant: maxPerTenant,
-		logger:       logger,
-		classifier:   relationship.NewClassifier(relationship.ClassifyConfig{}),
+		cfg:                cfg,
+		interval:           cfg.Interval,
+		window:             window,
+		maxPerTenant:       maxPerTenant,
+		logger:             logger,
+		classifier:         relationship.NewClassifier(relationship.ClassifyConfig{}),
+		lastCycleStartedAt: map[string]time.Time{},
 	}, nil
 }
 
@@ -185,8 +245,32 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 			if firstErr == nil {
 				firstErr = err
 			}
+			// Watermark NOT advanced: this tenant's lastCycleStartedAt
+			// keeps its previous value so the next cycle re-evaluates
+			// rows from the last point we successfully sampled. A
+			// partial outage of one tenant must not cost histogram
+			// samples on the recovery cycle.
 			continue
 		}
+		// Snapshot this tenant's previous-cycle watermark before
+		// the row loop. The row loop uses it as the "genuinely new
+		// activity since last cycle" gate; we advance the stored
+		// watermark to `now` only AFTER the row loop completes so
+		// a ctx cancellation mid-loop (handled inside the loop)
+		// leaves the watermark untouched and the next cycle picks
+		// up where this one left off. The zero value on the very
+		// first per-tenant cycle (map miss) lets every in-window
+		// row seed the histogram with one bootstrap sample.
+		prevCycleStartedAt := j.lastCycleStartedAt[t.ID]
+		// Per-tenant, per-cycle baseline cache: many communication
+		// history rows share the same (recipient, sender_domain)
+		// baseline. The cache collapses N rows-per-baseline into a
+		// single Baselines.Get for the whole cycle; subsequent
+		// rows pick up the running-aggregate state that
+		// persistBaselineUpdate writes back into the cache. The
+		// cache is created fresh per tenant so cross-tenant state
+		// can never leak.
+		cache := make(baselineCache)
 		for i := range rows {
 			h := rows[i]
 
@@ -234,6 +318,69 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 				}
 			}
 
+			// Behavioral baseline accumulation: append the current
+			// LastSeenAt hour to the existing per-(user,
+			// sender_domain) send-hour distribution rather than
+			// overwriting it with a single-element slice. The
+			// accumulated histogram is what
+			// relationship.BaselineAnomalyCheck consumes (see
+			// internal/service/relationship/timing.go) — feeding it
+			// a length-1 slice every cycle would collapse the
+			// distribution and make the histogram useless.
+			//
+			// The modal (most-frequent) hour computed from the
+			// updated distribution is then mirrored onto
+			// h.TypicalHour so the worker's CAS write below
+			// propagates it to communication_histories.typical_hour
+			// for the Tier 0 ATO heuristic to read on the hot path.
+			//
+			// Important: the baseline preparation is split from its
+			// persistence. prepareBaselineUpdate is read-only — it
+			// fetches the prior baseline, appends sendHour to the
+			// in-memory slice, and returns the prepared struct
+			// without writing it back. The actual Upsert happens
+			// only AFTER the canonical communication-history CAS
+			// succeeds (see persistBaselineUpdate below), so a CAS
+			// race rejection cannot leave a phantom sample in the
+			// histogram that a subsequent cycle would observe and
+			// double-count.
+			modalHour := -1
+			var preparedBaseline *repository.UserBehavioralBaseline
+			// Only feed the baseline when this row genuinely had
+			// new activity since the previous cycle. If LastSeenAt
+			// has not advanced past prevCycleStartedAt the row was
+			// already sampled in an earlier cycle and re-appending
+			// the same hour would double-count the same underlying
+			// message — which, with Window≫Interval, would saturate
+			// the 168-sample FIFO cap with a single pair's timestamp
+			// and destroy the histogram's representativeness.
+			//
+			// On the very first Run after process start
+			// prevCycleStartedAt is the zero value, so every
+			// in-window row passes this gate and seeds the
+			// histogram with one bootstrap sample. The modal-hour
+			// mirror to h.TypicalHour and the CAS write below still
+			// run on every row regardless — only the histogram
+			// append is gated.
+			if j.cfg.Baselines != nil && j.cfg.Hasher != nil &&
+				len(h.RecipientHash) > 0 && len(h.SenderDomainHash) > 0 &&
+				h.LastSeenAt.After(prevCycleStartedAt) {
+				sendHour := h.LastSeenAt.UTC().Hour()
+				accumulated, bl := j.prepareBaselineUpdate(ctx, t.ID, h, sendHour, cache)
+				if len(accumulated) > 0 {
+					modalHour = modalHourOf(accumulated)
+				}
+				preparedBaseline = bl
+			}
+			if modalHour >= 0 && modalHour < 24 {
+				h.TypicalHour = modalHour
+			} else if h.TypicalHour < 0 || h.TypicalHour >= 24 {
+				// Carry forward an existing valid value; otherwise
+				// fall back to the sentinel so the repository's
+				// CASE guard leaves the column untouched.
+				h.TypicalHour = repository.TypicalHourUnset
+			}
+
 			// Capture the snapshot's UpdatedAt as the CAS guard so
 			// the write only lands if ingestion has not produced a
 			// fresher version of this row between ListByTenant
@@ -262,30 +409,54 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 			}
 			if !updated {
 				raceSkipped++
+				// Drop preparedBaseline on the floor — its append
+				// was drawn from a stale snapshot, so persisting it
+				// would pollute the histogram with a phantom
+				// sample. The next cycle will re-read the row and
+				// re-prepare against the fresher LastSeenAt.
 				continue
 			}
+			// CAS landed — now safe to persist the prepared
+			// baseline. A best-effort Upsert: persistence failure is
+			// logged and the cycle still counts as processed, since
+			// the canonical communication-history write succeeded.
+			// The per-cycle cache is updated through persistBaselineUpdate
+			// so subsequent rows for the same (recipient, sender_domain)
+			// pair see the running aggregate.
+			j.persistBaselineUpdate(ctx, t.ID, preparedBaseline, cache)
 			processed++
-
-			// Populate per-user behavioral baselines when the
-			// baseline repository is wired.
-			if j.cfg.Baselines != nil && j.cfg.Hasher != nil && len(h.RecipientHash) > 0 && len(h.SenderDomainHash) > 0 {
-				sendHour := h.LastSeenAt.Hour()
-				var avgPerWeek float64
-				if h.Count30d > 0 {
-					avgPerWeek = float64(h.Count30d) / 4.0
-				}
-				bl := &repository.UserBehavioralBaseline{
-					TenantID:           t.ID,
-					UserEmailHash:      h.RecipientHash,
-					SenderDomainHash:   h.SenderDomainHash,
-					TypicalSendHours:   []int{sendHour},
-					AvgMessagesPerWeek: avgPerWeek,
-					LastSeenAt:         h.LastSeenAt,
-				}
-				if berr := j.cfg.Baselines.Upsert(ctx, bl); berr != nil {
-					j.logger.Warn("worker.relationship: baseline upsert failed",
-						slog.String("tenant_id", t.ID), slog.Any("error", berr))
-				}
+		}
+		// Tenant row loop reached its natural end (i.e. did not bail
+		// out via ListByTenant failure above). Advance this tenant's
+		// baseline-sampling watermark to `now` so the next cycle's
+		// gate treats only rows whose LastSeenAt has moved past `now`
+		// as genuinely new activity. Per-row failures inside the loop
+		// (CAS race, hasher error, persistBaselineUpdate error) are
+		// not tenant-level failures — they are individually logged
+		// and counted but do not invalidate the cycle's watermark
+		// advance.
+		j.lastCycleStartedAt[t.ID] = now
+	}
+	// Prune watermark entries for tenants that no longer appear in
+	// the canonical Tenants.List output. Deleted/deactivated
+	// tenants would otherwise leave their entries in
+	// lastCycleStartedAt indefinitely; in a long-running worker
+	// processing tenant churn over years that map would grow
+	// without bound. We use the same `tenants` slice the row loop
+	// iterated above — a transient ListByTenant failure on a peer
+	// tenant kept that tenant in the slice (the per-row error path
+	// above does `continue`, not `delete`), so the prune does NOT
+	// drop tenants whose data plane is briefly unreachable.
+	pruned := 0
+	if len(j.lastCycleStartedAt) > 0 {
+		activeTenantIDs := make(map[string]struct{}, len(tenants))
+		for _, t := range tenants {
+			activeTenantIDs[t.ID] = struct{}{}
+		}
+		for tenantID := range j.lastCycleStartedAt {
+			if _, ok := activeTenantIDs[tenantID]; !ok {
+				delete(j.lastCycleStartedAt, tenantID)
+				pruned++
 			}
 		}
 	}
@@ -295,8 +466,258 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 		slog.Int("decayed_count_7d", decayed7d),
 		slog.Int("reclassified", reclassified),
 		slog.Int("race_skipped", raceSkipped),
-		slog.Int("corrupt_skipped", corruptSkipped))
+		slog.Int("corrupt_skipped", corruptSkipped),
+		slog.Int("watermarks_pruned", pruned))
 	return firstErr
+}
+
+// maxBaselineSendHours caps the per-(user, sender_domain)
+// typical_send_hours slice so the column does not grow unbounded
+// across years of cycles. 168 entries = one full week of hourly
+// samples, which is enough resolution for the
+// relationship.BaselineAnomalyCheck histogram to detect off-window
+// sends without consuming a megabyte per pair in the worst case.
+const maxBaselineSendHours = 168
+
+// baselineCache is a per-tenant, per-cycle memoisation map for
+// UserBehavioralBaseline lookups. A communication_histories scan
+// can return many rows that share the same (recipient,
+// sender_domain) pair — e.g. ten distinct senders within
+// acme.example all writing to charlie@us.example produce ten rows
+// keyed by (sender_hash, recipient_hash) but they all roll up to
+// the same baseline keyed by (user_email_hash, sender_domain_hash).
+// Without caching, prepareBaselineUpdate would re-issue the same
+// Baselines.Get against Postgres N times per cycle; with caching,
+// each unique baseline is fetched exactly once and the prepared
+// hour is folded into the cached entry by persistBaselineUpdate so
+// subsequent rows in the same cycle see the cumulative state.
+//
+// The cache is scoped to one tenant's iteration of the Run loop
+// and discarded at the end of that tenant's pass — it is not a
+// long-lived cache, just per-cycle memoisation. A nil value in the
+// map encodes a negative result ("ErrNotFound was returned on
+// first lookup") so subsequent rows for the same key skip the DB
+// hit entirely.
+type baselineCache map[string]*repository.UserBehavioralBaseline
+
+// baselineCacheKey encodes the two hash byte-slices into a single
+// string key that is unambiguously decomposable back into the
+// original pair. The encoding is length-prefixed (4-byte
+// big-endian length || bytes, twice) rather than
+// separator-delimited:
+//
+// Today both hashes are fixed-width BLAKE2 outputs and a simple
+// NUL separator would not collide, but "both inputs are always
+// fixed-width" is a convention enforced nowhere in the type
+// system — a future change to a variable-width hash (or to a
+// composite key that includes a hashing salt or scheme identifier)
+// that contained a literal NUL byte would silently collide under
+// the old `recipient + "\x00" + domain` scheme. With a length
+// prefix the encoding is injective by construction: the byte at
+// each offset is decoded as part of either a length header or its
+// declared payload, so no two distinct (recipientHash,
+// senderDomainHash) pairs can ever produce the same key string
+// regardless of how either hash's contents or width evolve. The
+// negligible per-row cost (8 bytes of length headers + one byte
+// allocation) buys collision-resistance that is correct by
+// construction rather than by convention.
+func baselineCacheKey(recipientHash, senderDomainHash []byte) string {
+	buf := make([]byte, 0, 4+len(recipientHash)+4+len(senderDomainHash))
+	var lenBuf [4]byte
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(recipientHash)))
+	buf = append(buf, lenBuf[:]...)
+	buf = append(buf, recipientHash...)
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(senderDomainHash)))
+	buf = append(buf, lenBuf[:]...)
+	buf = append(buf, senderDomainHash...)
+	return string(buf)
+}
+
+// prepareBaselineUpdate computes the accumulated send-hour
+// distribution for this (tenant, user, sender_domain) tuple
+// without writing it back. The returned baseline struct is ready
+// for Upsert via persistBaselineUpdate once the canonical
+// communication-history CAS has succeeded; deferring the write
+// avoids polluting the histogram with phantom samples drawn from
+// snapshots that ultimately lose a CAS race against ingestion.
+//
+// The function consults the per-cycle `cache` first to avoid the
+// N+1 Get pattern for rows that share a baseline key. On a miss,
+// it loads the prior baseline (if any), records the outcome in
+// the cache (including the negative ErrNotFound case), appends
+// sendHour to the TypicalSendHours slice (FIFO-capped at
+// maxBaselineSendHours), recomputes AvgMessagesPerWeek from the
+// snapshot's 30-day count, and returns:
+//   - the in-memory accumulated hours slice (post-append,
+//     post-trim), used by the caller to compute the modal hour;
+//   - the prepared *repository.UserBehavioralBaseline ready for
+//     Upsert, or nil if there is nothing meaningful to persist.
+//
+// A transient baseline-Get failure (other than ErrNotFound) is
+// logged and the cache is NOT poisoned with a negative entry —
+// the next row whose key collides will retry the Get against a
+// healthy DB. The current row is skipped to preserve the existing
+// histogram.
+func (j *RelationshipJob) prepareBaselineUpdate(
+	ctx context.Context,
+	tenantID string,
+	h repository.CommunicationHistory,
+	sendHour int,
+	cache baselineCache,
+) ([]int, *repository.UserBehavioralBaseline) {
+	if sendHour < 0 || sendHour >= 24 {
+		return nil, nil
+	}
+	if j.cfg.Baselines == nil || j.cfg.Hasher == nil {
+		return nil, nil
+	}
+	if len(h.RecipientHash) == 0 || len(h.SenderDomainHash) == 0 {
+		return nil, nil
+	}
+
+	// Look up (or load) the prior baseline through the per-cycle
+	// cache. A cache hit returns the value as-is (nil means
+	// "ErrNotFound was cached on first encounter"); a cache miss
+	// falls through to Baselines.Get and records the result.
+	//
+	// On a transient Get failure (DB timeout, connection blip) we
+	// return (nil, nil) and leave the cache empty for this key —
+	// subsequent rows that share the key will retry the Get rather
+	// than silently inheriting the failure.
+	key := baselineCacheKey(h.RecipientHash, h.SenderDomainHash)
+	var prev *repository.UserBehavioralBaseline
+	if cached, ok := cache[key]; ok {
+		prev = cached
+	} else {
+		loaded, gerr := j.cfg.Baselines.Get(ctx, tenantID, h.RecipientHash, h.SenderDomainHash)
+		switch {
+		case gerr == nil:
+			prev = loaded
+			cache[key] = loaded
+		case errors.Is(gerr, repository.ErrNotFound):
+			prev = nil
+			cache[key] = nil
+		default:
+			j.logger.Warn("worker.relationship: baseline get failed; skipping cycle to preserve histogram",
+				slog.String("tenant_id", tenantID), slog.Any("error", gerr))
+			return nil, nil
+		}
+	}
+
+	var existingHours []int
+	if prev != nil {
+		existingHours = append(existingHours, prev.TypicalSendHours...)
+	}
+	existingHours = append(existingHours, sendHour)
+	// FIFO trim: drop the oldest samples once the slice exceeds
+	// the cap. The histogram is order-insensitive (it just counts
+	// per-hour occurrences) so any eviction policy works; FIFO
+	// is the simplest and keeps the most recent week of behaviour
+	// in the window.
+	if len(existingHours) > maxBaselineSendHours {
+		existingHours = existingHours[len(existingHours)-maxBaselineSendHours:]
+	}
+	updated := existingHours
+
+	var avgPerWeek float64
+	if h.Count30d > 0 {
+		avgPerWeek = float64(h.Count30d) / 4.0
+	}
+
+	bl := &repository.UserBehavioralBaseline{
+		TenantID:           tenantID,
+		UserEmailHash:      h.RecipientHash,
+		SenderDomainHash:   h.SenderDomainHash,
+		TypicalSendHours:   updated,
+		AvgMessagesPerWeek: avgPerWeek,
+		LastSeenAt:         h.LastSeenAt,
+	}
+	if prev != nil {
+		// Preserve the row id and device-type distribution that
+		// upstream callers (future: client fingerprint worker) may
+		// have populated. Upsert is keyed on (tenant_id,
+		// user_email_hash, sender_domain_hash) so the id is
+		// optional, but carrying it forward keeps the row stable
+		// across cycles for log-tailing.
+		bl.ID = prev.ID
+		bl.TypicalDeviceTypes = prev.TypicalDeviceTypes
+		bl.CreatedAt = prev.CreatedAt
+	}
+	return updated, bl
+}
+
+// persistBaselineUpdate writes a prepared baseline back to the
+// repository. Called by Run only after the canonical
+// communication-history CAS write has succeeded, so a CAS race
+// rejection never produces a phantom sample in the histogram.
+// Persistence failures are logged and swallowed: the canonical
+// CAS has already committed and the next worker cycle will re-
+// derive the baseline from scratch.
+//
+// On a successful Upsert the per-cycle cache entry is replaced
+// with the just-persisted baseline so subsequent rows for the
+// same (recipient, sender_domain) tuple in the same cycle see the
+// cumulative accumulated hours instead of a stale start-of-cycle
+// snapshot. Without this write-through, multiple rows sharing a
+// key would each see only the original hours plus their own
+// sample, losing the running aggregation across the cycle.
+func (j *RelationshipJob) persistBaselineUpdate(
+	ctx context.Context,
+	tenantID string,
+	bl *repository.UserBehavioralBaseline,
+	cache baselineCache,
+) {
+	if bl == nil || j.cfg.Baselines == nil {
+		return
+	}
+	if berr := j.cfg.Baselines.Upsert(ctx, bl); berr != nil {
+		j.logger.Warn("worker.relationship: baseline upsert failed",
+			slog.String("tenant_id", tenantID), slog.Any("error", berr))
+		return
+	}
+	if cache != nil {
+		cache[baselineCacheKey(bl.UserEmailHash, bl.SenderDomainHash)] = bl
+	}
+}
+
+// modalHourOf returns the most-frequent hour-of-day from hours.
+// Out-of-range entries are skipped. Returns -1 when no in-range
+// samples are present so the caller's CASE-guarded write leaves
+// communication_histories.typical_hour at its previous value.
+//
+// Ties are broken by lowest hour, which is deterministic and lets
+// tests assert exact values without depending on map iteration
+// order.
+func modalHourOf(hours []int) int {
+	if len(hours) == 0 {
+		return -1
+	}
+	var counts [24]int
+	total := 0
+	for _, h := range hours {
+		if h < 0 || h >= 24 {
+			continue
+		}
+		counts[h]++
+		total++
+	}
+	if total == 0 {
+		return -1
+	}
+	// best := 0 is safe because the `total > 0` early-return
+	// above guarantees at least one counts[h] >= 1 exists, so the
+	// `c > best` comparison admits the first non-zero bucket on
+	// strict-greater semantics. Initialising to 0 instead of -1
+	// avoids the intermediate "mode = 0, best = 0" state that
+	// briefly appears when counts[0] == 0, which reads as a bug
+	// on first inspection. The result is identical.
+	mode, best := -1, 0
+	for h, c := range counts {
+		if c > best {
+			mode, best = h, c
+		}
+	}
+	return mode
 }
 
 // VendorJobConfig wires the vendor-discovery worker.

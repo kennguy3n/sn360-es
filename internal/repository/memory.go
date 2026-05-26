@@ -562,17 +562,98 @@ func commKey(tenantID string, sender, recipient []byte) string {
 }
 
 func (m *memoryCommHistory) Upsert(_ context.Context, h *CommunicationHistory) error {
+	// h.ID generation is the one mutation we deliberately mirror
+	// from the Postgres backend: pgCommHistory.Upsert also does
+	// `h.ID = uuid.NewString()` when the caller passes the empty
+	// string, so the two backends agree that ID-assignment-on-
+	// missing is part of the Upsert contract. Every other field
+	// the column-preservation logic below cares about is mutated
+	// only on the local row copy, never on the caller's struct.
 	if h.ID == "" {
 		h.ID = uuid.NewString()
 	}
 	now := time.Now().UTC()
-	if h.FirstSeenAt.IsZero() {
-		h.FirstSeenAt = now
-	}
-	h.UpdatedAt = now
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.rows[commKey(h.TenantID, h.SenderHash, h.RecipientHash)] = *h
+	key := commKey(h.TenantID, h.SenderHash, h.RecipientHash)
+	// Upsert is the ingestion-time write path. The persisted row
+	// is built from a *local copy* of h so the caller's struct is
+	// not mutated by the column-preservation logic below — this
+	// matches the Postgres implementation, which writes via SQL
+	// and leaves the Go struct untouched for every column except
+	// the one ID mutation above. In particular FirstSeenAt and
+	// UpdatedAt are now set on the row copy, not on *h, so a
+	// caller inspecting `h.UpdatedAt` after Upsert sees the same
+	// thing they passed in (typically the Go zero value), exactly
+	// as they would with the pgCommHistory backend whose SQL uses
+	// `updated_at = NOW()` and never reflects the post-write
+	// timestamp back into the Go struct.
+	//
+	// On the existing-row branch the persisted row preserves the
+	// three columns the Postgres ON CONFLICT clause deliberately
+	// leaves out of its DO UPDATE SET:
+	//
+	//   - id            : the primary key is row-stable; Postgres
+	//                     never re-assigns it on conflict. Memory
+	//                     mirrors that, even though the caller's
+	//                     h.ID was set to a fresh UUID at the top
+	//                     of Upsert (same wasted-UUID quirk both
+	//                     backends share for the new-row case).
+	//   - first_seen_at : the rolling window's lower bound is
+	//                     monotonic — once observed, the timestamp
+	//                     of the first sighting must never advance
+	//                     backwards. The Tier 0 FirstTimeExternal
+	//                     heuristic depends on this stability.
+	//   - typical_hour  : owned by UpdateCountsIfFresh (the
+	//                     relationship-worker CAS path); Upsert
+	//                     never overwrites the worker-computed
+	//                     modal hour. This eliminates the Go
+	//                     zero-value trap whereby h.TypicalHour
+	//                     left at the int zero value (0 ==
+	//                     midnight UTC) would silently clobber the
+	//                     worker's value.
+	row := *h
+	if cur, ok := m.rows[key]; ok {
+		row.ID = cur.ID
+		row.FirstSeenAt = cur.FirstSeenAt
+		row.TypicalHour = cur.TypicalHour
+	} else {
+		row.TypicalHour = TypicalHourUnset
+		// New-row: mirror the Postgres column default
+		// `first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
+		// (migrations/0001_init.up.sql:216) when the caller
+		// omitted it. nullableTime() in pgCommHistory.Upsert
+		// passes nil to SQL for a zero FirstSeenAt, which lets
+		// the column default fire; we do the equivalent here on
+		// the row copy so the persisted state matches without
+		// touching the caller's struct.
+		if row.FirstSeenAt.IsZero() {
+			row.FirstSeenAt = now
+		}
+	}
+	// Mirror Postgres `updated_at = NOW()` SQL semantics on the
+	// row copy so the persisted state has a fresh stamp but the
+	// caller's *h.UpdatedAt is untouched.
+	row.UpdatedAt = now
+	m.rows[key] = row
+	return nil
+}
+
+// directSetTypicalHourForTest bypasses the Upsert contract to seed a
+// worker-computed modal hour into the in-memory row. It exists
+// solely so the memory_test suite can lock in the
+// Upsert-does-not-write-typical_hour contract without spinning up a
+// full RelationshipJob. NOT for production use.
+func (m *memoryCommHistory) directSetTypicalHourForTest(tenantID string, senderHash, recipientHash []byte, hour int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := commKey(tenantID, senderHash, recipientHash)
+	cur, ok := m.rows[key]
+	if !ok {
+		return ErrNotFound
+	}
+	cur.TypicalHour = hour
+	m.rows[key] = cur
 	return nil
 }
 
@@ -638,11 +719,24 @@ func (m *memoryCommHistory) UpdateCountsIfFresh(_ context.Context, h *Communicat
 	}
 	cur.Count7d = h.Count7d
 	cur.Relationship = h.Relationship
+	// typical_hour: only overwrite when the worker has computed a
+	// valid 0..23 modal hour. The sentinel -1 ("no baseline yet")
+	// or any out-of-range value preserves the existing column
+	// value — same contract as the Postgres implementation.
+	if h.TypicalHour >= 0 && h.TypicalHour < 24 {
+		cur.TypicalHour = h.TypicalHour
+	}
 	cur.UpdatedAt = time.Now().UTC()
 	m.rows[key] = cur
-	// Reflect the write back to the caller so callers that inspect
-	// `h.UpdatedAt` after the CAS see the fresh stamp.
-	h.UpdatedAt = cur.UpdatedAt
+	// UpdateCountsIfFresh contract: callers MUST NOT inspect *h
+	// after a successful CAS; the canonical post-write row state
+	// lives in the repository. The Postgres implementation uses
+	// ExecContext (no RETURNING), so its caller sees no reflection
+	// of the fresh UpdatedAt or merged TypicalHour either. Keeping
+	// the in-memory implementation deliberately non-reflective
+	// avoids a behaviour divergence that would otherwise hide
+	// bugs in tests (memory) that production (Postgres) would
+	// surface.
 	return true, nil
 }
 

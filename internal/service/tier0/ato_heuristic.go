@@ -118,14 +118,33 @@ func (h *ATOHeuristic) Check(req dto.EvaluateRequest, signals dto.RiskSignals) A
 // checkTimingAnomaly inspects whether the send time is anomalous
 // relative to the sender's historical pattern. We use pre-computed
 // signals: TypicalSendHour and CurrentHourUTC.
+//
+// TypicalSendHour is *int by design (see dto.RiskSignals): nil
+// means "no baseline yet," and a non-nil pointer carries the real
+// modal hour computed by the relationship worker. The pointer
+// type means the heuristic does not have to guess whether the
+// producer emitted a sentinel; the absence of a baseline is
+// represented physically by the absence of a value. We still
+// defensively check for out-of-[0,24) inside a non-nil pointer in
+// case a producer bug ever populates the field with a stale
+// `repository.TypicalHourUnset` (-1) value or some other
+// out-of-range integer — the heuristic degrades to a no-op in
+// that case rather than feeding garbage into hourDistance.
 func (h *ATOHeuristic) checkTimingAnomaly(signals dto.RiskSignals, reasons *[]string) float64 {
-	if signals.TypicalSendHour == 0 && signals.CommunicationFrequency == 0 {
+	if signals.TypicalSendHour == nil {
 		return 0 // No baseline data available.
+	}
+	typical := *signals.TypicalSendHour
+	if typical < 0 || typical >= 24 {
+		return 0 // Producer bug: out-of-range hour treated as no baseline.
+	}
+	if signals.CommunicationFrequency == 0 {
+		return 0 // No history yet.
 	}
 	if signals.CommunicationFrequency < h.cfg.MinTimingHistorySize {
 		return 0 // Insufficient history.
 	}
-	hourDist := hourDistance(signals.CurrentHourUTC, signals.TypicalSendHour)
+	hourDist := hourDistance(signals.CurrentHourUTC, typical)
 	if hourDist >= 8 {
 		*reasons = append(*reasons, "timing_anomaly")
 		return 0.35

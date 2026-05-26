@@ -137,6 +137,230 @@ func TestMemoryCommHistory(t *testing.T) {
 	}
 }
 
+// TestMemoryCommHistory_Upsert_DoesNotWriteTypicalHour locks in the
+// Upsert contract: the ingestion-time write path MUST NOT propagate
+// the caller's h.TypicalHour onto the persisted row, regardless of
+// whether the caller passes the Go zero value 0 (midnight UTC), a
+// valid in-range hour, or a sentinel. The worker's
+// UpdateCountsIfFresh path is the sole writer of typical_hour, so
+// ingestion cannot accidentally clobber the worker-computed modal
+// hour even when struct literals omit the field. The Postgres
+// implementation enforces this by excluding typical_hour from the
+// Upsert SQL entirely; this test exercises the memory mirror.
+func TestMemoryCommHistory_Upsert_DoesNotWriteTypicalHour(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+
+	// First insert: caller passes Go zero (0 == midnight UTC) for
+	// TypicalHour. Without the contract, this would persist as 0
+	// and the Tier 0 ATO heuristic would treat 03:00 sends as 3h
+	// off the "baseline" midnight. With the contract, the column
+	// settles at TypicalHourUnset (-1) per migration 0007 default.
+	first := &CommunicationHistory{
+		TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), Count7d: 3, Relationship: "partner",
+		// TypicalHour intentionally left at Go zero (0).
+	}
+	if err := r.CommunicationHistories.Upsert(ctx, first); err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	// The caller's struct must not be mutated by Upsert: this is
+	// the contract memory shares with Postgres (which only writes
+	// SQL, never the Go struct), so tests inspecting the pointer
+	// after Upsert observe identical behaviour across backends.
+	if first.TypicalHour != 0 {
+		t.Fatalf("first upsert mutated caller's TypicalHour: got %d, want 0 (unchanged Go zero)",
+			first.TypicalHour)
+	}
+	got, err := r.CommunicationHistories.Get(ctx, "t-1", []byte("a"), []byte("b"))
+	if err != nil {
+		t.Fatalf("get after first upsert: %v", err)
+	}
+	if got.TypicalHour != TypicalHourUnset {
+		t.Fatalf("first insert: TypicalHour = %d, want TypicalHourUnset (%d)",
+			got.TypicalHour, TypicalHourUnset)
+	}
+
+	// Simulate the worker writing a real modal hour by mutating
+	// the in-memory row directly (this is what UpdateCountsIfFresh
+	// effectively does after a CAS landing).
+	if err := r.CommunicationHistories.(*memoryCommHistory).directSetTypicalHourForTest("t-1", []byte("a"), []byte("b"), 14); err != nil {
+		t.Fatalf("seed worker-computed modal hour: %v", err)
+	}
+
+	// Second Upsert: caller again passes the Go zero. Without the
+	// contract, this would silently rewind typical_hour from 14
+	// (worker-computed) to 0 (midnight). With the contract, 14 is
+	// preserved.
+	second := &CommunicationHistory{
+		TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), Count7d: 7, Relationship: "partner",
+		// TypicalHour intentionally left at Go zero (0).
+	}
+	if err := r.CommunicationHistories.Upsert(ctx, second); err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	got, err = r.CommunicationHistories.Get(ctx, "t-1", []byte("a"), []byte("b"))
+	if err != nil {
+		t.Fatalf("get after second upsert: %v", err)
+	}
+	if got.TypicalHour != 14 {
+		t.Fatalf("second upsert clobbered worker value: TypicalHour = %d, want 14",
+			got.TypicalHour)
+	}
+	if got.Count7d != 7 {
+		t.Fatalf("second upsert lost Count7d: got %d, want 7", got.Count7d)
+	}
+
+	// Third Upsert: even a valid in-range TypicalHour from the
+	// ingestion-time path MUST NOT overwrite the worker's value.
+	third := &CommunicationHistory{
+		TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), Count7d: 9, Relationship: "partner",
+		TypicalHour: 5,
+	}
+	if err := r.CommunicationHistories.Upsert(ctx, third); err != nil {
+		t.Fatalf("third upsert: %v", err)
+	}
+	got, err = r.CommunicationHistories.Get(ctx, "t-1", []byte("a"), []byte("b"))
+	if err != nil {
+		t.Fatalf("get after third upsert: %v", err)
+	}
+	if got.TypicalHour != 14 {
+		t.Fatalf("third upsert overwrote worker value with caller-supplied 5: got %d, want 14",
+			got.TypicalHour)
+	}
+}
+
+// TestMemoryCommHistory_Upsert_PreservesIDAndFirstSeen locks in
+// the contract that the memory backend behaves identically to the
+// Postgres ON CONFLICT clause for the two columns the SQL
+// deliberately leaves out of DO UPDATE SET: id and first_seen_at.
+// Without this guarantee, an ingestion-time Upsert against an
+// existing row would clobber the original row id (breaking
+// log-tailing keyed on id) and reset first_seen_at to "now"
+// (breaking the Tier 0 FirstTimeExternal heuristic, which depends
+// on first_seen_at being monotonic).
+func TestMemoryCommHistory_Upsert_PreservesIDAndFirstSeen(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+
+	firstSeen := time.Date(2026, 1, 15, 9, 0, 0, 0, time.UTC)
+	first := &CommunicationHistory{
+		ID:       "row-original-id",
+		TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), Count7d: 3, Relationship: "partner",
+		FirstSeenAt: firstSeen,
+	}
+	if err := r.CommunicationHistories.Upsert(ctx, first); err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+
+	// Conflict path: caller supplies a fresh ID and a later
+	// FirstSeenAt. Postgres preserves the original via ON
+	// CONFLICT; memory must mirror that.
+	laterSeen := firstSeen.Add(72 * time.Hour)
+	second := &CommunicationHistory{
+		ID:       "row-new-id",
+		TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), Count7d: 7, Relationship: "partner",
+		FirstSeenAt: laterSeen,
+	}
+	if err := r.CommunicationHistories.Upsert(ctx, second); err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	got, err := r.CommunicationHistories.Get(ctx, "t-1", []byte("a"), []byte("b"))
+	if err != nil {
+		t.Fatalf("get after second upsert: %v", err)
+	}
+	if got.ID != "row-original-id" {
+		t.Fatalf("conflict Upsert overwrote ID: got %q, want %q (Postgres parity)",
+			got.ID, "row-original-id")
+	}
+	if !got.FirstSeenAt.Equal(firstSeen) {
+		t.Fatalf("conflict Upsert advanced FirstSeenAt: got %s, want %s (rolling-window monotonicity)",
+			got.FirstSeenAt, firstSeen)
+	}
+	if got.Count7d != 7 {
+		t.Fatalf("conflict Upsert lost Count7d: got %d, want 7 (must still update mutable columns)",
+			got.Count7d)
+	}
+}
+
+// TestMemoryCommHistory_Upsert_DoesNotMutateCallerTimestamps locks
+// in the contract that Upsert must not write back FirstSeenAt or
+// UpdatedAt onto the caller's *CommunicationHistory struct. The
+// Postgres backend uses SQL (`updated_at = NOW()`, and column
+// DEFAULT NOW() for first_seen_at) so the caller's Go struct is
+// never touched by those columns; memory must mirror that. The
+// concrete failure mode without this contract is: a test (or any
+// caller) that constructs an in-memory CommunicationHistory and
+// inspects h.UpdatedAt or h.FirstSeenAt after Upsert observes
+// behaviour the Postgres backend would never produce, hiding bugs
+// in tests that production would surface.
+func TestMemoryCommHistory_Upsert_DoesNotMutateCallerTimestamps(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+
+	// New-row path: caller passes zero values for both timestamps.
+	// Postgres would let column defaults populate the row server-
+	// side without touching the Go struct; memory must do the same.
+	first := &CommunicationHistory{
+		TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), Count7d: 3, Relationship: "partner",
+		// FirstSeenAt and UpdatedAt intentionally left at zero.
+	}
+	if err := r.CommunicationHistories.Upsert(ctx, first); err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	if !first.FirstSeenAt.IsZero() {
+		t.Fatalf("new-row Upsert mutated caller's FirstSeenAt: got %s, want zero (Postgres parity)",
+			first.FirstSeenAt)
+	}
+	if !first.UpdatedAt.IsZero() {
+		t.Fatalf("new-row Upsert mutated caller's UpdatedAt: got %s, want zero (Postgres parity)",
+			first.UpdatedAt)
+	}
+	// But the persisted row MUST carry non-zero timestamps so
+	// downstream readers (ListByTenant, BaselineAnomalyCheck) see
+	// the same shape as Postgres rows.
+	stored, err := r.CommunicationHistories.Get(ctx, "t-1", []byte("a"), []byte("b"))
+	if err != nil {
+		t.Fatalf("get after new-row Upsert: %v", err)
+	}
+	if stored.FirstSeenAt.IsZero() {
+		t.Fatal("persisted row missing FirstSeenAt: Postgres column DEFAULT NOW() must be mirrored")
+	}
+	if stored.UpdatedAt.IsZero() {
+		t.Fatal("persisted row missing UpdatedAt: Postgres `updated_at = NOW()` SQL must be mirrored")
+	}
+
+	// Conflict path: caller passes an explicit FirstSeenAt and a
+	// pre-existing UpdatedAt; both must remain untouched on the
+	// caller's struct after Upsert. The persisted row preserves
+	// the original FirstSeenAt (Postgres ON CONFLICT exclusion)
+	// and stamps a fresh UpdatedAt server-side.
+	callerFirstSeen := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
+	callerUpdated := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	second := &CommunicationHistory{
+		TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), Count7d: 7, Relationship: "partner",
+		FirstSeenAt: callerFirstSeen,
+		UpdatedAt:   callerUpdated,
+	}
+	if err := r.CommunicationHistories.Upsert(ctx, second); err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	if !second.FirstSeenAt.Equal(callerFirstSeen) {
+		t.Fatalf("conflict Upsert mutated caller's FirstSeenAt: got %s, want %s",
+			second.FirstSeenAt, callerFirstSeen)
+	}
+	if !second.UpdatedAt.Equal(callerUpdated) {
+		t.Fatalf("conflict Upsert mutated caller's UpdatedAt: got %s, want %s",
+			second.UpdatedAt, callerUpdated)
+	}
+}
+
 func TestMemoryClassifications(t *testing.T) {
 	ctx := context.Background()
 	r := NewInMemoryRegistry()

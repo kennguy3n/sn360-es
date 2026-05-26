@@ -103,9 +103,33 @@ type RiskSignals struct {
 	RecipientDepartment    string `json:"recipient_department,omitempty"`
 	SenderKnownTitle       string `json:"sender_known_title,omitempty"`
 	CommunicationFrequency int    `json:"communication_frequency,omitempty"`
-	TypicalSendHour        int    `json:"typical_send_hour,omitempty"`
-	CurrentHourUTC         int    `json:"current_hour_utc,omitempty"`
-	IsFirstContact         bool   `json:"is_first_contact,omitempty"`
+	// TypicalSendHour is the modal hour-of-day (UTC, 0..23) the
+	// signal builder derived from
+	// communication_histories.typical_hour. The pointer type is
+	// deliberate: it physically encodes the absence of a baseline
+	// as nil rather than relying on an in-band sentinel like -1
+	// that producers might forget to emit. This eliminates an
+	// entire class of bug at the DTO boundary —
+	//
+	//   - A producer that has no baseline returns a nil pointer
+	//     (and `omitempty` keeps the JSON wire format tidy by
+	//     omitting the field entirely).
+	//   - A producer that observed a real modal hour returns a
+	//     non-nil pointer to the value in [0, 24); the JSON
+	//     serialises as `"typical_send_hour":N`, including N=0
+	//     for midnight UTC.
+	//   - A producer cannot accidentally emit Go-zero-value 0
+	//     and have it interpreted as either "midnight" (valid)
+	//     or "no baseline" (sentinel); the nil/non-nil distinction
+	//     is unambiguous on both sides of the wire.
+	//
+	// The receiving ATO heuristic (internal/service/tier0)
+	// defensively treats a non-nil pointer pointing to a value
+	// outside [0, 24) as "no baseline" too, so a producer bug
+	// degrades to a no-op rather than a spurious timing_anomaly.
+	TypicalSendHour *int `json:"typical_send_hour,omitempty"`
+	CurrentHourUTC  int  `json:"current_hour_utc,omitempty"`
+	IsFirstContact  bool `json:"is_first_contact,omitempty"`
 }
 
 // AnyAuthFailed reports whether at least one of SPF/DKIM/DMARC failed.

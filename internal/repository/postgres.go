@@ -699,6 +699,22 @@ func (p *pgCommHistory) Upsert(ctx context.Context, h *CommunicationHistory) err
 	if h.ID == "" {
 		h.ID = uuid.NewString()
 	}
+	// Upsert is the ingestion-time write path. It does NOT touch
+	// the typical_hour column — the only writer of typical_hour is
+	// UpdateCountsIfFresh (the relationship-worker CAS path), which
+	// has its own CASE guard on the worker's freshly-computed modal
+	// hour.
+	//
+	// Excluding typical_hour from this SQL eliminates a Go zero-value
+	// trap: CommunicationHistory.TypicalHour is an int whose zero
+	// value (0) happens to be the valid hour "midnight UTC". An
+	// ingestion-time caller that constructs a CommunicationHistory
+	// struct literal without explicitly setting TypicalHour would
+	// otherwise silently overwrite the worker-computed modal hour
+	// with 00:00 UTC on every Upsert. Keeping typical_hour out of
+	// the column list lets new rows fall back to the migration 0007
+	// column default (-1, "no baseline yet") and existing rows keep
+	// whatever the worker last wrote.
 	_, err := p.db.ExecContext(ctx, `
 INSERT INTO communication_histories (id, tenant_id, sender_hash, recipient_hash, sender_domain_hash,
                                      sender_domain, count_7d, count_30d, first_seen_at, last_seen_at, relationship)
@@ -730,7 +746,8 @@ ON CONFLICT (tenant_id, sender_hash, recipient_hash) DO UPDATE SET
 func (p *pgCommHistory) ListByTenant(ctx context.Context, tenantID string, since time.Time, limit int) ([]CommunicationHistory, error) {
 	rows, err := p.db.QueryContext(ctx, `
 SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(sender_domain, ''),
-       count_7d, count_30d, first_seen_at, last_seen_at, relationship, updated_at
+       count_7d, count_30d, first_seen_at, last_seen_at, relationship,
+       COALESCE(typical_hour, -1), updated_at
   FROM communication_histories
  WHERE tenant_id=$1 AND last_seen_at >= $2
  ORDER BY last_seen_at DESC
@@ -744,7 +761,8 @@ SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(
 	for rows.Next() {
 		var h CommunicationHistory
 		if err := rows.Scan(&h.ID, &h.TenantID, &h.SenderHash, &h.RecipientHash, &h.SenderDomainHash, &h.SenderDomain,
-			&h.Count7d, &h.Count30d, &h.FirstSeenAt, &h.LastSeenAt, &h.Relationship, &h.UpdatedAt); err != nil {
+			&h.Count7d, &h.Count30d, &h.FirstSeenAt, &h.LastSeenAt, &h.Relationship,
+			&h.TypicalHour, &h.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -784,13 +802,23 @@ func (p *pgCommHistory) UpdateCountsIfFresh(ctx context.Context, h *Communicatio
 		// silently overwrite the wrong row.
 		return false, errors.New("repository: UpdateCountsIfFresh requires a non-zero readAt")
 	}
+	// Only overwrite typical_hour when the worker has computed a
+	// fresh modal hour in the valid 0..23 range. Passing the
+	// snapshot's value back unchanged would re-write the same
+	// number every cycle (harmless) but reserving the sentinel -1
+	// path lets a future caller explicitly skip the column.
+	typicalHour := h.TypicalHour
 	res, err := p.db.ExecContext(ctx, `
 UPDATE communication_histories
    SET count_7d = $1,
        relationship = $2,
+       typical_hour = CASE
+           WHEN $5 >= 0 AND $5 < 24 THEN $5
+           ELSE communication_histories.typical_hour
+       END,
        updated_at = NOW()
  WHERE id = $3 AND updated_at = $4
-`, h.Count7d, h.Relationship, h.ID, readAt)
+`, h.Count7d, h.Relationship, h.ID, readAt, typicalHour)
 	if err != nil {
 		return false, err
 	}
@@ -804,12 +832,13 @@ UPDATE communication_histories
 func (p *pgCommHistory) Get(ctx context.Context, tenantID string, senderHash, recipientHash []byte) (*CommunicationHistory, error) {
 	row := p.db.QueryRowContext(ctx, `
 SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(sender_domain, ''),
-       count_7d, count_30d, first_seen_at, last_seen_at, relationship, updated_at
+       count_7d, count_30d, first_seen_at, last_seen_at, relationship,
+       COALESCE(typical_hour, -1), updated_at
   FROM communication_histories WHERE tenant_id=$1 AND sender_hash=$2 AND recipient_hash=$3`,
 		tenantID, senderHash, recipientHash)
 	var h CommunicationHistory
 	err := row.Scan(&h.ID, &h.TenantID, &h.SenderHash, &h.RecipientHash, &h.SenderDomainHash, &h.SenderDomain,
-		&h.Count7d, &h.Count30d, &h.FirstSeenAt, &h.LastSeenAt, &h.Relationship, &h.UpdatedAt)
+		&h.Count7d, &h.Count30d, &h.FirstSeenAt, &h.LastSeenAt, &h.Relationship, &h.TypicalHour, &h.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

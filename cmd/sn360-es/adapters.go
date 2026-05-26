@@ -723,10 +723,17 @@ func (s *postgresConfigStore) invalidate(tenantID string) {
 
 // loadOrSeed returns the score_engine row for tenantID, falling back
 // to the schema defaults (matching migrations/0001_init.up.sql plus
-// migrations/0013_score_engine_tier1_thresholds.up.sql) if no row
+// migrations/0013_score_engine_tier1_thresholds.up.sql and
+// migrations/0014_score_engine_weight_defaults.up.sql) if no row
 // exists yet. The seeded row is NOT persisted until the caller does
 // its own Upsert; this keeps row creation idempotent with the rest
 // of the onboarding flow.
+//
+// The seeded weights/thresholds mirror the onboarding agent's
+// DefaultWeights and DefaultThresholds (see
+// internal/service/agent/onboarding.go) so a tenant whose row is
+// materialised through this fallback path lands on the same
+// configuration the onboarding agent would have seeded.
 func (s *postgresConfigStore) loadOrSeed(ctx context.Context, tenantID string) (*repository.ScoreEngine, error) {
 	row, err := s.repo.Get(ctx, tenantID)
 	if err == nil {
@@ -738,10 +745,10 @@ func (s *postgresConfigStore) loadOrSeed(ctx context.Context, tenantID string) (
 	return &repository.ScoreEngine{
 		TenantID:                tenantID,
 		ScoreBase:               100,
-		WeightAI:                80,
-		WeightRspamd:            20,
-		WeightAttachments:       0,
-		WeightLinks:             0,
+		WeightAI:                60,
+		WeightRspamd:            10,
+		WeightAttachments:       15,
+		WeightLinks:             15,
 		ThresholdBlocked:        85,
 		ThresholdHigh:           70,
 		ThresholdWarning:        50,
@@ -750,7 +757,7 @@ func (s *postgresConfigStore) loadOrSeed(ctx context.Context, tenantID string) (
 		ThresholdTier1PassBelow: 20,
 		ThresholdTier1FlagAbove: 60,
 		SubjectTagEnabled:       false,
-		SubjectTagPrefix:        "SN360",
+		SubjectTagPrefix:        "",
 	}, nil
 }
 

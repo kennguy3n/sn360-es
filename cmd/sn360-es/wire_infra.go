@@ -617,11 +617,31 @@ func buildRelationshipRunner(cfg *config.Config, logger *slog.Logger, app *appli
 	if app.repos.Tenants == nil || app.repos.CommunicationHistories == nil {
 		return nil
 	}
+	// Wire the per-(recipient, sender_domain) baseline-accumulation
+	// path: the worker needs the BehavioralBaselines repository to
+	// load/persist the typical_send_hours distribution and a PII
+	// hasher so it can derive the baseline keys from the same
+	// secret-keyed BLAKE2 namespace the ingestion pipeline uses.
+	// When either dependency is unavailable (no PII hasher
+	// configured, no behavioural-baseline repo wired) the worker's
+	// internal nil guards short-circuit the baseline path and the
+	// CAS write on communication_histories still runs unaffected —
+	// so a misconfigured deployment degrades to the pre-PR
+	// behaviour rather than failing outright.
+	piiHasher := buildPIIHasher(cfg)
+	var hasherFn func(string, string) ([]byte, error)
+	if piiHasher != nil {
+		hasherFn = func(tenantID, input string) ([]byte, error) {
+			return []byte(piiHasher.HashPII(tenantID, input)), nil
+		}
+	}
 	job, err := worker.NewRelationshipJob(worker.RelationshipJobConfig{
 		Interval:       cfg.Worker.RelationshipInterval,
 		Tenants:        app.repos.Tenants,
 		Communications: app.repos.CommunicationHistories,
 		Upserter:       app.repos.CommunicationHistories,
+		Baselines:      app.repos.BehavioralBaselines,
+		Hasher:         hasherFn,
 		Logger:         logger,
 	})
 	if err != nil {

@@ -199,8 +199,52 @@ type CommunicationHistory struct {
 	FirstSeenAt      time.Time
 	LastSeenAt       time.Time
 	Relationship     string
-	UpdatedAt        time.Time
+	// TypicalHour is the modal (most-frequent) send hour for this
+	// (sender, recipient) pair, derived from the accumulated
+	// per-(user, sender-domain) timing distribution held in
+	// user_behavioral_baselines.typical_send_hours by the
+	// relationship aggregation worker. Persisted in the
+	// communication_histories.typical_hour column (migration 0007)
+	// so the Tier 0 ATO heuristic's checkTimingAnomaly() can read
+	// a representative baseline hour without having to JOIN against
+	// user_behavioral_baselines on the hot path.
+	//
+	// Write contract (shared by every CommunicationHistoryRepository
+	// implementation — memory.go, postgres.go):
+	//
+	//   - Upsert (ingestion-time write path): the field is IGNORED.
+	//     Upsert never touches the typical_hour column — new rows
+	//     fall back to the migration 0007 column default
+	//     (TypicalHourUnset, -1) and existing rows keep whatever
+	//     the worker last wrote. This guarantees ingestion cannot
+	//     accidentally overwrite the worker-computed modal hour,
+	//     including via the Go zero-value trap (0 == midnight UTC).
+	//
+	//   - UpdateCountsIfFresh (relationship-worker CAS path): the
+	//     repository applies a CASE guard:
+	//       * 0..23                → written to typical_hour as-is.
+	//       * TypicalHourUnset(-1) → sentinel meaning "no fresh
+	//                                modal hour this cycle"; the
+	//                                column is preserved.
+	//       * any other out-of-range value → also preserved.
+	//
+	// Because Go's int zero value (0) is a *valid* hour, callers of
+	// UpdateCountsIfFresh MUST set this field explicitly. Use
+	// TypicalHourUnset for "no change this cycle".
+	TypicalHour int
+	UpdatedAt   time.Time
 }
+
+// TypicalHourUnset is the sentinel value for
+// CommunicationHistory.TypicalHour meaning "no baseline yet" / "do
+// not overwrite". It matches the migration 0007 column default
+// and is what every CommunicationHistoryRepository implementation
+// looks for when deciding whether to preserve the existing
+// typical_hour column on an Upsert / UpdateCountsIfFresh.
+//
+// See the CommunicationHistory.TypicalHour comment above for the
+// full contract.
+const TypicalHourUnset = -1
 
 // ----------------------------------------------------------------------
 // Repository interfaces
@@ -326,6 +370,14 @@ type EvaluationResultRepository interface {
 // callers (tests, admin tools) can request an unfiltered tenant
 // scan without a sentinel API.
 type CommunicationHistoryRepository interface {
+	// Upsert writes the ingestion-time view of a (sender,
+	// recipient) pair. Implementations MUST NOT propagate
+	// h.TypicalHour onto the persisted row — that column is owned
+	// by UpdateCountsIfFresh. See CommunicationHistory.TypicalHour
+	// for the full rationale (TL;DR: Go's int zero value 0 is a
+	// valid hour, so any path that lets ingestion write
+	// typical_hour creates a silent-overwrite trap for callers
+	// that omit the field).
 	Upsert(ctx context.Context, h *CommunicationHistory) error
 	Get(ctx context.Context, tenantID string, senderHash, recipientHash []byte) (*CommunicationHistory, error)
 	ListByTenant(ctx context.Context, tenantID string, since time.Time, limit int) ([]CommunicationHistory, error)
@@ -351,6 +403,17 @@ type CommunicationHistoryRepository interface {
 	// increment-and-stamp model. The worker is the only caller
 	// that needs the CAS semantics because it carries a stale
 	// snapshot across a list/decide/write boundary.
+	//
+	// Reflection contract: implementations MUST NOT be relied upon
+	// to reflect the post-CAS row state back onto *h. The Postgres
+	// implementation uses ExecContext (no RETURNING clause), so
+	// `h.UpdatedAt` and `h.TypicalHour` retain whatever values the
+	// caller passed in even after a successful return — the
+	// canonical post-write state lives in the repository and must
+	// be re-read via Get / ListByTenant if needed. The in-memory
+	// implementation matches this contract deliberately so tests
+	// cannot accidentally depend on a reflection that production
+	// does not provide.
 	UpdateCountsIfFresh(ctx context.Context, h *CommunicationHistory, readAt time.Time) (bool, error)
 }
 
