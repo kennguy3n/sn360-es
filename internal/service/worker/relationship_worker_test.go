@@ -329,6 +329,198 @@ func TestBuildSenderObservations_Aggregates(t *testing.T) {
 	}
 }
 
+// fakeBaselineRepo is a deterministic in-process implementation of
+// repository.UserBehavioralBaselineRepository used to exercise the
+// accumulation behaviour of RelationshipJob without spinning up a
+// real Postgres pool. It keyed on (tenant, user_hash, sender_hash)
+// the same way the production pgBehavioralBaselines table is.
+type fakeBaselineRepo struct {
+	mu      sync.Mutex
+	rows    map[string]repository.UserBehavioralBaseline
+	getErr  error
+	upErr   error
+	upCalls int
+}
+
+func newFakeBaselineRepo() *fakeBaselineRepo {
+	return &fakeBaselineRepo{rows: map[string]repository.UserBehavioralBaseline{}}
+}
+
+func (f *fakeBaselineRepo) baselineKey(tenantID string, userHash, senderHash []byte) string {
+	return tenantID + ":" + string(userHash) + ":" + string(senderHash)
+}
+
+func (f *fakeBaselineRepo) Get(_ context.Context, tenantID string, userHash, senderDomainHash []byte) (*repository.UserBehavioralBaseline, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	b, ok := f.rows[f.baselineKey(tenantID, userHash, senderDomainHash)]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	cp := b
+	cp.TypicalSendHours = append([]int(nil), b.TypicalSendHours...)
+	return &cp, nil
+}
+
+func (f *fakeBaselineRepo) Upsert(_ context.Context, b *repository.UserBehavioralBaseline) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.upCalls++
+	if f.upErr != nil {
+		return f.upErr
+	}
+	stored := *b
+	stored.TypicalSendHours = append([]int(nil), b.TypicalSendHours...)
+	f.rows[f.baselineKey(b.TenantID, b.UserEmailHash, b.SenderDomainHash)] = stored
+	return nil
+}
+
+// TestRelationshipJob_Run_AccumulatesBaselineHoursAndComputesModal
+// verifies the 1B fix: across multiple cycles the worker appends to
+// the existing TypicalSendHours distribution rather than overwriting
+// it with a single-element slice, and it mirrors the modal hour of
+// the accumulated distribution onto h.TypicalHour so the CAS write
+// propagates it to communication_histories.typical_hour.
+func TestRelationshipJob_Run_AccumulatesBaselineHoursAndComputesModal(t *testing.T) {
+	day := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	// Three "cycles", each observing the same (sender, recipient)
+	// pair but at a different send hour. The third cycle's send
+	// hour (14) appears twice across the run because the second
+	// and third cycles both land at 14:00, so the modal hour
+	// after cycle 3 must be 14.
+	cycles := []struct {
+		hour int
+		row  repository.CommunicationHistory
+	}{
+		{9, repository.CommunicationHistory{ID: "row-1", TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"), SenderDomainHash: []byte("d"), SenderDomain: "d.example", Count30d: 8, LastSeenAt: day.Add(9 * time.Hour), UpdatedAt: day}},
+		{14, repository.CommunicationHistory{ID: "row-1", TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"), SenderDomainHash: []byte("d"), SenderDomain: "d.example", Count30d: 8, LastSeenAt: day.Add(14 * time.Hour), UpdatedAt: day}},
+		{14, repository.CommunicationHistory{ID: "row-1", TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"), SenderDomainHash: []byte("d"), SenderDomain: "d.example", Count30d: 8, LastSeenAt: day.Add(14 * time.Hour), UpdatedAt: day}},
+	}
+
+	baselines := newFakeBaselineRepo()
+	up := &fakeCommUpserter{accept: true}
+	hasher := func(_, _ string) ([]byte, error) { return []byte("ok"), nil }
+
+	for i, c := range cycles {
+		tl := &fakeTenantLister{tenants: []repository.Tenant{{ID: "t-1"}}}
+		cs := &fakeCommunicationStore{rowsByTenant: map[string][]repository.CommunicationHistory{"t-1": {c.row}}}
+		job, err := NewRelationshipJob(RelationshipJobConfig{
+			Interval: time.Hour, Tenants: tl, Communications: cs, Upserter: up,
+			Baselines: baselines, Hasher: hasher, Logger: discardLogger(),
+		})
+		if err != nil {
+			t.Fatalf("cycle %d new: %v", i, err)
+		}
+		if err := job.Run(context.Background()); err != nil {
+			t.Fatalf("cycle %d run: %v", i, err)
+		}
+	}
+
+	// Baseline distribution must now contain three samples in the
+	// order they were observed.
+	b, err := baselines.Get(context.Background(), "t-1", []byte("b"), []byte("d"))
+	if err != nil {
+		t.Fatalf("baseline get: %v", err)
+	}
+	wantHours := []int{9, 14, 14}
+	if len(b.TypicalSendHours) != len(wantHours) {
+		t.Fatalf("expected %d send hours after 3 cycles, got %v", len(wantHours), b.TypicalSendHours)
+	}
+	for i, h := range wantHours {
+		if b.TypicalSendHours[i] != h {
+			t.Errorf("send hour[%d] = %d, want %d", i, b.TypicalSendHours[i], h)
+		}
+	}
+
+	// h.TypicalHour propagated to the third CAS write must be 14
+	// (the modal hour of {9, 14, 14}).
+	if len(up.upserts) != 3 {
+		t.Fatalf("expected 3 CAS writes, got %d", len(up.upserts))
+	}
+	if got := up.upserts[2].TypicalHour; got != 14 {
+		t.Errorf("CAS upsert[2].TypicalHour = %d, want 14 (modal hour of {9,14,14})", got)
+	}
+}
+
+// TestRelationshipJob_Run_BaselineCappedAtMaxBaselineSendHours
+// verifies the FIFO cap so the typical_send_hours array does not
+// grow unbounded across years of cycles.
+func TestRelationshipJob_Run_BaselineCappedAtMaxBaselineSendHours(t *testing.T) {
+	day := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	baselines := newFakeBaselineRepo()
+
+	// Pre-seed the baseline with maxBaselineSendHours samples so
+	// the very next observation triggers a trim.
+	seedHours := make([]int, maxBaselineSendHours)
+	for i := range seedHours {
+		seedHours[i] = i % 24
+	}
+	_ = baselines.Upsert(context.Background(), &repository.UserBehavioralBaseline{
+		TenantID:         "t-1",
+		UserEmailHash:    []byte("b"),
+		SenderDomainHash: []byte("d"),
+		TypicalSendHours: seedHours,
+	})
+
+	tl := &fakeTenantLister{tenants: []repository.Tenant{{ID: "t-1"}}}
+	cs := &fakeCommunicationStore{rowsByTenant: map[string][]repository.CommunicationHistory{
+		"t-1": {{ID: "row-1", TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+			SenderDomainHash: []byte("d"), SenderDomain: "d.example", Count30d: 4,
+			LastSeenAt: day.Add(7 * time.Hour), UpdatedAt: day}},
+	}}
+	up := &fakeCommUpserter{accept: true}
+	hasher := func(_, _ string) ([]byte, error) { return []byte("ok"), nil }
+
+	job, _ := NewRelationshipJob(RelationshipJobConfig{
+		Interval: time.Hour, Tenants: tl, Communications: cs, Upserter: up,
+		Baselines: baselines, Hasher: hasher, Logger: discardLogger(),
+	})
+	if err := job.Run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	b, err := baselines.Get(context.Background(), "t-1", []byte("b"), []byte("d"))
+	if err != nil {
+		t.Fatalf("baseline get: %v", err)
+	}
+	if len(b.TypicalSendHours) != maxBaselineSendHours {
+		t.Errorf("expected %d send hours (capped), got %d", maxBaselineSendHours, len(b.TypicalSendHours))
+	}
+	// FIFO eviction: the oldest entry (hour 0 at index 0 of the
+	// seed) should be gone and the newest entry (hour 7) should
+	// be the last element.
+	if b.TypicalSendHours[len(b.TypicalSendHours)-1] != 7 {
+		t.Errorf("expected newest send hour 7 at tail, got %d", b.TypicalSendHours[len(b.TypicalSendHours)-1])
+	}
+}
+
+// TestModalHourOf covers the helper used to derive the modal hour
+// from an accumulated send-hour distribution.
+func TestModalHourOf(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []int
+		want int
+	}{
+		{"empty", nil, -1},
+		{"out_of_range_only", []int{-1, 24, 99}, -1},
+		{"single_in_range", []int{7}, 7},
+		{"clear_modal", []int{9, 14, 14, 14, 9}, 14},
+		{"tie_breaks_to_lowest_hour", []int{3, 3, 8, 8}, 3},
+		{"mixed_with_invalid", []int{-5, 30, 11, 11, 4}, 11},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := modalHourOf(tc.in); got != tc.want {
+				t.Errorf("modalHourOf(%v) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 // makeCommRows builds a synthetic batch of CommunicationHistory rows
 // emulating a high-volume sender domain with the given inbound count
 // and distinct-recipient cardinality.

@@ -199,7 +199,19 @@ type CommunicationHistory struct {
 	FirstSeenAt      time.Time
 	LastSeenAt       time.Time
 	Relationship     string
-	UpdatedAt        time.Time
+	// TypicalHour is the modal (most-frequent) send hour for this
+	// (sender, recipient) pair, derived from the accumulated
+	// per-(user, sender-domain) timing distribution held in
+	// user_behavioral_baselines.typical_send_hours by the
+	// relationship aggregation worker. Persisted in the
+	// communication_histories.typical_hour column (migration 0007)
+	// so the Tier 0 ATO heuristic's checkTimingAnomaly() can read
+	// a representative baseline hour without having to JOIN against
+	// user_behavioral_baselines on the hot path. A value of -1
+	// means "no baseline yet" — the column default at row creation
+	// time.
+	TypicalHour int
+	UpdatedAt   time.Time
 }
 
 // ----------------------------------------------------------------------

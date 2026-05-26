@@ -572,7 +572,23 @@ func (m *memoryCommHistory) Upsert(_ context.Context, h *CommunicationHistory) e
 	h.UpdatedAt = now
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.rows[commKey(h.TenantID, h.SenderHash, h.RecipientHash)] = *h
+	key := commKey(h.TenantID, h.SenderHash, h.RecipientHash)
+	// Preserve the existing typical_hour when the incoming row
+	// does not carry a valid 0..23 value. Mirrors the Postgres
+	// implementation's CASE-guarded ON CONFLICT, so ingestion-time
+	// upserts that leave TypicalHour unset (Go zero value) do not
+	// reset the modal hour the relationship worker has already
+	// computed.
+	if cur, ok := m.rows[key]; ok {
+		if h.TypicalHour < 0 || h.TypicalHour >= 24 {
+			h.TypicalHour = cur.TypicalHour
+		}
+	} else if h.TypicalHour < 0 || h.TypicalHour >= 24 {
+		// First insert with no valid baseline yet — mirror the
+		// migration 0007 default of -1 ("no baseline").
+		h.TypicalHour = -1
+	}
+	m.rows[key] = *h
 	return nil
 }
 
@@ -638,11 +654,19 @@ func (m *memoryCommHistory) UpdateCountsIfFresh(_ context.Context, h *Communicat
 	}
 	cur.Count7d = h.Count7d
 	cur.Relationship = h.Relationship
+	// typical_hour: only overwrite when the worker has computed a
+	// valid 0..23 modal hour. The sentinel -1 ("no baseline yet")
+	// or any out-of-range value preserves the existing column
+	// value — same contract as the Postgres implementation.
+	if h.TypicalHour >= 0 && h.TypicalHour < 24 {
+		cur.TypicalHour = h.TypicalHour
+	}
 	cur.UpdatedAt = time.Now().UTC()
 	m.rows[key] = cur
 	// Reflect the write back to the caller so callers that inspect
 	// `h.UpdatedAt` after the CAS see the fresh stamp.
 	h.UpdatedAt = cur.UpdatedAt
+	h.TypicalHour = cur.TypicalHour
 	return true, nil
 }
 

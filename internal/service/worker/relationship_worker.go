@@ -234,6 +234,42 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 				}
 			}
 
+			// Behavioral baseline accumulation: append the current
+			// LastSeenAt hour to the existing per-(user,
+			// sender_domain) send-hour distribution rather than
+			// overwriting it with a single-element slice. The
+			// accumulated histogram is what
+			// relationship.BaselineAnomalyCheck consumes (see
+			// internal/service/relationship/timing.go) — feeding it
+			// a length-1 slice every cycle would collapse the
+			// distribution and make the histogram useless.
+			//
+			// The modal (most-frequent) hour computed from the
+			// updated distribution is then mirrored onto
+			// h.TypicalHour so the worker's CAS write below
+			// propagates it to communication_histories.typical_hour
+			// for the Tier 0 ATO heuristic to read on the hot path.
+			//
+			// Both writes are best-effort: a baseline read/write
+			// failure is logged and skipped so the canonical
+			// communication-history CAS still happens.
+			modalHour := -1
+			if j.cfg.Baselines != nil && j.cfg.Hasher != nil && len(h.RecipientHash) > 0 && len(h.SenderDomainHash) > 0 {
+				sendHour := h.LastSeenAt.UTC().Hour()
+				accumulated := j.accumulateBaselineHours(ctx, t.ID, h, sendHour)
+				if len(accumulated) > 0 {
+					modalHour = modalHourOf(accumulated)
+				}
+			}
+			if modalHour >= 0 && modalHour < 24 {
+				h.TypicalHour = modalHour
+			} else if h.TypicalHour < 0 || h.TypicalHour >= 24 {
+				// Carry forward an existing valid value; otherwise
+				// fall back to the sentinel so the repository's
+				// CASE guard leaves the column untouched.
+				h.TypicalHour = -1
+			}
+
 			// Capture the snapshot's UpdatedAt as the CAS guard so
 			// the write only lands if ingestion has not produced a
 			// fresher version of this row between ListByTenant
@@ -265,28 +301,6 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 				continue
 			}
 			processed++
-
-			// Populate per-user behavioral baselines when the
-			// baseline repository is wired.
-			if j.cfg.Baselines != nil && j.cfg.Hasher != nil && len(h.RecipientHash) > 0 && len(h.SenderDomainHash) > 0 {
-				sendHour := h.LastSeenAt.Hour()
-				var avgPerWeek float64
-				if h.Count30d > 0 {
-					avgPerWeek = float64(h.Count30d) / 4.0
-				}
-				bl := &repository.UserBehavioralBaseline{
-					TenantID:           t.ID,
-					UserEmailHash:      h.RecipientHash,
-					SenderDomainHash:   h.SenderDomainHash,
-					TypicalSendHours:   []int{sendHour},
-					AvgMessagesPerWeek: avgPerWeek,
-					LastSeenAt:         h.LastSeenAt,
-				}
-				if berr := j.cfg.Baselines.Upsert(ctx, bl); berr != nil {
-					j.logger.Warn("worker.relationship: baseline upsert failed",
-						slog.String("tenant_id", t.ID), slog.Any("error", berr))
-				}
-			}
 		}
 	}
 	j.logger.Info("worker.relationship: cycle complete",
@@ -297,6 +311,133 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 		slog.Int("race_skipped", raceSkipped),
 		slog.Int("corrupt_skipped", corruptSkipped))
 	return firstErr
+}
+
+// maxBaselineSendHours caps the per-(user, sender_domain)
+// typical_send_hours slice so the column does not grow unbounded
+// across years of cycles. 168 entries = one full week of hourly
+// samples, which is enough resolution for the
+// relationship.BaselineAnomalyCheck histogram to detect off-window
+// sends without consuming a megabyte per pair in the worst case.
+const maxBaselineSendHours = 168
+
+// accumulateBaselineHours fetches the existing per-(user,
+// sender_domain) baseline (if any), appends sendHour to the
+// TypicalSendHours distribution (capped at maxBaselineSendHours,
+// FIFO eviction), recomputes AvgMessagesPerWeek from the
+// snapshot's 30-day count, and upserts the row back. Returns the
+// accumulated send-hour slice (post-append, post-trim) so the
+// caller can compute the modal hour without re-reading the
+// repository.
+//
+// All failure paths log and return whatever distribution we managed
+// to assemble (possibly empty). The caller treats an empty return
+// as "no baseline available, leave typical_hour untouched".
+func (j *RelationshipJob) accumulateBaselineHours(
+	ctx context.Context,
+	tenantID string,
+	h repository.CommunicationHistory,
+	sendHour int,
+) []int {
+	if sendHour < 0 || sendHour >= 24 {
+		return nil
+	}
+	if j.cfg.Baselines == nil || j.cfg.Hasher == nil {
+		return nil
+	}
+	if len(h.RecipientHash) == 0 || len(h.SenderDomainHash) == 0 {
+		return nil
+	}
+
+	// Load the existing baseline (if any) so the new hour is
+	// appended rather than overwriting. Treat ErrNotFound as
+	// "first observation".
+	var existingHours []int
+	prev, gerr := j.cfg.Baselines.Get(ctx, tenantID, h.RecipientHash, h.SenderDomainHash)
+	if gerr == nil && prev != nil {
+		existingHours = append(existingHours, prev.TypicalSendHours...)
+	} else if gerr != nil && !errors.Is(gerr, repository.ErrNotFound) {
+		j.logger.Warn("worker.relationship: baseline get failed",
+			slog.String("tenant_id", tenantID), slog.Any("error", gerr))
+		// Fall through with the empty existingHours — we still
+		// want to record the new hour as the first sample.
+	}
+
+	existingHours = append(existingHours, sendHour)
+	// FIFO trim: drop the oldest samples once the slice exceeds
+	// the cap. The histogram is order-insensitive (it just counts
+	// per-hour occurrences) so any eviction policy works; FIFO
+	// is the simplest and keeps the most recent week of behaviour
+	// in the window.
+	if len(existingHours) > maxBaselineSendHours {
+		existingHours = existingHours[len(existingHours)-maxBaselineSendHours:]
+	}
+	updated := existingHours
+
+	var avgPerWeek float64
+	if h.Count30d > 0 {
+		avgPerWeek = float64(h.Count30d) / 4.0
+	}
+
+	bl := &repository.UserBehavioralBaseline{
+		TenantID:           tenantID,
+		UserEmailHash:      h.RecipientHash,
+		SenderDomainHash:   h.SenderDomainHash,
+		TypicalSendHours:   updated,
+		AvgMessagesPerWeek: avgPerWeek,
+		LastSeenAt:         h.LastSeenAt,
+	}
+	if prev != nil {
+		// Preserve the row id and device-type distribution that
+		// upstream callers (future: client fingerprint worker) may
+		// have populated. Upsert is keyed on (tenant_id,
+		// user_email_hash, sender_domain_hash) so the id is
+		// optional, but carrying it forward keeps the row stable
+		// across cycles for log-tailing.
+		bl.ID = prev.ID
+		bl.TypicalDeviceTypes = prev.TypicalDeviceTypes
+		bl.CreatedAt = prev.CreatedAt
+	}
+	if berr := j.cfg.Baselines.Upsert(ctx, bl); berr != nil {
+		j.logger.Warn("worker.relationship: baseline upsert failed",
+			slog.String("tenant_id", tenantID), slog.Any("error", berr))
+		// The in-memory slice is still meaningful for modal-hour
+		// computation even if persistence failed — return it.
+	}
+	return updated
+}
+
+// modalHourOf returns the most-frequent hour-of-day from hours.
+// Out-of-range entries are skipped. Returns -1 when no in-range
+// samples are present so the caller's CASE-guarded write leaves
+// communication_histories.typical_hour at its previous value.
+//
+// Ties are broken by lowest hour, which is deterministic and lets
+// tests assert exact values without depending on map iteration
+// order.
+func modalHourOf(hours []int) int {
+	if len(hours) == 0 {
+		return -1
+	}
+	var counts [24]int
+	total := 0
+	for _, h := range hours {
+		if h < 0 || h >= 24 {
+			continue
+		}
+		counts[h]++
+		total++
+	}
+	if total == 0 {
+		return -1
+	}
+	mode, best := -1, -1
+	for h, c := range counts {
+		if c > best {
+			mode, best = h, c
+		}
+	}
+	return mode
 }
 
 // VendorJobConfig wires the vendor-discovery worker.
