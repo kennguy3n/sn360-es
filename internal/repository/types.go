@@ -209,22 +209,28 @@ type CommunicationHistory struct {
 	// a representative baseline hour without having to JOIN against
 	// user_behavioral_baselines on the hot path.
 	//
-	// Contract (shared by every CommunicationHistoryRepository
-	// implementation — memory.go, postgres.go — and both write
-	// paths, Upsert and UpdateCountsIfFresh):
-	//   - 0..23                → a valid hour-of-day (0 == midnight
-	//                            UTC); persisted as-is.
-	//   - TypicalHourUnset(-1) → "no baseline yet"; the repository
-	//                            CASE guard preserves any prior
-	//                            value on update and writes -1 on
-	//                            first insert (matching the
-	//                            migration 0007 column default).
+	// Write contract (shared by every CommunicationHistoryRepository
+	// implementation — memory.go, postgres.go):
 	//
-	// Because Go's int zero value (0) is a *valid* hour, callers
-	// MUST set this field explicitly. A struct literal that omits
-	// TypicalHour will silently overwrite the previously-computed
-	// modal hour with midnight UTC. Use TypicalHourUnset for "no
-	// change" / "no baseline yet".
+	//   - Upsert (ingestion-time write path): the field is IGNORED.
+	//     Upsert never touches the typical_hour column — new rows
+	//     fall back to the migration 0007 column default
+	//     (TypicalHourUnset, -1) and existing rows keep whatever
+	//     the worker last wrote. This guarantees ingestion cannot
+	//     accidentally overwrite the worker-computed modal hour,
+	//     including via the Go zero-value trap (0 == midnight UTC).
+	//
+	//   - UpdateCountsIfFresh (relationship-worker CAS path): the
+	//     repository applies a CASE guard:
+	//       * 0..23                → written to typical_hour as-is.
+	//       * TypicalHourUnset(-1) → sentinel meaning "no fresh
+	//                                modal hour this cycle"; the
+	//                                column is preserved.
+	//       * any other out-of-range value → also preserved.
+	//
+	// Because Go's int zero value (0) is a *valid* hour, callers of
+	// UpdateCountsIfFresh MUST set this field explicitly. Use
+	// TypicalHourUnset for "no change this cycle".
 	TypicalHour int
 	UpdatedAt   time.Time
 }
@@ -364,6 +370,14 @@ type EvaluationResultRepository interface {
 // callers (tests, admin tools) can request an unfiltered tenant
 // scan without a sentinel API.
 type CommunicationHistoryRepository interface {
+	// Upsert writes the ingestion-time view of a (sender,
+	// recipient) pair. Implementations MUST NOT propagate
+	// h.TypicalHour onto the persisted row — that column is owned
+	// by UpdateCountsIfFresh. See CommunicationHistory.TypicalHour
+	// for the full rationale (TL;DR: Go's int zero value 0 is a
+	// valid hour, so any path that lets ingestion write
+	// typical_hour creates a silent-overwrite trap for callers
+	// that omit the field).
 	Upsert(ctx context.Context, h *CommunicationHistory) error
 	Get(ctx context.Context, tenantID string, senderHash, recipientHash []byte) (*CommunicationHistory, error)
 	ListByTenant(ctx context.Context, tenantID string, since time.Time, limit int) ([]CommunicationHistory, error)

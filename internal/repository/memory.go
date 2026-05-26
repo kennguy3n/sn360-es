@@ -573,22 +573,42 @@ func (m *memoryCommHistory) Upsert(_ context.Context, h *CommunicationHistory) e
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := commKey(h.TenantID, h.SenderHash, h.RecipientHash)
-	// Preserve the existing typical_hour when the incoming row
-	// does not carry a valid 0..23 value. Mirrors the Postgres
-	// implementation's CASE-guarded ON CONFLICT, so ingestion-time
-	// upserts that leave TypicalHour unset (Go zero value) do not
-	// reset the modal hour the relationship worker has already
-	// computed.
+	// Upsert is the ingestion-time write path. It does NOT touch
+	// the typical_hour column — only UpdateCountsIfFresh (the
+	// relationship-worker CAS path) writes typical_hour. This
+	// mirrors the Postgres implementation, which excludes
+	// typical_hour from its INSERT/ON CONFLICT SQL entirely.
+	//
+	// Forcing the persisted TypicalHour to the prior value (or to
+	// the migration-0007 default on first insert) eliminates the
+	// Go zero-value trap: an ingestion-time caller that omits
+	// TypicalHour would otherwise silently overwrite the worker's
+	// modal hour with midnight UTC (0), the int zero value that
+	// happens to fall inside the valid 0..23 range.
 	if cur, ok := m.rows[key]; ok {
-		if h.TypicalHour < 0 || h.TypicalHour >= 24 {
-			h.TypicalHour = cur.TypicalHour
-		}
-	} else if h.TypicalHour < 0 || h.TypicalHour >= 24 {
-		// First insert with no valid baseline yet — mirror the
-		// migration 0007 default of -1 ("no baseline").
-		h.TypicalHour = -1
+		h.TypicalHour = cur.TypicalHour
+	} else {
+		h.TypicalHour = TypicalHourUnset
 	}
 	m.rows[key] = *h
+	return nil
+}
+
+// directSetTypicalHourForTest bypasses the Upsert contract to seed a
+// worker-computed modal hour into the in-memory row. It exists
+// solely so the memory_test suite can lock in the
+// Upsert-does-not-write-typical_hour contract without spinning up a
+// full RelationshipJob. NOT for production use.
+func (m *memoryCommHistory) directSetTypicalHourForTest(tenantID string, senderHash, recipientHash []byte, hour int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := commKey(tenantID, senderHash, recipientHash)
+	cur, ok := m.rows[key]
+	if !ok {
+		return ErrNotFound
+	}
+	cur.TypicalHour = hour
+	m.rows[key] = cur
 	return nil
 }
 

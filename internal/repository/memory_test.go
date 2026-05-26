@@ -137,6 +137,93 @@ func TestMemoryCommHistory(t *testing.T) {
 	}
 }
 
+// TestMemoryCommHistory_Upsert_DoesNotWriteTypicalHour locks in the
+// Upsert contract: the ingestion-time write path MUST NOT propagate
+// the caller's h.TypicalHour onto the persisted row, regardless of
+// whether the caller passes the Go zero value 0 (midnight UTC), a
+// valid in-range hour, or a sentinel. The worker's
+// UpdateCountsIfFresh path is the sole writer of typical_hour, so
+// ingestion cannot accidentally clobber the worker-computed modal
+// hour even when struct literals omit the field. The Postgres
+// implementation enforces this by excluding typical_hour from the
+// Upsert SQL entirely; this test exercises the memory mirror.
+func TestMemoryCommHistory_Upsert_DoesNotWriteTypicalHour(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+
+	// First insert: caller passes Go zero (0 == midnight UTC) for
+	// TypicalHour. Without the contract, this would persist as 0
+	// and the Tier 0 ATO heuristic would treat 03:00 sends as 3h
+	// off the "baseline" midnight. With the contract, the column
+	// settles at TypicalHourUnset (-1) per migration 0007 default.
+	first := &CommunicationHistory{
+		TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), Count7d: 3, Relationship: "partner",
+		// TypicalHour intentionally left at Go zero (0).
+	}
+	if err := r.CommunicationHistories.Upsert(ctx, first); err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	got, err := r.CommunicationHistories.Get(ctx, "t-1", []byte("a"), []byte("b"))
+	if err != nil {
+		t.Fatalf("get after first upsert: %v", err)
+	}
+	if got.TypicalHour != TypicalHourUnset {
+		t.Fatalf("first insert: TypicalHour = %d, want TypicalHourUnset (%d)",
+			got.TypicalHour, TypicalHourUnset)
+	}
+
+	// Simulate the worker writing a real modal hour by mutating
+	// the in-memory row directly (this is what UpdateCountsIfFresh
+	// effectively does after a CAS landing).
+	if err := r.CommunicationHistories.(*memoryCommHistory).directSetTypicalHourForTest("t-1", []byte("a"), []byte("b"), 14); err != nil {
+		t.Fatalf("seed worker-computed modal hour: %v", err)
+	}
+
+	// Second Upsert: caller again passes the Go zero. Without the
+	// contract, this would silently rewind typical_hour from 14
+	// (worker-computed) to 0 (midnight). With the contract, 14 is
+	// preserved.
+	second := &CommunicationHistory{
+		TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), Count7d: 7, Relationship: "partner",
+		// TypicalHour intentionally left at Go zero (0).
+	}
+	if err := r.CommunicationHistories.Upsert(ctx, second); err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	got, err = r.CommunicationHistories.Get(ctx, "t-1", []byte("a"), []byte("b"))
+	if err != nil {
+		t.Fatalf("get after second upsert: %v", err)
+	}
+	if got.TypicalHour != 14 {
+		t.Fatalf("second upsert clobbered worker value: TypicalHour = %d, want 14",
+			got.TypicalHour)
+	}
+	if got.Count7d != 7 {
+		t.Fatalf("second upsert lost Count7d: got %d, want 7", got.Count7d)
+	}
+
+	// Third Upsert: even a valid in-range TypicalHour from the
+	// ingestion-time path MUST NOT overwrite the worker's value.
+	third := &CommunicationHistory{
+		TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), Count7d: 9, Relationship: "partner",
+		TypicalHour: 5,
+	}
+	if err := r.CommunicationHistories.Upsert(ctx, third); err != nil {
+		t.Fatalf("third upsert: %v", err)
+	}
+	got, err = r.CommunicationHistories.Get(ctx, "t-1", []byte("a"), []byte("b"))
+	if err != nil {
+		t.Fatalf("get after third upsert: %v", err)
+	}
+	if got.TypicalHour != 14 {
+		t.Fatalf("third upsert overwrote worker value with caller-supplied 5: got %d, want 14",
+			got.TypicalHour)
+	}
+}
+
 func TestMemoryClassifications(t *testing.T) {
 	ctx := context.Background()
 	r := NewInMemoryRegistry()

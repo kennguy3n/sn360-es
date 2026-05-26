@@ -699,23 +699,26 @@ func (p *pgCommHistory) Upsert(ctx context.Context, h *CommunicationHistory) err
 	if h.ID == "" {
 		h.ID = uuid.NewString()
 	}
-	// CommunicationHistory.TypicalHour contract:
-	//   - 0..23  → a valid hour-of-day (0 == midnight UTC); INSERT
-	//             persists it, ON CONFLICT replaces the column.
-	//   - any other value (canonically -1, the migration 0007
-	//             default) → "no baseline yet"; INSERT persists it
-	//             unchanged, ON CONFLICT leaves the existing column
-	//             untouched via the CASE guard below.
-	// This is the same contract memoryCommHistory.Upsert and
-	// pgCommHistory.UpdateCountsIfFresh use, so all three write
-	// paths behave identically. Callers that genuinely want "no
-	// change" must pass -1 explicitly — do NOT rely on the Go zero
-	// value, because 0 means midnight UTC.
+	// Upsert is the ingestion-time write path. It does NOT touch
+	// the typical_hour column — the only writer of typical_hour is
+	// UpdateCountsIfFresh (the relationship-worker CAS path), which
+	// has its own CASE guard on the worker's freshly-computed modal
+	// hour.
+	//
+	// Excluding typical_hour from this SQL eliminates a Go zero-value
+	// trap: CommunicationHistory.TypicalHour is an int whose zero
+	// value (0) happens to be the valid hour "midnight UTC". An
+	// ingestion-time caller that constructs a CommunicationHistory
+	// struct literal without explicitly setting TypicalHour would
+	// otherwise silently overwrite the worker-computed modal hour
+	// with 00:00 UTC on every Upsert. Keeping typical_hour out of
+	// the column list lets new rows fall back to the migration 0007
+	// column default (-1, "no baseline yet") and existing rows keep
+	// whatever the worker last wrote.
 	_, err := p.db.ExecContext(ctx, `
 INSERT INTO communication_histories (id, tenant_id, sender_hash, recipient_hash, sender_domain_hash,
-                                     sender_domain, count_7d, count_30d, first_seen_at, last_seen_at, relationship,
-                                     typical_hour)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,NOW()),COALESCE($10,NOW()),$11,$12)
+                                     sender_domain, count_7d, count_30d, first_seen_at, last_seen_at, relationship)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,NOW()),COALESCE($10,NOW()),$11)
 ON CONFLICT (tenant_id, sender_hash, recipient_hash) DO UPDATE SET
     sender_domain_hash=EXCLUDED.sender_domain_hash,
     sender_domain=EXCLUDED.sender_domain,
@@ -723,15 +726,10 @@ ON CONFLICT (tenant_id, sender_hash, recipient_hash) DO UPDATE SET
     count_30d=EXCLUDED.count_30d,
     last_seen_at=EXCLUDED.last_seen_at,
     relationship=EXCLUDED.relationship,
-    typical_hour=CASE
-        WHEN EXCLUDED.typical_hour >= 0 AND EXCLUDED.typical_hour < 24 THEN EXCLUDED.typical_hour
-        ELSE communication_histories.typical_hour
-    END,
     updated_at=NOW()
 `,
 		h.ID, h.TenantID, h.SenderHash, h.RecipientHash, h.SenderDomainHash,
 		h.SenderDomain, h.Count7d, h.Count30d, nullableTime(h.FirstSeenAt), nullableTime(h.LastSeenAt), h.Relationship,
-		h.TypicalHour,
 	)
 	return err
 }
