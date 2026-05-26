@@ -103,9 +103,22 @@ type RiskSignals struct {
 	RecipientDepartment    string `json:"recipient_department,omitempty"`
 	SenderKnownTitle       string `json:"sender_known_title,omitempty"`
 	CommunicationFrequency int    `json:"communication_frequency,omitempty"`
-	TypicalSendHour        int    `json:"typical_send_hour,omitempty"`
-	CurrentHourUTC         int    `json:"current_hour_utc,omitempty"`
-	IsFirstContact         bool   `json:"is_first_contact,omitempty"`
+	// TypicalSendHour is the modal hour-of-day (UTC, 0..23) the
+	// signal builder copied from communication_histories.typical_hour.
+	// A value outside [0, 24) is the "no baseline yet" sentinel that
+	// matches repository.TypicalHourUnset (-1) and the migration-0007
+	// column default. `omitempty` is deliberately omitted so the
+	// distinction between "midnight UTC" (valid hour 0) and "field
+	// not populated" (Go zero-value 0) is explicit on the wire —
+	// otherwise an absent JSON field would deserialise to 0
+	// (midnight) and the downstream ATO heuristic, despite its
+	// `< 0 || >= 24` sentinel guard, would still be fed a hour the
+	// producer never actually computed. Producers that lack a
+	// baseline MUST emit -1 explicitly; producers that observed
+	// midnight emit 0.
+	TypicalSendHour int  `json:"typical_send_hour"`
+	CurrentHourUTC  int  `json:"current_hour_utc,omitempty"`
+	IsFirstContact  bool `json:"is_first_contact,omitempty"`
 }
 
 // AnyAuthFailed reports whether at least one of SPF/DKIM/DMARC failed.

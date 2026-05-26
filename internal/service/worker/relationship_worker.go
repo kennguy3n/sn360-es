@@ -62,8 +62,20 @@ type RelationshipJobConfig struct {
 	// send-hour distributions from CommunicationHistory rows and
 	// upserts them during each aggregation cycle.
 	Baselines repository.UserBehavioralBaselineRepository
-	// Hasher produces PII-safe hashes for the baseline keys.
-	// Required when Baselines is non-nil.
+	// Hasher is a configuration-level parity guard: the worker
+	// writes per-(tenant, recipient_hash, sender_domain_hash)
+	// rows into BehavioralBaselines using the already-hashed
+	// columns on CommunicationHistory, so the function itself is
+	// never invoked inside Run. It is required to be non-nil only
+	// to ensure the deployment has wired the same PII hasher that
+	// (a) the ingestion pipeline used to produce h.RecipientHash
+	// and h.SenderDomainHash, and (b) the read side (e.g. the
+	// Tier 0 ATO heuristic looking up a baseline by hashed
+	// recipient) will use to query these rows back. Without that
+	// guarantee the worker's writes would land in keys nothing
+	// can ever look up; the guard surfaces the misconfiguration
+	// at job-construction time instead of producing silently
+	// orphaned rows. Required when Baselines is non-nil.
 	Hasher func(tenantID, input string) ([]byte, error)
 }
 
@@ -632,7 +644,14 @@ func modalHourOf(hours []int) int {
 	if total == 0 {
 		return -1
 	}
-	mode, best := -1, -1
+	// best := 0 is safe because the `total > 0` early-return
+	// above guarantees at least one counts[h] >= 1 exists, so the
+	// `c > best` comparison admits the first non-zero bucket on
+	// strict-greater semantics. Initialising to 0 instead of -1
+	// avoids the intermediate "mode = 0, best = 0" state that
+	// briefly appears when counts[0] == 0, which reads as a bug
+	// on first inspection. The result is identical.
+	mode, best := -1, 0
 	for h, c := range counts {
 		if c > best {
 			mode, best = h, c
