@@ -428,6 +428,20 @@ func (z Zoho) HasZoho() bool {
 		z.OrgID != "" && z.Domain != "" && z.RefreshToken != ""
 }
 
+// zohoDataCenterOrDefault normalises the operator-supplied data
+// centre. Empty / whitespace-only input maps to "com" (US), matching
+// the documented default in .env.example. Unknown values are passed
+// through (lower-cased) so the *BaseURL helpers can fall through to
+// their default switch arm rather than this code silently rewriting
+// invalid input.
+func zohoDataCenterOrDefault(raw string) string {
+	dc := strings.ToLower(strings.TrimSpace(raw))
+	if dc == "" {
+		return "com"
+	}
+	return dc
+}
+
 // Fastmail holds Fastmail (JMAP) configuration.
 //
 // Fastmail does not implement OAuth2 for personal/SMB API access; the
@@ -863,10 +877,15 @@ func Load() (Config, error) {
 			OrgID:        strings.TrimSpace(getStr("ZOHO_ORG_ID", "")),
 			// Domain is the provider-registry key — trim at the
 			// source for the same invariant as GWS.Domain.
-			Domain:       strings.TrimSpace(getStr("ZOHO_DOMAIN", "")),
-			BaseURL:      strings.TrimSpace(getStr("ZOHO_BASE_URL", "")),
-			AccountsURL:  strings.TrimSpace(getStr("ZOHO_ACCOUNTS_URL", "")),
-			DataCenter:   strings.ToLower(strings.TrimSpace(getStr("ZOHO_DATA_CENTER", ""))),
+			Domain:      strings.TrimSpace(getStr("ZOHO_DOMAIN", "")),
+			BaseURL:     strings.TrimSpace(getStr("ZOHO_BASE_URL", "")),
+			AccountsURL: strings.TrimSpace(getStr("ZOHO_ACCOUNTS_URL", "")),
+			// DataCenter defaults to "com" (US) when unset. We
+			// normalise here rather than at every consumer so the
+			// stored config matches the .env.example documentation
+			// and so the provider-init log line reports the
+			// effective region rather than an empty string.
+			DataCenter:   zohoDataCenterOrDefault(getStr("ZOHO_DATA_CENTER", "")),
 			RefreshToken: getStr("ZOHO_REFRESH_TOKEN", ""),
 		},
 		Fastmail: Fastmail{

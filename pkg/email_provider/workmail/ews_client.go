@@ -164,7 +164,7 @@ func (c *EWSClient) FindItems(ctx context.Context, impersonateEmail, folder stri
       <m:ParentFolderIds>
         <t:DistinguishedFolderId Id="%s"/>
       </m:ParentFolderIds>
-    </m:FindItem>`, limit, restriction, folder)
+    </m:FindItem>`, limit, restriction, xmlEscape(folder))
 	respBody, err := c.Invoke(ctx, impersonateEmail, body)
 	if err != nil {
 		return nil, fmt.Errorf("workmail: FindItem: %w", err)
@@ -282,7 +282,7 @@ func (c *EWSClient) CreateFolder(ctx context.Context, impersonateEmail, parentFo
           <t:DisplayName>%s</t:DisplayName>
         </t:Folder>
       </m:Folders>
-    </m:CreateFolder>`, parentFolder, xmlEscape(displayName))
+    </m:CreateFolder>`, xmlEscape(parentFolder), xmlEscape(displayName))
 	respBody, err := c.Invoke(ctx, impersonateEmail, xmlBody)
 	if err != nil {
 		return "", fmt.Errorf("workmail: CreateFolder: %w", err)
@@ -315,7 +315,7 @@ func (c *EWSClient) FindFolder(ctx context.Context, impersonateEmail, parentFold
       <m:ParentFolderIds>
         <t:DistinguishedFolderId Id="%s"/>
       </m:ParentFolderIds>
-    </m:FindFolder>`, xmlEscape(displayName), parentFolder)
+    </m:FindFolder>`, xmlEscape(displayName), xmlEscape(parentFolder))
 	respBody, err := c.Invoke(ctx, impersonateEmail, xmlBody)
 	if err != nil {
 		return "", fmt.Errorf("workmail: FindFolder: %w", err)
@@ -351,7 +351,7 @@ func (c *EWSClient) MoveItemToDistinguished(ctx context.Context, impersonateEmai
       <m:ItemIds>
         <t:ItemId Id="%s"/>
       </m:ItemIds>
-    </m:MoveItem>`, distinguishedFolder, xmlEscape(itemID))
+    </m:MoveItem>`, xmlEscape(distinguishedFolder), xmlEscape(itemID))
 	if _, err := c.Invoke(ctx, impersonateEmail, xmlBody); err != nil {
 		return fmt.Errorf("workmail: MoveItem distinguished: %w", err)
 	}

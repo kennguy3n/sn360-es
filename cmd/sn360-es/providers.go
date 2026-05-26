@@ -684,20 +684,32 @@ func buildFastmailEntry(_ context.Context, cfg *config.Config, logger *slog.Logg
 	}, nil
 }
 
+// buildWorkmailCredentials assembles the WorkMail credential chain
+// used by every WorkMail wiring path (provider registry, mailbox
+// poller, directory client). Centralising this prevents any one
+// site from forgetting to propagate a field — notably SessionToken,
+// which STS-issued temporary credentials require alongside the
+// access-key pair (the SigV4 signer emits X-Amz-Security-Token only
+// when SessionToken is non-empty).
+func buildWorkmailCredentials(cfg *config.Config) workmail.ChainedCredentials {
+	return workmail.ChainedCredentials{
+		Providers: []workmail.CredentialsProvider{
+			workmail.StaticCredentials{Credentials: workmail.Credentials{
+				AccessKeyID:     cfg.WorkMail.AccessKeyID,
+				SecretAccessKey: cfg.WorkMail.SecretAccessKey,
+				SessionToken:    cfg.WorkMail.SessionToken,
+			}},
+			workmail.EnvCredentials{},
+		},
+	}
+}
+
 // buildWorkmailEntry constructs the WorkMail provider stack. WorkMail
 // uses AWS IAM credentials (static via config, or the standard env
 // chain) signed with SigV4. The same Signer backs both the JSON API
 // client and the EWS client because WorkMail's IAM scope covers both.
 func buildWorkmailEntry(_ context.Context, cfg *config.Config, logger *slog.Logger) (*providerEntry, error) {
-	creds := workmail.ChainedCredentials{
-		Providers: []workmail.CredentialsProvider{
-			workmail.StaticCredentials{Credentials: workmail.Credentials{
-				AccessKeyID:     cfg.WorkMail.AccessKeyID,
-				SecretAccessKey: cfg.WorkMail.SecretAccessKey,
-			}},
-			workmail.EnvCredentials{},
-		},
-	}
+	creds := buildWorkmailCredentials(cfg)
 	signer, err := workmail.NewSigner(workmail.SignerConfig{
 		Region:      cfg.WorkMail.Region,
 		Service:     "workmail",

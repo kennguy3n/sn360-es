@@ -253,44 +253,109 @@ func buildBlobURL(template, accountID, blobID, name string) string {
 }
 
 // spliceBanner inserts the banner HTML into the appropriate MIME part
-// of an RFC822 message. The implementation parses the MIME structure
-// using net/mail and re-renders the body with the banner prepended.
+// of an RFC822 message and returns the rebuilt message bytes. The
+// header section is preserved verbatim from the original raw input
+// rather than reconstructed from the parsed mail.Header map: header
+// order is significant in RFC 5322 (e.g. trace headers like
+// `Received` must appear in reverse chronological order) and
+// reassembling from a Go map randomises iteration order, which would
+// (a) corrupt diagnostic trace data and (b) make banner-injection
+// output non-reproducible for the same input.
+//
+// When the body type changes (plain-text promoted to HTML) we rewrite
+// only the single Content-Type header line in the verbatim header
+// block, leaving every other header byte-identical.
 func spliceBanner(raw, banner []byte) ([]byte, error) {
+	headerBytes, bodyBytes, sepStyle, err := splitHeaderBody(raw)
+	if err != nil {
+		return nil, err
+	}
 	parsed, err := mail.ReadMessage(bytes.NewReader(raw))
 	if err != nil {
 		return nil, fmt.Errorf("parse rfc822: %w", err)
 	}
 	ct := parsed.Header.Get("Content-Type")
-	body, err := io.ReadAll(parsed.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
-	}
 	var mutated []byte
+	rewriteContentType := ""
 	switch {
 	case strings.HasPrefix(strings.ToLower(ct), "multipart/"):
-		mutated, err = injectIntoMultipart(parsed.Header, ct, body, banner)
+		mutated, err = injectIntoMultipart(parsed.Header, ct, bodyBytes, banner)
 		if err != nil {
 			return nil, err
 		}
 	case strings.Contains(strings.ToLower(ct), "text/html"):
-		mutated = []byte(spliceHTMLBanner(string(body), string(banner)))
+		mutated = []byte(spliceHTMLBanner(string(bodyBytes), string(banner)))
 	default:
-		// Plain text or unspecified → wrap in HTML.
-		text := htmlEscape(string(body))
+		// Plain text or unspecified → wrap in HTML. We promote the
+		// Content-Type header to text/html so downstream MUAs render
+		// the spliced HTML rather than treating it as literal text.
+		text := htmlEscape(string(bodyBytes))
 		mutated = []byte(string(banner) + "<hr/><pre>" + text + "</pre>")
-		parsed.Header["Content-Type"] = []string{"text/html; charset=utf-8"}
+		rewriteContentType = "text/html; charset=utf-8"
 	}
-	// Re-assemble header + body. We preserve the original headers
-	// verbatim (banner injection should not change envelope info).
+	if rewriteContentType != "" {
+		headerBytes = rewriteHeaderLine(headerBytes, "Content-Type", rewriteContentType, sepStyle)
+	}
 	var out bytes.Buffer
-	for k, vs := range parsed.Header {
-		for _, v := range vs {
-			fmt.Fprintf(&out, "%s: %s\r\n", k, v)
-		}
-	}
-	out.WriteString("\r\n")
+	out.Grow(len(headerBytes) + len(sepStyle)*2 + len(mutated))
+	out.Write(headerBytes)
+	// Re-emit the header/body separator (a blank line) using the
+	// line-ending style detected in the original message — sepStyle
+	// once to terminate the final header, and again to form the blank
+	// line that separates headers from body. RFC 5322 mandates CRLF
+	// but real-world JMAP blobs sometimes ship LF-only.
+	out.WriteString(sepStyle)
+	out.WriteString(sepStyle)
 	out.Write(mutated)
 	return out.Bytes(), nil
+}
+
+// splitHeaderBody finds the first blank line (RFC 5322 §2.1 header/
+// body separator) and returns the header bytes (without the
+// terminator), the body bytes, and the line-ending style observed
+// ("\r\n" or "\n"). When the message has no body, body is empty and
+// sepStyle defaults to CRLF.
+func splitHeaderBody(raw []byte) ([]byte, []byte, string, error) {
+	if idx := bytes.Index(raw, []byte("\r\n\r\n")); idx >= 0 {
+		return raw[:idx], raw[idx+4:], "\r\n", nil
+	}
+	if idx := bytes.Index(raw, []byte("\n\n")); idx >= 0 {
+		return raw[:idx], raw[idx+2:], "\n", nil
+	}
+	// No body — treat the whole thing as headers; emit CRLF on
+	// re-assembly which is RFC-compliant even if the input was LF.
+	return raw, nil, "\r\n", nil
+}
+
+// rewriteHeaderLine replaces the value of an existing header (matched
+// case-insensitively on the field name) in headerBytes, or appends a
+// new header line when none is present. The header block uses the
+// supplied line-ending sepStyle. Continuation lines (RFC 5322 §2.2.3
+// "folded" headers) are handled: the value spans from the colon up to
+// the next line that does NOT start with whitespace.
+func rewriteHeaderLine(headerBytes []byte, name, value, sepStyle string) []byte {
+	needle := strings.ToLower(name) + ":"
+	lines := bytes.Split(headerBytes, []byte(sepStyle))
+	for i := 0; i < len(lines); i++ {
+		if !bytes.HasPrefix(bytes.ToLower(lines[i]), []byte(needle)) {
+			continue
+		}
+		// Replace the first line of the folded header and drop any
+		// continuation lines belonging to it.
+		start := i + 1
+		end := start
+		for end < len(lines) && len(lines[end]) > 0 && (lines[end][0] == ' ' || lines[end][0] == '\t') {
+			end++
+		}
+		lines[i] = []byte(name + ": " + value)
+		lines = append(lines[:start], lines[end:]...)
+		return bytes.Join(lines, []byte(sepStyle))
+	}
+	// Not found — append a fresh header line.
+	if len(headerBytes) > 0 {
+		return append(append(headerBytes, []byte(sepStyle)...), []byte(name+": "+value)...)
+	}
+	return []byte(name + ": " + value)
 }
 
 // injectIntoMultipart finds the first text/html (or text/plain) sub

@@ -357,15 +357,7 @@ func buildMailboxProviders(ctx context.Context, cfg *config.Config, logger *slog
 		}
 	}
 	if cfg.WorkMail.HasWorkMail() {
-		creds := workmail.ChainedCredentials{
-			Providers: []workmail.CredentialsProvider{
-				workmail.StaticCredentials{Credentials: workmail.Credentials{
-					AccessKeyID:     cfg.WorkMail.AccessKeyID,
-					SecretAccessKey: cfg.WorkMail.SecretAccessKey,
-				}},
-				workmail.EnvCredentials{},
-			},
-		}
+		creds := buildWorkmailCredentials(cfg)
 		signer, serr := workmail.NewSigner(workmail.SignerConfig{
 			Region:      cfg.WorkMail.Region,
 			Service:     "workmail",

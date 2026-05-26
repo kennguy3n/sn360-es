@@ -35,12 +35,19 @@ type Client struct {
 	accountIDMu     sync.RWMutex
 	accountIDByMail map[string]string
 
-	// dirOnce ensures the account-id-warming directory lookup runs at
-	// most once per Client even when ResolveAccountID is called
-	// concurrently from different providers. On error we reset the
-	// once so the next caller can retry rather than caching the
-	// failure forever.
-	dirOnce sync.Once
+	// dirWarmMu serialises the directory-warm path so only one
+	// goroutine issues the underlying /api/users walk even when
+	// several providers call ResolveAccountID concurrently. We use a
+	// plain Mutex + warmed bool rather than sync.Once because we need
+	// retry-on-error semantics: a transient directory failure must
+	// not permanently disable resolution, which means we have to be
+	// able to re-arm the gate from a goroutine that may share the
+	// gate with another in-flight reader. sync.Once cannot be reset
+	// safely (its internal atomic state cannot be reassigned without
+	// a data race with concurrent Do() callers), so we own that state
+	// ourselves.
+	dirWarmMu sync.Mutex
+	dirWarmed bool
 }
 
 // ClientConfig configures Client.
@@ -102,37 +109,8 @@ func (c *Client) ResolveAccountID(ctx context.Context, email string) (string, er
 	}
 	c.accountIDMu.RUnlock()
 
-	var warmErr error
-	c.dirOnce.Do(func() {
-		dir, err := NewDirectoryClient(DirectoryClientConfig{Client: c})
-		if err != nil {
-			warmErr = err
-			return
-		}
-		users, err := dir.ListUsers(ctx, "")
-		if err != nil {
-			warmErr = fmt.Errorf("zoho: warm account id cache: %w", err)
-			return
-		}
-		c.accountIDMu.Lock()
-		for _, u := range users {
-			if u.Email != "" {
-				c.accountIDByMail[strings.ToLower(u.Email)] = u.ID
-			}
-			for _, a := range u.Aliases {
-				if a != "" {
-					c.accountIDByMail[strings.ToLower(a)] = u.ID
-				}
-			}
-		}
-		c.accountIDMu.Unlock()
-	})
-	if warmErr != nil {
-		// Reset the once so a transient directory failure does not
-		// permanently disable resolution for the lifetime of the
-		// Client.
-		c.dirOnce = sync.Once{}
-		return "", warmErr
+	if err := c.warmAccountIDCache(ctx); err != nil {
+		return "", err
 	}
 	c.accountIDMu.RLock()
 	id, ok := c.accountIDByMail[target]
@@ -141,6 +119,42 @@ func (c *Client) ResolveAccountID(ctx context.Context, email string) (string, er
 		return "", fmt.Errorf("zoho: no account found for %s", target)
 	}
 	return id, nil
+}
+
+// warmAccountIDCache populates the email → account-id cache from a
+// single DirectoryClient.ListUsers walk. It is safe for concurrent
+// callers: the dirWarmMu guarantees at most one outstanding warm at a
+// time, and dirWarmed remembers a successful warm so subsequent
+// callers fast-path through. On error dirWarmed stays false so the
+// next caller (this one or another goroutine) will retry.
+func (c *Client) warmAccountIDCache(ctx context.Context) error {
+	c.dirWarmMu.Lock()
+	defer c.dirWarmMu.Unlock()
+	if c.dirWarmed {
+		return nil
+	}
+	dir, err := NewDirectoryClient(DirectoryClientConfig{Client: c})
+	if err != nil {
+		return err
+	}
+	users, err := dir.ListUsers(ctx, "")
+	if err != nil {
+		return fmt.Errorf("zoho: warm account id cache: %w", err)
+	}
+	c.accountIDMu.Lock()
+	for _, u := range users {
+		if u.Email != "" {
+			c.accountIDByMail[strings.ToLower(u.Email)] = u.ID
+		}
+		for _, a := range u.Aliases {
+			if a != "" {
+				c.accountIDByMail[strings.ToLower(a)] = u.ID
+			}
+		}
+	}
+	c.accountIDMu.Unlock()
+	c.dirWarmed = true
+	return nil
 }
 
 // BaseURL exposes the resolved base URL, useful for diagnostics.
