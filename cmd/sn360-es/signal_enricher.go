@@ -142,8 +142,14 @@ func (e *commHistorySignalEnricher) Enrich(ctx context.Context, req dto.Evaluate
 		// Transient repository failure: do NOT synthesise a
 		// first-contact flag (it would force every in-flight
 		// message into Tier 2 during a Postgres blip). Leave the
-		// fields at their base values and rely on the heuristic's
-		// graceful no-baseline degradation.
+		// per-relationship fields (CommunicationFrequency,
+		// IsFirstContact, RelationshipCategory) at their base
+		// values and rely on the heuristic's graceful no-baseline
+		// degradation. CurrentHourUTC and TypicalSendHour have
+		// already been stamped/cleared up front per the enricher-
+		// owned contract; they are intentionally NOT rolled back
+		// here because a Postgres blip cannot un-do the fact that
+		// this message arrived at the time it arrived.
 		e.logger.Warn("signal enricher: communication_histories.Get failed; degrading to base signals",
 			slog.String("tenant_id", tenantID), slog.Any("error", err))
 		return out
