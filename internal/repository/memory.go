@@ -663,10 +663,15 @@ func (m *memoryCommHistory) UpdateCountsIfFresh(_ context.Context, h *Communicat
 	}
 	cur.UpdatedAt = time.Now().UTC()
 	m.rows[key] = cur
-	// Reflect the write back to the caller so callers that inspect
-	// `h.UpdatedAt` after the CAS see the fresh stamp.
-	h.UpdatedAt = cur.UpdatedAt
-	h.TypicalHour = cur.TypicalHour
+	// UpdateCountsIfFresh contract: callers MUST NOT inspect *h
+	// after a successful CAS; the canonical post-write row state
+	// lives in the repository. The Postgres implementation uses
+	// ExecContext (no RETURNING), so its caller sees no reflection
+	// of the fresh UpdatedAt or merged TypicalHour either. Keeping
+	// the in-memory implementation deliberately non-reflective
+	// avoids a behaviour divergence that would otherwise hide
+	// bugs in tests (memory) that production (Postgres) would
+	// surface.
 	return true, nil
 }
 

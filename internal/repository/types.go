@@ -389,6 +389,17 @@ type CommunicationHistoryRepository interface {
 	// increment-and-stamp model. The worker is the only caller
 	// that needs the CAS semantics because it carries a stale
 	// snapshot across a list/decide/write boundary.
+	//
+	// Reflection contract: implementations MUST NOT be relied upon
+	// to reflect the post-CAS row state back onto *h. The Postgres
+	// implementation uses ExecContext (no RETURNING clause), so
+	// `h.UpdatedAt` and `h.TypicalHour` retain whatever values the
+	// caller passed in even after a successful return — the
+	// canonical post-write state lives in the repository and must
+	// be re-read via Get / ListByTenant if needed. The in-memory
+	// implementation matches this contract deliberately so tests
+	// cannot accidentally depend on a reflection that production
+	// does not provide.
 	UpdateCountsIfFresh(ctx context.Context, h *CommunicationHistory, readAt time.Time) (bool, error)
 }
 

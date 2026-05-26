@@ -380,15 +380,26 @@ func (j *RelationshipJob) prepareBaselineUpdate(
 	// Load the existing baseline (if any) so the new hour is
 	// appended rather than overwriting. Treat ErrNotFound as
 	// "first observation".
+	//
+	// On a transient Get failure (anything other than ErrNotFound,
+	// e.g. a DB timeout or connection blip) we return (nil, nil)
+	// rather than falling through with an empty existingHours.
+	// Falling through would cause persistBaselineUpdate to write
+	// back a length-1 slice that overwrites the (possibly large)
+	// accumulated distribution still sitting in the repository — a
+	// worse failure mode than skipping this cycle. Skipping
+	// preserves the histogram and the next worker tick will retry
+	// the Get against a healthy DB. The single missed sample is
+	// inconsequential against a 168-entry FIFO window.
 	var existingHours []int
 	prev, gerr := j.cfg.Baselines.Get(ctx, tenantID, h.RecipientHash, h.SenderDomainHash)
-	if gerr == nil && prev != nil {
+	switch {
+	case gerr == nil && prev != nil:
 		existingHours = append(existingHours, prev.TypicalSendHours...)
-	} else if gerr != nil && !errors.Is(gerr, repository.ErrNotFound) {
-		j.logger.Warn("worker.relationship: baseline get failed",
+	case gerr != nil && !errors.Is(gerr, repository.ErrNotFound):
+		j.logger.Warn("worker.relationship: baseline get failed; skipping cycle to preserve histogram",
 			slog.String("tenant_id", tenantID), slog.Any("error", gerr))
-		// Fall through with the empty existingHours — we still
-		// want to record the new hour as the first sample.
+		return nil, nil
 	}
 
 	existingHours = append(existingHours, sendHour)
