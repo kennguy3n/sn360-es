@@ -573,27 +573,39 @@ func (m *memoryCommHistory) Upsert(_ context.Context, h *CommunicationHistory) e
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := commKey(h.TenantID, h.SenderHash, h.RecipientHash)
-	// Upsert is the ingestion-time write path. It does NOT touch
-	// the typical_hour column — only UpdateCountsIfFresh (the
-	// relationship-worker CAS path) writes typical_hour. This
-	// mirrors the Postgres implementation, which excludes
-	// typical_hour from its INSERT/ON CONFLICT SQL entirely.
+	// Upsert is the ingestion-time write path. The persisted row
+	// is built from a *local copy* of h so the caller's struct is
+	// not mutated by the column-preservation logic below — this
+	// matches the Postgres implementation, which only writes via
+	// SQL and leaves the Go struct untouched.
 	//
-	// Forcing the persisted TypicalHour to the prior value (or to
-	// the migration-0007 default on first insert) eliminates the
-	// Go zero-value trap: an ingestion-time caller that omits
-	// TypicalHour would otherwise silently overwrite the worker's
-	// modal hour with midnight UTC (0), the int zero value that
-	// happens to fall inside the valid 0..23 range.
+	// On the existing-row branch the persisted row preserves the
+	// three columns the Postgres ON CONFLICT clause deliberately
+	// leaves out of its DO UPDATE SET:
 	//
-	// The persisted row is built from a *local copy* of h so the
-	// caller's struct is not mutated. This matches the Postgres
-	// implementation, which only writes to the column via SQL and
-	// leaves h.TypicalHour untouched in Go memory — keeping the
-	// two backends behaviourally identical for tests that inspect
-	// the caller's pointer after a successful Upsert.
+	//   - id            : the primary key is row-stable; Postgres
+	//                     never re-assigns it on conflict. Memory
+	//                     mirrors that, even though the caller's
+	//                     h.ID was set to a fresh UUID at the top
+	//                     of Upsert (same wasted-UUID quirk both
+	//                     backends share for the new-row case).
+	//   - first_seen_at : the rolling window's lower bound is
+	//                     monotonic — once observed, the timestamp
+	//                     of the first sighting must never advance
+	//                     backwards. The Tier 0 FirstTimeExternal
+	//                     heuristic depends on this stability.
+	//   - typical_hour  : owned by UpdateCountsIfFresh (the
+	//                     relationship-worker CAS path); Upsert
+	//                     never overwrites the worker-computed
+	//                     modal hour. This eliminates the Go
+	//                     zero-value trap whereby h.TypicalHour
+	//                     left at the int zero value (0 ==
+	//                     midnight UTC) would silently clobber the
+	//                     worker's value.
 	row := *h
 	if cur, ok := m.rows[key]; ok {
+		row.ID = cur.ID
+		row.FirstSeenAt = cur.FirstSeenAt
 		row.TypicalHour = cur.TypicalHour
 	} else {
 		row.TypicalHour = TypicalHourUnset

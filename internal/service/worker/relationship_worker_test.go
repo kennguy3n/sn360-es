@@ -335,11 +335,12 @@ func TestBuildSenderObservations_Aggregates(t *testing.T) {
 // real Postgres pool. It keyed on (tenant, user_hash, sender_hash)
 // the same way the production pgBehavioralBaselines table is.
 type fakeBaselineRepo struct {
-	mu      sync.Mutex
-	rows    map[string]repository.UserBehavioralBaseline
-	getErr  error
-	upErr   error
-	upCalls int
+	mu       sync.Mutex
+	rows     map[string]repository.UserBehavioralBaseline
+	getErr   error
+	upErr    error
+	upCalls  int
+	getCalls int
 }
 
 func newFakeBaselineRepo() *fakeBaselineRepo {
@@ -353,6 +354,7 @@ func (f *fakeBaselineRepo) baselineKey(tenantID string, userHash, senderHash []b
 func (f *fakeBaselineRepo) Get(_ context.Context, tenantID string, userHash, senderDomainHash []byte) (*repository.UserBehavioralBaseline, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.getCalls++
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
@@ -559,6 +561,101 @@ func TestRelationshipJob_Run_CASRejection_DoesNotPolluteBaseline(t *testing.T) {
 	for i, h := range want {
 		if b.TypicalSendHours[i] != h {
 			t.Errorf("baseline hours[%d] = %d, want %d", i, b.TypicalSendHours[i], h)
+		}
+	}
+}
+
+// TestRelationshipJob_Run_BaselineCacheCollapsesNplus1Lookups
+// verifies the per-cycle baselineCache eliminates the N+1 Get
+// pattern when many communication_histories rows share the same
+// (recipient, sender_domain) baseline key. Without the cache the
+// worker would issue len(rows) Baselines.Get calls per cycle;
+// with the cache it issues exactly one per unique key. The test
+// also confirms the per-row hour samples are still aggregated
+// into the persisted baseline so the histogram doesn't lose
+// information.
+func TestRelationshipJob_Run_BaselineCacheCollapsesNplus1Lookups(t *testing.T) {
+	day := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	baselines := newFakeBaselineRepo()
+
+	// Five communication_histories rows: three share recipient
+	// "b" + sender_domain "d" (one baseline), two share
+	// recipient "b" + sender_domain "e" (second baseline). Total
+	// unique baseline keys: 2, so post-cycle the cache should
+	// have collapsed the Get count to exactly 2.
+	rows := []repository.CommunicationHistory{
+		{ID: "r1", TenantID: "t-1", SenderHash: []byte("a1"), RecipientHash: []byte("b"),
+			SenderDomainHash: []byte("d"), SenderDomain: "d.example", Count30d: 4,
+			LastSeenAt: day.Add(9 * time.Hour), UpdatedAt: day},
+		{ID: "r2", TenantID: "t-1", SenderHash: []byte("a2"), RecipientHash: []byte("b"),
+			SenderDomainHash: []byte("d"), SenderDomain: "d.example", Count30d: 4,
+			LastSeenAt: day.Add(14 * time.Hour), UpdatedAt: day},
+		{ID: "r3", TenantID: "t-1", SenderHash: []byte("a3"), RecipientHash: []byte("b"),
+			SenderDomainHash: []byte("d"), SenderDomain: "d.example", Count30d: 4,
+			LastSeenAt: day.Add(14 * time.Hour), UpdatedAt: day},
+		{ID: "r4", TenantID: "t-1", SenderHash: []byte("a4"), RecipientHash: []byte("b"),
+			SenderDomainHash: []byte("e"), SenderDomain: "e.example", Count30d: 4,
+			LastSeenAt: day.Add(10 * time.Hour), UpdatedAt: day},
+		{ID: "r5", TenantID: "t-1", SenderHash: []byte("a5"), RecipientHash: []byte("b"),
+			SenderDomainHash: []byte("e"), SenderDomain: "e.example", Count30d: 4,
+			LastSeenAt: day.Add(10 * time.Hour), UpdatedAt: day},
+	}
+
+	tl := &fakeTenantLister{tenants: []repository.Tenant{{ID: "t-1"}}}
+	cs := &fakeCommunicationStore{rowsByTenant: map[string][]repository.CommunicationHistory{"t-1": rows}}
+	up := &fakeCommUpserter{accept: true}
+	hasher := func(_, _ string) ([]byte, error) { return []byte("ok"), nil }
+
+	job, err := NewRelationshipJob(RelationshipJobConfig{
+		Interval: time.Hour, Tenants: tl, Communications: cs, Upserter: up,
+		Baselines: baselines, Hasher: hasher, Logger: discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if err := job.Run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// Cache regression: exactly 2 Get calls for 5 rows. Without
+	// caching this would be 5 (one per row).
+	if baselines.getCalls != 2 {
+		t.Fatalf("Baselines.Get call count = %d, want 2 (one per unique recipient+sender_domain pair); cache is not collapsing N+1 lookups",
+			baselines.getCalls)
+	}
+
+	// Aggregation regression: even with caching, every row's
+	// sendHour must still land in the persisted baseline. The
+	// first baseline (recipient b, sender_domain d) accumulates
+	// hours [9, 14, 14] from r1/r2/r3.
+	bd, err := baselines.Get(context.Background(), "t-1", []byte("b"), []byte("d"))
+	if err != nil {
+		t.Fatalf("baseline (b,d) get: %v", err)
+	}
+	wantBD := []int{9, 14, 14}
+	if len(bd.TypicalSendHours) != len(wantBD) {
+		t.Fatalf("baseline (b,d) hours = %v, want %v (cache must still aggregate every row's sample)",
+			bd.TypicalSendHours, wantBD)
+	}
+	for i, want := range wantBD {
+		if bd.TypicalSendHours[i] != want {
+			t.Errorf("baseline (b,d) hours[%d] = %d, want %d", i, bd.TypicalSendHours[i], want)
+		}
+	}
+
+	// The second baseline (recipient b, sender_domain e)
+	// accumulates hours [10, 10] from r4/r5.
+	be, err := baselines.Get(context.Background(), "t-1", []byte("b"), []byte("e"))
+	if err != nil {
+		t.Fatalf("baseline (b,e) get: %v", err)
+	}
+	wantBE := []int{10, 10}
+	if len(be.TypicalSendHours) != len(wantBE) {
+		t.Fatalf("baseline (b,e) hours = %v, want %v", be.TypicalSendHours, wantBE)
+	}
+	for i, want := range wantBE {
+		if be.TypicalSendHours[i] != want {
+			t.Errorf("baseline (b,e) hours[%d] = %d, want %d", i, be.TypicalSendHours[i], want)
 		}
 	}
 }

@@ -232,6 +232,61 @@ func TestMemoryCommHistory_Upsert_DoesNotWriteTypicalHour(t *testing.T) {
 	}
 }
 
+// TestMemoryCommHistory_Upsert_PreservesIDAndFirstSeen locks in
+// the contract that the memory backend behaves identically to the
+// Postgres ON CONFLICT clause for the two columns the SQL
+// deliberately leaves out of DO UPDATE SET: id and first_seen_at.
+// Without this guarantee, an ingestion-time Upsert against an
+// existing row would clobber the original row id (breaking
+// log-tailing keyed on id) and reset first_seen_at to "now"
+// (breaking the Tier 0 FirstTimeExternal heuristic, which depends
+// on first_seen_at being monotonic).
+func TestMemoryCommHistory_Upsert_PreservesIDAndFirstSeen(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+
+	firstSeen := time.Date(2026, 1, 15, 9, 0, 0, 0, time.UTC)
+	first := &CommunicationHistory{
+		ID:       "row-original-id",
+		TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), Count7d: 3, Relationship: "partner",
+		FirstSeenAt: firstSeen,
+	}
+	if err := r.CommunicationHistories.Upsert(ctx, first); err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+
+	// Conflict path: caller supplies a fresh ID and a later
+	// FirstSeenAt. Postgres preserves the original via ON
+	// CONFLICT; memory must mirror that.
+	laterSeen := firstSeen.Add(72 * time.Hour)
+	second := &CommunicationHistory{
+		ID:       "row-new-id",
+		TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), Count7d: 7, Relationship: "partner",
+		FirstSeenAt: laterSeen,
+	}
+	if err := r.CommunicationHistories.Upsert(ctx, second); err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	got, err := r.CommunicationHistories.Get(ctx, "t-1", []byte("a"), []byte("b"))
+	if err != nil {
+		t.Fatalf("get after second upsert: %v", err)
+	}
+	if got.ID != "row-original-id" {
+		t.Fatalf("conflict Upsert overwrote ID: got %q, want %q (Postgres parity)",
+			got.ID, "row-original-id")
+	}
+	if !got.FirstSeenAt.Equal(firstSeen) {
+		t.Fatalf("conflict Upsert advanced FirstSeenAt: got %s, want %s (rolling-window monotonicity)",
+			got.FirstSeenAt, firstSeen)
+	}
+	if got.Count7d != 7 {
+		t.Fatalf("conflict Upsert lost Count7d: got %d, want 7 (must still update mutable columns)",
+			got.Count7d)
+	}
+}
+
 func TestMemoryClassifications(t *testing.T) {
 	ctx := context.Background()
 	r := NewInMemoryRegistry()

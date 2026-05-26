@@ -187,6 +187,15 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 			}
 			continue
 		}
+		// Per-tenant, per-cycle baseline cache: many communication
+		// history rows share the same (recipient, sender_domain)
+		// baseline. The cache collapses N rows-per-baseline into a
+		// single Baselines.Get for the whole cycle; subsequent
+		// rows pick up the running-aggregate state that
+		// persistBaselineUpdate writes back into the cache. The
+		// cache is created fresh per tenant so cross-tenant state
+		// can never leak.
+		cache := make(baselineCache)
 		for i := range rows {
 			h := rows[i]
 
@@ -264,7 +273,7 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 			var preparedBaseline *repository.UserBehavioralBaseline
 			if j.cfg.Baselines != nil && j.cfg.Hasher != nil && len(h.RecipientHash) > 0 && len(h.SenderDomainHash) > 0 {
 				sendHour := h.LastSeenAt.UTC().Hour()
-				accumulated, bl := j.prepareBaselineUpdate(ctx, t.ID, h, sendHour)
+				accumulated, bl := j.prepareBaselineUpdate(ctx, t.ID, h, sendHour, cache)
 				if len(accumulated) > 0 {
 					modalHour = modalHourOf(accumulated)
 				}
@@ -318,7 +327,10 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 			// baseline. A best-effort Upsert: persistence failure is
 			// logged and the cycle still counts as processed, since
 			// the canonical communication-history write succeeded.
-			j.persistBaselineUpdate(ctx, t.ID, preparedBaseline)
+			// The per-cycle cache is updated through persistBaselineUpdate
+			// so subsequent rows for the same (recipient, sender_domain)
+			// pair see the running aggregate.
+			j.persistBaselineUpdate(ctx, t.ID, preparedBaseline, cache)
 			processed++
 		}
 	}
@@ -340,6 +352,35 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 // sends without consuming a megabyte per pair in the worst case.
 const maxBaselineSendHours = 168
 
+// baselineCache is a per-tenant, per-cycle memoisation map for
+// UserBehavioralBaseline lookups. A communication_histories scan
+// can return many rows that share the same (recipient,
+// sender_domain) pair — e.g. ten distinct senders within
+// acme.example all writing to charlie@us.example produce ten rows
+// keyed by (sender_hash, recipient_hash) but they all roll up to
+// the same baseline keyed by (user_email_hash, sender_domain_hash).
+// Without caching, prepareBaselineUpdate would re-issue the same
+// Baselines.Get against Postgres N times per cycle; with caching,
+// each unique baseline is fetched exactly once and the prepared
+// hour is folded into the cached entry by persistBaselineUpdate so
+// subsequent rows in the same cycle see the cumulative state.
+//
+// The cache is scoped to one tenant's iteration of the Run loop
+// and discarded at the end of that tenant's pass — it is not a
+// long-lived cache, just per-cycle memoisation. A nil value in the
+// map encodes a negative result ("ErrNotFound was returned on
+// first lookup") so subsequent rows for the same key skip the DB
+// hit entirely.
+type baselineCache map[string]*repository.UserBehavioralBaseline
+
+// baselineCacheKey concatenates the recipient hash and sender
+// domain hash with a NUL separator. Both hashes are fixed-width
+// in practice but the separator removes any ambiguity for
+// variable-width future inputs.
+func baselineCacheKey(recipientHash, senderDomainHash []byte) string {
+	return string(recipientHash) + "\x00" + string(senderDomainHash)
+}
+
 // prepareBaselineUpdate computes the accumulated send-hour
 // distribution for this (tenant, user, sender_domain) tuple
 // without writing it back. The returned baseline struct is ready
@@ -348,8 +389,11 @@ const maxBaselineSendHours = 168
 // avoids polluting the histogram with phantom samples drawn from
 // snapshots that ultimately lose a CAS race against ingestion.
 //
-// The function fetches the prior baseline (if any), appends
-// sendHour to its TypicalSendHours slice (FIFO-capped at
+// The function consults the per-cycle `cache` first to avoid the
+// N+1 Get pattern for rows that share a baseline key. On a miss,
+// it loads the prior baseline (if any), records the outcome in
+// the cache (including the negative ErrNotFound case), appends
+// sendHour to the TypicalSendHours slice (FIFO-capped at
 // maxBaselineSendHours), recomputes AvgMessagesPerWeek from the
 // snapshot's 30-day count, and returns:
 //   - the in-memory accumulated hours slice (post-append,
@@ -357,15 +401,17 @@ const maxBaselineSendHours = 168
 //   - the prepared *repository.UserBehavioralBaseline ready for
 //     Upsert, or nil if there is nothing meaningful to persist.
 //
-// A baseline-Get failure (other than ErrNotFound) is logged and
-// the function continues with an empty existing slice — the new
-// hour is still recorded as the first sample so the modal-hour
-// computation has something to work with.
+// A transient baseline-Get failure (other than ErrNotFound) is
+// logged and the cache is NOT poisoned with a negative entry —
+// the next row whose key collides will retry the Get against a
+// healthy DB. The current row is skipped to preserve the existing
+// histogram.
 func (j *RelationshipJob) prepareBaselineUpdate(
 	ctx context.Context,
 	tenantID string,
 	h repository.CommunicationHistory,
 	sendHour int,
+	cache baselineCache,
 ) ([]int, *repository.UserBehavioralBaseline) {
 	if sendHour < 0 || sendHour >= 24 {
 		return nil, nil
@@ -377,31 +423,39 @@ func (j *RelationshipJob) prepareBaselineUpdate(
 		return nil, nil
 	}
 
-	// Load the existing baseline (if any) so the new hour is
-	// appended rather than overwriting. Treat ErrNotFound as
-	// "first observation".
+	// Look up (or load) the prior baseline through the per-cycle
+	// cache. A cache hit returns the value as-is (nil means
+	// "ErrNotFound was cached on first encounter"); a cache miss
+	// falls through to Baselines.Get and records the result.
 	//
-	// On a transient Get failure (anything other than ErrNotFound,
-	// e.g. a DB timeout or connection blip) we return (nil, nil)
-	// rather than falling through with an empty existingHours.
-	// Falling through would cause persistBaselineUpdate to write
-	// back a length-1 slice that overwrites the (possibly large)
-	// accumulated distribution still sitting in the repository — a
-	// worse failure mode than skipping this cycle. Skipping
-	// preserves the histogram and the next worker tick will retry
-	// the Get against a healthy DB. The single missed sample is
-	// inconsequential against a 168-entry FIFO window.
-	var existingHours []int
-	prev, gerr := j.cfg.Baselines.Get(ctx, tenantID, h.RecipientHash, h.SenderDomainHash)
-	switch {
-	case gerr == nil && prev != nil:
-		existingHours = append(existingHours, prev.TypicalSendHours...)
-	case gerr != nil && !errors.Is(gerr, repository.ErrNotFound):
-		j.logger.Warn("worker.relationship: baseline get failed; skipping cycle to preserve histogram",
-			slog.String("tenant_id", tenantID), slog.Any("error", gerr))
-		return nil, nil
+	// On a transient Get failure (DB timeout, connection blip) we
+	// return (nil, nil) and leave the cache empty for this key —
+	// subsequent rows that share the key will retry the Get rather
+	// than silently inheriting the failure.
+	key := baselineCacheKey(h.RecipientHash, h.SenderDomainHash)
+	var prev *repository.UserBehavioralBaseline
+	if cached, ok := cache[key]; ok {
+		prev = cached
+	} else {
+		loaded, gerr := j.cfg.Baselines.Get(ctx, tenantID, h.RecipientHash, h.SenderDomainHash)
+		switch {
+		case gerr == nil:
+			prev = loaded
+			cache[key] = loaded
+		case errors.Is(gerr, repository.ErrNotFound):
+			prev = nil
+			cache[key] = nil
+		default:
+			j.logger.Warn("worker.relationship: baseline get failed; skipping cycle to preserve histogram",
+				slog.String("tenant_id", tenantID), slog.Any("error", gerr))
+			return nil, nil
+		}
 	}
 
+	var existingHours []int
+	if prev != nil {
+		existingHours = append(existingHours, prev.TypicalSendHours...)
+	}
 	existingHours = append(existingHours, sendHour)
 	// FIFO trim: drop the oldest samples once the slice exceeds
 	// the cap. The histogram is order-insensitive (it just counts
@@ -447,10 +501,19 @@ func (j *RelationshipJob) prepareBaselineUpdate(
 // Persistence failures are logged and swallowed: the canonical
 // CAS has already committed and the next worker cycle will re-
 // derive the baseline from scratch.
+//
+// On a successful Upsert the per-cycle cache entry is replaced
+// with the just-persisted baseline so subsequent rows for the
+// same (recipient, sender_domain) tuple in the same cycle see the
+// cumulative accumulated hours instead of a stale start-of-cycle
+// snapshot. Without this write-through, multiple rows sharing a
+// key would each see only the original hours plus their own
+// sample, losing the running aggregation across the cycle.
 func (j *RelationshipJob) persistBaselineUpdate(
 	ctx context.Context,
 	tenantID string,
 	bl *repository.UserBehavioralBaseline,
+	cache baselineCache,
 ) {
 	if bl == nil || j.cfg.Baselines == nil {
 		return
@@ -458,6 +521,10 @@ func (j *RelationshipJob) persistBaselineUpdate(
 	if berr := j.cfg.Baselines.Upsert(ctx, bl); berr != nil {
 		j.logger.Warn("worker.relationship: baseline upsert failed",
 			slog.String("tenant_id", tenantID), slog.Any("error", berr))
+		return
+	}
+	if cache != nil {
+		cache[baselineCacheKey(bl.UserEmailHash, bl.SenderDomainHash)] = bl
 	}
 }
 
