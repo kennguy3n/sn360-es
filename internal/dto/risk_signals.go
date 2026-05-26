@@ -104,19 +104,30 @@ type RiskSignals struct {
 	SenderKnownTitle       string `json:"sender_known_title,omitempty"`
 	CommunicationFrequency int    `json:"communication_frequency,omitempty"`
 	// TypicalSendHour is the modal hour-of-day (UTC, 0..23) the
-	// signal builder copied from communication_histories.typical_hour.
-	// A value outside [0, 24) is the "no baseline yet" sentinel that
-	// matches repository.TypicalHourUnset (-1) and the migration-0007
-	// column default. `omitempty` is deliberately omitted so the
-	// distinction between "midnight UTC" (valid hour 0) and "field
-	// not populated" (Go zero-value 0) is explicit on the wire —
-	// otherwise an absent JSON field would deserialise to 0
-	// (midnight) and the downstream ATO heuristic, despite its
-	// `< 0 || >= 24` sentinel guard, would still be fed a hour the
-	// producer never actually computed. Producers that lack a
-	// baseline MUST emit -1 explicitly; producers that observed
-	// midnight emit 0.
-	TypicalSendHour int  `json:"typical_send_hour"`
+	// signal builder derived from
+	// communication_histories.typical_hour. The pointer type is
+	// deliberate: it physically encodes the absence of a baseline
+	// as nil rather than relying on an in-band sentinel like -1
+	// that producers might forget to emit. This eliminates an
+	// entire class of bug at the DTO boundary —
+	//
+	//   - A producer that has no baseline returns a nil pointer
+	//     (and `omitempty` keeps the JSON wire format tidy by
+	//     omitting the field entirely).
+	//   - A producer that observed a real modal hour returns a
+	//     non-nil pointer to the value in [0, 24); the JSON
+	//     serialises as `"typical_send_hour":N`, including N=0
+	//     for midnight UTC.
+	//   - A producer cannot accidentally emit Go-zero-value 0
+	//     and have it interpreted as either "midnight" (valid)
+	//     or "no baseline" (sentinel); the nil/non-nil distinction
+	//     is unambiguous on both sides of the wire.
+	//
+	// The receiving ATO heuristic (internal/service/tier0)
+	// defensively treats a non-nil pointer pointing to a value
+	// outside [0, 24) as "no baseline" too, so a producer bug
+	// degrades to a no-op rather than a spurious timing_anomaly.
+	TypicalSendHour *int `json:"typical_send_hour,omitempty"`
 	CurrentHourUTC  int  `json:"current_hour_utc,omitempty"`
 	IsFirstContact  bool `json:"is_first_contact,omitempty"`
 }

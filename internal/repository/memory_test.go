@@ -287,6 +287,80 @@ func TestMemoryCommHistory_Upsert_PreservesIDAndFirstSeen(t *testing.T) {
 	}
 }
 
+// TestMemoryCommHistory_Upsert_DoesNotMutateCallerTimestamps locks
+// in the contract that Upsert must not write back FirstSeenAt or
+// UpdatedAt onto the caller's *CommunicationHistory struct. The
+// Postgres backend uses SQL (`updated_at = NOW()`, and column
+// DEFAULT NOW() for first_seen_at) so the caller's Go struct is
+// never touched by those columns; memory must mirror that. The
+// concrete failure mode without this contract is: a test (or any
+// caller) that constructs an in-memory CommunicationHistory and
+// inspects h.UpdatedAt or h.FirstSeenAt after Upsert observes
+// behaviour the Postgres backend would never produce, hiding bugs
+// in tests that production would surface.
+func TestMemoryCommHistory_Upsert_DoesNotMutateCallerTimestamps(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+
+	// New-row path: caller passes zero values for both timestamps.
+	// Postgres would let column defaults populate the row server-
+	// side without touching the Go struct; memory must do the same.
+	first := &CommunicationHistory{
+		TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), Count7d: 3, Relationship: "partner",
+		// FirstSeenAt and UpdatedAt intentionally left at zero.
+	}
+	if err := r.CommunicationHistories.Upsert(ctx, first); err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	if !first.FirstSeenAt.IsZero() {
+		t.Fatalf("new-row Upsert mutated caller's FirstSeenAt: got %s, want zero (Postgres parity)",
+			first.FirstSeenAt)
+	}
+	if !first.UpdatedAt.IsZero() {
+		t.Fatalf("new-row Upsert mutated caller's UpdatedAt: got %s, want zero (Postgres parity)",
+			first.UpdatedAt)
+	}
+	// But the persisted row MUST carry non-zero timestamps so
+	// downstream readers (ListByTenant, BaselineAnomalyCheck) see
+	// the same shape as Postgres rows.
+	stored, err := r.CommunicationHistories.Get(ctx, "t-1", []byte("a"), []byte("b"))
+	if err != nil {
+		t.Fatalf("get after new-row Upsert: %v", err)
+	}
+	if stored.FirstSeenAt.IsZero() {
+		t.Fatal("persisted row missing FirstSeenAt: Postgres column DEFAULT NOW() must be mirrored")
+	}
+	if stored.UpdatedAt.IsZero() {
+		t.Fatal("persisted row missing UpdatedAt: Postgres `updated_at = NOW()` SQL must be mirrored")
+	}
+
+	// Conflict path: caller passes an explicit FirstSeenAt and a
+	// pre-existing UpdatedAt; both must remain untouched on the
+	// caller's struct after Upsert. The persisted row preserves
+	// the original FirstSeenAt (Postgres ON CONFLICT exclusion)
+	// and stamps a fresh UpdatedAt server-side.
+	callerFirstSeen := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
+	callerUpdated := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	second := &CommunicationHistory{
+		TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), Count7d: 7, Relationship: "partner",
+		FirstSeenAt: callerFirstSeen,
+		UpdatedAt:   callerUpdated,
+	}
+	if err := r.CommunicationHistories.Upsert(ctx, second); err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	if !second.FirstSeenAt.Equal(callerFirstSeen) {
+		t.Fatalf("conflict Upsert mutated caller's FirstSeenAt: got %s, want %s",
+			second.FirstSeenAt, callerFirstSeen)
+	}
+	if !second.UpdatedAt.Equal(callerUpdated) {
+		t.Fatalf("conflict Upsert mutated caller's UpdatedAt: got %s, want %s",
+			second.UpdatedAt, callerUpdated)
+	}
+}
+
 func TestMemoryClassifications(t *testing.T) {
 	ctx := context.Background()
 	r := NewInMemoryRegistry()

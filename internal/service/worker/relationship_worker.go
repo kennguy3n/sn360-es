@@ -160,6 +160,16 @@ type RelationshipJob struct {
 	// watermark in a config table would harden this further but is
 	// out of scope for the baseline-accumulation fix.
 	//
+	// Lifecycle: at the bottom of each Run we prune entries whose
+	// tenant ID no longer appears in the active Tenants.List set,
+	// so deleted/deactivated tenants do not accumulate zombie
+	// watermarks across years of cycles. The pruning is keyed on
+	// the canonical Tenants.List output (the same source the row
+	// loop iterates), so a transient failure in a peer tenant's
+	// ListByTenant call (handled above) does NOT cause that tenant
+	// to be pruned — the tenant is still present in `tenants`, only
+	// its ListByTenant returned an error.
+	//
 	// Concurrency: Run is invoked serially by the scheduler so the
 	// map needs no mutex; one writer, no concurrent readers.
 	lastCycleStartedAt map[string]time.Time
@@ -426,13 +436,37 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 		// advance.
 		j.lastCycleStartedAt[t.ID] = now
 	}
+	// Prune watermark entries for tenants that no longer appear in
+	// the canonical Tenants.List output. Deleted/deactivated
+	// tenants would otherwise leave their entries in
+	// lastCycleStartedAt indefinitely; in a long-running worker
+	// processing tenant churn over years that map would grow
+	// without bound. We use the same `tenants` slice the row loop
+	// iterated above — a transient ListByTenant failure on a peer
+	// tenant kept that tenant in the slice (the per-row error path
+	// above does `continue`, not `delete`), so the prune does NOT
+	// drop tenants whose data plane is briefly unreachable.
+	pruned := 0
+	if len(j.lastCycleStartedAt) > 0 {
+		activeTenantIDs := make(map[string]struct{}, len(tenants))
+		for _, t := range tenants {
+			activeTenantIDs[t.ID] = struct{}{}
+		}
+		for tenantID := range j.lastCycleStartedAt {
+			if _, ok := activeTenantIDs[tenantID]; !ok {
+				delete(j.lastCycleStartedAt, tenantID)
+				pruned++
+			}
+		}
+	}
 	j.logger.Info("worker.relationship: cycle complete",
 		slog.Int("tenants", len(tenants)),
 		slog.Int("rows", processed),
 		slog.Int("decayed_count_7d", decayed7d),
 		slog.Int("reclassified", reclassified),
 		slog.Int("race_skipped", raceSkipped),
-		slog.Int("corrupt_skipped", corruptSkipped))
+		slog.Int("corrupt_skipped", corruptSkipped),
+		slog.Int("watermarks_pruned", pruned))
 	return firstErr
 }
 

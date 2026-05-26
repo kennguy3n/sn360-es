@@ -562,22 +562,32 @@ func commKey(tenantID string, sender, recipient []byte) string {
 }
 
 func (m *memoryCommHistory) Upsert(_ context.Context, h *CommunicationHistory) error {
+	// h.ID generation is the one mutation we deliberately mirror
+	// from the Postgres backend: pgCommHistory.Upsert also does
+	// `h.ID = uuid.NewString()` when the caller passes the empty
+	// string, so the two backends agree that ID-assignment-on-
+	// missing is part of the Upsert contract. Every other field
+	// the column-preservation logic below cares about is mutated
+	// only on the local row copy, never on the caller's struct.
 	if h.ID == "" {
 		h.ID = uuid.NewString()
 	}
 	now := time.Now().UTC()
-	if h.FirstSeenAt.IsZero() {
-		h.FirstSeenAt = now
-	}
-	h.UpdatedAt = now
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := commKey(h.TenantID, h.SenderHash, h.RecipientHash)
 	// Upsert is the ingestion-time write path. The persisted row
 	// is built from a *local copy* of h so the caller's struct is
 	// not mutated by the column-preservation logic below — this
-	// matches the Postgres implementation, which only writes via
-	// SQL and leaves the Go struct untouched.
+	// matches the Postgres implementation, which writes via SQL
+	// and leaves the Go struct untouched for every column except
+	// the one ID mutation above. In particular FirstSeenAt and
+	// UpdatedAt are now set on the row copy, not on *h, so a
+	// caller inspecting `h.UpdatedAt` after Upsert sees the same
+	// thing they passed in (typically the Go zero value), exactly
+	// as they would with the pgCommHistory backend whose SQL uses
+	// `updated_at = NOW()` and never reflects the post-write
+	// timestamp back into the Go struct.
 	//
 	// On the existing-row branch the persisted row preserves the
 	// three columns the Postgres ON CONFLICT clause deliberately
@@ -609,7 +619,22 @@ func (m *memoryCommHistory) Upsert(_ context.Context, h *CommunicationHistory) e
 		row.TypicalHour = cur.TypicalHour
 	} else {
 		row.TypicalHour = TypicalHourUnset
+		// New-row: mirror the Postgres column default
+		// `first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
+		// (migrations/0001_init.up.sql:216) when the caller
+		// omitted it. nullableTime() in pgCommHistory.Upsert
+		// passes nil to SQL for a zero FirstSeenAt, which lets
+		// the column default fire; we do the equivalent here on
+		// the row copy so the persisted state matches without
+		// touching the caller's struct.
+		if row.FirstSeenAt.IsZero() {
+			row.FirstSeenAt = now
+		}
 	}
+	// Mirror Postgres `updated_at = NOW()` SQL semantics on the
+	// row copy so the persisted state has a fresh stamp but the
+	// caller's *h.UpdatedAt is untouched.
+	row.UpdatedAt = now
 	m.rows[key] = row
 	return nil
 }

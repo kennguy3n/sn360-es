@@ -830,6 +830,103 @@ func TestRelationshipJob_Run_PartialFailurePreservesWatermark(t *testing.T) {
 	}
 }
 
+// TestRelationshipJob_Run_PrunesDeletedTenantWatermarks locks in
+// the active-tenant pruning at the bottom of Run. Without it, the
+// lastCycleStartedAt map would accumulate entries for tenants that
+// have been deleted/deactivated and no longer appear in
+// Tenants.List, growing unbounded in a long-running worker
+// processing tenant churn over years.
+//
+// The test cycles two tenants, removes one from the active tenant
+// list between cycles, and asserts the next Run drops the removed
+// tenant's entry from the in-process watermark map without touching
+// the surviving tenant's entry.
+func TestRelationshipJob_Run_PrunesDeletedTenantWatermarks(t *testing.T) {
+	day := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	baselines := newFakeBaselineRepo()
+
+	tl := &fakeTenantLister{tenants: []repository.Tenant{{ID: "t-A"}, {ID: "t-B"}, {ID: "t-C"}}}
+	cs := &fakeCommunicationStore{rowsByTenant: map[string][]repository.CommunicationHistory{
+		"t-A": {{ID: "rA", TenantID: "t-A", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+			SenderDomainHash: []byte("d"), SenderDomain: "d.example", Count30d: 4,
+			LastSeenAt: day.Add(9 * time.Hour), UpdatedAt: day}},
+		"t-B": {{ID: "rB", TenantID: "t-B", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+			SenderDomainHash: []byte("d"), SenderDomain: "d.example", Count30d: 4,
+			LastSeenAt: day.Add(10 * time.Hour), UpdatedAt: day}},
+		"t-C": {{ID: "rC", TenantID: "t-C", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+			SenderDomainHash: []byte("d"), SenderDomain: "d.example", Count30d: 4,
+			LastSeenAt: day.Add(11 * time.Hour), UpdatedAt: day}},
+	}}
+	up := &fakeCommUpserter{accept: true}
+	hasher := func(_, _ string) ([]byte, error) { return []byte("ok"), nil }
+
+	job, err := NewRelationshipJob(RelationshipJobConfig{
+		Interval: time.Hour, Tenants: tl, Communications: cs, Upserter: up,
+		Baselines: baselines, Hasher: hasher, Logger: discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	// Cycle 1: all three tenants process; each gets a watermark
+	// entry populated at the end of its row loop.
+	if err := job.Run(context.Background()); err != nil {
+		t.Fatalf("cycle 1: %v", err)
+	}
+	if len(job.lastCycleStartedAt) != 3 {
+		t.Fatalf("cycle 1 watermark map size = %d, want 3", len(job.lastCycleStartedAt))
+	}
+	for _, id := range []string{"t-A", "t-B", "t-C"} {
+		if _, ok := job.lastCycleStartedAt[id]; !ok {
+			t.Fatalf("cycle 1 watermark missing tenant %s", id)
+		}
+	}
+
+	// Simulate tenant deletion: t-B and t-C disappear from the
+	// canonical Tenants.List output. t-A remains.
+	tl.tenants = []repository.Tenant{{ID: "t-A"}}
+	delete(cs.rowsByTenant, "t-B")
+	delete(cs.rowsByTenant, "t-C")
+
+	// Cycle 2: only t-A processes. The bottom-of-Run pruning must
+	// drop t-B and t-C from the watermark map without touching
+	// t-A's entry (which advances in the row loop).
+	prevA := job.lastCycleStartedAt["t-A"]
+	if err := job.Run(context.Background()); err != nil {
+		t.Fatalf("cycle 2: %v", err)
+	}
+	if len(job.lastCycleStartedAt) != 1 {
+		t.Fatalf("cycle 2 watermark map size = %d after pruning, want 1; got keys %v",
+			len(job.lastCycleStartedAt), watermarkKeys(job.lastCycleStartedAt))
+	}
+	if _, ok := job.lastCycleStartedAt["t-A"]; !ok {
+		t.Fatal("cycle 2 dropped active tenant t-A from watermark map")
+	}
+	if got := job.lastCycleStartedAt["t-A"]; !got.After(prevA) {
+		t.Fatalf("cycle 2 did not advance t-A's watermark: prev=%s now=%s", prevA, got)
+	}
+
+	// Defence-in-depth: when an empty tenants list comes back
+	// (control-plane drain, accidental deactivation), all
+	// watermarks are pruned.
+	tl.tenants = nil
+	if err := job.Run(context.Background()); err != nil {
+		t.Fatalf("cycle 3: %v", err)
+	}
+	if len(job.lastCycleStartedAt) != 0 {
+		t.Fatalf("cycle 3 with empty tenant list left %d zombie watermarks: %v",
+			len(job.lastCycleStartedAt), watermarkKeys(job.lastCycleStartedAt))
+	}
+}
+
+func watermarkKeys(m map[string]time.Time) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // TestModalHourOf covers the helper used to derive the modal hour
 // from an accumulated send-hour distribution.
 func TestModalHourOf(t *testing.T) {

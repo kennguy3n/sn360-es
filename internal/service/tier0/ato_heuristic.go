@@ -119,21 +119,24 @@ func (h *ATOHeuristic) Check(req dto.EvaluateRequest, signals dto.RiskSignals) A
 // relative to the sender's historical pattern. We use pre-computed
 // signals: TypicalSendHour and CurrentHourUTC.
 //
-// TypicalSendHour follows the same convention as
-// repository.CommunicationHistory.TypicalHour (which the
-// signal-builder copies into the DTO): a value in [0, 24) is a
-// real modal hour computed by the relationship worker; anything
-// outside that range is the "no baseline yet" sentinel. Concretely
-// the worker writes -1 (repository.TypicalHourUnset) and the
-// Postgres column defaults to -1 via migration 0007 — guarding on
-// just `== 0` would miss the sentinel and let hourDistance(-1, …)
-// produce a spurious timing_anomaly score the moment the
-// signal-builder wire-up lands. The explicit out-of-range guard
-// here lets the heuristic stay correct without depending on a
-// translation step in the signal builder.
+// TypicalSendHour is *int by design (see dto.RiskSignals): nil
+// means "no baseline yet," and a non-nil pointer carries the real
+// modal hour computed by the relationship worker. The pointer
+// type means the heuristic does not have to guess whether the
+// producer emitted a sentinel; the absence of a baseline is
+// represented physically by the absence of a value. We still
+// defensively check for out-of-[0,24) inside a non-nil pointer in
+// case a producer bug ever populates the field with a stale
+// `repository.TypicalHourUnset` (-1) value or some other
+// out-of-range integer — the heuristic degrades to a no-op in
+// that case rather than feeding garbage into hourDistance.
 func (h *ATOHeuristic) checkTimingAnomaly(signals dto.RiskSignals, reasons *[]string) float64 {
-	if signals.TypicalSendHour < 0 || signals.TypicalSendHour >= 24 {
-		return 0 // Sentinel: no baseline data available.
+	if signals.TypicalSendHour == nil {
+		return 0 // No baseline data available.
+	}
+	typical := *signals.TypicalSendHour
+	if typical < 0 || typical >= 24 {
+		return 0 // Producer bug: out-of-range hour treated as no baseline.
 	}
 	if signals.CommunicationFrequency == 0 {
 		return 0 // No history yet.
@@ -141,7 +144,7 @@ func (h *ATOHeuristic) checkTimingAnomaly(signals dto.RiskSignals, reasons *[]st
 	if signals.CommunicationFrequency < h.cfg.MinTimingHistorySize {
 		return 0 // Insufficient history.
 	}
-	hourDist := hourDistance(signals.CurrentHourUTC, signals.TypicalSendHour)
+	hourDist := hourDistance(signals.CurrentHourUTC, typical)
 	if hourDist >= 8 {
 		*reasons = append(*reasons, "timing_anomaly")
 		return 0.35
