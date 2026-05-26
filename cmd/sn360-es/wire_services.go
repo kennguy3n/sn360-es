@@ -11,8 +11,11 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
 	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
 	"github.com/kennguy3n/sn360-es/internal/service/onboarding"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/fastmail"
 	"github.com/kennguy3n/sn360-es/pkg/email_provider/gmail"
 	"github.com/kennguy3n/sn360-es/pkg/email_provider/outlook"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/workmail"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/zoho"
 	"github.com/kennguy3n/sn360-es/pkg/privacy"
 )
 
@@ -156,6 +159,21 @@ func buildLabelApplier(app *application) agent.LabelApplier {
 	return registryLabelApplier{registry: app.providers}
 }
 
+// buildDirectoryClient returns the first DirectoryClient that can be
+// constructed from the operator's config, evaluated in the order
+// Gmail → Outlook → Zoho → Fastmail → WorkMail. Only ONE directory
+// client is wired per deployment: when multiple providers are
+// configured simultaneously (e.g., a tenant in the middle of an
+// Outlook→Zoho migration) the later-priority provider's directory
+// is invisible to the onboarding agent and sensitivity classifier.
+//
+// This is consistent with the pre-PR behaviour (which already
+// short-circuited on Gmail → Outlook) but the priority order matters
+// operationally — surface it explicitly so future readers don't have
+// to reconstruct it from the if/else chain. Multi-provider directory
+// support would require a composite that dispatches by tenant; that
+// refactor is out of scope for this PR and is tracked separately in
+// the architecture notes.
 func buildDirectoryClient(cfg *config.Config, logger *slog.Logger) agent.DirectoryClient {
 	if cfg.GWS.HasGmail() {
 		sa, err := gmail.LoadServiceAccount(cfg.GWS.ServiceAccountJSON)
@@ -205,6 +223,88 @@ func buildDirectoryClient(cfg *config.Config, logger *slog.Logger) agent.Directo
 		})
 		if derr != nil {
 			logger.Warn("sn360-es: directory client (outlook) wire failed",
+				slog.Any("error", derr))
+			return nil
+		}
+		return dc
+	}
+	if cfg.Zoho.HasZoho() {
+		tokens, terr := zoho.NewRefreshTokenSource(zoho.RefreshTokenConfig{
+			ClientID:     cfg.Zoho.ClientID,
+			ClientSecret: cfg.Zoho.ClientSecret,
+			RefreshToken: cfg.Zoho.RefreshToken,
+			AccountsURL:  cfg.Zoho.AccountsURL,
+			DataCenter:   cfg.Zoho.DataCenter,
+		})
+		if terr != nil {
+			logger.Warn("sn360-es: directory client (zoho) token init failed",
+				slog.Any("error", terr))
+			return nil
+		}
+		client, cerr := zoho.NewClient(zoho.ClientConfig{
+			TokenSource: tokens,
+			BaseURL:     cfg.Zoho.BaseURL,
+			DataCenter:  cfg.Zoho.DataCenter,
+			OrgID:       cfg.Zoho.OrgID,
+		})
+		if cerr != nil {
+			logger.Warn("sn360-es: directory client (zoho) client init failed",
+				slog.Any("error", cerr))
+			return nil
+		}
+		dc, derr := zoho.NewDirectoryClient(zoho.DirectoryClientConfig{Client: client})
+		if derr != nil {
+			logger.Warn("sn360-es: directory client (zoho) wire failed",
+				slog.Any("error", derr))
+			return nil
+		}
+		return dc
+	}
+	if cfg.Fastmail.HasFastmail() {
+		tokens := fastmail.StaticTokenSource{APIToken: cfg.Fastmail.APIToken}
+		client, cerr := fastmail.NewClient(fastmail.ClientConfig{
+			TokenSource: tokens,
+			BaseURL:     cfg.Fastmail.BaseURL,
+			AccountID:   cfg.Fastmail.AccountID,
+		})
+		if cerr != nil {
+			logger.Warn("sn360-es: directory client (fastmail) client init failed",
+				slog.Any("error", cerr))
+			return nil
+		}
+		dc, derr := fastmail.NewDirectoryClient(fastmail.DirectoryClientConfig{Client: client})
+		if derr != nil {
+			logger.Warn("sn360-es: directory client (fastmail) wire failed",
+				slog.Any("error", derr))
+			return nil
+		}
+		return dc
+	}
+	if cfg.WorkMail.HasWorkMail() {
+		creds := buildWorkmailCredentials(cfg)
+		signer, serr := workmail.NewSigner(workmail.SignerConfig{
+			Region:      cfg.WorkMail.Region,
+			Service:     "workmail",
+			Credentials: creds,
+		})
+		if serr != nil {
+			logger.Warn("sn360-es: directory client (workmail) signer init failed",
+				slog.Any("error", serr))
+			return nil
+		}
+		client, cerr := workmail.NewClient(workmail.ClientConfig{
+			Signer: signer,
+			Region: cfg.WorkMail.Region,
+			OrgID:  cfg.WorkMail.OrganizationID,
+		})
+		if cerr != nil {
+			logger.Warn("sn360-es: directory client (workmail) client init failed",
+				slog.Any("error", cerr))
+			return nil
+		}
+		dc, derr := workmail.NewDirectoryClient(workmail.DirectoryClientConfig{Client: client})
+		if derr != nil {
+			logger.Warn("sn360-es: directory client (workmail) wire failed",
 				slog.Any("error", derr))
 			return nil
 		}
@@ -338,32 +438,38 @@ func buildOnboardingService(cfg *config.Config, logger *slog.Logger, app *applic
 		nonces = onboarding.NewInMemoryNonceStore()
 	}
 
-	validator := onboarding.NewHTTPPostConsentValidator(nil, cfg.GWS.Domain)
+	// Resolve the regional Zoho Mail REST endpoint up front so the
+	// post-consent validator hits the data centre that matches the
+	// operator's ZOHO_DATA_CENTER setting (e.g. .eu, .in). Zoho's
+	// six data centres are isolated, so a US-default validator would
+	// silently 401 every non-US tenant.
+	validator := onboarding.NewHTTPPostConsentValidator(nil, cfg.GWS.Domain, zoho.MailBaseURL(cfg.Zoho.DataCenter))
+	// Strict org-match: when ZOHO_ORG_ID is configured, the post-
+	// consent validator parses /api/organization and requires the
+	// returned zoid to equal cfg.Zoho.OrgID. Without this, the
+	// validator would accept any valid Zoho token — weaker than the
+	// Microsoft (tenant ID) and Google (domain) checks. Empty leaves
+	// the field unset, matching the documented "only confirm the
+	// token can read the org endpoint" behaviour.
+	validator.ZohoExpectedOrgID = cfg.Zoho.OrgID
 	exch := onboarding.NewHTTPExchanger(nil)
 
-	providers := make(map[onboarding.ProviderType]onboarding.ProviderConfig)
-	if cfg.GWS.OAuthClientID != "" && cfg.GWS.OAuthClientSecret != "" {
-		providers[onboarding.ProviderGoogle] = onboarding.ProviderConfig{
-			ClientID:     cfg.GWS.OAuthClientID,
-			ClientSecret: cfg.GWS.OAuthClientSecret,
-			AuthURL:      "https://accounts.google.com/o/oauth2/v2/auth",
-			TokenURL:     "https://oauth2.googleapis.com/token",
-			Scopes:       []string{"https://www.googleapis.com/auth/admin.directory.user.readonly", "https://www.googleapis.com/auth/admin.directory.group.readonly"},
-			RedirectURL:  cfg.Onboarding.CallbackURL,
-		}
-	}
-	if cfg.O365.HasOutlook() {
-		providers[onboarding.ProviderMicrosoft] = onboarding.ProviderConfig{
-			ClientID:     cfg.O365.ClientID,
-			ClientSecret: cfg.O365.ClientSecret,
-			AuthURL:      "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize",
-			TokenURL:     "https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
-			Scopes:       []string{"https://graph.microsoft.com/.default", "offline_access"},
-			RedirectURL:  cfg.Onboarding.CallbackURL,
-		}
-	}
+	providers := buildOAuthProviderConfigs(cfg)
 	if len(providers) == 0 {
-		return nil, fmt.Errorf("at least one provider (GWS or O365) must be configured")
+		// No OAuth providers configured. Fastmail and Amazon
+		// WorkMail use non-OAuth credentials (static JMAP API
+		// tokens / AWS IAM) and don't go through this service,
+		// so a deployment that only configures those providers
+		// legitimately ends up here. The right semantics is
+		// "onboarding is disabled because none of the providers
+		// it serves are configured" — an info-level Log, not an
+		// error/warn. Returning (nil, nil) makes the caller
+		// branch on the nil service cleanly without log noise.
+		logger.Info("sn360-es: onboarding service disabled (no OAuth providers configured; Fastmail and WorkMail use non-OAuth auth)",
+			slog.Bool("fastmail_configured", cfg.Fastmail.HasFastmail()),
+			slog.Bool("workmail_configured", cfg.WorkMail.HasWorkMail()),
+		)
+		return nil, nil
 	}
 
 	var trigger onboarding.PostConsentTrigger
@@ -429,4 +535,77 @@ func buildTokenEncryptor(cfg *config.Config, logger *slog.Logger) (onboarding.To
 	h := sha256.Sum256([]byte("onboarding-token-encryption:" + cfg.Onboarding.StateSecret))
 	logger.Warn("sn360-es: onboarding token encryptor using derived key from state secret; set ONBOARDING_TOKEN_KEY_HEX for production")
 	return newAESGCMTokenEncryptor(h[:])
+}
+
+// buildOAuthProviderConfigs maps the env-loaded provider credentials
+// onto the onboarding service's per-provider OAuth config map. The
+// map keys (onboarding.ProviderType) are the values surfaced on the
+// /v1/onboarding/start?provider=… query string and looked up by both
+// AuthURL and HandleCallback. A provider absent from this map cannot
+// complete the OAuth handshake — so the predicates here are the
+// gating mechanism for whether each provider's consent flow is
+// reachable at all.
+//
+// Gating rules:
+//
+//   - Google (GWS): OAuthClientID + OAuthClientSecret. These are the
+//     credentials the consent flow needs; the long-lived refresh
+//     token is produced by the flow itself, so we don't require it
+//     here.
+//   - Microsoft (O365): cfg.O365.HasOutlook() (ClientID + ClientSecret
+//   - Tenant).
+//   - Zoho: ClientID + ClientSecret. Like Google, the refresh token is
+//     produced by the flow. AuthURL / TokenURL are data-centre-
+//     specific (Zoho's six regions are isolated), so they're derived
+//     from cfg.Zoho.DataCenter via the canonical AccountsBaseURL
+//     helper rather than hardcoding the US endpoint.
+//   - Fastmail: not registered — API-token auth, no OAuth consent.
+//   - WorkMail: not registered — AWS IAM SigV4 auth, no OAuth consent.
+//
+// Extracted into its own function (vs. inlined into
+// buildOnboardingService) so the per-provider gating can be unit-
+// tested without requiring a live application/PostgreSQL bootstrap.
+func buildOAuthProviderConfigs(cfg *config.Config) map[onboarding.ProviderType]onboarding.ProviderConfig {
+	providers := make(map[onboarding.ProviderType]onboarding.ProviderConfig)
+	if cfg.GWS.OAuthClientID != "" && cfg.GWS.OAuthClientSecret != "" {
+		providers[onboarding.ProviderGoogle] = onboarding.ProviderConfig{
+			ClientID:     cfg.GWS.OAuthClientID,
+			ClientSecret: cfg.GWS.OAuthClientSecret,
+			AuthURL:      "https://accounts.google.com/o/oauth2/v2/auth",
+			TokenURL:     "https://oauth2.googleapis.com/token",
+			Scopes: []string{
+				"https://www.googleapis.com/auth/admin.directory.user.readonly",
+				"https://www.googleapis.com/auth/admin.directory.group.readonly",
+			},
+			RedirectURL: cfg.Onboarding.CallbackURL,
+		}
+	}
+	if cfg.O365.HasOutlook() {
+		providers[onboarding.ProviderMicrosoft] = onboarding.ProviderConfig{
+			ClientID:     cfg.O365.ClientID,
+			ClientSecret: cfg.O365.ClientSecret,
+			AuthURL:      "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize",
+			TokenURL:     "https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
+			Scopes:       []string{"https://graph.microsoft.com/.default", "offline_access"},
+			RedirectURL:  cfg.Onboarding.CallbackURL,
+		}
+	}
+	if cfg.Zoho.ClientID != "" && cfg.Zoho.ClientSecret != "" {
+		accountsBase := zoho.AccountsBaseURL(cfg.Zoho.DataCenter)
+		providers[onboarding.ProviderZoho] = onboarding.ProviderConfig{
+			ClientID:     cfg.Zoho.ClientID,
+			ClientSecret: cfg.Zoho.ClientSecret,
+			AuthURL:      accountsBase + "/oauth/v2/auth",
+			TokenURL:     accountsBase + "/oauth/v2/token",
+			Scopes: []string{
+				"ZohoMail.messages.ALL",
+				"ZohoMail.folders.ALL",
+				"ZohoMail.tags.ALL",
+				"ZohoMail.accounts.READ",
+				"ZohoMail.organization.READ",
+			},
+			RedirectURL: cfg.Onboarding.CallbackURL,
+		}
+	}
+	return providers
 }

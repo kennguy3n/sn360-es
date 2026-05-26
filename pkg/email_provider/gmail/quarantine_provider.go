@@ -62,24 +62,26 @@ func (p *QuarantineProvider) EnsureQuarantineLabel(ctx context.Context, email st
 // driven by the action handler through the BannerInjector. Keeping
 // the contract aligned with the QuarantineProvider interface
 // preserves provider substitutability.
-func (p *QuarantineProvider) MoveToQuarantine(ctx context.Context, email, messageID, quarantineLabelID, _ string) error {
+func (p *QuarantineProvider) MoveToQuarantine(ctx context.Context, email, messageID, quarantineLabelID, _ string) (string, error) {
 	if err := p.labels.modify(ctx, email, messageID, gmailModifyRequest{
 		AddLabelIDs:    []string{quarantineLabelID},
 		RemoveLabelIDs: []string{"INBOX"},
 	}); err != nil {
-		return fmt.Errorf("apply quarantine label: %w", err)
+		return "", fmt.Errorf("apply quarantine label: %w", err)
 	}
-	return nil
+	// Gmail message IDs are stable across label mutations, so the
+	// caller's stored reference equals the input.
+	return messageID, nil
 }
 
 // RestoreFromQuarantine re-attaches INBOX and removes the quarantine
 // label.
-func (p *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, email, messageID, quarantineLabelID, _ string) error {
+func (p *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, email, messageID, quarantineLabelID, _ string) (string, error) {
 	if err := p.labels.modify(ctx, email, messageID, gmailModifyRequest{
 		AddLabelIDs:    []string{"INBOX"},
 		RemoveLabelIDs: []string{quarantineLabelID},
 	}); err != nil {
-		return fmt.Errorf("remove quarantine label: %w", err)
+		return "", fmt.Errorf("remove quarantine label: %w", err)
 	}
-	return nil
+	return messageID, nil
 }

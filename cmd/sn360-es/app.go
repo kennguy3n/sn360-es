@@ -783,9 +783,14 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	// Onboarding service.
 	if cfg.Onboarding.StateSecret != "" && cfg.Onboarding.CallbackURL != "" {
 		obSvc, obErr := buildOnboardingService(cfg, logger, app)
-		if obErr != nil {
+		switch {
+		case obErr != nil:
 			logger.Warn("sn360-es: onboarding service init failed", slog.Any("error", obErr))
-		} else {
+		case obSvc == nil:
+			// Intentional disable: builder logged at Info level
+			// why (no OAuth providers configured). Skip the
+			// success-wired Info log to avoid contradicting that.
+		default:
 			app.onboardingSvc = obSvc
 			logger.Info("sn360-es: onboarding service wired",
 				slog.String("callback_url", cfg.Onboarding.CallbackURL))

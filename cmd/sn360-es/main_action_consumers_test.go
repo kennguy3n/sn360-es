@@ -135,21 +135,21 @@ func (f *fakeQuarantineProvider) EnsureQuarantineLabel(_ context.Context, email 
 	return "qlabel-" + email, nil
 }
 
-func (f *fakeQuarantineProvider) MoveToQuarantine(_ context.Context, email, messageID, labelID, stub string) error {
+func (f *fakeQuarantineProvider) MoveToQuarantine(_ context.Context, email, messageID, labelID, stub string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
-		return f.err
+		return "", f.err
 	}
 	f.moves = append(f.moves, fakeMoveCall{Email: email, MessageID: messageID, LabelID: labelID, Stub: stub})
-	return nil
+	return messageID, nil
 }
 
-func (f *fakeQuarantineProvider) RestoreFromQuarantine(_ context.Context, email, messageID, labelID, body string) error {
+func (f *fakeQuarantineProvider) RestoreFromQuarantine(_ context.Context, email, messageID, labelID, body string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.restores = append(f.restores, fakeMoveCall{Email: email, MessageID: messageID, LabelID: labelID, Stub: body})
-	return nil
+	return messageID, nil
 }
 
 // fakeQuarantineStore is an in-memory QuarantineStore.

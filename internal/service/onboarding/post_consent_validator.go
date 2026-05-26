@@ -23,18 +23,36 @@ type HTTPPostConsentValidator struct {
 	gwsDomain             string // expected GWS primary domain
 	GoogleAdminBaseURL    string // overridable for tests; defaults to https://admin.googleapis.com
 	MicrosoftGraphBaseURL string // overridable for tests; defaults to https://graph.microsoft.com
+	ZohoAPIBaseURL        string // overridable for tests; defaults to https://mail.zoho.com/api
+	// ZohoExpectedOrgID, when non-empty, requires the org returned by
+	// /api/organization to match this value. When empty the validator
+	// only confirms that the token can read the org endpoint.
+	ZohoExpectedOrgID string
 }
 
-// NewHTTPPostConsentValidator constructs a validator.
-func NewHTTPPostConsentValidator(client *http.Client, gwsDomain string) *HTTPPostConsentValidator {
+// NewHTTPPostConsentValidator constructs a validator. zohoAPIBaseURL
+// is the regional Zoho Mail REST endpoint (e.g.
+// https://mail.zoho.com/api, https://mail.zoho.eu/api). Zoho's six
+// data centres are isolated — an EU tenant's token is rejected by
+// the US endpoint with a 401, so the caller MUST supply the endpoint
+// that matches cfg.Zoho.DataCenter. Pass an empty string only when
+// Zoho is not configured for this deployment; the field will fall
+// through to the US default at call time to keep tests using
+// httptest servers ergonomic (those tests override the field
+// directly), but production wiring is expected to pass a real URL.
+func NewHTTPPostConsentValidator(client *http.Client, gwsDomain, zohoAPIBaseURL string) *HTTPPostConsentValidator {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	if zohoAPIBaseURL == "" {
+		zohoAPIBaseURL = "https://mail.zoho.com/api"
 	}
 	return &HTTPPostConsentValidator{
 		client:                client,
 		gwsDomain:             gwsDomain,
 		GoogleAdminBaseURL:    "https://admin.googleapis.com",
 		MicrosoftGraphBaseURL: "https://graph.microsoft.com",
+		ZohoAPIBaseURL:        zohoAPIBaseURL,
 	}
 }
 
@@ -47,6 +65,18 @@ func (v *HTTPPostConsentValidator) ValidateTenantAccess(ctx context.Context, tok
 		return v.validateGoogle(ctx, token, tenantID)
 	case ProviderMicrosoft:
 		return v.validateMicrosoft(ctx, token, tenantID)
+	case ProviderZoho:
+		return v.validateZoho(ctx, token, tenantID)
+	case ProviderFastmail:
+		// Fastmail uses static API tokens that are minted directly by
+		// the user; there is no OAuth consent to validate. The token
+		// itself proves possession of the account.
+		return nil
+	case ProviderWorkmail:
+		// WorkMail uses IAM credentials; no OAuth consent to validate.
+		// AWS rejects unsigned/unauthorised SigV4 requests at the API
+		// edge, so the first WorkMail call serves as the access check.
+		return nil
 	default:
 		return fmt.Errorf("onboarding: unsupported provider for validation: %s", provider)
 	}
@@ -123,6 +153,52 @@ func (v *HTTPPostConsentValidator) validateMicrosoft(ctx context.Context, token 
 		}
 	}
 	return fmt.Errorf("onboarding: token tenant mismatch — expected %q, not found in organization list", tenantID)
+}
+
+// validateZoho calls Zoho Mail's /api/organization endpoint. A 200
+// response proves the access token has the ZohoMail.accounts.READ
+// scope on a real org; when ZohoExpectedOrgID is set the response
+// body is parsed and the returned zoid must match.
+func (v *HTTPPostConsentValidator) validateZoho(ctx context.Context, token Token, _ string) error {
+	baseURL := v.ZohoAPIBaseURL
+	if baseURL == "" {
+		baseURL = "https://mail.zoho.com/api"
+	}
+	endpoint := baseURL + "/organization"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Zoho-oauthtoken "+token.AccessToken)
+	resp, err := v.httpClient().Do(req)
+	if err != nil {
+		return fmt.Errorf("onboarding: zoho org validation request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("onboarding: zoho org validation failed (status %d): %s", resp.StatusCode, string(body))
+	}
+	if v.ZohoExpectedOrgID == "" {
+		return nil
+	}
+	var result struct {
+		Data []struct {
+			Zoid       string `json:"zoid"`
+			OrgID      string `json:"orgId"`
+			OrgIDAlt   string `json:"OrgId"`
+			PrimaryURL string `json:"primaryUrl"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("onboarding: decode zoho org response: %w", err)
+	}
+	for _, org := range result.Data {
+		if org.Zoid == v.ZohoExpectedOrgID || org.OrgID == v.ZohoExpectedOrgID || org.OrgIDAlt == v.ZohoExpectedOrgID {
+			return nil
+		}
+	}
+	return fmt.Errorf("onboarding: zoho org mismatch — expected %q, not found in response", v.ZohoExpectedOrgID)
 }
 
 // NoopPostConsentValidator always succeeds. Used when validation is

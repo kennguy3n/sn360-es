@@ -631,6 +631,6 @@ For a **buyer**: the SN360-ES tenant footprint is three OAuth scopes per side, a
 
 For an **operator**: connect either provider in under ten minutes — `GET /v1/onboarding/gws-setup-status` and the OAuth callback validator hand you a structured "what's missing" response, not a stack trace.
 
-For a **builder**: the LabelProvider, BannerInjector, QuarantineProvider, and MailboxProvider interfaces are the seams. Adding Yahoo Mail, IMAP, or an on-prem Exchange is a new package under `pkg/email_provider/`, not a fork of the binary.
+For a **builder**: the `LabelProvider`, `BannerInjector`, `QuarantineProvider`, `BodyRewriter`, `MailboxProvider`, and `DirectoryClient` interfaces are the seams. SN360-ES ships native packages for Gmail, Outlook, **Zoho Mail**, **Fastmail (JMAP)**, and **Amazon WorkMail** today — see [`blog/tenant-requirements-zoho-fastmail-workmail.md`](./tenant-requirements-zoho-fastmail-workmail.md) for the equivalent deep-dive on the three newer providers. Adding Yahoo Mail, IMAP, or an on-prem Exchange is still a new package under `pkg/email_provider/`, not a fork of the binary.
 
 The platform's commitment is straightforward: every byte of customer mail that enters SN360-ES is either dropped at goroutine exit, hashed before it touches disk, or encrypted under a key the customer can destroy at will. The architecture is the proof — and the file paths in this post are the receipts.

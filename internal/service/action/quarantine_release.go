@@ -244,12 +244,24 @@ func (s *ReleaseService) Release(ctx context.Context, req ReleaseRequest) (Relea
 	if body == "" {
 		body = defaultRestoredBody(verdict)
 	}
-	if err := prov.RestoreFromQuarantine(ctx, rec.Email, rec.MessageID, rec.LabelID, body); err != nil {
+	// RestoreFromQuarantine returns the resulting provider-side
+	// message ID. For Fastmail/JMAP, restoring rewrites the body and
+	// produces a fresh ID; we capture it so subsequent retries (when
+	// re-persist is required) reference the latest known message.
+	newMessageID, err := prov.RestoreFromQuarantine(ctx, rec.Email, rec.MessageID, rec.LabelID, body)
+	if err != nil {
 		// The reference is already gone (ClaimReference removed it).
 		// Re-persist so a follow-up release call can retry; the
 		// reference would otherwise be permanently lost on a transient
-		// provider failure.
-		if rerr := s.quarantine.RestoreReference(ctx, req.TenantID, req.PseudonymizedMessage, rec); rerr != nil {
+		// provider failure. When the provider reports partial progress
+		// via newMessageID (e.g. the import succeeded but the destroy
+		// failed mid-flight on Fastmail), persist that newer ID so the
+		// retry operates on the message that actually exists.
+		recForRetry := rec
+		if newMessageID != "" {
+			recForRetry.MessageID = newMessageID
+		}
+		if rerr := s.quarantine.RestoreReference(ctx, req.TenantID, req.PseudonymizedMessage, recForRetry); rerr != nil {
 			s.logger.ErrorContext(ctx, "release: re-persist after restore failure",
 				slog.Any("error", rerr))
 		}
@@ -261,6 +273,7 @@ func (s *ReleaseService) Release(ctx context.Context, req ReleaseRequest) (Relea
 		slog.String("tenant_id", req.TenantID),
 		slog.String("new_tier", string(verdict.Tier)),
 		slog.String("primary", string(verdict.Primary)),
+		slog.String("restored_message_id", newMessageID),
 	)
 	s.publishOutcome(ctx, req, outcome)
 	return outcome, nil

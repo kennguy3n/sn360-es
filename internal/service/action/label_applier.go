@@ -22,8 +22,11 @@ import (
 type LabelProviderKind string
 
 const (
-	LabelProviderGmail   LabelProviderKind = "gmail"
-	LabelProviderOutlook LabelProviderKind = "outlook"
+	LabelProviderGmail    LabelProviderKind = "gmail"
+	LabelProviderOutlook  LabelProviderKind = "outlook"
+	LabelProviderZoho     LabelProviderKind = "zoho"
+	LabelProviderFastmail LabelProviderKind = "fastmail"
+	LabelProviderWorkmail LabelProviderKind = "workmail"
 )
 
 // LabelCache is the minimal contract the label applier needs from

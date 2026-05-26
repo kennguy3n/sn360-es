@@ -120,3 +120,85 @@ func TestHTTPPostConsentValidator_UnknownProvider(t *testing.T) {
 		t.Error("expected error for unknown provider")
 	}
 }
+
+func TestHTTPPostConsentValidator_Zoho_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/organization" {
+			t.Errorf("Zoho validator hit unexpected path %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Zoho-oauthtoken zoho-at" {
+			t.Errorf("Zoho validator Authorization = %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"zoid": "100200300", "orgId": "100200300"},
+			},
+		})
+	}))
+	defer srv.Close()
+	v := &HTTPPostConsentValidator{
+		ZohoAPIBaseURL:    srv.URL,
+		ZohoExpectedOrgID: "100200300",
+	}
+	tok := Token{AccessToken: "zoho-at", ExpiresAt: time.Now().Add(time.Hour)}
+	if err := v.ValidateTenantAccess(context.Background(), tok, "acme", ProviderZoho); err != nil {
+		t.Fatalf("ValidateTenantAccess: %v", err)
+	}
+}
+
+func TestHTTPPostConsentValidator_Zoho_WrongOrgID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"zoid": "999", "orgId": "999"},
+			},
+		})
+	}))
+	defer srv.Close()
+	v := &HTTPPostConsentValidator{
+		ZohoAPIBaseURL:    srv.URL,
+		ZohoExpectedOrgID: "100200300",
+	}
+	tok := Token{AccessToken: "x", ExpiresAt: time.Now().Add(time.Hour)}
+	if err := v.ValidateTenantAccess(context.Background(), tok, "acme", ProviderZoho); err == nil {
+		t.Fatal("expected org mismatch to error")
+	}
+}
+
+// TestNewHTTPPostConsentValidator_HonoursZohoBaseURL guards against
+// the previous regression where the constructor hard-coded
+// ZohoAPIBaseURL to the US endpoint regardless of cfg.Zoho.DataCenter.
+// Non-US tenants would have their freshly-minted refresh tokens
+// validated against mail.zoho.com (US), which returns 401, breaking
+// onboarding silently. The fix accepts the regional URL as a
+// constructor argument so the wiring layer must explicitly supply it.
+func TestNewHTTPPostConsentValidator_HonoursZohoBaseURL(t *testing.T) {
+	const euURL = "https://mail.zoho.eu/api"
+	v := NewHTTPPostConsentValidator(nil, "acme.example", euURL)
+	if v.ZohoAPIBaseURL != euURL {
+		t.Fatalf("ZohoAPIBaseURL = %q, want %q", v.ZohoAPIBaseURL, euURL)
+	}
+	// Empty input must still produce the documented US fallback so
+	// deployments without Zoho configured don't end up with an empty
+	// URL that would fail with a malformed-request error on first
+	// use.
+	v2 := NewHTTPPostConsentValidator(nil, "acme.example", "")
+	if v2.ZohoAPIBaseURL != "https://mail.zoho.com/api" {
+		t.Fatalf("empty input fallback = %q, want %q", v2.ZohoAPIBaseURL, "https://mail.zoho.com/api")
+	}
+}
+
+func TestHTTPPostConsentValidator_FastmailWorkmail_AlwaysOK(t *testing.T) {
+	// Fastmail (static token) and WorkMail (IAM SigV4) bypass OAuth
+	// post-consent validation; the validator should return nil so the
+	// onboarding flow doesn't reject them on a check that doesn't
+	// apply to their auth model.
+	v := &HTTPPostConsentValidator{}
+	tok := Token{AccessToken: "x", ExpiresAt: time.Now().Add(time.Hour)}
+	if err := v.ValidateTenantAccess(context.Background(), tok, "acme", ProviderFastmail); err != nil {
+		t.Errorf("Fastmail validation: %v", err)
+	}
+	if err := v.ValidateTenantAccess(context.Background(), tok, "acme", ProviderWorkmail); err != nil {
+		t.Errorf("WorkMail validation: %v", err)
+	}
+}
