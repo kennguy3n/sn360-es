@@ -699,17 +699,18 @@ func (p *pgCommHistory) Upsert(ctx context.Context, h *CommunicationHistory) err
 	if h.ID == "" {
 		h.ID = uuid.NewString()
 	}
-	// typical_hour defaults to -1 ("no baseline yet") in migration
-	// 0007. Preserve that semantics by inserting -1 whenever the
-	// caller's Go value is the zero int — every caller that wants to
-	// persist hour 0 (midnight UTC) explicitly sets TypicalHour. The
-	// relationship worker is the canonical writer; ingestion-time
-	// upserts leave TypicalHour at zero and the COALESCE keeps the
-	// previously-computed modal hour intact across those writes.
-	typicalHour := h.TypicalHour
-	if typicalHour == 0 {
-		typicalHour = -1
-	}
+	// CommunicationHistory.TypicalHour contract:
+	//   - 0..23  → a valid hour-of-day (0 == midnight UTC); INSERT
+	//             persists it, ON CONFLICT replaces the column.
+	//   - any other value (canonically -1, the migration 0007
+	//             default) → "no baseline yet"; INSERT persists it
+	//             unchanged, ON CONFLICT leaves the existing column
+	//             untouched via the CASE guard below.
+	// This is the same contract memoryCommHistory.Upsert and
+	// pgCommHistory.UpdateCountsIfFresh use, so all three write
+	// paths behave identically. Callers that genuinely want "no
+	// change" must pass -1 explicitly — do NOT rely on the Go zero
+	// value, because 0 means midnight UTC.
 	_, err := p.db.ExecContext(ctx, `
 INSERT INTO communication_histories (id, tenant_id, sender_hash, recipient_hash, sender_domain_hash,
                                      sender_domain, count_7d, count_30d, first_seen_at, last_seen_at, relationship,
@@ -730,7 +731,7 @@ ON CONFLICT (tenant_id, sender_hash, recipient_hash) DO UPDATE SET
 `,
 		h.ID, h.TenantID, h.SenderHash, h.RecipientHash, h.SenderDomainHash,
 		h.SenderDomain, h.Count7d, h.Count30d, nullableTime(h.FirstSeenAt), nullableTime(h.LastSeenAt), h.Relationship,
-		typicalHour,
+		h.TypicalHour,
 	)
 	return err
 }
@@ -839,7 +840,7 @@ SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(
 		tenantID, senderHash, recipientHash)
 	var h CommunicationHistory
 	err := row.Scan(&h.ID, &h.TenantID, &h.SenderHash, &h.RecipientHash, &h.SenderDomainHash, &h.SenderDomain,
-		&h.Count7d, &h.Count30d, &h.FirstSeenAt, &h.LastSeenAt, &h.Relationship, &h.UpdatedAt)
+		&h.Count7d, &h.Count30d, &h.FirstSeenAt, &h.LastSeenAt, &h.Relationship, &h.TypicalHour, &h.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
