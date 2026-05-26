@@ -568,11 +568,39 @@ modal hour (rather than just the last-seen hour) gives the heuristic a
 representative baseline that does not flap with every off-hour outlier.
 The `typical_hour` column carries the migration-0007 default `-1`
 ("no baseline yet") until the worker has at least one in-range sample
-to evict it. The heuristic guards on `TypicalSendHour < 0 ||
-TypicalSendHour >= 24` rather than the weaker `== 0` check, so the
-sentinel value cannot leak through the signal builder and produce a
-spurious `hourDistance(-1, currentHour)` reading on internal
-messages whose pairs the worker has not yet sampled.
+to evict it. The heuristic guards on `signals.TypicalSendHour == nil`
+first and then defensively on `< 0 || >= 24`, so neither the column
+sentinel nor a future producer bug can leak through and produce a
+spurious `hourDistance` reading on internal messages whose pairs
+the worker has not yet sampled.
+
+The bridge between the worker-maintained `communication_histories`
+row and the evaluator's `dto.RiskSignals` is the **signal
+enricher** (`internal/service/evaluate/SignalEnricher`,
+implemented in `cmd/sn360-es/signal_enricher.go` as
+`commHistorySignalEnricher`). It runs at consumer-side ingress —
+once in `handleEvaluateRequest` (per-message path) and once in the
+batch orchestrator's run loop (`internal/service/evaluate/batch.go`)
+— BEFORE the Tier 0 gate. For each message, the enricher hashes
+sender and recipient with the same PII hasher the relationship
+worker writes with, calls `CommunicationHistoryRepository.Get`,
+and folds the resulting row's `typical_hour`, `count_30d`, and
+relationship label onto the base `RiskSignals` the normalizer
+produced. The enricher also stamps `CurrentHourUTC` from
+`req.ReceivedAt` (falling back to wall-clock) so the ATO
+heuristic always compares against the actual arrival hour, not
+the publish-time wall-clock. Missing rows are reported as
+`IsFirstContact = true`; transient repository failures degrade
+gracefully to base signals (so a Postgres blip never synthesises
+spurious first-contact flags across every in-flight message).
+
+When either the communication-histories repo or the PII hasher
+is not wired (development / minimal deployments), the
+composition root substitutes `evaluate.NoopEnricher` so the
+consumer call sites never have to nil-check. The behavior in
+that degraded mode is identical to the pre-enricher world: the
+Tier 0 timing-anomaly check sees `TypicalSendHour == nil` and
+short-circuits to zero.
 
 #### Org Graph Persistence
 
