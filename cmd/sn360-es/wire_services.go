@@ -159,6 +159,21 @@ func buildLabelApplier(app *application) agent.LabelApplier {
 	return registryLabelApplier{registry: app.providers}
 }
 
+// buildDirectoryClient returns the first DirectoryClient that can be
+// constructed from the operator's config, evaluated in the order
+// Gmail → Outlook → Zoho → Fastmail → WorkMail. Only ONE directory
+// client is wired per deployment: when multiple providers are
+// configured simultaneously (e.g., a tenant in the middle of an
+// Outlook→Zoho migration) the later-priority provider's directory
+// is invisible to the onboarding agent and sensitivity classifier.
+//
+// This is consistent with the pre-PR behaviour (which already
+// short-circuited on Gmail → Outlook) but the priority order matters
+// operationally — surface it explicitly so future readers don't have
+// to reconstruct it from the if/else chain. Multi-provider directory
+// support would require a composite that dispatches by tenant; that
+// refactor is out of scope for this PR and is tracked separately in
+// the architecture notes.
 func buildDirectoryClient(cfg *config.Config, logger *slog.Logger) agent.DirectoryClient {
 	if cfg.GWS.HasGmail() {
 		sa, err := gmail.LoadServiceAccount(cfg.GWS.ServiceAccountJSON)
