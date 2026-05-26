@@ -28,14 +28,23 @@ func (f *fakeTenantLister) List(_ context.Context, _ int) ([]repository.Tenant, 
 type fakeCommunicationStore struct {
 	rowsByTenant map[string][]repository.CommunicationHistory
 	err          error
-	calls        []string
-	mu           sync.Mutex
+	// errByTenant, when set, overrides err on a per-tenant basis.
+	// A tenant whose ID is a key here returns the mapped error from
+	// ListByTenant; tenants not in the map fall through to the
+	// rowsByTenant data path. Used by tests that need to exercise
+	// "tenant A succeeds, tenant B fails" partial-outage paths.
+	errByTenant map[string]error
+	calls       []string
+	mu          sync.Mutex
 }
 
 func (f *fakeCommunicationStore) ListByTenant(_ context.Context, tenantID string, _ time.Time, _ int) ([]repository.CommunicationHistory, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, tenantID)
+	if e, ok := f.errByTenant[tenantID]; ok {
+		return nil, e
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -734,6 +743,90 @@ func TestRelationshipJob_Run_BaselineWatermarkSkipsUnchangedRows(t *testing.T) {
 	if len(b.TypicalSendHours) != 2 {
 		t.Fatalf("third run with advanced LastSeenAt did not append: %v, want 2 samples",
 			b.TypicalSendHours)
+	}
+}
+
+// TestRelationshipJob_Run_PartialFailurePreservesWatermark locks
+// in the per-tenant watermark contract: when tenant A's row loop
+// completes but tenant B's ListByTenant fails, only A's watermark
+// advances. The next cycle must re-evaluate B's rows from the
+// previous (still-empty) watermark so no histogram samples are
+// dropped just because a peer tenant had a transient outage. The
+// global-watermark predecessor of this code would have advanced a
+// single field for both tenants, silently dropping every B row
+// whose LastSeenAt fell into the failed window on the next cycle.
+func TestRelationshipJob_Run_PartialFailurePreservesWatermark(t *testing.T) {
+	day := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	baselines := newFakeBaselineRepo()
+
+	// Two tenants, one row each. Tenant A processes cleanly,
+	// tenant B's ListByTenant fails on the first cycle.
+	rowB := repository.CommunicationHistory{
+		ID: "rB", TenantID: "t-B", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), SenderDomain: "d.example", Count30d: 4,
+		LastSeenAt: day.Add(9 * time.Hour), UpdatedAt: day,
+	}
+	rowA := repository.CommunicationHistory{
+		ID: "rA", TenantID: "t-A", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), SenderDomain: "d.example", Count30d: 4,
+		LastSeenAt: day.Add(11 * time.Hour), UpdatedAt: day,
+	}
+
+	tl := &fakeTenantLister{tenants: []repository.Tenant{{ID: "t-A"}, {ID: "t-B"}}}
+	cs := &fakeCommunicationStore{
+		rowsByTenant: map[string][]repository.CommunicationHistory{
+			"t-A": {rowA},
+			"t-B": {rowB},
+		},
+		errByTenant: map[string]error{"t-B": errors.New("transient B")},
+	}
+	up := &fakeCommUpserter{accept: true}
+	hasher := func(_, _ string) ([]byte, error) { return []byte("ok"), nil }
+
+	job, err := NewRelationshipJob(RelationshipJobConfig{
+		Interval: time.Hour, Tenants: tl, Communications: cs, Upserter: up,
+		Baselines: baselines, Hasher: hasher, Logger: discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	// Cycle 1: A succeeds (1 sample), B's ListByTenant fails (0 samples).
+	_ = job.Run(context.Background())
+	bA, err := baselines.Get(context.Background(), "t-A", []byte("b"), []byte("d"))
+	if err != nil {
+		t.Fatalf("baseline A get after cycle 1: %v", err)
+	}
+	if len(bA.TypicalSendHours) != 1 || bA.TypicalSendHours[0] != 11 {
+		t.Fatalf("cycle 1 tenant A baseline = %v, want [11]", bA.TypicalSendHours)
+	}
+	if _, err := baselines.Get(context.Background(), "t-B", []byte("b"), []byte("d")); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("cycle 1 tenant B should have no baseline; got err=%v", err)
+	}
+
+	// Cycle 2: clear B's error, both tenants' ListByTenant
+	// succeeds. With LastSeenAt unchanged for both rows, A's
+	// watermark has advanced past rowA.LastSeenAt so A is gated
+	// out (correctly — already sampled). B's watermark stayed at
+	// zero because cycle 1 failed for B, so B's row passes the
+	// gate and lands its bootstrap sample.
+	delete(cs.errByTenant, "t-B")
+	_ = job.Run(context.Background())
+
+	bA, err = baselines.Get(context.Background(), "t-A", []byte("b"), []byte("d"))
+	if err != nil {
+		t.Fatalf("baseline A get after cycle 2: %v", err)
+	}
+	if len(bA.TypicalSendHours) != 1 || bA.TypicalSendHours[0] != 11 {
+		t.Fatalf("cycle 2 tenant A re-sampled unchanged row: %v, want still [11]", bA.TypicalSendHours)
+	}
+	bB, err := baselines.Get(context.Background(), "t-B", []byte("b"), []byte("d"))
+	if err != nil {
+		t.Fatalf("baseline B get after cycle 2: %v", err)
+	}
+	if len(bB.TypicalSendHours) != 1 || bB.TypicalSendHours[0] != 9 {
+		t.Fatalf("cycle 2 tenant B baseline = %v, want [9] (B's watermark must not have advanced during cycle 1)",
+			bB.TypicalSendHours)
 	}
 }
 

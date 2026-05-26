@@ -118,9 +118,25 @@ func (h *ATOHeuristic) Check(req dto.EvaluateRequest, signals dto.RiskSignals) A
 // checkTimingAnomaly inspects whether the send time is anomalous
 // relative to the sender's historical pattern. We use pre-computed
 // signals: TypicalSendHour and CurrentHourUTC.
+//
+// TypicalSendHour follows the same convention as
+// repository.CommunicationHistory.TypicalHour (which the
+// signal-builder copies into the DTO): a value in [0, 24) is a
+// real modal hour computed by the relationship worker; anything
+// outside that range is the "no baseline yet" sentinel. Concretely
+// the worker writes -1 (repository.TypicalHourUnset) and the
+// Postgres column defaults to -1 via migration 0007 — guarding on
+// just `== 0` would miss the sentinel and let hourDistance(-1, …)
+// produce a spurious timing_anomaly score the moment the
+// signal-builder wire-up lands. The explicit out-of-range guard
+// here lets the heuristic stay correct without depending on a
+// translation step in the signal builder.
 func (h *ATOHeuristic) checkTimingAnomaly(signals dto.RiskSignals, reasons *[]string) float64 {
-	if signals.TypicalSendHour == 0 && signals.CommunicationFrequency == 0 {
-		return 0 // No baseline data available.
+	if signals.TypicalSendHour < 0 || signals.TypicalSendHour >= 24 {
+		return 0 // Sentinel: no baseline data available.
+	}
+	if signals.CommunicationFrequency == 0 {
+		return 0 // No history yet.
 	}
 	if signals.CommunicationFrequency < h.cfg.MinTimingHistorySize {
 		return 0 // Insufficient history.

@@ -32,6 +32,47 @@ func TestATOHeuristic_CleanInternalPassesThrough(t *testing.T) {
 	}
 }
 
+// TestATOHeuristic_TimingAnomaly_SentinelDoesNotFlag locks in the
+// out-of-range guard for the "no baseline yet" sentinel. The
+// relationship worker writes -1 (repository.TypicalHourUnset) into
+// communication_histories.typical_hour when it has not yet
+// accumulated any in-range samples, and the migration-0007 column
+// default is -1 as well. The future signal-builder will copy that
+// value into dto.RiskSignals.TypicalSendHour without any
+// translation, so the heuristic must treat -1 (and any other
+// out-of-[0,24) value) as "no baseline" rather than feeding it
+// into hourDistance — otherwise hourDistance(-1, currentHour)
+// would produce a spurious timing_anomaly reason on every
+// internal message until the baseline is populated.
+func TestATOHeuristic_TimingAnomaly_SentinelDoesNotFlag(t *testing.T) {
+	h := NewATOHeuristic(DefaultATOHeuristicConfig())
+	req := dto.EvaluateRequest{
+		Sender: "alice@company.com",
+		Signals: dto.RiskSignals{
+			IsInternal:             true,
+			SenderDomain:           "company.com",
+			CommunicationFrequency: 20,
+			TypicalSendHour:        -1, // TypicalHourUnset sentinel
+			CurrentHourUTC:         2,
+		},
+	}
+	r := h.Check(req, req.Signals)
+	if contains(r.Reasons, "timing_anomaly") || contains(r.Reasons, "timing_unusual") {
+		t.Errorf("sentinel TypicalSendHour=-1 must NOT produce timing reasons; got %v", r.Reasons)
+	}
+	if r.Score > 0 {
+		t.Errorf("sentinel TypicalSendHour=-1 must contribute zero score; got %.2f", r.Score)
+	}
+
+	// Also cover an out-of-upper-range value just in case a
+	// future bug stores 24 or 25 somewhere.
+	req.Signals.TypicalSendHour = 24
+	r = h.Check(req, req.Signals)
+	if contains(r.Reasons, "timing_anomaly") || contains(r.Reasons, "timing_unusual") {
+		t.Errorf("out-of-range TypicalSendHour=24 must NOT produce timing reasons; got %v", r.Reasons)
+	}
+}
+
 func TestATOHeuristic_TimingAnomaly(t *testing.T) {
 	h := NewATOHeuristic(DefaultATOHeuristicConfig())
 	req := dto.EvaluateRequest{

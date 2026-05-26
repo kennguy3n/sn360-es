@@ -116,30 +116,41 @@ type RelationshipJob struct {
 	logger       *slog.Logger
 	classifier   *relationship.Classifier
 
-	// lastCycleStartedAt is the wall-clock start time of the
-	// previous successful Run invocation. The baseline-accumulation
-	// path uses it as the lower bound for "this row has genuinely
-	// new activity since we last sampled it": a comm-history row
-	// whose LastSeenAt has not advanced past this watermark must
-	// already have been sampled by an earlier cycle, so re-appending
-	// would inflate the histogram with a duplicate of an existing
-	// event. Without the watermark, the default Window=30d /
-	// Interval=4h pairing would re-sample the same LastSeenAt up to
-	// ~180 times for a single underlying message — saturating the
-	// 168-sample FIFO cap with one pair's stale timestamp and
-	// destroying the histogram's ability to represent the actual
-	// message-time distribution that
+	// lastCycleStartedAt is a per-tenant map of "the wall-clock
+	// start time of the last cycle that completed processing for
+	// this tenant." The baseline-accumulation path uses the
+	// per-tenant value as the lower bound for "this row has
+	// genuinely new activity since we last sampled it": a
+	// comm-history row whose LastSeenAt has not advanced past this
+	// watermark must already have been sampled by an earlier
+	// cycle, so re-appending would inflate the histogram with a
+	// duplicate of an existing event. Without the watermark, the
+	// default Window=30d / Interval=4h pairing would re-sample the
+	// same LastSeenAt up to ~180 times for a single underlying
+	// message — saturating the 168-sample FIFO cap with one pair's
+	// stale timestamp and destroying the histogram's ability to
+	// represent the actual message-time distribution that
 	// relationship.BaselineAnomalyCheck consumes.
 	//
+	// Per-tenant rather than global: if tenant A succeeds but
+	// tenant B's ListByTenant fails partway through a cycle, only
+	// A's watermark advances. B's stays at its previous value so
+	// the next cycle re-evaluates B's rows from the last
+	// successful watermark — no histogram samples are lost just
+	// because a peer tenant failed.
+	//
 	// Process-local rather than persisted: a worker restart resets
-	// it to the zero value, which means the first post-restart
-	// cycle re-samples every in-window row once. That bounded
+	// the map to empty, which means the first post-restart cycle
+	// re-samples every in-window row once per tenant. That bounded
 	// double-count (one extra sample per row per restart) is
 	// preferable to the chronic over-sampling described above, and
 	// it remains capped by the 168-entry FIFO. Persisting the
 	// watermark in a config table would harden this further but is
 	// out of scope for the baseline-accumulation fix.
-	lastCycleStartedAt time.Time
+	//
+	// Concurrency: Run is invoked serially by the scheduler so the
+	// map needs no mutex; one writer, no concurrent readers.
+	lastCycleStartedAt map[string]time.Time
 }
 
 // NewRelationshipJob constructs the job and applies defaults.
@@ -169,12 +180,13 @@ func NewRelationshipJob(cfg RelationshipJobConfig) (*RelationshipJob, error) {
 		logger = slog.Default()
 	}
 	return &RelationshipJob{
-		cfg:          cfg,
-		interval:     cfg.Interval,
-		window:       window,
-		maxPerTenant: maxPerTenant,
-		logger:       logger,
-		classifier:   relationship.NewClassifier(relationship.ClassifyConfig{}),
+		cfg:                cfg,
+		interval:           cfg.Interval,
+		window:             window,
+		maxPerTenant:       maxPerTenant,
+		logger:             logger,
+		classifier:         relationship.NewClassifier(relationship.ClassifyConfig{}),
+		lastCycleStartedAt: map[string]time.Time{},
 	}, nil
 }
 
@@ -193,14 +205,6 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 	now := time.Now().UTC()
 	since := now.Add(-j.window)
 	recentCutoff := now.Add(-7 * 24 * time.Hour)
-	// Snapshot the previous cycle's start so the row loop can
-	// detect "this LastSeenAt has not advanced since we last
-	// sampled it" without racing against the field update below.
-	// The zero value on first invocation lets every in-window row
-	// contribute one initial sample, which is the desired bootstrap
-	// behaviour.
-	prevCycleStartedAt := j.lastCycleStartedAt
-	j.lastCycleStartedAt = now
 	var firstErr error
 	processed := 0
 	decayed7d := 0
@@ -218,8 +222,23 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 			if firstErr == nil {
 				firstErr = err
 			}
+			// Watermark NOT advanced: this tenant's lastCycleStartedAt
+			// keeps its previous value so the next cycle re-evaluates
+			// rows from the last point we successfully sampled. A
+			// partial outage of one tenant must not cost histogram
+			// samples on the recovery cycle.
 			continue
 		}
+		// Snapshot this tenant's previous-cycle watermark before
+		// the row loop. The row loop uses it as the "genuinely new
+		// activity since last cycle" gate; we advance the stored
+		// watermark to `now` only AFTER the row loop completes so
+		// a ctx cancellation mid-loop (handled inside the loop)
+		// leaves the watermark untouched and the next cycle picks
+		// up where this one left off. The zero value on the very
+		// first per-tenant cycle (map miss) lets every in-window
+		// row seed the histogram with one bootstrap sample.
+		prevCycleStartedAt := j.lastCycleStartedAt[t.ID]
 		// Per-tenant, per-cycle baseline cache: many communication
 		// history rows share the same (recipient, sender_domain)
 		// baseline. The cache collapses N rows-per-baseline into a
@@ -384,6 +403,16 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 			j.persistBaselineUpdate(ctx, t.ID, preparedBaseline, cache)
 			processed++
 		}
+		// Tenant row loop reached its natural end (i.e. did not bail
+		// out via ListByTenant failure above). Advance this tenant's
+		// baseline-sampling watermark to `now` so the next cycle's
+		// gate treats only rows whose LastSeenAt has moved past `now`
+		// as genuinely new activity. Per-row failures inside the loop
+		// (CAS race, hasher error, persistBaselineUpdate error) are
+		// not tenant-level failures — they are individually logged
+		// and counted but do not invalidate the cycle's watermark
+		// advance.
+		j.lastCycleStartedAt[t.ID] = now
 	}
 	j.logger.Info("worker.relationship: cycle complete",
 		slog.Int("tenants", len(tenants)),

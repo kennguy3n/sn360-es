@@ -546,7 +546,12 @@ baselines during its 4 h cycle:
   pairing would re-sample the same unchanged `LastSeenAt` up to ~180
   times for a single underlying message, saturating the 168-entry FIFO
   with one pair's timestamp and destroying the histogram's
-  representativeness.
+  representativeness. The watermark is **per-tenant**: a tenant whose
+  `Communications.ListByTenant` fails mid-cycle keeps its previous
+  watermark, so the next cycle still samples every in-window row
+  that has not yet been recorded for that tenant. A peer tenant's
+  transient outage cannot cost a tenant histogram samples it would
+  otherwise have collected.
 - Device types
 - Average messages per week (derived from `count_30d / 4.0`)
 
@@ -563,7 +568,11 @@ modal hour (rather than just the last-seen hour) gives the heuristic a
 representative baseline that does not flap with every off-hour outlier.
 The `typical_hour` column carries the migration-0007 default `-1`
 ("no baseline yet") until the worker has at least one in-range sample
-to evict it.
+to evict it. The heuristic guards on `TypicalSendHour < 0 ||
+TypicalSendHour >= 24` rather than the weaker `== 0` check, so the
+sentinel value cannot leak through the signal builder and produce a
+spurious `hourDistance(-1, currentHour)` reading on internal
+messages whose pairs the worker has not yet sampled.
 
 #### Org Graph Persistence
 
