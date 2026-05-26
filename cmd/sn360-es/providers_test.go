@@ -65,7 +65,6 @@ func TestBuildProviderRegistry_RegistersNewProviders(t *testing.T) {
 			Region:          "us-east-1",
 			AccessKeyID:     "AKIA",
 			SecretAccessKey: "secret",
-			Domain:          "workmail.example.com",
 		},
 	}
 	reg := buildProviderRegistry(context.Background(), cfg, quietLogger())
@@ -121,12 +120,12 @@ func TestBuildProviderRegistry_RegistersNewProviders(t *testing.T) {
 	}
 }
 
-// TestBuildProviderRegistry_TenantResolutionPrefersDomain verifies
-// that Zoho's registry key follows the Domain-when-set rule so a
-// later mailbox call using cfg.Zoho.Domain as TenantID hits the
-// registered entry instead of falling back to OrgID. This is the
-// invariant the package comment on zohoProviderTenant promises.
-func TestBuildProviderRegistry_TenantResolutionPrefersDomain(t *testing.T) {
+// TestBuildProviderRegistry_ZohoTenantIsDomain verifies that Zoho's
+// registry key is the operator-supplied Domain (HasZoho() requires
+// Domain to be non-empty, and OrgID is intentionally not used as a
+// fallback). This is the invariant the package comment on
+// zohoProviderTenant promises.
+func TestBuildProviderRegistry_ZohoTenantIsDomain(t *testing.T) {
 	cfg := &config.Config{
 		Zoho: config.Zoho{
 			ClientID:     "zc",
@@ -142,6 +141,6 @@ func TestBuildProviderRegistry_TenantResolutionPrefersDomain(t *testing.T) {
 		t.Fatal("expected Zoho entry keyed by Domain to be present")
 	}
 	if e := reg.lookup("100200300"); e != nil {
-		t.Errorf("did not expect Zoho entry keyed by OrgID when Domain is set: got kind=%q", e.kind)
+		t.Errorf("did not expect Zoho entry keyed by OrgID: got kind=%q", e.kind)
 	}
 }

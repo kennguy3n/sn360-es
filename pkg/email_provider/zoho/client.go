@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,21 @@ type Client struct {
 	tokens  TokenSource
 	baseURL string
 	orgID   string
+
+	// accountIDCache memoises the email → Zoho account-id lookup so
+	// ApplyLabel / InjectBanner / MoveToQuarantine don't each trigger a
+	// full /api/users enumeration. The cache lives on the Client (not
+	// per-provider) so all six provider implementations share one
+	// resolved account-id table per Zoho tenant.
+	accountIDMu     sync.RWMutex
+	accountIDByMail map[string]string
+
+	// dirOnce ensures the account-id-warming directory lookup runs at
+	// most once per Client even when ResolveAccountID is called
+	// concurrently from different providers. On error we reset the
+	// once so the next caller can retry rather than caching the
+	// failure forever.
+	dirOnce sync.Once
 }
 
 // ClientConfig configures Client.
@@ -60,11 +76,71 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
 	return &Client{
-		http:    client,
-		tokens:  cfg.TokenSource,
-		baseURL: base,
-		orgID:   strings.TrimSpace(cfg.OrgID),
+		http:            client,
+		tokens:          cfg.TokenSource,
+		baseURL:         base,
+		orgID:           strings.TrimSpace(cfg.OrgID),
+		accountIDByMail: make(map[string]string),
 	}, nil
+}
+
+// ResolveAccountID looks up the Zoho account-id for the supplied
+// email (matched case-insensitively against primary address and
+// aliases) using a per-Client memoised cache. On a miss it issues a
+// single directory ListUsers walk, populates the cache, and returns
+// the result. Concurrent callers race on the underlying lookup; only
+// one network call is made per Client lifetime.
+func (c *Client) ResolveAccountID(ctx context.Context, email string) (string, error) {
+	target := strings.ToLower(strings.TrimSpace(email))
+	if target == "" {
+		return "", errors.New("zoho: email is required")
+	}
+	c.accountIDMu.RLock()
+	if id, ok := c.accountIDByMail[target]; ok {
+		c.accountIDMu.RUnlock()
+		return id, nil
+	}
+	c.accountIDMu.RUnlock()
+
+	var warmErr error
+	c.dirOnce.Do(func() {
+		dir, err := NewDirectoryClient(DirectoryClientConfig{Client: c})
+		if err != nil {
+			warmErr = err
+			return
+		}
+		users, err := dir.ListUsers(ctx, "")
+		if err != nil {
+			warmErr = fmt.Errorf("zoho: warm account id cache: %w", err)
+			return
+		}
+		c.accountIDMu.Lock()
+		for _, u := range users {
+			if u.Email != "" {
+				c.accountIDByMail[strings.ToLower(u.Email)] = u.ID
+			}
+			for _, a := range u.Aliases {
+				if a != "" {
+					c.accountIDByMail[strings.ToLower(a)] = u.ID
+				}
+			}
+		}
+		c.accountIDMu.Unlock()
+	})
+	if warmErr != nil {
+		// Reset the once so a transient directory failure does not
+		// permanently disable resolution for the lifetime of the
+		// Client.
+		c.dirOnce = sync.Once{}
+		return "", warmErr
+	}
+	c.accountIDMu.RLock()
+	id, ok := c.accountIDByMail[target]
+	c.accountIDMu.RUnlock()
+	if !ok {
+		return "", fmt.Errorf("zoho: no account found for %s", target)
+	}
+	return id, nil
 }
 
 // BaseURL exposes the resolved base URL, useful for diagnostics.

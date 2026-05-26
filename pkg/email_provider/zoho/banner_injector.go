@@ -110,30 +110,11 @@ func (b *BannerInjector) writeBody(ctx context.Context, accountID, messageID str
 	return b.client.do(ctx, http.MethodPut, endpoint, payload, nil)
 }
 
-// accountIDForEmail mirrors the helper on LabelProvider — kept as a
-// method here to avoid leaking the Directory dependency past the
-// public surface of BannerInjector.
+// accountIDForEmail mirrors the helper on LabelProvider — delegates
+// to the per-Client cache so we avoid re-enumerating /api/users on
+// every banner injection.
 func (b *BannerInjector) accountIDForEmail(ctx context.Context, email string) (string, error) {
-	dir, err := NewDirectoryClient(DirectoryClientConfig{Client: b.client})
-	if err != nil {
-		return "", err
-	}
-	users, err := dir.ListUsers(ctx, "")
-	if err != nil {
-		return "", fmt.Errorf("zoho: resolve account for %s: %w", email, err)
-	}
-	target := strings.ToLower(strings.TrimSpace(email))
-	for _, u := range users {
-		if u.Email == target {
-			return u.ID, nil
-		}
-		for _, a := range u.Aliases {
-			if a == target {
-				return u.ID, nil
-			}
-		}
-	}
-	return "", fmt.Errorf("zoho: no account found for %s", email)
+	return b.client.ResolveAccountID(ctx, email)
 }
 
 // injectZohoBanner returns a new zohoBody with the banner spliced in.

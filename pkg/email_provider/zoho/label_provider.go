@@ -158,29 +158,10 @@ func mapZohoColor(c action.LabelColor) string {
 }
 
 // accountIDForEmail resolves a mailbox email address to its Zoho
-// account ID. Zoho's tag-apply endpoint needs the account id rather
-// than the email so we look it up via the directory client.
+// account ID via the shared per-Client cache so we don't list users
+// once per ApplyLabel call.
 func (p *LabelProvider) accountIDForEmail(ctx context.Context, email string) (string, error) {
-	dir, err := NewDirectoryClient(DirectoryClientConfig{Client: p.client})
-	if err != nil {
-		return "", err
-	}
-	users, err := dir.ListUsers(ctx, "")
-	if err != nil {
-		return "", fmt.Errorf("zoho: resolve account for %s: %w", email, err)
-	}
-	target := strings.ToLower(strings.TrimSpace(email))
-	for _, u := range users {
-		if u.Email == target {
-			return u.ID, nil
-		}
-		for _, a := range u.Aliases {
-			if a == target {
-				return u.ID, nil
-			}
-		}
-	}
-	return "", fmt.Errorf("zoho: no account found for %s", email)
+	return p.client.ResolveAccountID(ctx, email)
 }
 
 // Compile-time interface check.

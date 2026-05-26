@@ -192,28 +192,10 @@ func (q *QuarantineProvider) moveMessage(ctx context.Context, accountID, message
 	return q.client.do(ctx, http.MethodPut, endpoint, body, nil)
 }
 
-// accountIDForEmail mirrors the LabelProvider helper.
+// accountIDForEmail mirrors the LabelProvider helper — delegates to
+// the per-Client account-id cache.
 func (q *QuarantineProvider) accountIDForEmail(ctx context.Context, email string) (string, error) {
-	dir, err := NewDirectoryClient(DirectoryClientConfig{Client: q.client})
-	if err != nil {
-		return "", err
-	}
-	users, err := dir.ListUsers(ctx, "")
-	if err != nil {
-		return "", fmt.Errorf("zoho: resolve account for %s: %w", email, err)
-	}
-	target := strings.ToLower(strings.TrimSpace(email))
-	for _, u := range users {
-		if u.Email == target {
-			return u.ID, nil
-		}
-		for _, a := range u.Aliases {
-			if a == target {
-				return u.ID, nil
-			}
-		}
-	}
-	return "", fmt.Errorf("zoho: no account found for %s", email)
+	return q.client.ResolveAccountID(ctx, email)
 }
 
 // Compile-time interface check.

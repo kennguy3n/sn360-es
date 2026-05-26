@@ -316,13 +316,11 @@ func buildMailboxProviders(ctx context.Context, cfg *config.Config, logger *slog
 				logger.Warn("sn360-es: zoho mailbox provider init failed (client)",
 					slog.Any("error", cerr))
 			} else {
-				tenant := cfg.Zoho.Domain
-				if tenant == "" {
-					tenant = cfg.Zoho.OrgID
-				}
+				// HasZoho requires Domain to be set, so use it
+				// directly as the registry / TenantID key.
 				mbp, merr := zoho.NewMailboxProvider(zoho.MailboxProviderConfig{
 					Client:   client,
-					TenantID: tenant,
+					TenantID: cfg.Zoho.Domain,
 				})
 				if merr != nil {
 					logger.Warn("sn360-es: zoho mailbox provider init failed",

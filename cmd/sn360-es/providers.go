@@ -310,14 +310,11 @@ func outlookProviderTenant(cfg *config.Config) string {
 }
 
 // zohoProviderTenant returns the registry key for the Zoho entry.
-// HasZoho requires OrgID to be non-empty; we prefer the operator-set
-// Domain when present so the registry key matches the tenant id the
-// Zoho MailboxProvider emits, falling back to OrgID otherwise.
+// HasZoho requires Domain to be non-empty (alongside ClientID,
+// ClientSecret, OrgID and RefreshToken), so by the time this is
+// called the Domain is guaranteed present.
 func zohoProviderTenant(cfg *config.Config) string {
-	if cfg.Zoho.Domain != "" {
-		return cfg.Zoho.Domain
-	}
-	return cfg.Zoho.OrgID
+	return cfg.Zoho.Domain
 }
 
 // fastmailProviderTenant returns the registry key for the Fastmail

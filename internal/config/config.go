@@ -416,10 +416,16 @@ type Zoho struct {
 }
 
 // HasZoho reports whether enough fields are set to build a Zoho
-// provider. Domain is required for the same provider-registry-key
-// invariant as GWS.Domain.
+// provider from the boot-time environment. Domain is required for
+// the same provider-registry-key invariant as GWS.Domain;
+// RefreshToken is required because the env-based path calls
+// NewRefreshTokenSource which itself requires a long-lived refresh
+// token (the onboarding-token path goes through buildZohoEntryFromToken
+// and supplies the access token directly, so this predicate does not
+// gate that flow).
 func (z Zoho) HasZoho() bool {
-	return z.ClientID != "" && z.ClientSecret != "" && z.OrgID != "" && z.Domain != ""
+	return z.ClientID != "" && z.ClientSecret != "" &&
+		z.OrgID != "" && z.Domain != "" && z.RefreshToken != ""
 }
 
 // Fastmail holds Fastmail (JMAP) configuration.
@@ -486,16 +492,13 @@ type WorkMail struct {
 	// is the standard https://workmail.<region>.amazonaws.com URL
 	// auto-derived from Region.
 	WorkMailBaseURL string
-	// Domain is the primary mail domain (e.g. "example.com"); used
-	// as the provider-registry key.
-	Domain string
 }
 
 // HasWorkMail reports whether enough fields are set to build a
-// WorkMail provider. Domain is required for the provider-registry-
-// key invariant.
+// WorkMail provider. OrganizationID also doubles as the provider-
+// registry key, so unlike GWS/Zoho there is no separate Domain field.
 func (w WorkMail) HasWorkMail() bool {
-	return w.OrganizationID != "" && w.Region != "" && w.Domain != ""
+	return w.OrganizationID != "" && w.Region != ""
 }
 
 // Ingestion holds the per-mailbox poller and push-notification tuning knobs.
@@ -881,9 +884,6 @@ func Load() (Config, error) {
 			SessionToken:    getStr("WORKMAIL_SESSION_TOKEN", ""),
 			EWSBaseURL:      strings.TrimSpace(getStr("WORKMAIL_EWS_BASE_URL", "")),
 			WorkMailBaseURL: strings.TrimSpace(getStr("WORKMAIL_BASE_URL", "")),
-			// Domain is the provider-registry key — trim at the
-			// source.
-			Domain: strings.TrimSpace(getStr("WORKMAIL_DOMAIN", "")),
 		},
 		Ingestion: Ingestion{
 			Mode:                           strings.ToLower(strings.TrimSpace(getStr("INGESTION_MODE", "poll"))),
