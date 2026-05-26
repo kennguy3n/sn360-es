@@ -92,7 +92,13 @@ func (p *LabelProvider) RemoveLabel(ctx context.Context, email, messageID, label
 	if err != nil {
 		return err
 	}
-	filtered := current[:0]
+	// Build a fresh slice rather than aliasing current's backing array;
+	// the EWS client may retain the slice for the duration of the
+	// request and we don't want a later mutation of current to leak
+	// in. (Same defensive pattern as ApplyLabel above — keeping the
+	// two methods consistent prevents a future maintainer from
+	// copy-pasting an unsafe alias by mistake.)
+	filtered := make([]string, 0, len(current))
 	for _, c := range current {
 		if !strings.EqualFold(c, labelID) {
 			filtered = append(filtered, c)

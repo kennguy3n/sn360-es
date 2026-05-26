@@ -2,6 +2,7 @@ package workmail
 
 import (
 	"context"
+	"encoding/hex"
 	"net/http"
 	"strings"
 	"testing"
@@ -113,6 +114,96 @@ func TestSigner_SignatureChangesWithBody(t *testing.T) {
 	b := sign([]byte(`{"a":2}`))
 	if a == b {
 		t.Fatal("signature should differ when payload differs")
+	}
+}
+
+// TestSigner_AWSCanonicalGetVanillaVector pins the canonical
+// AWS-style "get-vanilla" SigV4 test vector end-to-end through the
+// low-level helpers. The test verifies that:
+//
+//  1. sha256Sum produces the canonical empty-payload SHA256 hash
+//     (`e3b0c4…b855`) — a value documented in countless cryptographic
+//     standards and independently verifiable via any SHA256 tool.
+//  2. buildCanonicalRequest emits the AWS-format canonical-request
+//     bytes and signed-headers list for an empty GET request with
+//     only host + x-amz-date headers.
+//  3. The SHA256 of that canonical request matches the value used in
+//     the string-to-sign.
+//  4. deriveSigningKey + hmacSHA256 reproduce a SigV4 signature that
+//     matches a known-good HMAC-SHA256 reference. The expected
+//     signature was cross-verified by running the same inputs through
+//     Python's `hmac`/`hashlib` standard library — independent of our
+//     Go implementation — to guarantee the assertion isn't tautological.
+//
+// The signer is implemented from scratch (no aws-sdk-go-v2 dependency)
+// so this end-to-end vector is the strongest available cryptographic
+// conformance check short of integration testing against a live AWS
+// endpoint. Reference: AWS SigV4 algorithm documented at
+// https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-create-signed-request.html
+func TestSigner_AWSCanonicalGetVanillaVector(t *testing.T) {
+	const (
+		secret      = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+		region      = "us-east-1"
+		service     = "service"
+		dateStamp   = "20150830"
+		amzDate     = "20150830T123600Z"
+		emptyHash   = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+		wantCanHash = "bb579772317eb040ac9ed261061d46c1f17a8133879d6129b6e1c25292927e63"
+		// Independently re-derived via Python's hmac/hashlib standard
+		// library using the SigV4 derivation chain (kDate ← kRegion ←
+		// kService ← kSigning); this ensures the assertion validates
+		// our Go HMAC chain against a non-Go reference rather than
+		// against itself.
+		wantSig = "5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31"
+	)
+
+	// (1) Verify the empty-payload hash matches the AWS reference.
+	gotEmptyHash := hex.EncodeToString(sha256Sum(nil))
+	if gotEmptyHash != emptyHash {
+		t.Fatalf("sha256(empty) = %q, want %q", gotEmptyHash, emptyHash)
+	}
+
+	// (2) Build the canonical request from the AWS get-vanilla input.
+	req, err := http.NewRequest(http.MethodGet, "https://example.amazonaws.com/", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Host", "example.amazonaws.com")
+	req.Header.Set("X-Amz-Date", amzDate)
+
+	canonical, signedHeaders := buildCanonicalRequest(req, emptyHash)
+	const wantCanonical = "GET\n" +
+		"/\n" +
+		"\n" +
+		"host:example.amazonaws.com\n" +
+		"x-amz-date:20150830T123600Z\n" +
+		"\n" +
+		"host;x-amz-date\n" +
+		emptyHash
+	if canonical != wantCanonical {
+		t.Errorf("canonical request mismatch:\n got: %q\nwant: %q", canonical, wantCanonical)
+	}
+	if signedHeaders != "host;x-amz-date" {
+		t.Errorf("signedHeaders = %q, want %q", signedHeaders, "host;x-amz-date")
+	}
+
+	// (3) Verify the canonical-request hash matches the AWS reference.
+	gotCanHash := hex.EncodeToString(sha256Sum([]byte(canonical)))
+	if gotCanHash != wantCanHash {
+		t.Errorf("sha256(canonical) = %q, want %q", gotCanHash, wantCanHash)
+	}
+
+	// (4) Derive the signing key and compute the final signature.
+	stringToSign := strings.Join([]string{
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		dateStamp + "/" + region + "/" + service + "/aws4_request",
+		gotCanHash,
+	}, "\n")
+	signingKey := deriveSigningKey(secret, dateStamp, region, service)
+	gotSig := hex.EncodeToString(hmacSHA256(signingKey, []byte(stringToSign)))
+	if gotSig != wantSig {
+		t.Errorf("signature = %q, want %q", gotSig, wantSig)
 	}
 }
 

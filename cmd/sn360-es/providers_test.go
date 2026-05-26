@@ -4,10 +4,13 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/kennguy3n/sn360-es/internal/config"
 	"github.com/kennguy3n/sn360-es/internal/service/action"
+	"github.com/kennguy3n/sn360-es/internal/service/onboarding"
 )
 
 // quietLogger returns a logger that discards all output so the test
@@ -142,5 +145,75 @@ func TestBuildProviderRegistry_ZohoTenantIsDomain(t *testing.T) {
 	}
 	if e := reg.lookup("100200300"); e != nil {
 		t.Errorf("did not expect Zoho entry keyed by OrgID: got kind=%q", e.kind)
+	}
+}
+
+// TestBuildOAuthProviderConfigs_ZohoRegistration verifies that Zoho
+// ClientID + ClientSecret alone are enough to register a Zoho OAuth
+// provider config (the refresh token is produced by the consent flow
+// itself, so we must NOT require it here — chicken-and-egg). Without
+// this entry, calling AuthURL(ProviderZoho, …) would error with
+// "unknown provider" and the entire Zoho onboarding flow would be
+// dead code.
+func TestBuildOAuthProviderConfigs_ZohoRegistration(t *testing.T) {
+	cfg := &config.Config{
+		Onboarding: config.Onboarding{CallbackURL: "https://app.example/v1/onboarding/callback"},
+		Zoho: config.Zoho{
+			ClientID:     "zc",
+			ClientSecret: "zs",
+			DataCenter:   "eu",
+			// RefreshToken intentionally empty: this is what the
+			// consent flow produces. Registering must NOT depend on
+			// it being present.
+		},
+	}
+	providers := buildOAuthProviderConfigs(cfg)
+	got, ok := providers[onboarding.ProviderZoho]
+	if !ok {
+		t.Fatal("ProviderZoho not registered")
+	}
+	if got.ClientID != "zc" || got.ClientSecret != "zs" {
+		t.Errorf("ClientID/Secret = %q/%q, want zc/zs", got.ClientID, got.ClientSecret)
+	}
+	// EU data centre must route AuthURL/TokenURL to accounts.zoho.eu.
+	if !strings.HasPrefix(got.AuthURL, "https://accounts.zoho.eu/oauth/v2/auth") {
+		t.Errorf("AuthURL = %q, want EU regional endpoint", got.AuthURL)
+	}
+	if !strings.HasPrefix(got.TokenURL, "https://accounts.zoho.eu/oauth/v2/token") {
+		t.Errorf("TokenURL = %q, want EU regional endpoint", got.TokenURL)
+	}
+	if got.RedirectURL != cfg.Onboarding.CallbackURL {
+		t.Errorf("RedirectURL = %q, want %q", got.RedirectURL, cfg.Onboarding.CallbackURL)
+	}
+	wantScopes := []string{
+		"ZohoMail.messages.ALL",
+		"ZohoMail.folders.ALL",
+		"ZohoMail.tags.ALL",
+		"ZohoMail.accounts.READ",
+		"ZohoMail.organization.READ",
+	}
+	if !reflect.DeepEqual(got.Scopes, wantScopes) {
+		t.Errorf("Scopes = %v, want %v", got.Scopes, wantScopes)
+	}
+}
+
+// TestBuildOAuthProviderConfigs_ZohoEmptyWithoutCredentials verifies
+// that Zoho is NOT registered when its OAuth credentials are absent.
+// (Fastmail/WorkMail are similarly never registered here — they use
+// non-OAuth auth, so this also serves as a regression for that.)
+func TestBuildOAuthProviderConfigs_ZohoEmptyWithoutCredentials(t *testing.T) {
+	cfg := &config.Config{
+		Fastmail: config.Fastmail{APIToken: "fm-token", AccountID: "fm-acct"},
+		WorkMail: config.WorkMail{OrganizationID: "m-x", Region: "us-east-1"},
+	}
+	providers := buildOAuthProviderConfigs(cfg)
+	if _, ok := providers[onboarding.ProviderZoho]; ok {
+		t.Error("ProviderZoho should not be registered without Zoho OAuth credentials")
+	}
+	if _, ok := providers[onboarding.ProviderFastmail]; ok {
+		t.Error("ProviderFastmail must not be registered (non-OAuth auth)")
+	}
+	if _, ok := providers[onboarding.ProviderWorkmail]; ok {
+		t.Error("ProviderWorkmail must not be registered (AWS IAM auth)")
 	}
 }
