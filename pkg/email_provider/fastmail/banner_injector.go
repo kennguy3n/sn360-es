@@ -296,7 +296,7 @@ func spliceBanner(raw, banner []byte) ([]byte, error) {
 // injectIntoMultipart finds the first text/html (or text/plain) sub
 // part and inlines the banner. The boundary is extracted from the
 // Content-Type header.
-func injectIntoMultipart(headers mail.Header, contentType string, body, banner []byte) ([]byte, error) {
+func injectIntoMultipart(_ mail.Header, contentType string, body, banner []byte) ([]byte, error) {
 	boundary := extractBoundary(contentType)
 	if boundary == "" {
 		// Fall back: pretend it's plain text.

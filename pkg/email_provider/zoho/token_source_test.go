@@ -15,7 +15,7 @@ func TestAccountsBaseURL_DataCenters(t *testing.T) {
 		"":         "https://accounts.zoho.com",
 		"com":      "https://accounts.zoho.com",
 		"COM":      "https://accounts.zoho.com",
-		" eu ":     "https://accounts.zoho.eu",
+		"eu":       "https://accounts.zoho.eu",
 		"in":       "https://accounts.zoho.in",
 		"com.au":   "https://accounts.zoho.com.au",
 		"au":       "https://accounts.zoho.com.au",
@@ -30,22 +30,31 @@ func TestAccountsBaseURL_DataCenters(t *testing.T) {
 			t.Errorf("AccountsBaseURL(%q) = %q, want %q", dc, got, want)
 		}
 	}
+	// Whitespace/case normalisation is a separate behavioural
+	// assertion: surrounding whitespace must be stripped before the
+	// data-centre lookup so a stray space in the config doesn't drop
+	// the tenant back to the US default.
+	if got := AccountsBaseURL(" eu "); got != "https://accounts.zoho.eu" {
+		t.Errorf("AccountsBaseURL(\" eu \") = %q, want trimmed match", got)
+	}
 }
 
 func TestMailBaseURL_DataCenters(t *testing.T) {
 	cases := map[string]string{
-		"":     "https://mail.zoho.com/api",
-		"eu":   "https://mail.zoho.eu/api",
-		"in":   "https://mail.zoho.in/api",
-		"jp":   "https://mail.zoho.jp/api",
-		"bad":  "https://mail.zoho.com/api",
-		"COM":  "https://mail.zoho.com/api",
-		"  EU": "https://mail.zoho.eu/api",
+		"":    "https://mail.zoho.com/api",
+		"eu":  "https://mail.zoho.eu/api",
+		"in":  "https://mail.zoho.in/api",
+		"jp":  "https://mail.zoho.jp/api",
+		"bad": "https://mail.zoho.com/api",
+		"COM": "https://mail.zoho.com/api",
 	}
 	for dc, want := range cases {
 		if got := MailBaseURL(dc); got != want {
 			t.Errorf("MailBaseURL(%q) = %q, want %q", dc, got, want)
 		}
+	}
+	if got := MailBaseURL("  EU"); got != "https://mail.zoho.eu/api" {
+		t.Errorf("MailBaseURL(\"  EU\") = %q, want trimmed match", got)
 	}
 }
 

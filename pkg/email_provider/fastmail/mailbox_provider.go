@@ -90,17 +90,17 @@ func (p *MailboxProvider) ListMailboxes(ctx context.Context, tenantID string) ([
 
 // jmapEmail is the subset of JMAP Email we consume. RFC 8621 §4.
 type jmapEmail struct {
-	ID         string `json:"id"`
-	ThreadID   string `json:"threadId"`
-	MailboxIDs map[string]bool   `json:"mailboxIds"`
+	ID         string             `json:"id"`
+	ThreadID   string             `json:"threadId"`
+	MailboxIDs map[string]bool    `json:"mailboxIds"`
 	From       []jmapEmailAddress `json:"from"`
 	To         []jmapEmailAddress `json:"to"`
 	CC         []jmapEmailAddress `json:"cc"`
 	Subject    string             `json:"subject"`
 	ReceivedAt string             `json:"receivedAt"`
 	BodyValues map[string]struct {
-		Value      string `json:"value"`
-		IsTruncated bool  `json:"isTruncated"`
+		Value       string `json:"value"`
+		IsTruncated bool   `json:"isTruncated"`
 	} `json:"bodyValues"`
 	TextBody []struct {
 		PartID string `json:"partId"`
@@ -140,16 +140,16 @@ func (p *MailboxProvider) FetchNew(ctx context.Context, mailbox ingestion.Mailbo
 		filter["after"] = since.UTC().Add(time.Nanosecond).Format(time.RFC3339)
 	}
 	queryArgs := map[string]any{
-		"accountId":  p.client.accountID,
-		"filter":     filter,
-		"sort":       []map[string]any{{"property": "receivedAt", "isAscending": true}},
-		"limit":      limit,
+		"accountId":       p.client.accountID,
+		"filter":          filter,
+		"sort":            []map[string]any{{"property": "receivedAt", "isAscending": true}},
+		"limit":           limit,
 		"collapseThreads": false,
 	}
 	getArgs := map[string]any{
-		"accountId":     p.client.accountID,
-		"#ids":          map[string]string{"resultOf": "0", "name": "Email/query", "path": "/ids"},
-		"properties":    []string{"id", "threadId", "mailboxIds", "from", "to", "cc", "subject", "receivedAt", "bodyValues", "textBody", "htmlBody", "headers"},
+		"accountId":           p.client.accountID,
+		"#ids":                map[string]string{"resultOf": "0", "name": "Email/query", "path": "/ids"},
+		"properties":          []string{"id", "threadId", "mailboxIds", "from", "to", "cc", "subject", "receivedAt", "bodyValues", "textBody", "htmlBody", "headers"},
 		"fetchTextBodyValues": true,
 		"fetchHTMLBodyValues": true,
 		"maxBodyValueBytes":   1 << 20,

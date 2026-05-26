@@ -120,8 +120,8 @@ func (p *LabelProvider) ApplyLabel(ctx context.Context, email, messageID, labelI
 	endpoint := fmt.Sprintf("%s/accounts/%s/messages/tag/%s",
 		p.client.baseURL, url.PathEscape(accountID), url.PathEscape(labelID))
 	body := map[string]any{
-		"mode":       "add",
-		"messageId":  []string{messageID},
+		"mode":      "add",
+		"messageId": []string{messageID},
 	}
 	return p.client.do(ctx, http.MethodPost, endpoint, body, nil)
 }
@@ -138,8 +138,8 @@ func (p *LabelProvider) RemoveLabel(ctx context.Context, email, messageID, label
 	endpoint := fmt.Sprintf("%s/accounts/%s/messages/tag/%s",
 		p.client.baseURL, url.PathEscape(accountID), url.PathEscape(labelID))
 	body := map[string]any{
-		"mode":       "remove",
-		"messageId":  []string{messageID},
+		"mode":      "remove",
+		"messageId": []string{messageID},
 	}
 	return p.client.do(ctx, http.MethodPost, endpoint, body, nil)
 }

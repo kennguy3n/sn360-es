@@ -41,13 +41,13 @@ func NewDirectoryClient(cfg DirectoryClientConfig) (*DirectoryClient, error) {
 // jmapIdentity is the subset of the JMAP Identity object we consume.
 // See RFC 8621 §6.1 for the full definition.
 type jmapIdentity struct {
-	ID          string `json:"id"`
-	Email       string `json:"email"`
-	Name        string `json:"name"`
-	MayDelete   bool   `json:"mayDelete"`
-	TextSig     string `json:"textSignature"`
-	HTMLSig     string `json:"htmlSignature"`
-	ReplyTo     []struct {
+	ID        string `json:"id"`
+	Email     string `json:"email"`
+	Name      string `json:"name"`
+	MayDelete bool   `json:"mayDelete"`
+	TextSig   string `json:"textSignature"`
+	HTMLSig   string `json:"htmlSignature"`
+	ReplyTo   []struct {
 		Email string `json:"email"`
 	} `json:"replyTo,omitempty"`
 }
@@ -139,12 +139,12 @@ func (c *DirectoryClient) ListUsersDelta(ctx context.Context, tenantID string, d
 		return users, state, nil
 	}
 	var changes struct {
-		AccountID  string   `json:"accountId"`
-		OldState   string   `json:"oldState"`
-		NewState   string   `json:"newState"`
-		HasMore    bool     `json:"hasMoreChanges"`
-		Created    []string `json:"created"`
-		Updated    []string `json:"updated"`
+		AccountID string   `json:"accountId"`
+		OldState  string   `json:"oldState"`
+		NewState  string   `json:"newState"`
+		HasMore   bool     `json:"hasMoreChanges"`
+		Created   []string `json:"created"`
+		Updated   []string `json:"updated"`
 	}
 	if err := json.Unmarshal(resp, &changes); err != nil {
 		return nil, "", fmt.Errorf("fastmail: decode identity/changes: %w", err)

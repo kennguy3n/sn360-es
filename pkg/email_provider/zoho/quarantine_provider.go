@@ -138,7 +138,7 @@ func (q *QuarantineProvider) MoveToQuarantine(ctx context.Context, email, messag
 // RestoreFromQuarantine moves the message back to Inbox and replaces
 // the stub with the supplied restoredBody (or a short receipt when
 // empty).
-func (q *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, email, messageID, quarantineLabelID, restoredBody string) error {
+func (q *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, email, messageID, _, restoredBody string) error {
 	accountID, err := q.accountIDForEmail(ctx, email)
 	if err != nil {
 		return err

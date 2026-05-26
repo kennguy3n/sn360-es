@@ -39,14 +39,14 @@ func NewDirectoryClient(cfg DirectoryClientConfig) (*DirectoryClient, error) {
 
 // workMailUser is the subset of the WorkMail user object we consume.
 type workMailUser struct {
-	ID             string `json:"Id"`
-	Email          string `json:"Email"`
-	Name           string `json:"Name"`
-	DisplayName    string `json:"DisplayName"`
-	State          string `json:"State"`     // ENABLED | DISABLED | DELETED
-	UserRole       string `json:"UserRole"`  // USER | RESOURCE | SYSTEM_USER
-	EnabledDate    string `json:"EnabledDate,omitempty"`
-	DisabledDate   string `json:"DisabledDate,omitempty"`
+	ID           string `json:"Id"`
+	Email        string `json:"Email"`
+	Name         string `json:"Name"`
+	DisplayName  string `json:"DisplayName"`
+	State        string `json:"State"`    // ENABLED | DISABLED | DELETED
+	UserRole     string `json:"UserRole"` // USER | RESOURCE | SYSTEM_USER
+	EnabledDate  string `json:"EnabledDate,omitempty"`
+	DisabledDate string `json:"DisabledDate,omitempty"`
 }
 
 // listUsersOutput is the WorkMail ListUsers response shape.

@@ -98,7 +98,7 @@ func NewRefreshTokenSource(cfg RefreshTokenConfig) (*RefreshTokenSource, error) 
 	if tokenURL == "" {
 		tokenURL = AccountsBaseURL(cfg.DataCenter)
 	}
-	tokenURL += "/oauth/v2/token"
+	tokenURL += "/oauth/v2/token" //nolint:gosec // G101: URL path, not a credential
 	client := cfg.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}

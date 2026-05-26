@@ -46,13 +46,13 @@ type ClientConfig struct {
 // Session represents the JMAP session object returned by the
 // well-known endpoint. Only the fields we use are decoded.
 type Session struct {
-	APIURL          string                       `json:"apiUrl"`
-	DownloadURL     string                       `json:"downloadUrl"`
-	UploadURL       string                       `json:"uploadUrl"`
-	EventSourceURL  string                       `json:"eventSourceUrl"`
-	PrimaryAccounts map[string]string            `json:"primaryAccounts"`
-	Accounts        map[string]json.RawMessage   `json:"accounts"`
-	Capabilities    map[string]json.RawMessage   `json:"capabilities"`
+	APIURL          string                     `json:"apiUrl"`
+	DownloadURL     string                     `json:"downloadUrl"`
+	UploadURL       string                     `json:"uploadUrl"`
+	EventSourceURL  string                     `json:"eventSourceUrl"`
+	PrimaryAccounts map[string]string          `json:"primaryAccounts"`
+	Accounts        map[string]json.RawMessage `json:"accounts"`
+	Capabilities    map[string]json.RawMessage `json:"capabilities"`
 }
 
 // NewClient validates the config and returns a usable Client.

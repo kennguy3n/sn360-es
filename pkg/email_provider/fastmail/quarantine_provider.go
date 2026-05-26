@@ -37,7 +37,7 @@ func NewQuarantineProvider(cfg QuarantineProviderConfig) (*QuarantineProvider, e
 	if cfg.Client == nil {
 		return nil, errors.New("fastmail: quarantine provider requires a Client")
 	}
-	inj, err := NewBannerInjector(BannerInjectorConfig{Client: cfg.Client})
+	inj, err := NewBannerInjector(BannerInjectorConfig(cfg))
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func (q *QuarantineProvider) Kind() action.LabelProviderKind { return action.Lab
 
 // EnsureQuarantineLabel creates (or resolves) the hidden quarantine
 // mailbox. Returns the JMAP mailboxId.
-func (q *QuarantineProvider) EnsureQuarantineLabel(ctx context.Context, email string) (string, error) {
+func (q *QuarantineProvider) EnsureQuarantineLabel(ctx context.Context, _ string) (string, error) {
 	q.mu.Lock()
 	if q.cachedID != "" {
 		q.mu.Unlock()
@@ -143,7 +143,7 @@ func (q *QuarantineProvider) MoveToQuarantine(ctx context.Context, email, messag
 
 // RestoreFromQuarantine moves the message back to Inbox and rewrites
 // the body to restoredBody (or a short release receipt when empty).
-func (q *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, email, messageID, quarantineLabelID, restoredBody string) error {
+func (q *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, email, messageID, _, restoredBody string) error {
 	inboxID, err := q.resolveInbox(ctx)
 	if err != nil {
 		return err

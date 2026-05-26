@@ -30,9 +30,9 @@ func newFakeFastmail(t *testing.T, handle func(method string, args json.RawMessa
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"apiUrl":       srv.URL + "/jmap/api/",
-			"downloadUrl":  srv.URL + "/jmap/download/",
-			"uploadUrl":    srv.URL + "/jmap/upload/",
+			"apiUrl":         srv.URL + "/jmap/api/",
+			"downloadUrl":    srv.URL + "/jmap/download/",
+			"uploadUrl":      srv.URL + "/jmap/upload/",
 			"eventSourceUrl": srv.URL + "/jmap/event/",
 			"primaryAccounts": map[string]string{
 				"urn:ietf:params:jmap:mail": "acct-1",

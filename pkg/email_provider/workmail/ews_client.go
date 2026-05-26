@@ -20,9 +20,9 @@ import (
 // The client speaks the Exchange 2010_SP2 schema namespace, which is
 // the latest version WorkMail supports.
 type EWSClient struct {
-	http       *http.Client
-	signer     *Signer
-	endpoint   string
+	http        *http.Client
+	signer      *Signer
+	endpoint    string
 	impersonate bool
 }
 
@@ -174,13 +174,13 @@ func (c *EWSClient) FindItems(ctx context.Context, impersonateEmail, folder stri
 
 // EWSItem captures the IdOnly + headline fields returned by FindItem.
 type EWSItem struct {
-	ID            string
-	ChangeKey     string
-	Subject       string
-	DateReceived  time.Time
-	From          string
-	To            []string
-	Cc            []string
+	ID           string
+	ChangeKey    string
+	Subject      string
+	DateReceived time.Time
+	From         string
+	To           []string
+	Cc           []string
 }
 
 // EWSMessageBody is the body shape used by GetItem / UpdateItem.

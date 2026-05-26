@@ -46,7 +46,7 @@ func (p *LabelProvider) Kind() action.LabelProviderKind { return action.LabelPro
 // The email argument is ignored: JMAP labels are account-scoped, not
 // per-mailbox like Gmail. Color is also ignored — Fastmail's UI
 // derives mailbox colors from its own settings.
-func (p *LabelProvider) EnsureLabel(ctx context.Context, email, name string, color action.LabelColor) (string, error) {
+func (p *LabelProvider) EnsureLabel(ctx context.Context, _, name string, _ action.LabelColor) (string, error) {
 	if name == "" {
 		return "", errors.New("fastmail: label name is required")
 	}
@@ -70,7 +70,7 @@ func (p *LabelProvider) EnsureLabel(ctx context.Context, email, name string, col
 }
 
 // ApplyLabel adds the mailboxId to the message's mailboxIds set.
-func (p *LabelProvider) ApplyLabel(ctx context.Context, email, messageID, labelID string) error {
+func (p *LabelProvider) ApplyLabel(ctx context.Context, _, messageID, labelID string) error {
 	if messageID == "" || labelID == "" {
 		return errors.New("fastmail: message_id and label_id are required")
 	}
@@ -86,7 +86,7 @@ func (p *LabelProvider) ApplyLabel(ctx context.Context, email, messageID, labelI
 }
 
 // RemoveLabel removes the mailboxId from the message's mailboxIds.
-func (p *LabelProvider) RemoveLabel(ctx context.Context, email, messageID, labelID string) error {
+func (p *LabelProvider) RemoveLabel(ctx context.Context, _, messageID, labelID string) error {
 	if messageID == "" || labelID == "" {
 		return errors.New("fastmail: message_id and label_id are required")
 	}

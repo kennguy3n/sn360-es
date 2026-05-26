@@ -18,11 +18,11 @@ import (
 // with a JSON body and an X-Amz-Target header identifying the
 // operation.
 type Client struct {
-	http      *http.Client
-	signer    *Signer
-	endpoint  string
-	orgID     string
-	region    string
+	http     *http.Client
+	signer   *Signer
+	endpoint string
+	orgID    string
+	region   string
 }
 
 // ClientConfig wires Client.

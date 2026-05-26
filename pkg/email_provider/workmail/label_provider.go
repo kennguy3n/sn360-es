@@ -71,7 +71,12 @@ func (p *LabelProvider) ApplyLabel(ctx context.Context, email, messageID, labelI
 	if containsCI(current, labelID) {
 		return nil // already set; nothing to do
 	}
-	updated := append(current, labelID)
+	// Build a fresh slice rather than aliasing current's backing array;
+	// the EWS client may retain the slice for the duration of the
+	// request and we don't want a later mutation of current to leak in.
+	updated := make([]string, 0, len(current)+1)
+	updated = append(updated, current...)
+	updated = append(updated, labelID)
 	if err := p.ews.UpdateCategories(ctx, email, messageID, updated); err != nil {
 		return fmt.Errorf("workmail: apply category: %w", err)
 	}
