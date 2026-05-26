@@ -9,6 +9,7 @@ import (
 
 	"github.com/kennguy3n/sn360-es/internal/config"
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
+	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
 	"github.com/kennguy3n/sn360-es/internal/service/onboarding"
 	"github.com/kennguy3n/sn360-es/pkg/email_provider/gmail"
 	"github.com/kennguy3n/sn360-es/pkg/email_provider/outlook"
@@ -256,6 +257,35 @@ func buildVendorScanner(app *application) agent.VendorScanner {
 		return nil
 	}
 	return &vendorScannerAdapter{histories: app.repos.CommunicationHistories}
+}
+
+// buildSignalEnricher constructs the consumer-side enrichment hook
+// that folds per-(tenant, sender, recipient) state from
+// communication_histories onto each evaluate request's RiskSignals.
+//
+// Returns NoopEnricher (rather than nil) when either dependency is
+// missing — the communication_histories repository or the PII
+// hasher. Callers therefore never have to nil-check; a partially-
+// wired deployment degrades to base signals exactly as if the
+// enricher hook had not existed, which is what the Tier 0 ATO
+// heuristic's defensive `signals.TypicalSendHour == nil` branch
+// already handles. The PII hasher MUST be the same one the
+// relationship / directory workers use so the computed sender_hash
+// and recipient_hash byte-for-byte match the row keys persisted in
+// communication_histories.
+func buildSignalEnricher(cfg *config.Config, logger *slog.Logger, app *application) evaluate.SignalEnricher {
+	if app.repos == nil || app.repos.CommunicationHistories == nil {
+		return evaluate.NoopEnricher{}
+	}
+	hasher := buildPIIHasher(cfg)
+	if hasher == nil {
+		return evaluate.NoopEnricher{}
+	}
+	enricher := newCommHistorySignalEnricher(app.repos.CommunicationHistories, hasher, logger)
+	if enricher == nil {
+		return evaluate.NoopEnricher{}
+	}
+	return enricher
 }
 
 // ---------------------------------------------------------------------

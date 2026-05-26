@@ -416,14 +416,23 @@ func (a *application) handleEvaluateRequest(ctx context.Context, msg events.Mess
 			slog.String("message_id", req.MessageID))
 		return nil
 	}
-	// Pass req.Signals as the explicit signals argument so the
-	// per-message and batch paths now share the same evaluator entry
-	// signature. The per-message handler keeps signals on the request
-	// (they were computed by the ingestion / prefilter pipeline that
-	// emitted es.evaluate.request); the batch handler reads them from
-	// the BatchMessage envelope. Both call sites converge on
-	// Evaluate(ctx, req, signals).
-	result, err := a.evaluator.Evaluate(ctx, req, req.Signals)
+	// Pass the enriched signals as the explicit signals argument so
+	// the per-message and batch paths share the same evaluator entry
+	// signature AND the same per-relationship view of
+	// communication_histories. The producer-supplied req.Signals
+	// only carry header-derived state (SenderDomain, IsExternal,
+	// auth verdicts, …); the SignalEnricher folds in the
+	// per-(tenant, sender, recipient) state at evaluation time so
+	// the Tier 0 ATO heuristic and the categoriser see fresh
+	// TypicalSendHour, CommunicationFrequency, IsFirstContact, and
+	// CurrentHourUTC. When the enricher is not wired (no repo / no
+	// PII hasher) it is the no-op enricher and req.Signals flow
+	// through untouched, matching the pre-enricher behaviour.
+	enriched := req.Signals
+	if a.signalEnricher != nil {
+		enriched = a.signalEnricher.Enrich(ctx, req, req.Signals)
+	}
+	result, err := a.evaluator.Evaluate(ctx, req, enriched)
 	if err != nil {
 		return fmt.Errorf("evaluate: %w", err)
 	}

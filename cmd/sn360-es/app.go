@@ -121,6 +121,17 @@ type application struct {
 	rspamdClient evaluate.RspamdClient
 	evaluator    *evaluate.Evaluator
 	batchOrch    *evaluate.BatchOrchestrator
+	// signalEnricher folds per-(tenant, sender, recipient) state
+	// from communication_histories onto the base RiskSignals the
+	// normalizer produced. It runs at consumer-side ingress
+	// (handleEvaluateRequest + BatchOrchestrator) so the Tier 0
+	// ATO heuristic sees the freshest TypicalSendHour /
+	// CommunicationFrequency / IsFirstContact / CurrentHourUTC at
+	// evaluation time rather than at publish time. The composition
+	// root substitutes evaluate.NoopEnricher when the repository or
+	// PII hasher dependency is missing so call sites never have to
+	// nil-check.
+	signalEnricher evaluate.SignalEnricher
 
 	// Ingestion polling.
 	poller *ingestion.Poller
@@ -587,6 +598,18 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		tenantConfigLoader = app.tenantScoringConfig
 	}
 
+	// Signal enricher bridges communication_histories →
+	// dto.RiskSignals. Both newCommHistorySignalEnricher (real
+	// implementation) and NoopEnricher satisfy the interface, so
+	// the consumer-side call site never has to nil-check.
+	// Wiring requires the communication-histories repo AND a PII
+	// hasher (the same one ingestion / directory / relationship
+	// workers use); a missing dependency degrades to no-op
+	// enrichment, matching the pre-enricher behaviour where
+	// Tier 0's timing anomaly check sees no baseline and
+	// short-circuits.
+	app.signalEnricher = buildSignalEnricher(cfg, logger, app)
+
 	app.evaluator = evaluate.NewEvaluator(evaluate.Config{
 		Tier0:                app.tier0Gate,
 		Tier1:                app.tier1Client,
@@ -652,7 +675,11 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 					TenantConfig:  tenantConfigLoader,
 					Sink:          app.eventBus,
 					ResultSubject: "es.evaluate.result",
-					Logger:        logger,
+					// Same enricher both paths consume so per-message
+					// and batch verdicts see identical
+					// per-relationship signals for the same input.
+					Enricher: app.signalEnricher,
+					Logger:   logger,
 				})
 				if oerr != nil {
 					logger.Warn("sn360-es: tier1 batch orchestrator init failed; falling back to single-message consumer",

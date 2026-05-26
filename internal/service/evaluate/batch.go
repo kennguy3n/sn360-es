@@ -129,6 +129,17 @@ type BatchOrchestratorConfig struct {
 	// dedicated batch action service).
 	ResultSubject string
 
+	// Enricher folds per-(tenant, sender, recipient) state
+	// (TypicalSendHour, CommunicationFrequency, IsFirstContact,
+	// CurrentHourUTC) onto each message's signals BEFORE the
+	// Tier 0 gate runs. The per-message evaluator path applies
+	// the same enricher in handleEvaluateRequest; threading it
+	// through the orchestrator keeps batch and per-message
+	// verdicts identical for the same input. Nil degrades to
+	// NoopEnricher so a partially-wired deployment behaves as
+	// it did before enrichment existed.
+	Enricher SignalEnricher
+
 	// Logger is the structured logger (default slog.Default()).
 	Logger *slog.Logger
 }
@@ -212,6 +223,9 @@ func NewBatchOrchestrator(cfg BatchOrchestratorConfig) (*BatchOrchestrator, erro
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
+	}
+	if cfg.Enricher == nil {
+		cfg.Enricher = NoopEnricher{}
 	}
 	return &BatchOrchestrator{cfg: cfg, log: cfg.Logger, stop: make(chan struct{}), done: make(chan struct{})}, nil
 }
@@ -299,9 +313,16 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 			_ = m.Nak(5 * time.Second)
 			continue
 		}
-		p := pending{msg: m, req: bm.Request, sig: bm.Signals}
+		// Enrich the producer-supplied signals with per-relationship
+		// state (TypicalSendHour, CommunicationFrequency,
+		// IsFirstContact, CurrentHourUTC) at evaluation time. The
+		// per-message path applies the same enricher in
+		// handleEvaluateRequest so both code paths feed Tier 0 +
+		// Tier 1 the same view of the relationship aggregate.
+		enrichedSig := o.cfg.Enricher.Enrich(ctx, bm.Request, bm.Signals)
+		p := pending{msg: m, req: bm.Request, sig: enrichedSig}
 		if o.cfg.Tier0 != nil {
-			outcome := o.cfg.Tier0.Apply(bm.Request, bm.Signals)
+			outcome := o.cfg.Tier0.Apply(bm.Request, enrichedSig)
 			p.tier0Outcome = outcome
 			if outcome.Bypass {
 				// Tier 0 short-circuit: build the published
