@@ -1,6 +1,7 @@
 package fastmail
 
 import (
+	"bytes"
 	"container/list"
 	"context"
 	"errors"
@@ -10,6 +11,15 @@ import (
 
 	"github.com/kennguy3n/sn360-es/internal/service/action"
 )
+
+// rewrittenHTMLContentType is the Content-Type header value the
+// rewriter applies when it has just replaced a non-HTML body with
+// HTML. Without this, JMAP receivers re-import the message keeping
+// the source Content-Type (e.g. text/plain), and mail clients then
+// render the HTML as literal tags. Matches the value spliceBanner
+// already uses for the analogous "escape plain-text into HTML" path
+// in banner_injector.go.
+const rewrittenHTMLContentType = "text/html; charset=utf-8"
 
 // defaultBodyCacheMaxEntries bounds the per-process Fastmail body
 // cache to prevent unbounded growth when callers invoke FetchBody
@@ -249,9 +259,9 @@ func findFirstHTMLPart(raw []byte) (string, bool) {
 	}
 	partSep := []byte(sepStyle + sepStyle)
 	sep := []byte("--" + boundary)
-	parts := bytesSplit(body, sep)
+	parts := bytes.Split(body, sep)
 	for _, p := range parts {
-		i := bytesIndex(p, partSep)
+		i := bytes.Index(p, partSep)
 		if i < 0 {
 			continue
 		}
@@ -271,6 +281,14 @@ func findFirstHTMLPart(raw []byte) (string, bool) {
 // part's header/body separator. The rebuilt message preserves the
 // original line-ending style so LF-only inputs round-trip without
 // CRLF contamination.
+//
+// When the source message is NOT already HTML (no Content-Type,
+// text/plain, or any other non-multipart, non-HTML type) the top-
+// level Content-Type header is rewritten to text/html so receivers
+// render the body rather than displaying raw HTML tags as literal
+// text. For multipart messages we only touch the matching text/html
+// part's body and leave the outer Content-Type alone, because the
+// other parts (text/plain, attachments) remain valid.
 func replaceHTMLBody(raw, newHTML []byte) ([]byte, error) {
 	header, body, sepStyle, err := splitHeaderBody(raw)
 	if err != nil {
@@ -281,37 +299,42 @@ func replaceHTMLBody(raw, newHTML []byte) ([]byte, error) {
 	}
 	blank := []byte(sepStyle + sepStyle)
 	contentType := extractHeaderValue(string(header), "Content-Type")
-	if contentType == "" {
-		// Treat as text/plain and replace whole body.
-		var out []byte
+	lower := strings.ToLower(contentType)
+
+	switch {
+	case contentType == "",
+		!strings.HasPrefix(lower, "text/html") && !strings.HasPrefix(lower, "multipart/"):
+		// Source body is text/plain (or has no declared type, or
+		// some other singlepart type). Replacing the body with
+		// HTML requires promoting Content-Type to text/html;
+		// without this the JMAP receiver keeps the source type
+		// and clients render the HTML as literal text. Mirrors
+		// spliceBanner's escape-into-HTML path.
+		rewrittenHeader := rewriteHeaderLine(header, "Content-Type", rewrittenHTMLContentType, sepStyle)
+		out := make([]byte, 0, len(rewrittenHeader)+len(blank)+len(newHTML))
+		out = append(out, rewrittenHeader...)
+		out = append(out, blank...)
+		out = append(out, newHTML...)
+		return out, nil
+	case strings.HasPrefix(lower, "text/html"):
+		// Already HTML — just swap the body in place.
+		out := make([]byte, 0, len(header)+len(blank)+len(newHTML))
 		out = append(out, header...)
 		out = append(out, blank...)
 		out = append(out, newHTML...)
 		return out, nil
 	}
-	if strings.HasPrefix(strings.ToLower(contentType), "text/html") {
-		var out []byte
-		out = append(out, header...)
-		out = append(out, blank...)
-		out = append(out, newHTML...)
-		return out, nil
-	}
-	if !strings.HasPrefix(strings.ToLower(contentType), "multipart/") {
-		var out []byte
-		out = append(out, header...)
-		out = append(out, blank...)
-		out = append(out, newHTML...)
-		return out, nil
-	}
+
+	// Multipart: walk parts, rebuild the first text/html part.
 	boundary := extractBoundary(contentType)
 	if boundary == "" {
 		return nil, errors.New("fastmail: missing boundary in multipart Content-Type")
 	}
 	sep := []byte("--" + boundary)
-	parts := bytesSplit(body, sep)
+	parts := bytes.Split(body, sep)
 	replaced := false
 	for i, p := range parts {
-		j := bytesIndex(p, blank)
+		j := bytes.Index(p, blank)
 		if j < 0 {
 			continue
 		}
@@ -320,7 +343,7 @@ func replaceHTMLBody(raw, newHTML []byte) ([]byte, error) {
 			continue
 		}
 		hdrEnd := j + len(blank)
-		var rebuilt []byte
+		rebuilt := make([]byte, 0, hdrEnd+len(newHTML))
 		rebuilt = append(rebuilt, p[:hdrEnd]...)
 		rebuilt = append(rebuilt, newHTML...)
 		parts[i] = rebuilt
@@ -330,67 +353,11 @@ func replaceHTMLBody(raw, newHTML []byte) ([]byte, error) {
 	if !replaced {
 		return nil, errors.New("fastmail: no text/html part to replace")
 	}
-	var out []byte
+	out := make([]byte, 0, len(header)+len(blank)+len(body))
 	out = append(out, header...)
 	out = append(out, blank...)
-	out = append(out, joinParts(parts, sep)...)
+	out = append(out, bytes.Join(parts, sep)...)
 	return out, nil
-}
-
-// joinParts re-renders the multipart body. Mirrors bytes.Join while
-// keeping the package free of external imports.
-func joinParts(parts [][]byte, sep []byte) []byte {
-	if len(parts) == 0 {
-		return nil
-	}
-	total := 0
-	for _, p := range parts {
-		total += len(p)
-	}
-	total += len(sep) * (len(parts) - 1)
-	out := make([]byte, 0, total)
-	for i, p := range parts {
-		if i > 0 {
-			out = append(out, sep...)
-		}
-		out = append(out, p...)
-	}
-	return out
-}
-
-// bytesIndex / bytesSplit are small helpers kept package-local so
-// the package's standard-library footprint stays minimal.
-
-func bytesIndex(haystack, needle []byte) int {
-	if len(needle) == 0 || len(needle) > len(haystack) {
-		return -1
-	}
-	for i := 0; i <= len(haystack)-len(needle); i++ {
-		match := true
-		for j := range needle {
-			if haystack[i+j] != needle[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return i
-		}
-	}
-	return -1
-}
-
-func bytesSplit(s, sep []byte) [][]byte {
-	var out [][]byte
-	for {
-		idx := bytesIndex(s, sep)
-		if idx < 0 {
-			out = append(out, s)
-			return out
-		}
-		out = append(out, s[:idx])
-		s = s[idx+len(sep):]
-	}
 }
 
 // extractHeaderValue returns the value of the named header (case-

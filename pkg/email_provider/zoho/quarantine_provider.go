@@ -18,6 +18,12 @@ import (
 // /accounts/{acct}/messages/move.
 type QuarantineProvider struct {
 	client *Client
+	// inj is the shared BannerInjector used to rewrite quarantine
+	// stub / restore bodies. Hoisted to a field so MoveToQuarantine
+	// and RestoreFromQuarantine don't reconstruct it (and its
+	// underlying state) on every call; this also matches Fastmail's
+	// QuarantineProvider which reuses a single BannerInjector.
+	inj *BannerInjector
 
 	// folderCache memoises (email → folderID) lookups so the
 	// quarantine loop doesn't re-walk the directory and folder
@@ -36,7 +42,15 @@ func NewQuarantineProvider(cfg QuarantineProviderConfig) (*QuarantineProvider, e
 	if cfg.Client == nil {
 		return nil, errors.New("zoho: quarantine provider requires a Client")
 	}
-	return &QuarantineProvider{client: cfg.Client, folderCache: make(map[string]string)}, nil
+	inj, err := NewBannerInjector(BannerInjectorConfig(cfg))
+	if err != nil {
+		return nil, fmt.Errorf("zoho: quarantine provider banner injector: %w", err)
+	}
+	return &QuarantineProvider{
+		client:      cfg.Client,
+		inj:         inj,
+		folderCache: make(map[string]string),
+	}, nil
 }
 
 // Kind reports the provider identity for the quarantine service.
@@ -121,16 +135,12 @@ func (q *QuarantineProvider) MoveToQuarantine(ctx context.Context, email, messag
 	if stubBody == "" {
 		return messageID, nil
 	}
-	inj, err := NewBannerInjector(BannerInjectorConfig{Client: q.client})
-	if err != nil {
-		return messageID, err
-	}
 	// Wrap the stub in a minimal HTML document so it renders
 	// identically to the Fastmail and WorkMail quarantine stubs.
 	// Without the wrapper Zoho's web UI sometimes renders the
 	// escaped text as a plain string rather than an HTML body.
 	body := zohoBody{HTML: "<html><body>" + htmlEscape(stubBody) + "</body></html>", IsHTML: true}
-	if err := inj.writeBody(ctx, accountID, messageID, body); err != nil {
+	if err := q.inj.writeBody(ctx, accountID, messageID, body); err != nil {
 		// Surface the write error — operators want to know when the
 		// stub couldn't be applied, but the message is already
 		// moved so the user can't see it anyway. Zoho's PUT
@@ -176,12 +186,8 @@ func (q *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, email, m
 	if restoredBody == "" {
 		restoredBody = "<p>This message was released from SN360 quarantine.</p>"
 	}
-	inj, err := NewBannerInjector(BannerInjectorConfig{Client: q.client})
-	if err != nil {
-		return messageID, err
-	}
 	body := zohoBody{HTML: restoredBody, IsHTML: true}
-	if err := inj.writeBody(ctx, accountID, messageID, body); err != nil {
+	if err := q.inj.writeBody(ctx, accountID, messageID, body); err != nil {
 		return messageID, fmt.Errorf("zoho: apply restore body: %w", err)
 	}
 	// Zoho's PUT-based body rewrite is in place — the message id

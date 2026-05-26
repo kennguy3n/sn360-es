@@ -56,16 +56,18 @@ func NewEWSClient(cfg EWSClientConfig) (*EWSClient, error) {
 	if endpoint == "" {
 		endpoint = fmt.Sprintf("https://ews.mail.%s.awsapps.com/EWS/Exchange.asmx", cfg.Region)
 	}
-	http := cfg.HTTPClient
-	if http == nil {
-		http = newDefaultHTTPClient()
+	// Use httpClient (not `http`) so we don't shadow the
+	// imported net/http package inside this function body.
+	httpClient := cfg.HTTPClient
+	if httpClient == nil {
+		httpClient = newDefaultHTTPClient()
 	}
 	imp := true
 	if cfg.Impersonate != nil {
 		imp = *cfg.Impersonate
 	}
 	return &EWSClient{
-		http:        http,
+		http:        httpClient,
 		signer:      cfg.Signer,
 		endpoint:    endpoint,
 		impersonate: imp,
