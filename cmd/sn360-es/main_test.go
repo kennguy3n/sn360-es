@@ -18,6 +18,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/action"
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
 	"github.com/kennguy3n/sn360-es/internal/service/education"
+	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
 	"github.com/kennguy3n/sn360-es/internal/service/predict"
 	"github.com/kennguy3n/sn360-es/pkg/events"
 	"github.com/kennguy3n/sn360-es/pkg/telemetry"
@@ -79,12 +80,19 @@ func newTestApp(t *testing.T) *application {
 	bus := &stubBus{}
 
 	app := &application{
-		cfg:          cfg,
-		logger:       logger,
-		metrics:      telemetry.DefaultMetrics(),
-		eventBus:     bus,
-		recipientSvc: predict.NewRecipientService(predict.RecipientServiceConfig{}),
-		openSvc:      predict.NewOpenService(predict.OpenServiceConfig{}),
+		cfg:     cfg,
+		logger:  logger,
+		metrics: telemetry.DefaultMetrics(),
+		// signalEnricher is always populated in production by
+		// buildSignalEnricher (which returns NoopEnricher when the
+		// communication-histories repo or PII hasher is missing).
+		// Mirror that contract here so tests don't have to nil-
+		// check before calling handleEvaluateRequest /
+		// processBatch.
+		signalEnricher: evaluate.NoopEnricher{},
+		eventBus:       bus,
+		recipientSvc:   predict.NewRecipientService(predict.RecipientServiceConfig{}),
+		openSvc:        predict.NewOpenService(predict.OpenServiceConfig{}),
 	}
 
 	// Real micro-lesson service so the education route serves an

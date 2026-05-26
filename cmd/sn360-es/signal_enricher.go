@@ -87,6 +87,16 @@ func (e *commHistorySignalEnricher) Enrich(ctx context.Context, req dto.Evaluate
 	// CurrentHourUTC is derived from the request itself; populate it
 	// even when the repository lookup short-circuits below so the
 	// ATO heuristic always has the arrival hour available.
+	//
+	// This unconditionally overwrites any producer-supplied
+	// CurrentHourUTC on base, by design: the heuristic must compare
+	// against the actual arrival time, not the publish-time
+	// wall-clock from a normalizer that ran minutes earlier on a
+	// different node. RelationshipCategory is the opposite — it is
+	// preserved when the producer already classified the pair (see
+	// below) because classification is repo-driven and the
+	// normalizer-supplied value is also repo-driven, so the most
+	// recently-observed one wins. The asymmetry is intentional.
 	out.CurrentHourUTC = e.deriveCurrentHourUTC(req)
 
 	tenantID := strings.TrimSpace(req.TenantID)

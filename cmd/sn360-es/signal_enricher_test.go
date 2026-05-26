@@ -376,15 +376,21 @@ func TestHandleEvaluateRequest_InvokesSignalEnricher(t *testing.T) {
 	}
 }
 
-// TestHandleEvaluateRequest_NoEnricherUsesRequestSignals pins the
-// no-enricher path: with app.signalEnricher unset, the handler
-// must pass req.Signals through unmodified.
-func TestHandleEvaluateRequest_NoEnricherUsesRequestSignals(t *testing.T) {
+// TestHandleEvaluateRequest_NoopEnricherUsesRequestSignals pins the
+// degraded-deployment contract: when the composition root has
+// substituted evaluate.NoopEnricher (because the
+// communication-histories repo or the PII hasher was not wired),
+// the handler must pass req.Signals through unmodified. The
+// production composition root and newTestApp both make the same
+// guarantee that app.signalEnricher is always non-nil, so the
+// handler can call Enrich unconditionally — this test exercises
+// that contract end-to-end.
+func TestHandleEvaluateRequest_NoopEnricherUsesRequestSignals(t *testing.T) {
 	bus := &recordingBus{}
 	app := newTestApp(t)
 	app.eventBus = bus
 	app.evaluator = buildEvaluator(t, fakeTier1{score: 30})
-	app.signalEnricher = nil // simulate not-yet-wired enricher.
+	app.signalEnricher = evaluate.NoopEnricher{}
 
 	req := dto.EvaluateRequest{
 		MessageID:     "msg-noenrich",

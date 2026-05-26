@@ -273,6 +273,20 @@ func buildVendorScanner(app *application) agent.VendorScanner {
 // relationship / directory workers use so the computed sender_hash
 // and recipient_hash byte-for-byte match the row keys persisted in
 // communication_histories.
+//
+// Non-obvious config dependency: buildPIIHasher reads
+// cfg.Banner.TokenSecret (BANNER_TOKEN_SECRET). If that secret is
+// unset, the PII hasher comes back nil and the enricher silently
+// degrades to NoopEnricher even when the communication_histories
+// repo is fully wired. This coupling is pre-existing — the
+// relationship / directory workers also short-circuit when the
+// banner token secret is missing — but a deployment that
+// configures Postgres + the comm-histories repo but omits
+// BANNER_TOKEN_SECRET will get no enrichment and every email will
+// look like first-contact via the IsFirstContact pathway. The
+// production deployment guide treats BANNER_TOKEN_SECRET as a
+// required platform secret; this branch exists for development
+// fallback only.
 func buildSignalEnricher(cfg *config.Config, logger *slog.Logger, app *application) evaluate.SignalEnricher {
 	if app.repos == nil || app.repos.CommunicationHistories == nil {
 		return evaluate.NoopEnricher{}

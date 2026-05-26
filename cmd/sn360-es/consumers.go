@@ -425,14 +425,14 @@ func (a *application) handleEvaluateRequest(ctx context.Context, msg events.Mess
 	// per-(tenant, sender, recipient) state at evaluation time so
 	// the Tier 0 ATO heuristic and the categoriser see fresh
 	// TypicalSendHour, CommunicationFrequency, IsFirstContact, and
-	// CurrentHourUTC. When the enricher is not wired (no repo / no
-	// PII hasher) it is the no-op enricher and req.Signals flow
-	// through untouched, matching the pre-enricher behaviour.
-	enriched := req.Signals
-	if a.signalEnricher != nil {
-		enriched = a.signalEnricher.Enrich(ctx, req, req.Signals)
-	}
-	result, err := a.evaluator.Evaluate(ctx, req, enriched)
+	// CurrentHourUTC. a.signalEnricher is always non-nil (the
+	// composition root substitutes evaluate.NoopEnricher when the
+	// repo or PII hasher is missing), so we can call Enrich
+	// unconditionally — the batch orchestrator's run loop
+	// (internal/service/evaluate/batch.go) makes the same
+	// guarantee, keeping the per-message and batch paths
+	// symmetric.
+	result, err := a.evaluator.Evaluate(ctx, req, a.signalEnricher.Enrich(ctx, req, req.Signals))
 	if err != nil {
 		return fmt.Errorf("evaluate: %w", err)
 	}
