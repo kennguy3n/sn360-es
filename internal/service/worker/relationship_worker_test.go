@@ -660,6 +660,83 @@ func TestRelationshipJob_Run_BaselineCacheCollapsesNplus1Lookups(t *testing.T) {
 	}
 }
 
+// TestRelationshipJob_Run_BaselineWatermarkSkipsUnchangedRows
+// locks in the lastCycleStartedAt watermark: a row whose
+// LastSeenAt has not advanced since the previous Run must not
+// contribute another histogram sample, otherwise the default
+// Window=30d / Interval=4h pairing would re-sample the same
+// underlying message ~180 times and saturate the 168-entry FIFO
+// cap with stale duplicates of one pair's timestamp.
+func TestRelationshipJob_Run_BaselineWatermarkSkipsUnchangedRows(t *testing.T) {
+	day := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	baselines := newFakeBaselineRepo()
+
+	// Single row whose LastSeenAt never moves across two
+	// invocations of Run on the SAME job instance.
+	rows := []repository.CommunicationHistory{{
+		ID: "r1", TenantID: "t-1", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+		SenderDomainHash: []byte("d"), SenderDomain: "d.example", Count30d: 4,
+		LastSeenAt: day.Add(9 * time.Hour), UpdatedAt: day,
+	}}
+	tl := &fakeTenantLister{tenants: []repository.Tenant{{ID: "t-1"}}}
+	cs := &fakeCommunicationStore{rowsByTenant: map[string][]repository.CommunicationHistory{"t-1": rows}}
+	up := &fakeCommUpserter{accept: true}
+	hasher := func(_, _ string) ([]byte, error) { return []byte("ok"), nil }
+
+	job, err := NewRelationshipJob(RelationshipJobConfig{
+		Interval: time.Hour, Tenants: tl, Communications: cs, Upserter: up,
+		Baselines: baselines, Hasher: hasher, Logger: discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	// First Run: prevCycleStartedAt is the zero value, so the
+	// row's LastSeenAt > zero and the bootstrap sample lands.
+	if err := job.Run(context.Background()); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	b, err := baselines.Get(context.Background(), "t-1", []byte("b"), []byte("d"))
+	if err != nil {
+		t.Fatalf("baseline get after first run: %v", err)
+	}
+	if len(b.TypicalSendHours) != 1 || b.TypicalSendHours[0] != 9 {
+		t.Fatalf("first run baseline = %v, want [9] (bootstrap sample)", b.TypicalSendHours)
+	}
+
+	// Second Run on the same job: prevCycleStartedAt is now the
+	// first Run's start time, and the row's LastSeenAt has not
+	// advanced past it. The watermark must skip the append.
+	if err := job.Run(context.Background()); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	b, err = baselines.Get(context.Background(), "t-1", []byte("b"), []byte("d"))
+	if err != nil {
+		t.Fatalf("baseline get after second run: %v", err)
+	}
+	if len(b.TypicalSendHours) != 1 || b.TypicalSendHours[0] != 9 {
+		t.Fatalf("second run double-appended unchanged LastSeenAt: %v, want still [9]",
+			b.TypicalSendHours)
+	}
+
+	// Third Run AFTER mutating the row's LastSeenAt to a fresh
+	// timestamp: this simulates ingestion observing a new
+	// message for the same pair. The watermark must let the new
+	// hour through.
+	cs.rowsByTenant["t-1"][0].LastSeenAt = time.Now().UTC().Add(time.Hour) // strictly > job.lastCycleStartedAt set just before this Run
+	if err := job.Run(context.Background()); err != nil {
+		t.Fatalf("third run: %v", err)
+	}
+	b, err = baselines.Get(context.Background(), "t-1", []byte("b"), []byte("d"))
+	if err != nil {
+		t.Fatalf("baseline get after third run: %v", err)
+	}
+	if len(b.TypicalSendHours) != 2 {
+		t.Fatalf("third run with advanced LastSeenAt did not append: %v, want 2 samples",
+			b.TypicalSendHours)
+	}
+}
+
 // TestModalHourOf covers the helper used to derive the modal hour
 // from an accumulated send-hour distribution.
 func TestModalHourOf(t *testing.T) {

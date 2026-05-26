@@ -115,6 +115,31 @@ type RelationshipJob struct {
 	maxPerTenant int
 	logger       *slog.Logger
 	classifier   *relationship.Classifier
+
+	// lastCycleStartedAt is the wall-clock start time of the
+	// previous successful Run invocation. The baseline-accumulation
+	// path uses it as the lower bound for "this row has genuinely
+	// new activity since we last sampled it": a comm-history row
+	// whose LastSeenAt has not advanced past this watermark must
+	// already have been sampled by an earlier cycle, so re-appending
+	// would inflate the histogram with a duplicate of an existing
+	// event. Without the watermark, the default Window=30d /
+	// Interval=4h pairing would re-sample the same LastSeenAt up to
+	// ~180 times for a single underlying message — saturating the
+	// 168-sample FIFO cap with one pair's stale timestamp and
+	// destroying the histogram's ability to represent the actual
+	// message-time distribution that
+	// relationship.BaselineAnomalyCheck consumes.
+	//
+	// Process-local rather than persisted: a worker restart resets
+	// it to the zero value, which means the first post-restart
+	// cycle re-samples every in-window row once. That bounded
+	// double-count (one extra sample per row per restart) is
+	// preferable to the chronic over-sampling described above, and
+	// it remains capped by the 168-entry FIFO. Persisting the
+	// watermark in a config table would harden this further but is
+	// out of scope for the baseline-accumulation fix.
+	lastCycleStartedAt time.Time
 }
 
 // NewRelationshipJob constructs the job and applies defaults.
@@ -168,6 +193,14 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 	now := time.Now().UTC()
 	since := now.Add(-j.window)
 	recentCutoff := now.Add(-7 * 24 * time.Hour)
+	// Snapshot the previous cycle's start so the row loop can
+	// detect "this LastSeenAt has not advanced since we last
+	// sampled it" without racing against the field update below.
+	// The zero value on first invocation lets every in-window row
+	// contribute one initial sample, which is the desired bootstrap
+	// behaviour.
+	prevCycleStartedAt := j.lastCycleStartedAt
+	j.lastCycleStartedAt = now
 	var firstErr error
 	processed := 0
 	decayed7d := 0
@@ -271,7 +304,25 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 			// double-count.
 			modalHour := -1
 			var preparedBaseline *repository.UserBehavioralBaseline
-			if j.cfg.Baselines != nil && j.cfg.Hasher != nil && len(h.RecipientHash) > 0 && len(h.SenderDomainHash) > 0 {
+			// Only feed the baseline when this row genuinely had
+			// new activity since the previous cycle. If LastSeenAt
+			// has not advanced past prevCycleStartedAt the row was
+			// already sampled in an earlier cycle and re-appending
+			// the same hour would double-count the same underlying
+			// message — which, with Window≫Interval, would saturate
+			// the 168-sample FIFO cap with a single pair's timestamp
+			// and destroy the histogram's representativeness.
+			//
+			// On the very first Run after process start
+			// prevCycleStartedAt is the zero value, so every
+			// in-window row passes this gate and seeds the
+			// histogram with one bootstrap sample. The modal-hour
+			// mirror to h.TypicalHour and the CAS write below still
+			// run on every row regardless — only the histogram
+			// append is gated.
+			if j.cfg.Baselines != nil && j.cfg.Hasher != nil &&
+				len(h.RecipientHash) > 0 && len(h.SenderDomainHash) > 0 &&
+				h.LastSeenAt.After(prevCycleStartedAt) {
 				sendHour := h.LastSeenAt.UTC().Hour()
 				accumulated, bl := j.prepareBaselineUpdate(ctx, t.ID, h, sendHour, cache)
 				if len(accumulated) > 0 {

@@ -539,7 +539,14 @@ baselines during its 4 h cycle:
   cycles — the worker loads the existing
   `user_behavioral_baselines.typical_send_hours` array, appends the
   current row's `LastSeenAt` hour, and FIFO-trims to a 168-entry cap
-  so the distribution does not grow unbounded across years of cycles)
+  so the distribution does not grow unbounded across years of cycles).
+  Each comm-history row contributes a sample only when its
+  `LastSeenAt` has advanced past the worker's previous-cycle
+  watermark — without this gate, the default `Window=30d`/`Interval=4h`
+  pairing would re-sample the same unchanged `LastSeenAt` up to ~180
+  times for a single underlying message, saturating the 168-entry FIFO
+  with one pair's timestamp and destroying the histogram's
+  representativeness.
 - Device types
 - Average messages per week (derived from `count_30d / 4.0`)
 
