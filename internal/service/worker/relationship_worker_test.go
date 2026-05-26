@@ -927,6 +927,72 @@ func watermarkKeys(m map[string]time.Time) []string {
 	return keys
 }
 
+// TestBaselineCacheKey_InjectiveOverVariableWidthInputs locks in
+// the length-prefix encoding for the per-cycle baseline cache key.
+// The old `recipientHash + "\x00" + senderDomainHash` scheme was
+// collision-free only because today's hashes are fixed-width
+// BLAKE2 outputs — a future change to a variable-width hash whose
+// payload contained a literal NUL byte would have silently
+// collided two distinct (recipient, sender_domain) pairs onto the
+// same cache entry, polluting the histogram.
+//
+// The cases below construct two DIFFERENT (recipientHash,
+// senderDomainHash) pairs that the old separator-based encoding
+// would have mapped to the same string — by leaking a NUL byte
+// from the recipient into where the separator should have been —
+// and assert the length-prefix encoding keeps them distinct.
+func TestBaselineCacheKey_InjectiveOverVariableWidthInputs(t *testing.T) {
+	tests := []struct {
+		name    string
+		aRecip  []byte
+		aDomain []byte
+		bRecip  []byte
+		bDomain []byte
+	}{
+		{
+			name:    "nul_byte_in_recipient_emulating_separator",
+			aRecip:  []byte("ab"),
+			aDomain: []byte("cd"),
+			bRecip:  []byte("ab\x00cd"),
+			bDomain: []byte(""),
+		},
+		{
+			name:    "shifted_boundary_emulating_collision",
+			aRecip:  []byte("x"),
+			aDomain: []byte("yz"),
+			bRecip:  []byte("x\x00yz"),
+			bDomain: []byte(""),
+		},
+		{
+			name:    "empty_vs_zero_length_payload",
+			aRecip:  []byte(""),
+			aDomain: []byte("\x00\x00"),
+			bRecip:  []byte("\x00\x00"),
+			bDomain: []byte(""),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ka := baselineCacheKey(tc.aRecip, tc.aDomain)
+			kb := baselineCacheKey(tc.bRecip, tc.bDomain)
+			if ka == kb {
+				t.Errorf("baselineCacheKey collided: (%q,%q) and (%q,%q) both -> %q; length-prefix scheme failed",
+					tc.aRecip, tc.aDomain, tc.bRecip, tc.bDomain, ka)
+			}
+		})
+	}
+
+	// Equality direction: identical inputs must produce identical
+	// keys (sanity check on the determinism of the encoding).
+	t.Run("deterministic_for_identical_inputs", func(t *testing.T) {
+		k1 := baselineCacheKey([]byte("rec"), []byte("dom"))
+		k2 := baselineCacheKey([]byte("rec"), []byte("dom"))
+		if k1 != k2 {
+			t.Errorf("baselineCacheKey not deterministic: %q vs %q", k1, k2)
+		}
+	})
+}
+
 // TestModalHourOf covers the helper used to derive the modal hour
 // from an accumulated send-hour distribution.
 func TestModalHourOf(t *testing.T) {

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"log/slog"
 	"strings"
@@ -499,12 +500,37 @@ const maxBaselineSendHours = 168
 // hit entirely.
 type baselineCache map[string]*repository.UserBehavioralBaseline
 
-// baselineCacheKey concatenates the recipient hash and sender
-// domain hash with a NUL separator. Both hashes are fixed-width
-// in practice but the separator removes any ambiguity for
-// variable-width future inputs.
+// baselineCacheKey encodes the two hash byte-slices into a single
+// string key that is unambiguously decomposable back into the
+// original pair. The encoding is length-prefixed (4-byte
+// big-endian length || bytes, twice) rather than
+// separator-delimited:
+//
+// Today both hashes are fixed-width BLAKE2 outputs and a simple
+// NUL separator would not collide, but "both inputs are always
+// fixed-width" is a convention enforced nowhere in the type
+// system — a future change to a variable-width hash (or to a
+// composite key that includes a hashing salt or scheme identifier)
+// that contained a literal NUL byte would silently collide under
+// the old `recipient + "\x00" + domain` scheme. With a length
+// prefix the encoding is injective by construction: the byte at
+// each offset is decoded as part of either a length header or its
+// declared payload, so no two distinct (recipientHash,
+// senderDomainHash) pairs can ever produce the same key string
+// regardless of how either hash's contents or width evolve. The
+// negligible per-row cost (8 bytes of length headers + one byte
+// allocation) buys collision-resistance that is correct by
+// construction rather than by convention.
 func baselineCacheKey(recipientHash, senderDomainHash []byte) string {
-	return string(recipientHash) + "\x00" + string(senderDomainHash)
+	buf := make([]byte, 0, 4+len(recipientHash)+4+len(senderDomainHash))
+	var lenBuf [4]byte
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(recipientHash)))
+	buf = append(buf, lenBuf[:]...)
+	buf = append(buf, recipientHash...)
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(senderDomainHash)))
+	buf = append(buf, lenBuf[:]...)
+	buf = append(buf, senderDomainHash...)
+	return string(buf)
 }
 
 // prepareBaselineUpdate computes the accumulated send-hour
