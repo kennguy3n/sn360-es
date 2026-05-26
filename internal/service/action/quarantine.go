@@ -223,9 +223,22 @@ func (s *QuarantineService) Quarantine(ctx context.Context, req QuarantineReques
 	// destroys the original and creates a new message, so the
 	// returned ID is the only valid reference for the later release
 	// flow. We persist whichever ID the provider returned.
-	newMessageID, err := prov.MoveToQuarantine(ctx, req.Email, req.MessageID, labelID, QuarantineStubBody)
-	if err != nil {
-		return QuarantineRecord{}, fmt.Errorf("quarantine: move: %w", err)
+	//
+	// Partial-failure contract: the JMAP / Fastmail flow is
+	// upload → import(quarantine) → destroy(original). If the
+	// destroy fails after a successful import, the provider returns
+	// (newID, err) with newID set: the quarantine mailbox now
+	// contains a valid message under newID, but the original is
+	// also still present. We must persist the QuarantineRecord
+	// against newID before surfacing the error so that
+	// RestoreFromQuarantine can locate the message later — otherwise
+	// the quarantined copy becomes orphaned, unreachable through
+	// the release flow, and recoverable only by direct mailbox
+	// access. This mirrors the symmetric recovery in
+	// quarantine_release.go:RestoreFromQuarantine.
+	newMessageID, moveErr := prov.MoveToQuarantine(ctx, req.Email, req.MessageID, labelID, QuarantineStubBody)
+	if moveErr != nil && newMessageID == "" {
+		return QuarantineRecord{}, fmt.Errorf("quarantine: move: %w", moveErr)
 	}
 	storedMessageID := req.MessageID
 	if newMessageID != "" {
@@ -243,7 +256,25 @@ func (s *QuarantineService) Quarantine(ctx context.Context, req QuarantineReques
 		QuarantineAt: time.Now().UTC(),
 	}
 	if err := s.persist(ctx, req.Tenant, req.PseudonymizedMessage, rec); err != nil {
+		// If we already had a partial-failure error from the move
+		// step, surface it alongside the persist error so callers
+		// see both — the message is in quarantine but neither the
+		// record was saved nor the move fully completed.
+		if moveErr != nil {
+			return rec, fmt.Errorf("quarantine: move (partial): %w; persist: %w", moveErr, err)
+		}
 		return rec, fmt.Errorf("quarantine: persist: %w", err)
+	}
+	if moveErr != nil {
+		// Record persisted with the partial-success ID; surface the
+		// move error so retry can complete the destroy step against
+		// the (now-stored) newMessageID.
+		s.logger.WarnContext(ctx, "quarantine: persisted partial-success record after move error",
+			slog.String("tenant_id", req.Tenant),
+			slog.String("provider", string(req.Provider)),
+			slog.Any("error", moveErr),
+		)
+		return rec, fmt.Errorf("quarantine: move (partial): %w", moveErr)
 	}
 	if s.publisher != nil {
 		payload, err := json.Marshal(struct {

@@ -1,6 +1,7 @@
 package fastmail
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,17 @@ import (
 
 	"github.com/kennguy3n/sn360-es/internal/service/action"
 )
+
+// defaultBodyCacheMaxEntries bounds the per-process Fastmail body
+// cache to prevent unbounded growth when callers invoke FetchBody
+// without a paired WriteBody / EvictCache. The URLRewriteService
+// path always calls EvictCache after FetchBody, so this bound is
+// defensive against future callers (or buggy ones) that don't.
+// Each entry holds the raw RFC822 bytes + two small bool maps; at
+// 256 entries the worst-case memory footprint is roughly
+// 256 × average_message_size + tracker overhead, which keeps the
+// cache as scratch-space rather than a long-lived structure.
+const defaultBodyCacheMaxEntries = 256
 
 // BodyRewriter implements action.BodyRewriter for Fastmail.
 //
@@ -19,17 +31,30 @@ import (
 //
 // FetchBody is straightforward: Email/get with fetchHTMLBodyValues
 // returns the assembled HTML.
+//
+// The internal cache is a bounded LRU: at most maxEntries entries
+// are retained, and on overflow the least-recently-used entry is
+// evicted. This makes the rewriter safe to use from callers that
+// invoke FetchBody without always pairing it with WriteBody or
+// EvictCache — the cache cannot grow without bound regardless of
+// caller discipline.
 type BodyRewriter struct {
 	inj *BannerInjector
 
 	mu sync.Mutex
-	// cached holds the raw RFC822 fetched in FetchBody so WriteBody
-	// can swap only the HTML payload without re-downloading the
-	// blob. Keyed by (email,messageID).
-	cached map[string]cachedBody
+	// cached maps cacheKey → list element holding the cachedBody.
+	// The list orders entries from front (most-recently-used) to
+	// back (least-recently-used). LookupReference / insertion both
+	// move the entry to the front.
+	cached map[string]*list.Element
+	order  *list.List
+	// maxEntries is the hard upper bound on cache size. Set via
+	// NewBodyRewriter / NewBodyRewriterWithCacheBound.
+	maxEntries int
 }
 
 type cachedBody struct {
+	key        string
 	raw        []byte
 	mailboxIDs map[string]bool
 	keywords   map[string]bool
@@ -37,12 +62,30 @@ type cachedBody struct {
 
 // NewBodyRewriter constructs a Fastmail BodyRewriter from an
 // existing BannerInjector. The injector provides the shared client +
-// upload/import plumbing.
+// upload/import plumbing. The internal cache is bounded to
+// defaultBodyCacheMaxEntries entries with LRU eviction.
 func NewBodyRewriter(inj *BannerInjector) (*BodyRewriter, error) {
+	return NewBodyRewriterWithCacheBound(inj, defaultBodyCacheMaxEntries)
+}
+
+// NewBodyRewriterWithCacheBound constructs a BodyRewriter with an
+// explicit upper bound on the internal cache. maxEntries <= 0 falls
+// back to defaultBodyCacheMaxEntries. Exposed for tests and for
+// operators that want to tune the bound for unusually large or
+// small deployments.
+func NewBodyRewriterWithCacheBound(inj *BannerInjector, maxEntries int) (*BodyRewriter, error) {
 	if inj == nil {
 		return nil, errors.New("fastmail: body rewriter requires a non-nil banner injector")
 	}
-	return &BodyRewriter{inj: inj, cached: make(map[string]cachedBody)}, nil
+	if maxEntries <= 0 {
+		maxEntries = defaultBodyCacheMaxEntries
+	}
+	return &BodyRewriter{
+		inj:        inj,
+		cached:     make(map[string]*list.Element, maxEntries),
+		order:      list.New(),
+		maxEntries: maxEntries,
+	}, nil
 }
 
 // FetchBody returns the HTML body of the given message. Plain-text
@@ -55,12 +98,56 @@ func (r *BodyRewriter) FetchBody(ctx context.Context, email, messageID string) (
 	if err != nil {
 		return "", fmt.Errorf("fastmail body_rewriter: %w", err)
 	}
-	r.mu.Lock()
-	r.cached[cacheKey(email, messageID)] = cachedBody{raw: raw, mailboxIDs: mailboxIDs, keywords: keywords}
-	r.mu.Unlock()
+	r.cacheInsert(cacheKey(email, messageID), raw, mailboxIDs, keywords)
 
 	html, _ := extractHTMLBody(raw)
 	return html, nil
+}
+
+// cacheInsert promotes / inserts the entry while enforcing the
+// LRU bound.
+func (r *BodyRewriter) cacheInsert(key string, raw []byte, mailboxIDs, keywords map[string]bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if el, ok := r.cached[key]; ok {
+		el.Value = &cachedBody{key: key, raw: raw, mailboxIDs: mailboxIDs, keywords: keywords}
+		r.order.MoveToFront(el)
+		return
+	}
+	for r.order.Len() >= r.maxEntries {
+		oldest := r.order.Back()
+		if oldest == nil {
+			break
+		}
+		if cb, ok := oldest.Value.(*cachedBody); ok {
+			delete(r.cached, cb.key)
+		}
+		r.order.Remove(oldest)
+	}
+	el := r.order.PushFront(&cachedBody{key: key, raw: raw, mailboxIDs: mailboxIDs, keywords: keywords})
+	r.cached[key] = el
+}
+
+// cacheLookup returns the cachedBody for key when present and marks
+// it as most-recently-used.
+func (r *BodyRewriter) cacheLookup(key string) (cachedBody, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	el, ok := r.cached[key]
+	if !ok {
+		return cachedBody{}, false
+	}
+	r.order.MoveToFront(el)
+	cb, _ := el.Value.(*cachedBody)
+	return *cb, true
+}
+
+// cacheLen reports the current cache size. Used by tests; safe for
+// concurrent callers.
+func (r *BodyRewriter) cacheLen() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.order.Len()
 }
 
 // WriteBody swaps the HTML payload using the same upload/import/destroy
@@ -70,9 +157,7 @@ func (r *BodyRewriter) WriteBody(ctx context.Context, email, messageID, htmlBody
 	if messageID == "" {
 		return errors.New("fastmail: message_id required")
 	}
-	r.mu.Lock()
-	cached, ok := r.cached[cacheKey(email, messageID)]
-	r.mu.Unlock()
+	cached, ok := r.cacheLookup(cacheKey(email, messageID))
 	if !ok {
 		// Cold path: fetch the raw body. This handles WriteBody
 		// invocations that were not preceded by FetchBody (e.g.
@@ -109,9 +194,13 @@ func (r *BodyRewriter) WriteBody(ctx context.Context, email, messageID, htmlBody
 // EvictCache implements action.BodyRewriterCacheCleaner. Release the
 // cached raw RFC822 bytes when WriteBody will not be called.
 func (r *BodyRewriter) EvictCache(email, messageID string) {
+	key := cacheKey(email, messageID)
 	r.mu.Lock()
-	delete(r.cached, cacheKey(email, messageID))
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	if el, ok := r.cached[key]; ok {
+		r.order.Remove(el)
+		delete(r.cached, key)
+	}
 }
 
 func cacheKey(email, messageID string) string {

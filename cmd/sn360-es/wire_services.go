@@ -441,7 +441,20 @@ func buildOnboardingService(cfg *config.Config, logger *slog.Logger, app *applic
 
 	providers := buildOAuthProviderConfigs(cfg)
 	if len(providers) == 0 {
-		return nil, fmt.Errorf("at least one OAuth provider (GWS, O365, or Zoho) must be configured for the onboarding flow; Fastmail and WorkMail use non-OAuth auth and are not registered here")
+		// No OAuth providers configured. Fastmail and Amazon
+		// WorkMail use non-OAuth credentials (static JMAP API
+		// tokens / AWS IAM) and don't go through this service,
+		// so a deployment that only configures those providers
+		// legitimately ends up here. The right semantics is
+		// "onboarding is disabled because none of the providers
+		// it serves are configured" — an info-level Log, not an
+		// error/warn. Returning (nil, nil) makes the caller
+		// branch on the nil service cleanly without log noise.
+		logger.Info("sn360-es: onboarding service disabled (no OAuth providers configured; Fastmail and WorkMail use non-OAuth auth)",
+			slog.Bool("fastmail_configured", cfg.Fastmail.HasFastmail()),
+			slog.Bool("workmail_configured", cfg.WorkMail.HasWorkMail()),
+		)
+		return nil, nil
 	}
 
 	var trigger onboarding.PostConsentTrigger

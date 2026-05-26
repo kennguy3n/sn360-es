@@ -1,6 +1,7 @@
 package fastmail
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -247,5 +248,121 @@ func TestReplaceHTMLBody_LFOnlySinglepart(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "<body>new</body>") {
 		t.Errorf("body not replaced:\n%q", out)
+	}
+}
+
+// newRewriterForCacheTests returns a BodyRewriter with a dummy
+// BannerInjector. The injector's HTTP client is never invoked by the
+// cache tests; we exercise cacheInsert / cacheLookup / EvictCache
+// directly.
+func newRewriterForCacheTests(t *testing.T, maxEntries int) *BodyRewriter {
+	t.Helper()
+	c, err := NewClient(ClientConfig{
+		TokenSource: staticTokenSource("tok"),
+		BaseURL:     "http://127.0.0.1:0",
+		AccountID:   "acct-test",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	inj, err := NewBannerInjector(BannerInjectorConfig{Client: c})
+	if err != nil {
+		t.Fatalf("NewBannerInjector: %v", err)
+	}
+	r, err := NewBodyRewriterWithCacheBound(inj, maxEntries)
+	if err != nil {
+		t.Fatalf("NewBodyRewriterWithCacheBound: %v", err)
+	}
+	return r
+}
+
+// TestBodyRewriterCache_EnforcesUpperBound pins the LRU bound: once
+// the cache is full, every additional insertion evicts the
+// least-recently-used entry, so the cache never exceeds maxEntries
+// even under sustained FetchBody-without-EvictCache calls. This is
+// the defence against the unbounded-growth concern flagged by Devin
+// Review: callers that forget to call EvictCache cannot leak memory.
+func TestBodyRewriterCache_EnforcesUpperBound(t *testing.T) {
+	const maxEntries = 4
+	r := newRewriterForCacheTests(t, maxEntries)
+
+	for i := 0; i < maxEntries*3; i++ {
+		key := fmt.Sprintf("user@example.com|msg-%d", i)
+		r.cacheInsert(key, []byte("raw"), map[string]bool{"inbox": true}, nil)
+	}
+	if got := r.cacheLen(); got != maxEntries {
+		t.Fatalf("cache exceeded its bound: got %d entries, want %d", got, maxEntries)
+	}
+
+	// The first maxEntries-1 insertions should have been evicted by
+	// now; only the most-recent maxEntries entries remain.
+	for i := maxEntries * 2; i < maxEntries*3; i++ {
+		key := fmt.Sprintf("user@example.com|msg-%d", i)
+		if _, ok := r.cacheLookup(key); !ok {
+			t.Errorf("expected most-recent entry %s to still be cached", key)
+		}
+	}
+	if _, ok := r.cacheLookup("user@example.com|msg-0"); ok {
+		t.Error("oldest entry should have been evicted")
+	}
+}
+
+// TestBodyRewriterCache_LRUOrderingPromotesOnLookup verifies that
+// cacheLookup moves the entry to most-recently-used position, so a
+// hot key survives even when many cold keys cycle through.
+func TestBodyRewriterCache_LRUOrderingPromotesOnLookup(t *testing.T) {
+	const maxEntries = 3
+	r := newRewriterForCacheTests(t, maxEntries)
+
+	r.cacheInsert("k|hot", []byte("hot"), nil, nil)
+	r.cacheInsert("k|cold-1", []byte("c1"), nil, nil)
+	r.cacheInsert("k|cold-2", []byte("c2"), nil, nil)
+
+	// Promote "hot" by looking it up.
+	if _, ok := r.cacheLookup("k|hot"); !ok {
+		t.Fatal("hot lookup should hit")
+	}
+
+	// Insert a new entry that triggers eviction; the oldest at this
+	// point is cold-1 (cold-2 is newer, hot was just promoted).
+	r.cacheInsert("k|new", []byte("n"), nil, nil)
+
+	if _, ok := r.cacheLookup("k|hot"); !ok {
+		t.Error("hot entry should have survived; LRU promotion broken")
+	}
+	if _, ok := r.cacheLookup("k|cold-1"); ok {
+		t.Error("cold-1 should have been evicted as the LRU entry")
+	}
+}
+
+// TestBodyRewriterCache_EvictCacheRemovesEntry verifies EvictCache
+// removes the entry from both the map and the LRU list (so a later
+// insert does not double-count this slot against the bound).
+//
+// EvictCache derives its key via cacheKey(email,messageID), so the
+// test inserts through the same derived key to make the eviction
+// path realistic. After eviction the cache slot is freed and a
+// follow-up insert reuses it rather than evicting an unrelated
+// entry.
+func TestBodyRewriterCache_EvictCacheRemovesEntry(t *testing.T) {
+	r := newRewriterForCacheTests(t, 2)
+	r.cacheInsert(cacheKey("user@example.com", "msg-x"), []byte("x"), nil, nil)
+	r.cacheInsert(cacheKey("user@example.com", "msg-y"), []byte("y"), nil, nil)
+	if got := r.cacheLen(); got != 2 {
+		t.Fatalf("expected 2 entries pre-evict, got %d", got)
+	}
+
+	r.EvictCache("user@example.com", "msg-x")
+
+	if got := r.cacheLen(); got != 1 {
+		t.Fatalf("EvictCache did not remove entry: got %d, want 1", got)
+	}
+	if _, ok := r.cacheLookup(cacheKey("user@example.com", "msg-x")); ok {
+		t.Error("evicted entry still reachable")
+	}
+	// Freed slot must be reusable without evicting msg-y.
+	r.cacheInsert(cacheKey("user@example.com", "msg-z"), []byte("z"), nil, nil)
+	if _, ok := r.cacheLookup(cacheKey("user@example.com", "msg-y")); !ok {
+		t.Error("EvictCache should have freed a slot without disturbing msg-y")
 	}
 }

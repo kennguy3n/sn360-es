@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -135,6 +136,14 @@ func (p *fakeQProvider) MoveToQuarantine(_ context.Context, email, messageID, la
 	defer p.mu.Unlock()
 	p.moveCalls = append(p.moveCalls, moveCall{email, messageID, labelID, body})
 	if p.moveErr != nil {
+		// Partial-failure simulation: when moveNewID is also set we
+		// model the JMAP/Fastmail case where the import created a
+		// new message but a follow-up step (destroy original) failed.
+		// The provider returns (newID, err) so the caller can persist
+		// the record against newID before surfacing the error.
+		if p.moveNewID != "" {
+			return p.moveNewID, p.moveErr
+		}
 		return "", p.moveErr
 	}
 	if p.moveNewID != "" {
@@ -341,6 +350,95 @@ func TestQuarantine_ProviderEnsureFailureSurfacesError(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error from ensure")
+	}
+}
+
+// TestQuarantine_MoveErrorWithNoNewIDDoesNotPersist asserts the
+// hard-failure path: when MoveToQuarantine returns ("", err) with no
+// partial success, no record is persisted and the error is surfaced.
+// This is the existing pre-fix behavior we preserve for fully-failed
+// moves so we don't pollute the store with empty-ID records.
+func TestQuarantine_MoveErrorWithNoNewIDDoesNotPersist(t *testing.T) {
+	ctx := context.Background()
+	prov := newFakeQProvider(LabelProviderFastmail, "quar-folder-1")
+	prov.moveErr = errors.New("move: upload blob failed")
+	// moveNewID is unset → fake returns ("", err) modelling the
+	// pre-import failure case.
+	svc, store := newQuarantineForTest(t, prov, &recordingPublisher{})
+
+	_, err := svc.Quarantine(ctx, QuarantineRequest{
+		Tenant:               "acme",
+		PseudonymizedMessage: "msg-1",
+		Provider:             LabelProviderFastmail,
+		Email:                "user@acme.com",
+		MessageID:            "jmap-1",
+		Tier:                 constant.TierBlocked,
+	})
+	if err == nil {
+		t.Fatal("expected move error")
+	}
+	if _, ok, _ := store.Get(ctx, QuarantineKey("acme", "msg-1")); ok {
+		t.Fatal("store should not contain a record after a no-partial-progress failure")
+	}
+}
+
+// TestQuarantine_PartialFailurePersistsNewIDAndSurfacesError pins
+// the partial-failure contract: when MoveToQuarantine returns a
+// non-empty newID alongside an error (the JMAP / Fastmail
+// "import succeeded, destroy failed" case), the QuarantineRecord
+// MUST be persisted with newID before the error is surfaced. Without
+// this the quarantined message becomes orphaned — present in the
+// provider mailbox but invisible to RestoreFromQuarantine because
+// the record never made it into the store.
+//
+// This is the symmetric counterpart to the recovery in
+// quarantine_release.go which captures newMessageID and calls
+// RestoreReference on partial failure.
+func TestQuarantine_PartialFailurePersistsNewIDAndSurfacesError(t *testing.T) {
+	ctx := context.Background()
+	prov := newFakeQProvider(LabelProviderFastmail, "quar-folder-1")
+	prov.moveErr = errors.New("move: destroy original: connection reset")
+	prov.moveNewID = "jmap-imported-fresh-id"
+	pub := &recordingPublisher{}
+	svc, store := newQuarantineForTest(t, prov, pub)
+
+	rec, err := svc.Quarantine(ctx, QuarantineRequest{
+		Tenant:               "acme",
+		PseudonymizedMessage: "msg-partial-1",
+		Provider:             LabelProviderFastmail,
+		Email:                "user@acme.com",
+		MessageID:            "jmap-original",
+		Tier:                 constant.TierBlocked,
+		Primary:              constant.CategoryLikelyPhishing,
+	})
+	if err == nil {
+		t.Fatal("expected partial-failure error to be surfaced")
+	}
+	if !strings.Contains(err.Error(), "move (partial)") {
+		t.Fatalf("error %q should mark partial-failure path", err.Error())
+	}
+	if rec.MessageID != "jmap-imported-fresh-id" {
+		t.Fatalf("returned record should reference the freshly-imported ID; got %q", rec.MessageID)
+	}
+
+	raw, ok, gerr := store.Get(ctx, QuarantineKey("acme", "msg-partial-1"))
+	if gerr != nil || !ok {
+		t.Fatalf("partial-failure record must be persisted so release can find it: ok=%v err=%v", ok, gerr)
+	}
+	enc, _ := hex.DecodeString(raw)
+	plain, _ := (fakeQEncryptor{}).Decrypt(ctx, "acme", enc)
+	var back QuarantineRecord
+	if err := json.Unmarshal(plain, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.MessageID != "jmap-imported-fresh-id" {
+		t.Fatalf("persisted MessageID must be the freshly-imported id; got %q", back.MessageID)
+	}
+
+	// No applied event should be published — the move is in a
+	// partial-success state, not "fully applied".
+	if pub.lastSubject() != "" {
+		t.Fatalf("no applied event should fire on partial failure; got %q", pub.lastSubject())
 	}
 }
 
