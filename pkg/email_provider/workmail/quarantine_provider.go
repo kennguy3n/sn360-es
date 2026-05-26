@@ -67,34 +67,43 @@ func (q *QuarantineProvider) EnsureQuarantineLabel(ctx context.Context, email st
 }
 
 // MoveToQuarantine moves the message into the hidden folder and
-// rewrites its body to the stub.
-func (q *QuarantineProvider) MoveToQuarantine(ctx context.Context, email, messageID, quarantineLabelID, stubBody string) error {
-	if err := q.ews.MoveItem(ctx, email, messageID, quarantineLabelID); err != nil {
-		return fmt.Errorf("workmail: move to quarantine: %w", err)
+// rewrites its body to the stub. Returns the EWS ItemId of the
+// message at its new location; EWS reissues the id on MoveItem so
+// the input id is no longer valid after this call.
+func (q *QuarantineProvider) MoveToQuarantine(ctx context.Context, email, messageID, quarantineLabelID, stubBody string) (string, error) {
+	newID, err := q.ews.MoveItem(ctx, email, messageID, quarantineLabelID)
+	if err != nil {
+		return "", fmt.Errorf("workmail: move to quarantine: %w", err)
 	}
 	if strings.TrimSpace(stubBody) == "" {
-		return nil
+		return newID, nil
 	}
 	stub := EWSMessageBody{BodyType: "HTML", Content: "<html><body>" + htmlEscape(stubBody) + "</body></html>"}
-	if err := q.ews.UpdateBody(ctx, email, messageID, stub); err != nil {
-		return fmt.Errorf("workmail: stub body: %w", err)
+	// IMPORTANT: use newID (the EWS-reissued id at the destination
+	// folder) for the body update — the original id no longer
+	// resolves after MoveItem.
+	if err := q.ews.UpdateBody(ctx, email, newID, stub); err != nil {
+		return newID, fmt.Errorf("workmail: stub body: %w", err)
 	}
-	return nil
+	return newID, nil
 }
 
 // RestoreFromQuarantine moves the message back to Inbox and updates
-// its body to restoredBody (or a release receipt when empty).
-func (q *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, email, messageID, _, restoredBody string) error {
-	if err := q.ews.MoveItemToDistinguished(ctx, email, messageID, "inbox"); err != nil {
-		return fmt.Errorf("workmail: restore move: %w", err)
+// its body to restoredBody (or a release receipt when empty). Returns
+// the EWS ItemId at the inbox folder following the same reissue
+// rules as MoveToQuarantine.
+func (q *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, email, messageID, _, restoredBody string) (string, error) {
+	newID, err := q.ews.MoveItemToDistinguished(ctx, email, messageID, "inbox")
+	if err != nil {
+		return "", fmt.Errorf("workmail: restore move: %w", err)
 	}
 	if strings.TrimSpace(restoredBody) == "" {
 		restoredBody = "<p>This message was released from SN360 quarantine.</p>"
 	}
-	if err := q.ews.UpdateBody(ctx, email, messageID, EWSMessageBody{BodyType: "HTML", Content: restoredBody}); err != nil {
-		return fmt.Errorf("workmail: restored body: %w", err)
+	if err := q.ews.UpdateBody(ctx, email, newID, EWSMessageBody{BodyType: "HTML", Content: restoredBody}); err != nil {
+		return newID, fmt.Errorf("workmail: restored body: %w", err)
 	}
-	return nil
+	return newID, nil
 }
 
 // Compile-time interface check.

@@ -285,6 +285,37 @@ func TestService_AuthURL_UnknownProvider(t *testing.T) {
 	}
 }
 
+// TestService_AuthURL_NonOAuthProvidersGetActionableError pins down
+// the round-6 fix that moved the non-OAuth provider checks ahead of
+// the providers-map lookup. Before, callers got a generic "unknown
+// provider" message that didn't tell them why the provider lacked
+// an OAuth consent URL.
+func TestService_AuthURL_NonOAuthProvidersGetActionableError(t *testing.T) {
+	svc, _, _, _ := newServiceForTest(t)
+	cases := []struct {
+		provider    ProviderType
+		wantSubstr  string
+		description string
+	}{
+		{ProviderFastmail, "static API tokens, not OAuth2", "Fastmail uses app passwords"},
+		{ProviderWorkmail, "AWS IAM, not OAuth2", "WorkMail uses AWS IAM"},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.provider), func(t *testing.T) {
+			_, err := svc.AuthURL(tc.provider, "acme")
+			if err == nil {
+				t.Fatalf("%s: expected error, got nil", tc.description)
+			}
+			if !strings.Contains(err.Error(), tc.wantSubstr) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantSubstr)
+			}
+			if strings.Contains(err.Error(), "unknown provider") {
+				t.Errorf("error fell through to the generic unknown-provider message: %q", err.Error())
+			}
+		})
+	}
+}
+
 func TestService_HandleCallback_HappyPath(t *testing.T) {
 	svc, store, exch, trig := newServiceForTest(t)
 	exch.exchToken = Token{

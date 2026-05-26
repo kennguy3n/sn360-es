@@ -97,12 +97,14 @@ func (p *qhFakeProvider) Kind() action.LabelProviderKind { return action.LabelPr
 func (p *qhFakeProvider) EnsureQuarantineLabel(_ context.Context, _ string) (string, error) {
 	return "Label_Q", nil
 }
-func (p *qhFakeProvider) MoveToQuarantine(_ context.Context, _, _, _, _ string) error { return nil }
-func (p *qhFakeProvider) RestoreFromQuarantine(_ context.Context, _, _, _, _ string) error {
+func (p *qhFakeProvider) MoveToQuarantine(_ context.Context, _, messageID, _, _ string) (string, error) {
+	return messageID, nil
+}
+func (p *qhFakeProvider) RestoreFromQuarantine(_ context.Context, _, messageID, _, _ string) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.restoreCalls++
-	return nil
+	return messageID, nil
 }
 
 type qhFakeReevaluator struct {

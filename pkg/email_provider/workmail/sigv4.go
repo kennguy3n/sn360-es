@@ -163,7 +163,16 @@ func buildCanonicalRequest(req *http.Request, payloadHash string) (string, strin
 			continue
 		}
 		headerNames = append(headerNames, lc)
-		headers[lc] = strings.TrimSpace(strings.Join(vs, ","))
+		// AWS SigV4 (Task 1, step 6) requires:
+		//   - trim leading and trailing whitespace
+		//   - collapse sequential whitespace inside a value to a
+		//     single space (unless the value is inside a quoted
+		//     string, which we do not handle since EWS/WorkMail
+		//     never sends quoted-string headers we sign).
+		// strings.TrimSpace alone fails the second requirement, and
+		// AWS rejects requests where the calculated canonical
+		// header value disagrees with theirs.
+		headers[lc] = collapseHeaderWhitespace(strings.Join(vs, ","))
 	}
 	// Ensure host is always present.
 	if _, ok := headers["host"]; !ok {
@@ -222,6 +231,40 @@ func buildCanonicalQuery(values url.Values) string {
 			b.WriteString("=")
 			b.WriteString(awsURIEncode(v, false))
 		}
+	}
+	return b.String()
+}
+
+// collapseHeaderWhitespace implements the canonical-header whitespace
+// normalization mandated by the AWS SigV4 spec: leading/trailing
+// whitespace is trimmed and every run of sequential whitespace inside
+// the value is replaced with a single space. The spec exempts
+// whitespace inside HTTP quoted-strings (RFC 7230 §3.2.6), but the
+// EWS and WorkMail headers we sign never use quoted-string values, so
+// we apply the collapse unconditionally and document the limitation.
+//
+// Implemented manually rather than via regexp to keep this on the
+// signing hot path; ASCII whitespace classification matches
+// unicode.IsSpace for the bytes that appear in HTTP headers.
+func collapseHeaderWhitespace(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return v
+	}
+	var b strings.Builder
+	b.Grow(len(v))
+	inSpace := false
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+			if !inSpace {
+				b.WriteByte(' ')
+				inSpace = true
+			}
+			continue
+		}
+		inSpace = false
+		b.WriteByte(c)
 	}
 	return b.String()
 }

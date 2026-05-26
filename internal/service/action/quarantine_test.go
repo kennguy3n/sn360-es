@@ -93,6 +93,11 @@ type fakeQProvider struct {
 	ensureErr    error
 	moveErr      error
 	restoreErr   error
+	// moveNewID and restoreNewID, when set, are the ids the fake
+	// returns from MoveToQuarantine / RestoreFromQuarantine. Empty
+	// means "return the input messageID" (the mutable-body case).
+	moveNewID    string
+	restoreNewID string
 }
 
 type moveCall struct {
@@ -125,18 +130,30 @@ func (p *fakeQProvider) EnsureQuarantineLabel(_ context.Context, email string) (
 	return p.labelID, nil
 }
 
-func (p *fakeQProvider) MoveToQuarantine(_ context.Context, email, messageID, labelID, body string) error {
+func (p *fakeQProvider) MoveToQuarantine(_ context.Context, email, messageID, labelID, body string) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.moveCalls = append(p.moveCalls, moveCall{email, messageID, labelID, body})
-	return p.moveErr
+	if p.moveErr != nil {
+		return "", p.moveErr
+	}
+	if p.moveNewID != "" {
+		return p.moveNewID, nil
+	}
+	return messageID, nil
 }
 
-func (p *fakeQProvider) RestoreFromQuarantine(_ context.Context, email, messageID, labelID, body string) error {
+func (p *fakeQProvider) RestoreFromQuarantine(_ context.Context, email, messageID, labelID, body string) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.restoreCalls = append(p.restoreCalls, restoreCall{email, messageID, labelID, body})
-	return p.restoreErr
+	if p.restoreErr != nil {
+		return "", p.restoreErr
+	}
+	if p.restoreNewID != "" {
+		return p.restoreNewID, nil
+	}
+	return messageID, nil
 }
 
 // recordingPublisher captures every published event.

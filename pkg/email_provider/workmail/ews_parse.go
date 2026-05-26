@@ -151,6 +151,45 @@ func parseCreatedFolderID(raw []byte) (string, error) {
 	return resp.Folders.Folder[0].FolderID.ID, nil
 }
 
+// parseMoveItemID extracts the new ItemId.Id from a MoveItem
+// response. EWS's MoveItem reissues the ItemId on success (because
+// items are folder-scoped in Exchange); the caller persists the
+// returned id so subsequent operations (e.g. release) reference the
+// message that actually exists at the destination. Returns "" with
+// nil error when the response is well-formed but omits the ItemId
+// (an EWS-server quirk worth surfacing to the caller, which then
+// falls back to the input id).
+func parseMoveItemID(raw []byte) (string, error) {
+	var wrap struct {
+		MoveItemResponse struct {
+			ResponseMessages struct {
+				Resp struct {
+					ResponseClass string `xml:"ResponseClass,attr"`
+					Items         struct {
+						Messages []struct {
+							ItemID struct {
+								ID        string `xml:"Id,attr"`
+								ChangeKey string `xml:"ChangeKey,attr"`
+							} `xml:"ItemId"`
+						} `xml:"Message"`
+					} `xml:"Items"`
+				} `xml:"MoveItemResponseMessage"`
+			} `xml:"ResponseMessages"`
+		} `xml:"MoveItemResponse"`
+	}
+	if err := xml.Unmarshal(envelopeBody(raw), &wrap); err != nil {
+		return "", fmt.Errorf("workmail: parse MoveItem: %w", err)
+	}
+	resp := wrap.MoveItemResponse.ResponseMessages.Resp
+	if resp.ResponseClass != "" && resp.ResponseClass != "Success" {
+		return "", fmt.Errorf("workmail: MoveItem class=%s", resp.ResponseClass)
+	}
+	if len(resp.Items.Messages) == 0 {
+		return "", nil
+	}
+	return resp.Items.Messages[0].ItemID.ID, nil
+}
+
 // parseFoundFolderID looks for a folder with the given DisplayName
 // in a FindFolder response and returns its FolderId or "".
 func parseFoundFolderID(raw []byte, wantedName string) (string, error) {

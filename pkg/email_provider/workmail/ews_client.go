@@ -355,8 +355,12 @@ func (c *EWSClient) FindFolder(ctx context.Context, impersonateEmail, parentFold
 	return parseFoundFolderID(respBody, displayName)
 }
 
-// MoveItem moves a message into the destination folder.
-func (c *EWSClient) MoveItem(ctx context.Context, impersonateEmail, itemID, destinationFolderID string) error {
+// MoveItem moves a message into the destination folder and returns
+// the EWS ItemId of the message at its new location. EWS reissues
+// the ItemId on every MoveItem (Exchange items are folder-scoped),
+// so the caller MUST persist the returned id rather than reusing the
+// input id for subsequent operations.
+func (c *EWSClient) MoveItem(ctx context.Context, impersonateEmail, itemID, destinationFolderID string) (string, error) {
 	xmlBody := fmt.Sprintf(`
     <m:MoveItem>
       <m:ToFolderId>
@@ -366,15 +370,24 @@ func (c *EWSClient) MoveItem(ctx context.Context, impersonateEmail, itemID, dest
         <t:ItemId Id="%s"/>
       </m:ItemIds>
     </m:MoveItem>`, xmlEscape(destinationFolderID), xmlEscape(itemID))
-	if _, err := c.Invoke(ctx, impersonateEmail, xmlBody); err != nil {
-		return fmt.Errorf("workmail: MoveItem: %w", err)
+	respBody, err := c.Invoke(ctx, impersonateEmail, xmlBody)
+	if err != nil {
+		return "", fmt.Errorf("workmail: MoveItem: %w", err)
 	}
-	return nil
+	newID, perr := parseMoveItemID(respBody)
+	if perr != nil {
+		return "", perr
+	}
+	if newID == "" {
+		return itemID, nil
+	}
+	return newID, nil
 }
 
 // MoveItemToDistinguished moves a message into a distinguished folder
-// (e.g. "inbox") rather than an arbitrary FolderId.
-func (c *EWSClient) MoveItemToDistinguished(ctx context.Context, impersonateEmail, itemID, distinguishedFolder string) error {
+// (e.g. "inbox") rather than an arbitrary FolderId. Returns the new
+// ItemId following the same EWS reissue rules as MoveItem.
+func (c *EWSClient) MoveItemToDistinguished(ctx context.Context, impersonateEmail, itemID, distinguishedFolder string) (string, error) {
 	xmlBody := fmt.Sprintf(`
     <m:MoveItem>
       <m:ToFolderId>
@@ -384,10 +397,18 @@ func (c *EWSClient) MoveItemToDistinguished(ctx context.Context, impersonateEmai
         <t:ItemId Id="%s"/>
       </m:ItemIds>
     </m:MoveItem>`, xmlEscape(distinguishedFolder), xmlEscape(itemID))
-	if _, err := c.Invoke(ctx, impersonateEmail, xmlBody); err != nil {
-		return fmt.Errorf("workmail: MoveItem distinguished: %w", err)
+	respBody, err := c.Invoke(ctx, impersonateEmail, xmlBody)
+	if err != nil {
+		return "", fmt.Errorf("workmail: MoveItem distinguished: %w", err)
 	}
-	return nil
+	newID, perr := parseMoveItemID(respBody)
+	if perr != nil {
+		return "", perr
+	}
+	if newID == "" {
+		return itemID, nil
+	}
+	return newID, nil
 }
 
 // buildSOAPEnvelope renders the SOAP envelope including the

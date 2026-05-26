@@ -254,7 +254,19 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 // AuthURL returns the consent URL the user should visit. Includes a
 // signed state binding tenantID + provider. Parameters are
 // provider-aware: Google gets access_type=offline; Microsoft does not.
+//
+// Non-OAuth providers (Fastmail uses static API tokens; Amazon
+// WorkMail uses AWS IAM) are matched ahead of the provider-config
+// lookup so callers get an actionable error message that names the
+// real authentication mechanism instead of a generic "unknown
+// provider".
 func (s *Service) AuthURL(provider ProviderType, tenantID string) (string, error) {
+	switch provider {
+	case ProviderFastmail:
+		return "", fmt.Errorf("onboarding: %s uses static API tokens, not OAuth2", provider)
+	case ProviderWorkmail:
+		return "", fmt.Errorf("onboarding: %s uses AWS IAM, not OAuth2", provider)
+	}
 	p, ok := s.providers[provider]
 	if !ok {
 		return "", fmt.Errorf("onboarding: unknown provider %q", provider)
@@ -269,7 +281,7 @@ func (s *Service) AuthURL(provider ProviderType, tenantID string) (string, error
 	q.Set("response_type", "code")
 	q.Set("scope", strings.Join(p.Scopes, " "))
 	q.Set("state", stateTok)
-	// Provider-specific parameters.
+	// Provider-specific parameters for OAuth providers.
 	switch provider {
 	case ProviderGoogle:
 		q.Set("access_type", "offline")
@@ -280,15 +292,6 @@ func (s *Service) AuthURL(provider ProviderType, tenantID string) (string, error
 		// Zoho requires access_type=offline to issue a refresh token.
 		q.Set("access_type", "offline")
 		q.Set("prompt", "consent")
-	case ProviderFastmail:
-		// Fastmail does not use OAuth2; the onboarding flow does not
-		// produce a consent URL for it. Callers are expected to gate
-		// on this before invoking AuthURL.
-		return "", fmt.Errorf("onboarding: %s uses static API tokens, not OAuth2", provider)
-	case ProviderWorkmail:
-		// WorkMail uses AWS IAM, not OAuth2. Same handling as
-		// Fastmail.
-		return "", fmt.Errorf("onboarding: %s uses AWS IAM, not OAuth2", provider)
 	default:
 		q.Set("prompt", "consent")
 	}

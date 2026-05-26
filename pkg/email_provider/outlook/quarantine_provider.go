@@ -107,17 +107,17 @@ func (p *QuarantineProvider) EnsureQuarantineLabel(ctx context.Context, email st
 // which transparently recreates the folder. Bounded to a single
 // retry to avoid masking a genuine "message-not-found" 404 (which
 // would still surface after the second failed attempt).
-func (p *QuarantineProvider) MoveToQuarantine(ctx context.Context, email, messageID, quarantineLabelID, _ string) error {
+func (p *QuarantineProvider) MoveToQuarantine(ctx context.Context, email, messageID, quarantineLabelID, _ string) (string, error) {
 	if err := p.labels.ApplyLabel(ctx, email, messageID, quarantineLabelID); err != nil {
-		return fmt.Errorf("apply quarantine category: %w", err)
+		return "", fmt.Errorf("apply quarantine category: %w", err)
 	}
 	folderID, err := p.ensureQuarantineFolder(ctx, email)
 	if err != nil {
-		return fmt.Errorf("ensure quarantine folder: %w", err)
+		return "", fmt.Errorf("ensure quarantine folder: %w", err)
 	}
-	err = p.moveTo(ctx, email, messageID, folderID)
+	newID, err := p.moveTo(ctx, email, messageID, folderID)
 	if err == nil {
-		return nil
+		return newID, nil
 	}
 	// Stale-cache recovery: a 404 on /move with a folder id we
 	// just looked up is almost always the folder having been
@@ -125,17 +125,18 @@ func (p *QuarantineProvider) MoveToQuarantine(ctx context.Context, email, messag
 	// retry once. Any other error — including a 404 on the
 	// retry — surfaces normally.
 	if !is404(err) {
-		return fmt.Errorf("move to quarantine folder: %w", err)
+		return "", fmt.Errorf("move to quarantine folder: %w", err)
 	}
 	p.invalidateFolderID(email)
 	folderID, err = p.ensureQuarantineFolder(ctx, email)
 	if err != nil {
-		return fmt.Errorf("recreate quarantine folder after stale-cache 404: %w", err)
+		return "", fmt.Errorf("recreate quarantine folder after stale-cache 404: %w", err)
 	}
-	if err := p.moveTo(ctx, email, messageID, folderID); err != nil {
-		return fmt.Errorf("move to quarantine folder (retry after stale-cache 404): %w", err)
+	newID, err = p.moveTo(ctx, email, messageID, folderID)
+	if err != nil {
+		return "", fmt.Errorf("move to quarantine folder (retry after stale-cache 404): %w", err)
 	}
-	return nil
+	return newID, nil
 }
 
 // is404 reports whether the error is an *APIError carrying a 404
@@ -156,27 +157,49 @@ func (p *QuarantineProvider) invalidateFolderID(email string) {
 }
 
 // RestoreFromQuarantine removes the quarantine category and moves the
-// message back into the inbox.
-func (p *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, email, messageID, quarantineLabelID, _ string) error {
+// message back into the inbox. Returns the resulting provider-side
+// message ID, which is fresh because Microsoft Graph's /move endpoint
+// reissues the immutable Outlook ID on every cross-folder move.
+func (p *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, email, messageID, quarantineLabelID, _ string) (string, error) {
 	if err := p.labels.RemoveLabel(ctx, email, messageID, quarantineLabelID); err != nil {
-		return fmt.Errorf("remove quarantine category: %w", err)
+		return "", fmt.Errorf("remove quarantine category: %w", err)
 	}
-	if err := p.moveTo(ctx, email, messageID, "inbox"); err != nil {
-		return fmt.Errorf("move to inbox: %w", err)
+	newID, err := p.moveTo(ctx, email, messageID, "inbox")
+	if err != nil {
+		return "", fmt.Errorf("move to inbox: %w", err)
 	}
-	return nil
+	return newID, nil
 }
 
 // moveTo invokes Graph's folder move endpoint. The `destinationId`
 // accepts both well-known folder names ("inbox", "archive", ...) and
 // concrete folder ids returned by /mailFolders.
-func (p *QuarantineProvider) moveTo(ctx context.Context, email, messageID, destination string) error {
+//
+// Microsoft Graph documents /move as creating a new copy of the
+// message in the destination folder and deleting the original — the
+// returned Message therefore carries a *new* immutable id. The
+// quarantine and release flows persist this returned id so later
+// operations (re-evaluate, release) reference the message that
+// actually exists.
+func (p *QuarantineProvider) moveTo(ctx context.Context, email, messageID, destination string) (string, error) {
 	endpoint := fmt.Sprintf("%s/v1.0/users/%s/messages/%s/move",
 		p.labels.baseURL, url.PathEscape(email), url.PathEscape(messageID))
 	body := struct {
 		DestinationID string `json:"destinationId"`
 	}{DestinationID: destination}
-	return p.labels.do(ctx, http.MethodPost, endpoint, body, nil)
+	var resp struct {
+		ID string `json:"id"`
+	}
+	if err := p.labels.do(ctx, http.MethodPost, endpoint, body, &resp); err != nil {
+		return "", err
+	}
+	// Graph's response always carries the new id; fall back to the
+	// input only when the server omitted it (defensive: should not
+	// happen against real Graph but keeps mocks/fakes simple).
+	if resp.ID == "" {
+		return messageID, nil
+	}
+	return resp.ID, nil
 }
 
 // graphFolder is the subset of microsoft.graph.mailFolder the

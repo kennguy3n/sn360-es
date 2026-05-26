@@ -120,48 +120,102 @@ func (q *QuarantineProvider) resolveOrCreate(ctx context.Context, name string) (
 	return c.ID, nil
 }
 
-// MoveToQuarantine replaces the message's mailboxIds with the
-// quarantine mailbox and rewrites the body to the stub.
-func (q *QuarantineProvider) MoveToQuarantine(ctx context.Context, email, messageID, quarantineLabelID, stubBody string) error {
-	if err := q.replaceMailboxes(ctx, messageID, []string{quarantineLabelID}); err != nil {
-		return fmt.Errorf("fastmail: move to quarantine: %w", err)
-	}
+// MoveToQuarantine places the message in the quarantine mailbox with
+// a body stub in a single pass.
+//
+// JMAP email bodies are immutable, so rewriting the body necessarily
+// destroys the original message and imports a new one. Doing the
+// mailbox-move and the body-rewrite as two separate steps (the
+// previous implementation) left a window where the destroy succeeded
+// against the original id but the caller's QuarantineRecord still
+// referenced that destroyed id — making release impossible.
+//
+// We now do a single fetchRaw → splice stub HTML → upload → import
+// (with the quarantine mailbox as the only target) → destroy
+// original. The newly-imported message lives only in the quarantine
+// mailbox with the stub body, and we return its id so the caller
+// persists a valid reference.
+//
+// When stubBody is empty we keep the original message intact and
+// only flip the mailboxIds; the id stays stable and we return it
+// unchanged.
+func (q *QuarantineProvider) MoveToQuarantine(ctx context.Context, _, messageID, quarantineLabelID, stubBody string) (string, error) {
 	if stubBody == "" {
-		return nil
+		if err := q.replaceMailboxes(ctx, messageID, []string{quarantineLabelID}); err != nil {
+			return "", fmt.Errorf("fastmail: move to quarantine: %w", err)
+		}
+		return messageID, nil
 	}
-	// Rewrite the body with a banner-style stub. We use the same
-	// upload/import/destroy dance.
-	bw, err := NewBodyRewriter(q.inj)
+	stubHTML := "<html><body>" + htmlEscape(stubBody) + "</body></html>"
+	newID, err := q.rewriteIntoMailbox(ctx, messageID, quarantineLabelID, stubHTML)
 	if err != nil {
-		return err
+		return newID, fmt.Errorf("fastmail: quarantine rewrite: %w", err)
 	}
-	if err := bw.WriteBody(ctx, email, messageID, "<html><body>"+htmlEscape(stubBody)+"</body></html>"); err != nil {
-		return fmt.Errorf("fastmail: stub body: %w", err)
-	}
-	return nil
+	return newID, nil
 }
 
 // RestoreFromQuarantine moves the message back to Inbox and rewrites
 // the body to restoredBody (or a short release receipt when empty).
-func (q *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, email, messageID, _, restoredBody string) error {
+// Uses the same single-pass pattern as MoveToQuarantine to keep the
+// returned id pointing at the message that actually exists.
+func (q *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, _, messageID, _, restoredBody string) (string, error) {
 	inboxID, err := q.resolveInbox(ctx)
 	if err != nil {
-		return err
-	}
-	if err := q.replaceMailboxes(ctx, messageID, []string{inboxID}); err != nil {
-		return fmt.Errorf("fastmail: restore move: %w", err)
+		return "", err
 	}
 	if restoredBody == "" {
 		restoredBody = "<p>This message was released from SN360 quarantine.</p>"
 	}
-	bw, err := NewBodyRewriter(q.inj)
+	newID, err := q.rewriteIntoMailbox(ctx, messageID, inboxID, restoredBody)
 	if err != nil {
-		return err
+		return newID, fmt.Errorf("fastmail: restore rewrite: %w", err)
 	}
-	if err := bw.WriteBody(ctx, email, messageID, restoredBody); err != nil {
-		return fmt.Errorf("fastmail: restored body: %w", err)
+	return newID, nil
+}
+
+// rewriteIntoMailbox performs the atomic body-rewrite + reparent
+// flow used by both MoveToQuarantine and RestoreFromQuarantine.
+//
+// On success the original message is destroyed and the returned id
+// references the new message in destMailboxID. The new message
+// inherits the original message's JMAP keywords (so SEEN/FLAGGED
+// state is preserved) but its mailbox set is reduced to
+// {destMailboxID} regardless of what the source had — quarantine
+// must hide the message from every other folder, and release must
+// land it cleanly in the inbox.
+//
+// On partial failure (import succeeded but destroy failed) the new
+// id is returned together with the error so the caller can persist
+// it for a subsequent retry — at worst the original remains as a
+// duplicate in its old location until the destroy retries clean it
+// up.
+func (q *QuarantineProvider) rewriteIntoMailbox(ctx context.Context, messageID, destMailboxID, htmlBody string) (string, error) {
+	raw, _, keywords, err := q.inj.fetchRaw(ctx, messageID)
+	if err != nil {
+		return "", fmt.Errorf("fetch raw: %w", err)
 	}
-	return nil
+	mutated, err := replaceHTMLBody(raw, []byte(htmlBody))
+	if err != nil {
+		return "", fmt.Errorf("replace body: %w", err)
+	}
+	blobID, err := q.inj.upload(ctx, mutated)
+	if err != nil {
+		return "", fmt.Errorf("upload: %w", err)
+	}
+	newID, err := q.inj.importBlob(ctx, blobID, map[string]bool{destMailboxID: true}, keywords)
+	if err != nil {
+		return "", fmt.Errorf("import: %w", err)
+	}
+	if newID == "" {
+		return "", errors.New("import returned no new id")
+	}
+	if err := q.inj.destroy(ctx, messageID); err != nil {
+		// Import already produced a new message in the target
+		// mailbox; surface the new id alongside the error so the
+		// caller's record points at the message that exists.
+		return newID, fmt.Errorf("destroy original: %w", err)
+	}
+	return newID, nil
 }
 
 // resolveInbox returns the JMAP mailboxId for the role "inbox".

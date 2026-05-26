@@ -219,3 +219,58 @@ func TestNewSigner_Validation(t *testing.T) {
 		}
 	}
 }
+
+// TestCollapseHeaderWhitespace pins down the AWS SigV4 canonical-
+// header rule that the previous TrimSpace-only implementation
+// silently violated: sequential whitespace inside a header value
+// must collapse to a single space, not stay multi-spaced. AWS will
+// reject the request if the calculated canonical value disagrees
+// with theirs.
+//
+// Cases cover:
+//   - leading + trailing trim (preserved from the old behaviour),
+//   - runs of internal spaces collapsing to one,
+//   - mixed-whitespace runs (tab + CR + LF + space) collapsing,
+//   - empty / whitespace-only values returning the empty string,
+//   - already-canonical values being left alone.
+func TestCollapseHeaderWhitespace(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"trim only", "  value  ", "value"},
+		{"internal run", "AAA   BBB", "AAA BBB"},
+		{"tabs and newlines", "AAA\t\t \nBBB\r\nCCC", "AAA BBB CCC"},
+		{"all whitespace", "  \t \r\n ", ""},
+		{"empty", "", ""},
+		{"single space", "AAA BBB", "AAA BBB"},
+		{"only one trailing newline", "value\n", "value"},
+		{"mixed-with-comma", "a, b,c,  d", "a, b,c, d"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := collapseHeaderWhitespace(tc.in); got != tc.want {
+				t.Errorf("collapseHeaderWhitespace(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBuildCanonicalRequest_CollapsesHeaderWhitespace exercises the
+// SigV4 canonical-header rule through the public entry point. Pre-
+// fix this test would have failed because TrimSpace alone left
+// internal whitespace runs intact.
+func TestBuildCanonicalRequest_CollapsesHeaderWhitespace(t *testing.T) {
+	req, err := http.NewRequest(http.MethodGet, "https://example.amazonaws.com/", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Host", "example.amazonaws.com")
+	req.Header.Set("X-Amz-Custom", "  multi   spaced\tvalue  ")
+	canonical, signed := buildCanonicalRequest(req, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+	if !strings.Contains(canonical, "x-amz-custom:multi spaced value\n") {
+		t.Errorf("canonical did not collapse whitespace:\n%s", canonical)
+	}
+	if !strings.Contains(signed, "x-amz-custom") {
+		t.Errorf("signed headers missing x-amz-custom: %q", signed)
+	}
+}

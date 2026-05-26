@@ -110,38 +110,45 @@ func (q *QuarantineProvider) EnsureQuarantineLabel(ctx context.Context, email st
 // and replaces the body with the stub. The body rewrite is best
 // effort: Zoho may reject the edit on already-quarantined messages,
 // in which case the move alone is sufficient to hide the message.
-func (q *QuarantineProvider) MoveToQuarantine(ctx context.Context, email, messageID, quarantineLabelID, stubBody string) error {
+func (q *QuarantineProvider) MoveToQuarantine(ctx context.Context, email, messageID, quarantineLabelID, stubBody string) (string, error) {
 	accountID, err := q.accountIDForEmail(ctx, email)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := q.moveMessage(ctx, accountID, messageID, quarantineLabelID); err != nil {
-		return fmt.Errorf("zoho: move to quarantine: %w", err)
+		return "", fmt.Errorf("zoho: move to quarantine: %w", err)
 	}
 	if stubBody == "" {
-		return nil
+		return messageID, nil
 	}
 	inj, err := NewBannerInjector(BannerInjectorConfig{Client: q.client})
 	if err != nil {
-		return err
+		return messageID, err
 	}
-	body := zohoBody{HTML: htmlEscape(stubBody), IsHTML: true}
+	// Wrap the stub in a minimal HTML document so it renders
+	// identically to the Fastmail and WorkMail quarantine stubs.
+	// Without the wrapper Zoho's web UI sometimes renders the
+	// escaped text as a plain string rather than an HTML body.
+	body := zohoBody{HTML: "<html><body>" + htmlEscape(stubBody) + "</body></html>", IsHTML: true}
 	if err := inj.writeBody(ctx, accountID, messageID, body); err != nil {
 		// Surface the write error — operators want to know when the
 		// stub couldn't be applied, but the message is already
-		// moved so the user can't see it anyway.
-		return fmt.Errorf("zoho: apply quarantine stub: %w", err)
+		// moved so the user can't see it anyway. Zoho's PUT
+		// /messages endpoint updates the body in place and does
+		// NOT reissue the message id, so the original id remains
+		// valid for the caller's quarantine record.
+		return messageID, fmt.Errorf("zoho: apply quarantine stub: %w", err)
 	}
-	return nil
+	return messageID, nil
 }
 
 // RestoreFromQuarantine moves the message back to Inbox and replaces
 // the stub with the supplied restoredBody (or a short receipt when
 // empty).
-func (q *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, email, messageID, _, restoredBody string) error {
+func (q *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, email, messageID, _, restoredBody string) (string, error) {
 	accountID, err := q.accountIDForEmail(ctx, email)
 	if err != nil {
-		return err
+		return "", err
 	}
 	// Resolve the Inbox folder ID — Zoho doesn't accept folder
 	// names in the move endpoint, only numeric folderIds.
@@ -151,7 +158,7 @@ func (q *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, email, m
 		Data []zohoFolder `json:"data"`
 	}
 	if err := q.client.do(ctx, http.MethodGet, listEndpoint, nil, &listResp); err != nil {
-		return fmt.Errorf("zoho: list folders for restore: %w", err)
+		return "", fmt.Errorf("zoho: list folders for restore: %w", err)
 	}
 	var inboxID string
 	for _, f := range listResp.Data {
@@ -161,23 +168,25 @@ func (q *QuarantineProvider) RestoreFromQuarantine(ctx context.Context, email, m
 		}
 	}
 	if inboxID == "" {
-		return errors.New("zoho: inbox folder not found for restore")
+		return "", errors.New("zoho: inbox folder not found for restore")
 	}
 	if err := q.moveMessage(ctx, accountID, messageID, inboxID); err != nil {
-		return fmt.Errorf("zoho: restore move: %w", err)
+		return "", fmt.Errorf("zoho: restore move: %w", err)
 	}
 	if restoredBody == "" {
 		restoredBody = "<p>This message was released from SN360 quarantine.</p>"
 	}
 	inj, err := NewBannerInjector(BannerInjectorConfig{Client: q.client})
 	if err != nil {
-		return err
+		return messageID, err
 	}
 	body := zohoBody{HTML: restoredBody, IsHTML: true}
 	if err := inj.writeBody(ctx, accountID, messageID, body); err != nil {
-		return fmt.Errorf("zoho: apply restore body: %w", err)
+		return messageID, fmt.Errorf("zoho: apply restore body: %w", err)
 	}
-	return nil
+	// Zoho's PUT-based body rewrite is in place — the message id
+	// is stable across move + body update.
+	return messageID, nil
 }
 
 // moveMessage drives /accounts/{acct}/messages/move.
