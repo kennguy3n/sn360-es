@@ -18,33 +18,49 @@ import (
 // communication_histories and folding its persisted fields onto
 // the base RiskSignals the normalizer produced.
 //
-// Responsibilities:
+// Field ownership (which side wins when both base and the row
+// disagree):
 //
-//   - Translate communication_histories.typical_hour (int, -1
-//     sentinel, 0..23 valid) into dto.RiskSignals.TypicalSendHour
-//     (*int, nil = no baseline). Out-of-range values are mapped to
-//     nil so a stale producer can never feed garbage into the ATO
-//     heuristic's hourDistance.
-//   - Populate dto.RiskSignals.CommunicationFrequency from the row's
-//     30-day rolling count (Count30d). That window matches the
-//     classifier's lookback so the same view of "recent activity"
-//     drives both relationship categorisation and the ATO
-//     frequency guard.
-//   - Set dto.RiskSignals.IsFirstContact = true iff the repository
-//     returns ErrNotFound for the (tenant, sender, recipient)
-//     triple. Any other error degrades to "leave fields as base"
-//     so a Postgres blip cannot synthesise a spurious first-contact
-//     signal and force every in-flight message through Tier 2.
-//   - Stamp dto.RiskSignals.CurrentHourUTC from req.ReceivedAt
-//     (falling back to the enricher's clock when the request lacks
-//     a received timestamp) so the ATO heuristic always compares
-//     against the actual arrival hour rather than the upstream
-//     wall-clock at publish time.
+//   - CurrentHourUTC: ENRICHER-OWNED. Unconditionally derived from
+//     req.ReceivedAt; any producer-supplied value on base is
+//     dropped. The ATO heuristic must compare against actual
+//     arrival time, not publish-time wall-clock.
+//   - TypicalSendHour: ENRICHER-OWNED. Cleared on entry; only
+//     populated from a valid (0..23) DB row. A stale or future
+//     producer-supplied value on base cannot survive enrichment.
+//   - CommunicationFrequency: ENRICHER-OWNED when a row exists.
+//     Set to the row's Count30d; unmodified when the row lookup
+//     short-circuits or errors transiently.
+//   - IsFirstContact: ENRICHER-OWNED. Set to true only on
+//     ErrNotFound; transient repo failures degrade to base so a
+//     Postgres blip cannot force every in-flight message into
+//     Tier 2.
+//   - RelationshipCategory: BASE-WINS when the producer already
+//     classified the pair. Both sides are repo-driven, so the most-
+//     recently-observed classification (the producer's, if it has
+//     one) wins; the enricher only fills in when base is Unknown.
+//   - SenderDomain and other producer-only fields: BASE-PRESERVED.
+//     The enricher does not touch them.
 //
 // The enricher hashes the sender and recipient with the same PII
 // hasher the directory/relationship workers use so the key
 // matches communication_histories' (sender_hash, recipient_hash)
 // primary key derivation byte-for-byte.
+//
+// Producer-side contract for whoever wires the ingestion-time
+// writer (currently no production writer exists — see the
+// pre-existing gap noted in relationship_worker.go's CommunicationUpserter
+// comment): any code path that writes communication_histories.sender_hash
+// or recipient_hash MUST derive the column from
+//
+//	HashPII(tenantID, strings.TrimSpace(strings.ToLower(address)))
+//
+// — the same trim + lower + tenant-keyed BLAKE2 derivation this
+// enricher applies on the read side. Asymmetric normalisation
+// (e.g. ingestion hashes raw "Alice@Example.COM" while the
+// enricher hashes "alice@example.com") will make every message
+// look like first-contact regardless of how many prior messages
+// the pair exchanged.
 //
 // The enricher does NOT mutate base; it returns a copy with the
 // enrichment fields populated.
@@ -84,20 +100,16 @@ func newCommHistorySignalEnricher(
 func (e *commHistorySignalEnricher) Enrich(ctx context.Context, req dto.EvaluateRequest, base dto.RiskSignals) dto.RiskSignals {
 	out := base
 
-	// CurrentHourUTC is derived from the request itself; populate it
-	// even when the repository lookup short-circuits below so the
-	// ATO heuristic always has the arrival hour available.
-	//
-	// This unconditionally overwrites any producer-supplied
-	// CurrentHourUTC on base, by design: the heuristic must compare
-	// against the actual arrival time, not the publish-time
-	// wall-clock from a normalizer that ran minutes earlier on a
-	// different node. RelationshipCategory is the opposite — it is
-	// preserved when the producer already classified the pair (see
-	// below) because classification is repo-driven and the
-	// normalizer-supplied value is also repo-driven, so the most
-	// recently-observed one wins. The asymmetry is intentional.
+	// CurrentHourUTC and TypicalSendHour are both enricher-owned
+	// (see the field-ownership table on commHistorySignalEnricher).
+	// Clear/overwrite them up front so a future producer that
+	// accidentally sets either field cannot leak a stale value past
+	// the enricher — the ATO heuristic must compare against the
+	// actual arrival hour, and a non-nil TypicalSendHour past this
+	// point must come from a row whose typical_hour column was
+	// validated in 0..23 (below).
 	out.CurrentHourUTC = e.deriveCurrentHourUTC(req)
+	out.TypicalSendHour = nil
 
 	tenantID := strings.TrimSpace(req.TenantID)
 	sender := strings.TrimSpace(strings.ToLower(req.Sender))

@@ -249,6 +249,59 @@ func TestCommHistorySignalEnricher_MissingTenantOrAddressShortCircuits(t *testin
 	}
 }
 
+// TestCommHistorySignalEnricher_ClearsProducerSuppliedTypicalSendHour
+// pins the enricher-owned contract on TypicalSendHour. A future
+// producer that erroneously populates dto.RiskSignals.TypicalSendHour
+// on base must not be able to smuggle that value past the enricher
+// when the DB row is missing OR carries an out-of-range sentinel —
+// the only way TypicalSendHour leaves the enricher non-nil is if a
+// valid (0..23) row exists for the pair.
+func TestCommHistorySignalEnricher_ClearsProducerSuppliedTypicalSendHour(t *testing.T) {
+	repo := newFakeCommHistoryRepo()
+	sender := []byte((fakeHasher{}).HashPII("t-1", "alice@partner.com"))
+	recipient := []byte((fakeHasher{}).HashPII("t-1", "bob@acme.com"))
+	repo.seed("t-1", sender, recipient, &repository.CommunicationHistory{
+		TenantID:      "t-1",
+		SenderHash:    sender,
+		RecipientHash: recipient,
+		Count30d:      4,
+		TypicalHour:   repository.TypicalHourUnset, // -1 sentinel; row exists but no baseline yet
+	})
+	e := newCommHistorySignalEnricher(repo, fakeHasher{}, discardLogger())
+	req := dto.EvaluateRequest{TenantID: "t-1", Sender: "alice@partner.com", Recipient: "bob@acme.com"}
+
+	stale := 7
+	base := dto.RiskSignals{TypicalSendHour: &stale}
+	out := e.Enrich(context.Background(), req, base)
+	if out.TypicalSendHour != nil {
+		t.Fatalf("stale producer-supplied TypicalSendHour leaked past enricher when DB row had sentinel: got *TypicalSendHour=%d", *out.TypicalSendHour)
+	}
+
+	// Out-of-range DB row must also nil out base's value.
+	repo.seed("t-1", sender, recipient, &repository.CommunicationHistory{
+		TenantID:      "t-1",
+		SenderHash:    sender,
+		RecipientHash: recipient,
+		Count30d:      4,
+		TypicalHour:   25, // out of [0,24)
+	})
+	out = e.Enrich(context.Background(), req, base)
+	if out.TypicalSendHour != nil {
+		t.Fatalf("stale producer-supplied TypicalSendHour leaked past enricher when DB row was out-of-range: got *TypicalSendHour=%d", *out.TypicalSendHour)
+	}
+
+	// Missing row (ErrNotFound branch) must also clear base.
+	repo = newFakeCommHistoryRepo()
+	e = newCommHistorySignalEnricher(repo, fakeHasher{}, discardLogger())
+	out = e.Enrich(context.Background(), req, base)
+	if out.TypicalSendHour != nil {
+		t.Fatalf("stale producer-supplied TypicalSendHour leaked past enricher when row was missing (IsFirstContact): got *TypicalSendHour=%d", *out.TypicalSendHour)
+	}
+	if !out.IsFirstContact {
+		t.Fatalf("expected IsFirstContact=true on missing row")
+	}
+}
+
 func TestCommHistorySignalEnricher_PreservesProducerSuppliedRelationship(t *testing.T) {
 	repo := newFakeCommHistoryRepo()
 	sender := []byte((fakeHasher{}).HashPII("t-1", "alice@partner.com"))
@@ -276,10 +329,15 @@ func TestCommHistorySignalEnricher_PreservesProducerSuppliedRelationship(t *test
 // side wiring tests can assert handleEvaluateRequest /
 // BatchOrchestrator actually invoke the enricher with the expected
 // request envelope.
+//
+// applyOverride is an explicit override hook (rather than a zero-
+// value sentinel on a dto.RiskSignals field) so a test that needs
+// to override CurrentHourUTC to 0 (midnight UTC) or any other Go
+// zero-value still produces an unambiguous override.
 type recordingEnricher struct {
-	mu       sync.Mutex
-	calls    []recordingEnricherCall
-	override dto.RiskSignals
+	mu            sync.Mutex
+	calls         []recordingEnricherCall
+	applyOverride func(base dto.RiskSignals) dto.RiskSignals
 }
 
 type recordingEnricherCall struct {
@@ -291,24 +349,10 @@ func (r *recordingEnricher) Enrich(_ context.Context, req dto.EvaluateRequest, b
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, recordingEnricherCall{req: req, base: base})
-	if r.override.SenderDomain == "" && r.override.CurrentHourUTC == 0 && r.override.TypicalSendHour == nil && r.override.CommunicationFrequency == 0 && !r.override.IsFirstContact {
+	if r.applyOverride == nil {
 		return base
 	}
-	out := base
-	if r.override.TypicalSendHour != nil {
-		v := *r.override.TypicalSendHour
-		out.TypicalSendHour = &v
-	}
-	if r.override.CommunicationFrequency != 0 {
-		out.CommunicationFrequency = r.override.CommunicationFrequency
-	}
-	if r.override.IsFirstContact {
-		out.IsFirstContact = true
-	}
-	if r.override.CurrentHourUTC != 0 {
-		out.CurrentHourUTC = r.override.CurrentHourUTC
-	}
-	return out
+	return r.applyOverride(base)
 }
 
 func (r *recordingEnricher) snapshot() []recordingEnricherCall {
@@ -334,10 +378,13 @@ func TestHandleEvaluateRequest_InvokesSignalEnricher(t *testing.T) {
 
 	typical := 9
 	rec := &recordingEnricher{
-		override: dto.RiskSignals{
-			TypicalSendHour:        &typical,
-			CommunicationFrequency: 17,
-			CurrentHourUTC:         14,
+		applyOverride: func(base dto.RiskSignals) dto.RiskSignals {
+			h := typical
+			out := base
+			out.TypicalSendHour = &h
+			out.CommunicationFrequency = 17
+			out.CurrentHourUTC = 14
+			return out
 		},
 	}
 	app.signalEnricher = rec
