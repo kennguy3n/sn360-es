@@ -144,17 +144,10 @@ func findFirstHTMLPart(raw []byte) (string, bool) {
 	if err != nil || len(body) == 0 {
 		return "", false
 	}
-	headerStr := string(header)
-	ctIdx := indexCI(headerStr, "Content-Type:")
-	if ctIdx < 0 {
+	contentType := extractHeaderValue(string(header), "Content-Type")
+	if contentType == "" {
 		return "", false
 	}
-	rest := headerStr[ctIdx+len("Content-Type:"):]
-	newline := indexAnyOf(rest, "\r\n")
-	if newline < 0 {
-		newline = len(rest)
-	}
-	contentType := strings.TrimSpace(rest[:newline])
 	if strings.HasPrefix(strings.ToLower(contentType), "text/html") {
 		return string(body), true
 	}
@@ -198,9 +191,8 @@ func replaceHTMLBody(raw, newHTML []byte) ([]byte, error) {
 		return nil, errors.New("fastmail: missing header/body separator")
 	}
 	blank := []byte(sepStyle + sepStyle)
-	headerStr := string(header)
-	ctIdx := indexCI(headerStr, "Content-Type:")
-	if ctIdx < 0 {
+	contentType := extractHeaderValue(string(header), "Content-Type")
+	if contentType == "" {
 		// Treat as text/plain and replace whole body.
 		var out []byte
 		out = append(out, header...)
@@ -208,12 +200,6 @@ func replaceHTMLBody(raw, newHTML []byte) ([]byte, error) {
 		out = append(out, newHTML...)
 		return out, nil
 	}
-	rest := headerStr[ctIdx+len("Content-Type:"):]
-	newline := indexAnyOf(rest, "\r\n")
-	if newline < 0 {
-		newline = len(rest)
-	}
-	contentType := strings.TrimSpace(rest[:newline])
 	if strings.HasPrefix(strings.ToLower(contentType), "text/html") {
 		var out []byte
 		out = append(out, header...)
@@ -283,9 +269,8 @@ func joinParts(parts [][]byte, sep []byte) []byte {
 	return out
 }
 
-// bytesIndex / bytesSplit / indexCI / indexAnyOf are small helpers
-// kept package-local so the package's standard-library footprint
-// stays minimal.
+// bytesIndex / bytesSplit are small helpers kept package-local so
+// the package's standard-library footprint stays minimal.
 
 func bytesIndex(haystack, needle []byte) int {
 	if len(needle) == 0 || len(needle) > len(haystack) {
@@ -319,12 +304,70 @@ func bytesSplit(s, sep []byte) [][]byte {
 	}
 }
 
-func indexCI(s, sub string) int {
-	return strings.Index(strings.ToLower(s), strings.ToLower(sub))
+// extractHeaderValue returns the value of the named header (case-
+// insensitive) from a raw RFC 5322 header block, performing header
+// unfolding per §2.2.3: lines that begin with whitespace are
+// treated as continuations of the preceding header and joined into
+// a single logical value with a single-space separator. Returns the
+// empty string if the header is not present.
+//
+// This is the critical correctness layer for Content-Type parsing,
+// where the boundary= parameter is commonly placed on a continuation
+// line:
+//
+//	Content-Type: multipart/alternative;
+//	 boundary="xx"
+//
+// A naive "stop at first newline" parse would miss the boundary
+// parameter entirely; the unfolded value sees both halves joined.
+func extractHeaderValue(headerStr, name string) string {
+	nameLower := strings.ToLower(strings.TrimSpace(name))
+	lines := splitHeaderLines(headerStr)
+	for i, line := range lines {
+		colon := strings.IndexByte(line, ':')
+		if colon < 0 {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(line[:colon])) != nameLower {
+			continue
+		}
+		value := strings.TrimSpace(line[colon+1:])
+		for j := i + 1; j < len(lines); j++ {
+			next := lines[j]
+			if next == "" {
+				break
+			}
+			if next[0] != ' ' && next[0] != '\t' {
+				break
+			}
+			value += " " + strings.TrimSpace(next)
+		}
+		return value
+	}
+	return ""
 }
 
-func indexAnyOf(s string, chars string) int {
-	return strings.IndexAny(s, chars)
+// splitHeaderLines splits a header block on \n, stripping a trailing
+// \r from each line so the returned slice is line-ending-agnostic
+// (CRLF or LF). Empty trailing line is preserved as "" so callers can
+// terminate folded-header look-ahead at the header/body boundary.
+func splitHeaderLines(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			end := i
+			if end > start && s[end-1] == '\r' {
+				end--
+			}
+			out = append(out, s[start:end])
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		out = append(out, s[start:])
+	}
+	return out
 }
 
 // Compile-time interface checks.

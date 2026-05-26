@@ -718,14 +718,16 @@ func buildWorkmailEntry(_ context.Context, cfg *config.Config, logger *slog.Logg
 	if err != nil {
 		return nil, fmt.Errorf("signer: %w", err)
 	}
-	client, err := workmail.NewClient(workmail.ClientConfig{
-		Signer: signer,
-		Region: cfg.WorkMail.Region,
-		OrgID:  cfg.WorkMail.OrganizationID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("workmail client: %w", err)
-	}
+	// The WorkMail JSON API client (workmail.NewClient) used to be
+	// constructed here and discarded with `_ = client`. The three
+	// providers built below (label, banner, body, quarantine) all run
+	// over EWS — the JSON API surface (ListUsers etc.) is owned by the
+	// directory client in wire_services.go and the mailbox provider in
+	// wire_infra.go, each of which constructs its own scoped Client.
+	// Allocating an unused one here just consumed an HTTP client +
+	// performed redundant config validation already covered by NewSigner
+	// (Region) and the EWS / directory builders (OrgID), so it was
+	// removed.
 	ews, err := workmail.NewEWSClient(workmail.EWSClientConfig{
 		Signer:   signer,
 		Endpoint: cfg.WorkMail.EWSBaseURL,
@@ -750,7 +752,6 @@ func buildWorkmailEntry(_ context.Context, cfg *config.Config, logger *slog.Logg
 	if err != nil {
 		return nil, fmt.Errorf("quarantine provider: %w", err)
 	}
-	_ = client // future use: SDK calls outside the directory client
 	if logger != nil {
 		logger.Debug("sn360-es: workmail provider wired",
 			slog.String("region", cfg.WorkMail.Region),

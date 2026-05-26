@@ -213,6 +213,16 @@ func (c *EWSClient) GetItem(ctx context.Context, impersonateEmail, itemID string
 }
 
 // UpdateBody replaces the message body via EWS UpdateItem.
+//
+// The body.BodyType field is normalised to one of the two EWS schema
+// enum values ("HTML" or "Text") before being interpolated into the
+// SOAP envelope. The enum-restriction is the primary defence: a
+// BodyType that originated from a parsed EWS response (and therefore
+// could in principle contain attacker-controlled XML if the response
+// were tampered with mid-flight) is collapsed to a known-safe string,
+// preventing any chance of XML injection into the outbound
+// UpdateItem. itemID and Content are escaped via xmlEscape as the
+// belt-and-braces layer.
 func (c *EWSClient) UpdateBody(ctx context.Context, impersonateEmail, itemID string, body EWSMessageBody) error {
 	xmlBody := fmt.Sprintf(`
     <m:UpdateItem ConflictResolution="AutoResolve" MessageDisposition="SaveOnly">
@@ -229,20 +239,42 @@ func (c *EWSClient) UpdateBody(ctx context.Context, impersonateEmail, itemID str
           </t:Updates>
         </t:ItemChange>
       </m:ItemChanges>
-    </m:UpdateItem>`, xmlEscape(itemID), body.BodyType, xmlEscape(body.Content))
+    </m:UpdateItem>`, xmlEscape(itemID), normalizeEWSBodyType(body.BodyType), xmlEscape(body.Content))
 	if _, err := c.Invoke(ctx, impersonateEmail, xmlBody); err != nil {
 		return fmt.Errorf("workmail: UpdateItem body: %w", err)
 	}
 	return nil
 }
 
+// normalizeEWSBodyType collapses any caller-supplied or server-parsed
+// BodyType value to one of the two EWS schema enum values: "HTML" or
+// "Text". The EWS XSD permits only these two values (see
+// types.xsd#BodyTypeType), so any other value would be rejected by
+// WorkMail anyway. Forcing the value into this set at the boundary
+// makes it impossible for a tampered response body to inject XML via
+// the BodyType attribute (defence-in-depth alongside xmlEscape on the
+// content fields).
+func normalizeEWSBodyType(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "text":
+		return "Text"
+	default:
+		return "HTML"
+	}
+}
+
 // UpdateCategories sets the Categories property on a message via
 // UpdateItem. Categories is an array of strings (Outlook-style
 // category labels).
+//
+// Loop variable is named cat (not c) so it cannot shadow the EWSClient
+// receiver — a future maintainer adding code inside the loop body
+// that needs the receiver (e.g. for a nested c.Invoke call) won't
+// accidentally pick up the string element instead.
 func (c *EWSClient) UpdateCategories(ctx context.Context, impersonateEmail, itemID string, categories []string) error {
 	var cats strings.Builder
-	for _, c := range categories {
-		fmt.Fprintf(&cats, "<t:String>%s</t:String>", xmlEscape(c))
+	for _, cat := range categories {
+		fmt.Fprintf(&cats, "<t:String>%s</t:String>", xmlEscape(cat))
 	}
 	xmlBody := fmt.Sprintf(`
     <m:UpdateItem ConflictResolution="AutoResolve" MessageDisposition="SaveOnly">
