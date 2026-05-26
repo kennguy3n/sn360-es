@@ -164,6 +164,14 @@ func TestMemoryCommHistory_Upsert_DoesNotWriteTypicalHour(t *testing.T) {
 	if err := r.CommunicationHistories.Upsert(ctx, first); err != nil {
 		t.Fatalf("first upsert: %v", err)
 	}
+	// The caller's struct must not be mutated by Upsert: this is
+	// the contract memory shares with Postgres (which only writes
+	// SQL, never the Go struct), so tests inspecting the pointer
+	// after Upsert observe identical behaviour across backends.
+	if first.TypicalHour != 0 {
+		t.Fatalf("first upsert mutated caller's TypicalHour: got %d, want 0 (unchanged Go zero)",
+			first.TypicalHour)
+	}
 	got, err := r.CommunicationHistories.Get(ctx, "t-1", []byte("a"), []byte("b"))
 	if err != nil {
 		t.Fatalf("get after first upsert: %v", err)

@@ -585,12 +585,20 @@ func (m *memoryCommHistory) Upsert(_ context.Context, h *CommunicationHistory) e
 	// TypicalHour would otherwise silently overwrite the worker's
 	// modal hour with midnight UTC (0), the int zero value that
 	// happens to fall inside the valid 0..23 range.
+	//
+	// The persisted row is built from a *local copy* of h so the
+	// caller's struct is not mutated. This matches the Postgres
+	// implementation, which only writes to the column via SQL and
+	// leaves h.TypicalHour untouched in Go memory — keeping the
+	// two backends behaviourally identical for tests that inspect
+	// the caller's pointer after a successful Upsert.
+	row := *h
 	if cur, ok := m.rows[key]; ok {
-		h.TypicalHour = cur.TypicalHour
+		row.TypicalHour = cur.TypicalHour
 	} else {
-		h.TypicalHour = TypicalHourUnset
+		row.TypicalHour = TypicalHourUnset
 	}
-	m.rows[key] = *h
+	m.rows[key] = row
 	return nil
 }
 
