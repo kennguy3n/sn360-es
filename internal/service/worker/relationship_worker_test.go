@@ -497,6 +497,72 @@ func TestRelationshipJob_Run_BaselineCappedAtMaxBaselineSendHours(t *testing.T) 
 	}
 }
 
+// TestRelationshipJob_Run_CASRejection_DoesNotPolluteBaseline
+// verifies the split between prepareBaselineUpdate (pure compute)
+// and persistBaselineUpdate (write-after-CAS): when the canonical
+// communication-history CAS write loses the race against
+// ingestion (UpdateCountsIfFresh returns (false, nil)), the
+// baseline append from the stale snapshot must NOT be persisted.
+// Otherwise a subsequent cycle would re-read the now-fresher row
+// and append another sample, double-counting the same underlying
+// message event in the histogram and skewing
+// relationship.BaselineAnomalyCheck's timing-anomaly detection.
+func TestRelationshipJob_Run_CASRejection_DoesNotPolluteBaseline(t *testing.T) {
+	day := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	baselines := newFakeBaselineRepo()
+	// Seed an existing baseline so we can verify it stays
+	// untouched after the worker's CAS-rejected cycle.
+	_ = baselines.Upsert(context.Background(), &repository.UserBehavioralBaseline{
+		TenantID:         "t-1",
+		UserEmailHash:    []byte("b"),
+		SenderDomainHash: []byte("d"),
+		TypicalSendHours: []int{9, 14},
+	})
+
+	tl := &fakeTenantLister{tenants: []repository.Tenant{{ID: "t-1"}}}
+	cs := &fakeCommunicationStore{rowsByTenant: map[string][]repository.CommunicationHistory{
+		"t-1": {{
+			ID: "row-1", TenantID: "t-1", SenderHash: []byte("a"),
+			RecipientHash: []byte("b"), SenderDomainHash: []byte("d"),
+			SenderDomain: "d.example", Count30d: 8,
+			LastSeenAt: day.Add(11 * time.Hour), UpdatedAt: day,
+		}},
+	}}
+	// accept: false simulates ingestion winning the CAS race
+	// between ListByTenant and UpdateCountsIfFresh.
+	up := &fakeCommUpserter{accept: false}
+	hasher := func(_, _ string) ([]byte, error) { return []byte("ok"), nil }
+
+	job, err := NewRelationshipJob(RelationshipJobConfig{
+		Interval: time.Hour, Tenants: tl, Communications: cs, Upserter: up,
+		Baselines: baselines, Hasher: hasher, Logger: discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if err := job.Run(context.Background()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// Baseline must still hold the original seed {9, 14} — the
+	// stale snapshot's hour 11 must not have been persisted
+	// because the CAS write was rejected.
+	b, err := baselines.Get(context.Background(), "t-1", []byte("b"), []byte("d"))
+	if err != nil {
+		t.Fatalf("baseline get: %v", err)
+	}
+	want := []int{9, 14}
+	if len(b.TypicalSendHours) != len(want) {
+		t.Fatalf("baseline hours = %v, want %v (CAS-rejected snapshot must not pollute the histogram)",
+			b.TypicalSendHours, want)
+	}
+	for i, h := range want {
+		if b.TypicalSendHours[i] != h {
+			t.Errorf("baseline hours[%d] = %d, want %d", i, b.TypicalSendHours[i], h)
+		}
+	}
+}
+
 // TestModalHourOf covers the helper used to derive the modal hour
 // from an accumulated send-hour distribution.
 func TestModalHourOf(t *testing.T) {

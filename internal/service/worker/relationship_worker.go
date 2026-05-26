@@ -250,16 +250,25 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 			// propagates it to communication_histories.typical_hour
 			// for the Tier 0 ATO heuristic to read on the hot path.
 			//
-			// Both writes are best-effort: a baseline read/write
-			// failure is logged and skipped so the canonical
-			// communication-history CAS still happens.
+			// Important: the baseline preparation is split from its
+			// persistence. prepareBaselineUpdate is read-only — it
+			// fetches the prior baseline, appends sendHour to the
+			// in-memory slice, and returns the prepared struct
+			// without writing it back. The actual Upsert happens
+			// only AFTER the canonical communication-history CAS
+			// succeeds (see persistBaselineUpdate below), so a CAS
+			// race rejection cannot leave a phantom sample in the
+			// histogram that a subsequent cycle would observe and
+			// double-count.
 			modalHour := -1
+			var preparedBaseline *repository.UserBehavioralBaseline
 			if j.cfg.Baselines != nil && j.cfg.Hasher != nil && len(h.RecipientHash) > 0 && len(h.SenderDomainHash) > 0 {
 				sendHour := h.LastSeenAt.UTC().Hour()
-				accumulated := j.accumulateBaselineHours(ctx, t.ID, h, sendHour)
+				accumulated, bl := j.prepareBaselineUpdate(ctx, t.ID, h, sendHour)
 				if len(accumulated) > 0 {
 					modalHour = modalHourOf(accumulated)
 				}
+				preparedBaseline = bl
 			}
 			if modalHour >= 0 && modalHour < 24 {
 				h.TypicalHour = modalHour
@@ -267,7 +276,7 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 				// Carry forward an existing valid value; otherwise
 				// fall back to the sentinel so the repository's
 				// CASE guard leaves the column untouched.
-				h.TypicalHour = -1
+				h.TypicalHour = repository.TypicalHourUnset
 			}
 
 			// Capture the snapshot's UpdatedAt as the CAS guard so
@@ -298,8 +307,18 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 			}
 			if !updated {
 				raceSkipped++
+				// Drop preparedBaseline on the floor — its append
+				// was drawn from a stale snapshot, so persisting it
+				// would pollute the histogram with a phantom
+				// sample. The next cycle will re-read the row and
+				// re-prepare against the fresher LastSeenAt.
 				continue
 			}
+			// CAS landed — now safe to persist the prepared
+			// baseline. A best-effort Upsert: persistence failure is
+			// logged and the cycle still counts as processed, since
+			// the canonical communication-history write succeeded.
+			j.persistBaselineUpdate(ctx, t.ID, preparedBaseline)
 			processed++
 		}
 	}
@@ -321,32 +340,41 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 // sends without consuming a megabyte per pair in the worst case.
 const maxBaselineSendHours = 168
 
-// accumulateBaselineHours fetches the existing per-(user,
-// sender_domain) baseline (if any), appends sendHour to the
-// TypicalSendHours distribution (capped at maxBaselineSendHours,
-// FIFO eviction), recomputes AvgMessagesPerWeek from the
-// snapshot's 30-day count, and upserts the row back. Returns the
-// accumulated send-hour slice (post-append, post-trim) so the
-// caller can compute the modal hour without re-reading the
-// repository.
+// prepareBaselineUpdate computes the accumulated send-hour
+// distribution for this (tenant, user, sender_domain) tuple
+// without writing it back. The returned baseline struct is ready
+// for Upsert via persistBaselineUpdate once the canonical
+// communication-history CAS has succeeded; deferring the write
+// avoids polluting the histogram with phantom samples drawn from
+// snapshots that ultimately lose a CAS race against ingestion.
 //
-// All failure paths log and return whatever distribution we managed
-// to assemble (possibly empty). The caller treats an empty return
-// as "no baseline available, leave typical_hour untouched".
-func (j *RelationshipJob) accumulateBaselineHours(
+// The function fetches the prior baseline (if any), appends
+// sendHour to its TypicalSendHours slice (FIFO-capped at
+// maxBaselineSendHours), recomputes AvgMessagesPerWeek from the
+// snapshot's 30-day count, and returns:
+//   - the in-memory accumulated hours slice (post-append,
+//     post-trim), used by the caller to compute the modal hour;
+//   - the prepared *repository.UserBehavioralBaseline ready for
+//     Upsert, or nil if there is nothing meaningful to persist.
+//
+// A baseline-Get failure (other than ErrNotFound) is logged and
+// the function continues with an empty existing slice — the new
+// hour is still recorded as the first sample so the modal-hour
+// computation has something to work with.
+func (j *RelationshipJob) prepareBaselineUpdate(
 	ctx context.Context,
 	tenantID string,
 	h repository.CommunicationHistory,
 	sendHour int,
-) []int {
+) ([]int, *repository.UserBehavioralBaseline) {
 	if sendHour < 0 || sendHour >= 24 {
-		return nil
+		return nil, nil
 	}
 	if j.cfg.Baselines == nil || j.cfg.Hasher == nil {
-		return nil
+		return nil, nil
 	}
 	if len(h.RecipientHash) == 0 || len(h.SenderDomainHash) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// Load the existing baseline (if any) so the new hour is
@@ -398,13 +426,28 @@ func (j *RelationshipJob) accumulateBaselineHours(
 		bl.TypicalDeviceTypes = prev.TypicalDeviceTypes
 		bl.CreatedAt = prev.CreatedAt
 	}
+	return updated, bl
+}
+
+// persistBaselineUpdate writes a prepared baseline back to the
+// repository. Called by Run only after the canonical
+// communication-history CAS write has succeeded, so a CAS race
+// rejection never produces a phantom sample in the histogram.
+// Persistence failures are logged and swallowed: the canonical
+// CAS has already committed and the next worker cycle will re-
+// derive the baseline from scratch.
+func (j *RelationshipJob) persistBaselineUpdate(
+	ctx context.Context,
+	tenantID string,
+	bl *repository.UserBehavioralBaseline,
+) {
+	if bl == nil || j.cfg.Baselines == nil {
+		return
+	}
 	if berr := j.cfg.Baselines.Upsert(ctx, bl); berr != nil {
 		j.logger.Warn("worker.relationship: baseline upsert failed",
 			slog.String("tenant_id", tenantID), slog.Any("error", berr))
-		// The in-memory slice is still meaningful for modal-hour
-		// computation even if persistence failed — return it.
 	}
-	return updated
 }
 
 // modalHourOf returns the most-frequent hour-of-day from hours.

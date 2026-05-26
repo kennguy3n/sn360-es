@@ -207,12 +207,38 @@ type CommunicationHistory struct {
 	// communication_histories.typical_hour column (migration 0007)
 	// so the Tier 0 ATO heuristic's checkTimingAnomaly() can read
 	// a representative baseline hour without having to JOIN against
-	// user_behavioral_baselines on the hot path. A value of -1
-	// means "no baseline yet" — the column default at row creation
-	// time.
+	// user_behavioral_baselines on the hot path.
+	//
+	// Contract (shared by every CommunicationHistoryRepository
+	// implementation — memory.go, postgres.go — and both write
+	// paths, Upsert and UpdateCountsIfFresh):
+	//   - 0..23                → a valid hour-of-day (0 == midnight
+	//                            UTC); persisted as-is.
+	//   - TypicalHourUnset(-1) → "no baseline yet"; the repository
+	//                            CASE guard preserves any prior
+	//                            value on update and writes -1 on
+	//                            first insert (matching the
+	//                            migration 0007 column default).
+	//
+	// Because Go's int zero value (0) is a *valid* hour, callers
+	// MUST set this field explicitly. A struct literal that omits
+	// TypicalHour will silently overwrite the previously-computed
+	// modal hour with midnight UTC. Use TypicalHourUnset for "no
+	// change" / "no baseline yet".
 	TypicalHour int
 	UpdatedAt   time.Time
 }
+
+// TypicalHourUnset is the sentinel value for
+// CommunicationHistory.TypicalHour meaning "no baseline yet" / "do
+// not overwrite". It matches the migration 0007 column default
+// and is what every CommunicationHistoryRepository implementation
+// looks for when deciding whether to preserve the existing
+// typical_hour column on an Upsert / UpdateCountsIfFresh.
+//
+// See the CommunicationHistory.TypicalHour comment above for the
+// full contract.
+const TypicalHourUnset = -1
 
 // ----------------------------------------------------------------------
 // Repository interfaces
