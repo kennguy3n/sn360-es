@@ -93,6 +93,9 @@ type Config struct {
 	SMTP                     SMTP
 	GWS                      GWS
 	O365                     O365
+	Zoho                     Zoho
+	Fastmail                 Fastmail
+	WorkMail                 WorkMail
 	Ingestion                Ingestion
 	Worker                   Worker
 	Onboarding               Onboarding
@@ -373,6 +376,126 @@ func (g GWS) HasGmail() bool {
 // Outlook provider.
 func (o O365) HasOutlook() bool {
 	return o.ClientID != "" && o.ClientSecret != "" && o.TenantID != ""
+}
+
+// Zoho holds Zoho Mail API configuration.
+//
+// Zoho is a multi-data-center cloud — every API endpoint has six
+// regional variants. Selecting the right region is non-optional:
+// hitting accounts.zoho.com when the tenant lives in accounts.zoho.eu
+// returns 401 with no helpful body. DataCenter holds the short region
+// code; the package's BaseURL / AccountsURL helpers map it onto the
+// correct hostnames.
+//
+// All fields are optional: when ClientID/ClientSecret/OrgID are not
+// all set the Zoho provider is disabled and the action consumers /
+// mailbox poller fall back to logging-only mode.
+type Zoho struct {
+	ClientID     string
+	ClientSecret string
+	// OrgID is the Zoho Mail organisation ID (an integer rendered as
+	// a string), required for /api/organization and /api/users.
+	OrgID string
+	// Domain is the primary tenant domain (e.g. "example.com").
+	// Used as the provider-registry key so a single ZOHO_DOMAIN flows
+	// to the MailboxProvider's emitted TenantID.
+	Domain string
+	// BaseURL overrides the Zoho Mail REST endpoint. Defaults to
+	// https://mail.<region>.zoho.<tld> derived from DataCenter.
+	BaseURL string
+	// AccountsURL overrides the Zoho OAuth accounts endpoint. Defaults
+	// to https://accounts.zoho.<tld> derived from DataCenter.
+	AccountsURL string
+	// DataCenter selects the Zoho data center region. Valid values:
+	// "com" (US, default), "eu", "in", "com.au", "com.cn", "jp".
+	DataCenter string
+	// RefreshToken is the long-lived OAuth refresh token issued by the
+	// Zoho API Console for the configured ClientID/ClientSecret. The
+	// token source exchanges it for short-lived access tokens.
+	RefreshToken string
+}
+
+// HasZoho reports whether enough fields are set to build a Zoho
+// provider. Domain is required for the same provider-registry-key
+// invariant as GWS.Domain.
+func (z Zoho) HasZoho() bool {
+	return z.ClientID != "" && z.ClientSecret != "" && z.OrgID != "" && z.Domain != ""
+}
+
+// Fastmail holds Fastmail (JMAP) configuration.
+//
+// Fastmail does not implement OAuth2 for personal/SMB API access; the
+// service authenticates with an app-specific password ("API token")
+// that the operator generates in the Fastmail settings UI. The token
+// carries the JMAP scope and is sent as a Bearer token on every JMAP
+// request.
+//
+// All fields are optional: when APIToken/AccountID are not both set
+// the Fastmail provider is disabled.
+type Fastmail struct {
+	// APIToken is the long-lived bearer token (an app-specific
+	// password with JMAP scope) used on every JMAP call.
+	APIToken string
+	// BaseURL overrides the JMAP session endpoint. Defaults to
+	// https://api.fastmail.com.
+	BaseURL string
+	// AccountID is the Fastmail account identifier used as the
+	// accountId argument on JMAP method calls and as the provider-
+	// registry key.
+	AccountID string
+}
+
+// HasFastmail reports whether enough fields are set to build a
+// Fastmail provider.
+func (f Fastmail) HasFastmail() bool {
+	return f.APIToken != "" && f.AccountID != ""
+}
+
+// WorkMail holds Amazon WorkMail configuration.
+//
+// WorkMail authentication is unusual: directory operations use the
+// AWS SDK (SigV4 with IAM credentials) while mail operations use EWS
+// (Exchange Web Services) over HTTPS with basic auth derived from
+// the WorkMail Access Control Rules. SN360-ES uses IAM credentials
+// for both code paths; the EWS endpoint signs requests with the same
+// credentials.
+//
+// When AccessKeyID / SecretAccessKey are empty the SDK falls back to
+// the default AWS credential chain (env vars, EC2 instance role,
+// shared credentials file). This keeps single-binary deployments
+// running on EC2/ECS clean.
+type WorkMail struct {
+	// OrganizationID is the WorkMail organization ID
+	// (e.g. m-1234567890abcdef…). Required.
+	OrganizationID string
+	// Region is the AWS region the WorkMail org lives in
+	// (e.g. us-east-1). Required.
+	Region string
+	// AccessKeyID + SecretAccessKey are the static IAM credentials.
+	// When empty, the default AWS credential chain is used.
+	AccessKeyID     string
+	SecretAccessKey string
+	// SessionToken is the optional STS session token paired with a
+	// short-lived AccessKeyID/SecretAccessKey set.
+	SessionToken string
+	// EWSBaseURL is the Exchange Web Services endpoint for WorkMail.
+	// When empty, defaults to
+	// https://ews.mail.<region>.awsapps.com/EWS/Exchange.asmx.
+	EWSBaseURL string
+	// WorkMailBaseURL overrides the WorkMail SDK endpoint. Default
+	// is the standard https://workmail.<region>.amazonaws.com URL
+	// auto-derived from Region.
+	WorkMailBaseURL string
+	// Domain is the primary mail domain (e.g. "example.com"); used
+	// as the provider-registry key.
+	Domain string
+}
+
+// HasWorkMail reports whether enough fields are set to build a
+// WorkMail provider. Domain is required for the provider-registry-
+// key invariant.
+func (w WorkMail) HasWorkMail() bool {
+	return w.OrganizationID != "" && w.Region != "" && w.Domain != ""
 }
 
 // Ingestion holds the per-mailbox poller and push-notification tuning knobs.
@@ -730,6 +853,37 @@ func Load() (Config, error) {
 			BaseURL:             getStr("O365_BASE_URL", ""),
 			TokenURL:            getStr("O365_TOKEN_URL", ""),
 			ResolveNestedGroups: getBool("O365_RESOLVE_NESTED_GROUPS", true),
+		},
+		Zoho: Zoho{
+			ClientID:     strings.TrimSpace(getStr("ZOHO_CLIENT_ID", "")),
+			ClientSecret: getStr("ZOHO_CLIENT_SECRET", ""),
+			OrgID:        strings.TrimSpace(getStr("ZOHO_ORG_ID", "")),
+			// Domain is the provider-registry key — trim at the
+			// source for the same invariant as GWS.Domain.
+			Domain:       strings.TrimSpace(getStr("ZOHO_DOMAIN", "")),
+			BaseURL:      strings.TrimSpace(getStr("ZOHO_BASE_URL", "")),
+			AccountsURL:  strings.TrimSpace(getStr("ZOHO_ACCOUNTS_URL", "")),
+			DataCenter:   strings.ToLower(strings.TrimSpace(getStr("ZOHO_DATA_CENTER", ""))),
+			RefreshToken: getStr("ZOHO_REFRESH_TOKEN", ""),
+		},
+		Fastmail: Fastmail{
+			APIToken: getStr("FASTMAIL_API_TOKEN", ""),
+			// AccountID is the provider-registry key — trim at
+			// the source.
+			AccountID: strings.TrimSpace(getStr("FASTMAIL_ACCOUNT_ID", "")),
+			BaseURL:   strings.TrimSpace(getStr("FASTMAIL_BASE_URL", "")),
+		},
+		WorkMail: WorkMail{
+			OrganizationID:  strings.TrimSpace(getStr("WORKMAIL_ORGANIZATION_ID", "")),
+			Region:          strings.ToLower(strings.TrimSpace(getStr("WORKMAIL_REGION", ""))),
+			AccessKeyID:     strings.TrimSpace(getStr("WORKMAIL_ACCESS_KEY_ID", "")),
+			SecretAccessKey: getStr("WORKMAIL_SECRET_ACCESS_KEY", ""),
+			SessionToken:    getStr("WORKMAIL_SESSION_TOKEN", ""),
+			EWSBaseURL:      strings.TrimSpace(getStr("WORKMAIL_EWS_BASE_URL", "")),
+			WorkMailBaseURL: strings.TrimSpace(getStr("WORKMAIL_BASE_URL", "")),
+			// Domain is the provider-registry key — trim at the
+			// source.
+			Domain: strings.TrimSpace(getStr("WORKMAIL_DOMAIN", "")),
 		},
 		Ingestion: Ingestion{
 			Mode:                           strings.ToLower(strings.TrimSpace(getStr("INGESTION_MODE", "poll"))),

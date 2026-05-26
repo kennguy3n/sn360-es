@@ -26,6 +26,9 @@ type ProviderType string
 const (
 	ProviderGoogle    ProviderType = "google_workspace"
 	ProviderMicrosoft ProviderType = "microsoft_365"
+	ProviderZoho      ProviderType = "zoho_mail"
+	ProviderFastmail  ProviderType = "fastmail"
+	ProviderWorkmail  ProviderType = "amazon_workmail"
 )
 
 // ProviderConfig captures the per-provider OAuth parameters.
@@ -273,6 +276,19 @@ func (s *Service) AuthURL(provider ProviderType, tenantID string) (string, error
 		q.Set("prompt", "consent")
 	case ProviderMicrosoft:
 		q.Set("prompt", "consent")
+	case ProviderZoho:
+		// Zoho requires access_type=offline to issue a refresh token.
+		q.Set("access_type", "offline")
+		q.Set("prompt", "consent")
+	case ProviderFastmail:
+		// Fastmail does not use OAuth2; the onboarding flow does not
+		// produce a consent URL for it. Callers are expected to gate
+		// on this before invoking AuthURL.
+		return "", fmt.Errorf("onboarding: %s uses static API tokens, not OAuth2", provider)
+	case ProviderWorkmail:
+		// WorkMail uses AWS IAM, not OAuth2. Same handling as
+		// Fastmail.
+		return "", fmt.Errorf("onboarding: %s uses AWS IAM, not OAuth2", provider)
 	default:
 		q.Set("prompt", "consent")
 	}

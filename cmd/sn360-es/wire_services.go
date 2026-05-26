@@ -11,8 +11,11 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
 	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
 	"github.com/kennguy3n/sn360-es/internal/service/onboarding"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/fastmail"
 	"github.com/kennguy3n/sn360-es/pkg/email_provider/gmail"
 	"github.com/kennguy3n/sn360-es/pkg/email_provider/outlook"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/workmail"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/zoho"
 	"github.com/kennguy3n/sn360-es/pkg/privacy"
 )
 
@@ -205,6 +208,96 @@ func buildDirectoryClient(cfg *config.Config, logger *slog.Logger) agent.Directo
 		})
 		if derr != nil {
 			logger.Warn("sn360-es: directory client (outlook) wire failed",
+				slog.Any("error", derr))
+			return nil
+		}
+		return dc
+	}
+	if cfg.Zoho.HasZoho() {
+		tokens, terr := zoho.NewRefreshTokenSource(zoho.RefreshTokenConfig{
+			ClientID:     cfg.Zoho.ClientID,
+			ClientSecret: cfg.Zoho.ClientSecret,
+			RefreshToken: cfg.Zoho.RefreshToken,
+			AccountsURL:  cfg.Zoho.AccountsURL,
+			DataCenter:   cfg.Zoho.DataCenter,
+		})
+		if terr != nil {
+			logger.Warn("sn360-es: directory client (zoho) token init failed",
+				slog.Any("error", terr))
+			return nil
+		}
+		client, cerr := zoho.NewClient(zoho.ClientConfig{
+			TokenSource: tokens,
+			BaseURL:     cfg.Zoho.BaseURL,
+			DataCenter:  cfg.Zoho.DataCenter,
+			OrgID:       cfg.Zoho.OrgID,
+		})
+		if cerr != nil {
+			logger.Warn("sn360-es: directory client (zoho) client init failed",
+				slog.Any("error", cerr))
+			return nil
+		}
+		dc, derr := zoho.NewDirectoryClient(zoho.DirectoryClientConfig{Client: client})
+		if derr != nil {
+			logger.Warn("sn360-es: directory client (zoho) wire failed",
+				slog.Any("error", derr))
+			return nil
+		}
+		return dc
+	}
+	if cfg.Fastmail.HasFastmail() {
+		tokens := fastmail.StaticTokenSource{APIToken: cfg.Fastmail.APIToken}
+		client, cerr := fastmail.NewClient(fastmail.ClientConfig{
+			TokenSource: tokens,
+			BaseURL:     cfg.Fastmail.BaseURL,
+			AccountID:   cfg.Fastmail.AccountID,
+		})
+		if cerr != nil {
+			logger.Warn("sn360-es: directory client (fastmail) client init failed",
+				slog.Any("error", cerr))
+			return nil
+		}
+		dc, derr := fastmail.NewDirectoryClient(fastmail.DirectoryClientConfig{Client: client})
+		if derr != nil {
+			logger.Warn("sn360-es: directory client (fastmail) wire failed",
+				slog.Any("error", derr))
+			return nil
+		}
+		return dc
+	}
+	if cfg.WorkMail.HasWorkMail() {
+		creds := workmail.ChainedCredentials{
+			Providers: []workmail.CredentialsProvider{
+				workmail.StaticCredentials{Credentials: workmail.Credentials{
+					AccessKeyID:     cfg.WorkMail.AccessKeyID,
+					SecretAccessKey: cfg.WorkMail.SecretAccessKey,
+				}},
+				workmail.EnvCredentials{},
+			},
+		}
+		signer, serr := workmail.NewSigner(workmail.SignerConfig{
+			Region:      cfg.WorkMail.Region,
+			Service:     "workmail",
+			Credentials: creds,
+		})
+		if serr != nil {
+			logger.Warn("sn360-es: directory client (workmail) signer init failed",
+				slog.Any("error", serr))
+			return nil
+		}
+		client, cerr := workmail.NewClient(workmail.ClientConfig{
+			Signer: signer,
+			Region: cfg.WorkMail.Region,
+			OrgID:  cfg.WorkMail.OrganizationID,
+		})
+		if cerr != nil {
+			logger.Warn("sn360-es: directory client (workmail) client init failed",
+				slog.Any("error", cerr))
+			return nil
+		}
+		dc, derr := workmail.NewDirectoryClient(workmail.DirectoryClientConfig{Client: client})
+		if derr != nil {
+			logger.Warn("sn360-es: directory client (workmail) wire failed",
 				slog.Any("error", derr))
 			return nil
 		}

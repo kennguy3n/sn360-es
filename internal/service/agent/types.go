@@ -27,13 +27,16 @@ type Provider string
 const (
 	ProviderGoogle    Provider = "google_workspace"
 	ProviderMicrosoft Provider = "microsoft_365"
+	ProviderZoho      Provider = "zoho_mail"
+	ProviderFastmail  Provider = "fastmail"
+	ProviderWorkmail  Provider = "amazon_workmail"
 	ProviderUnknown   Provider = "unknown"
 )
 
 // Valid reports whether p is a known provider.
 func (p Provider) Valid() bool {
 	switch p {
-	case ProviderGoogle, ProviderMicrosoft, ProviderUnknown:
+	case ProviderGoogle, ProviderMicrosoft, ProviderZoho, ProviderFastmail, ProviderWorkmail, ProviderUnknown:
 		return true
 	}
 	return false

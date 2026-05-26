@@ -120,3 +120,62 @@ func TestHTTPPostConsentValidator_UnknownProvider(t *testing.T) {
 		t.Error("expected error for unknown provider")
 	}
 }
+
+func TestHTTPPostConsentValidator_Zoho_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/organization" {
+			t.Errorf("Zoho validator hit unexpected path %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Zoho-oauthtoken zoho-at" {
+			t.Errorf("Zoho validator Authorization = %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"zoid": "100200300", "orgId": "100200300"},
+			},
+		})
+	}))
+	defer srv.Close()
+	v := &HTTPPostConsentValidator{
+		ZohoAPIBaseURL:    srv.URL,
+		ZohoExpectedOrgID: "100200300",
+	}
+	tok := Token{AccessToken: "zoho-at", ExpiresAt: time.Now().Add(time.Hour)}
+	if err := v.ValidateTenantAccess(context.Background(), tok, "acme", ProviderZoho); err != nil {
+		t.Fatalf("ValidateTenantAccess: %v", err)
+	}
+}
+
+func TestHTTPPostConsentValidator_Zoho_WrongOrgID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"zoid": "999", "orgId": "999"},
+			},
+		})
+	}))
+	defer srv.Close()
+	v := &HTTPPostConsentValidator{
+		ZohoAPIBaseURL:    srv.URL,
+		ZohoExpectedOrgID: "100200300",
+	}
+	tok := Token{AccessToken: "x", ExpiresAt: time.Now().Add(time.Hour)}
+	if err := v.ValidateTenantAccess(context.Background(), tok, "acme", ProviderZoho); err == nil {
+		t.Fatal("expected org mismatch to error")
+	}
+}
+
+func TestHTTPPostConsentValidator_FastmailWorkmail_AlwaysOK(t *testing.T) {
+	// Fastmail (static token) and WorkMail (IAM SigV4) bypass OAuth
+	// post-consent validation; the validator should return nil so the
+	// onboarding flow doesn't reject them on a check that doesn't
+	// apply to their auth model.
+	v := &HTTPPostConsentValidator{}
+	tok := Token{AccessToken: "x", ExpiresAt: time.Now().Add(time.Hour)}
+	if err := v.ValidateTenantAccess(context.Background(), tok, "acme", ProviderFastmail); err != nil {
+		t.Errorf("Fastmail validation: %v", err)
+	}
+	if err := v.ValidateTenantAccess(context.Background(), tok, "acme", ProviderWorkmail); err != nil {
+		t.Errorf("WorkMail validation: %v", err)
+	}
+}

@@ -421,3 +421,87 @@ func TestService_Revoke_DelegatesToStore(t *testing.T) {
 		t.Fatal("token still present")
 	}
 }
+
+func zohoConfig() ProviderConfig {
+	return ProviderConfig{
+		ClientID:     "zcid",
+		ClientSecret: "zcsec",
+		AuthURL:      "https://accounts.zoho.com/oauth/v2/auth",
+		TokenURL:     "https://accounts.zoho.com/oauth/v2/token",
+		Scopes:       []string{"ZohoMail.messages.ALL", "ZohoMail.accounts.READ"},
+		RedirectURL:  "https://app/cb",
+	}
+}
+
+// TestService_AuthURL_Zoho_OfflineAccess covers the Zoho-specific
+// AuthURL branch: Zoho only issues a refresh token when
+// access_type=offline is set on the consent URL, so the service must
+// add that parameter.
+func TestService_AuthURL_Zoho_OfflineAccess(t *testing.T) {
+	signer, _ := NewStateSigner([]byte("0123456789abcdef"))
+	svc, err := NewService(ServiceConfig{
+		Providers: map[ProviderType]ProviderConfig{ProviderZoho: zohoConfig()},
+		Store:     newFakeTokenStore(),
+		Exch:      &fakeExchanger{},
+		State:     signer,
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	authURL, err := svc.AuthURL(ProviderZoho, "acme")
+	if err != nil {
+		t.Fatalf("AuthURL: %v", err)
+	}
+	u, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	q := u.Query()
+	if q.Get("access_type") != "offline" {
+		t.Errorf("Zoho consent URL missing access_type=offline: %q", q.Get("access_type"))
+	}
+	if q.Get("prompt") != "consent" {
+		t.Errorf("Zoho consent URL missing prompt=consent: %q", q.Get("prompt"))
+	}
+	if q.Get("client_id") != "zcid" {
+		t.Errorf("Zoho consent URL client_id = %q", q.Get("client_id"))
+	}
+}
+
+// TestService_AuthURL_FastmailWorkmail_RejectedAsNonOAuth verifies
+// the service rejects AuthURL for the two non-OAuth providers with a
+// helpful explanatory error rather than silently producing a bogus
+// consent URL.
+func TestService_AuthURL_FastmailWorkmail_RejectedAsNonOAuth(t *testing.T) {
+	signer, _ := NewStateSigner([]byte("0123456789abcdef"))
+	// Providers map keys: even though Fastmail/WorkMail do not run
+	// OAuth, ProviderConfig.Validate requires placeholder URLs and
+	// scopes; that's all this test cares about.
+	stub := ProviderConfig{
+		ClientID: "x", ClientSecret: "y",
+		AuthURL: "https://example.invalid/", TokenURL: "https://example.invalid/",
+		Scopes: []string{"s"}, RedirectURL: "https://app/cb",
+	}
+	svc, err := NewService(ServiceConfig{
+		Providers: map[ProviderType]ProviderConfig{
+			ProviderFastmail: stub,
+			ProviderWorkmail: stub,
+		},
+		Store: newFakeTokenStore(),
+		Exch:  &fakeExchanger{},
+		State: signer,
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	for _, p := range []ProviderType{ProviderFastmail, ProviderWorkmail} {
+		_, err := svc.AuthURL(p, "acme")
+		if err == nil {
+			t.Errorf("AuthURL(%q) expected error", p)
+			continue
+		}
+		if !strings.Contains(err.Error(), "not OAuth2") && !strings.Contains(err.Error(), "AWS IAM") {
+			t.Errorf("AuthURL(%q) error did not explain non-OAuth nature: %v", p, err)
+		}
+	}
+}

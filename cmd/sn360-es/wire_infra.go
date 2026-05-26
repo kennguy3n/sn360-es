@@ -20,8 +20,11 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/ingestion"
 	"github.com/kennguy3n/sn360-es/internal/service/relationship"
 	"github.com/kennguy3n/sn360-es/internal/service/worker"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/fastmail"
 	"github.com/kennguy3n/sn360-es/pkg/email_provider/gmail"
 	"github.com/kennguy3n/sn360-es/pkg/email_provider/outlook"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/workmail"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/zoho"
 	"github.com/kennguy3n/sn360-es/pkg/events/bus"
 	natsbus "github.com/kennguy3n/sn360-es/pkg/events/nats"
 	redisbus "github.com/kennguy3n/sn360-es/pkg/events/redis"
@@ -230,7 +233,7 @@ func buildPoller(ctx context.Context, cfg *config.Config, logger *slog.Logger, a
 }
 
 func buildMailboxProviders(ctx context.Context, cfg *config.Config, logger *slog.Logger) []ingestion.MailboxProvider {
-	out := make([]ingestion.MailboxProvider, 0, 2)
+	out := make([]ingestion.MailboxProvider, 0, 5)
 	if cfg.GWS.HasGmail() {
 		sa, err := gmail.LoadServiceAccount(cfg.GWS.ServiceAccountJSON)
 		if err != nil {
@@ -288,6 +291,124 @@ func buildMailboxProviders(ctx context.Context, cfg *config.Config, logger *slog
 				out = append(out, mbp)
 				logger.Info("sn360-es: outlook mailbox provider wired",
 					slog.String("tenant", cfg.O365.TenantID))
+			}
+		}
+	}
+	if cfg.Zoho.HasZoho() {
+		tokens, terr := zoho.NewRefreshTokenSource(zoho.RefreshTokenConfig{
+			ClientID:     cfg.Zoho.ClientID,
+			ClientSecret: cfg.Zoho.ClientSecret,
+			RefreshToken: cfg.Zoho.RefreshToken,
+			AccountsURL:  cfg.Zoho.AccountsURL,
+			DataCenter:   cfg.Zoho.DataCenter,
+		})
+		if terr != nil {
+			logger.Warn("sn360-es: zoho mailbox provider init failed (token source)",
+				slog.Any("error", terr))
+		} else {
+			client, cerr := zoho.NewClient(zoho.ClientConfig{
+				TokenSource: tokens,
+				BaseURL:     cfg.Zoho.BaseURL,
+				DataCenter:  cfg.Zoho.DataCenter,
+				OrgID:       cfg.Zoho.OrgID,
+			})
+			if cerr != nil {
+				logger.Warn("sn360-es: zoho mailbox provider init failed (client)",
+					slog.Any("error", cerr))
+			} else {
+				tenant := cfg.Zoho.Domain
+				if tenant == "" {
+					tenant = cfg.Zoho.OrgID
+				}
+				mbp, merr := zoho.NewMailboxProvider(zoho.MailboxProviderConfig{
+					Client:   client,
+					TenantID: tenant,
+				})
+				if merr != nil {
+					logger.Warn("sn360-es: zoho mailbox provider init failed",
+						slog.Any("error", merr))
+				} else {
+					out = append(out, mbp)
+					logger.Info("sn360-es: zoho mailbox provider wired",
+						slog.String("data_center", cfg.Zoho.DataCenter),
+						slog.String("org_id", cfg.Zoho.OrgID))
+				}
+			}
+		}
+	}
+	if cfg.Fastmail.HasFastmail() {
+		tokens := fastmail.StaticTokenSource{APIToken: cfg.Fastmail.APIToken}
+		client, cerr := fastmail.NewClient(fastmail.ClientConfig{
+			TokenSource: tokens,
+			BaseURL:     cfg.Fastmail.BaseURL,
+			AccountID:   cfg.Fastmail.AccountID,
+		})
+		if cerr != nil {
+			logger.Warn("sn360-es: fastmail mailbox provider init failed (client)",
+				slog.Any("error", cerr))
+		} else {
+			mbp, merr := fastmail.NewMailboxProvider(fastmail.MailboxProviderConfig{Client: client})
+			if merr != nil {
+				logger.Warn("sn360-es: fastmail mailbox provider init failed",
+					slog.Any("error", merr))
+			} else {
+				out = append(out, mbp)
+				logger.Info("sn360-es: fastmail mailbox provider wired",
+					slog.String("account_id", cfg.Fastmail.AccountID))
+			}
+		}
+	}
+	if cfg.WorkMail.HasWorkMail() {
+		creds := workmail.ChainedCredentials{
+			Providers: []workmail.CredentialsProvider{
+				workmail.StaticCredentials{Credentials: workmail.Credentials{
+					AccessKeyID:     cfg.WorkMail.AccessKeyID,
+					SecretAccessKey: cfg.WorkMail.SecretAccessKey,
+				}},
+				workmail.EnvCredentials{},
+			},
+		}
+		signer, serr := workmail.NewSigner(workmail.SignerConfig{
+			Region:      cfg.WorkMail.Region,
+			Service:     "workmail",
+			Credentials: creds,
+		})
+		if serr != nil {
+			logger.Warn("sn360-es: workmail mailbox provider init failed (signer)",
+				slog.Any("error", serr))
+		} else {
+			client, cerr := workmail.NewClient(workmail.ClientConfig{
+				Signer: signer,
+				Region: cfg.WorkMail.Region,
+				OrgID:  cfg.WorkMail.OrganizationID,
+			})
+			ews, eerr := workmail.NewEWSClient(workmail.EWSClientConfig{
+				Signer:   signer,
+				Endpoint: cfg.WorkMail.EWSBaseURL,
+				Region:   cfg.WorkMail.Region,
+			})
+			switch {
+			case cerr != nil:
+				logger.Warn("sn360-es: workmail mailbox provider init failed (client)",
+					slog.Any("error", cerr))
+			case eerr != nil:
+				logger.Warn("sn360-es: workmail mailbox provider init failed (ews)",
+					slog.Any("error", eerr))
+			default:
+				mbp, merr := workmail.NewMailboxProvider(workmail.MailboxProviderConfig{
+					Client:   client,
+					EWS:      ews,
+					TenantID: cfg.WorkMail.OrganizationID,
+				})
+				if merr != nil {
+					logger.Warn("sn360-es: workmail mailbox provider init failed",
+						slog.Any("error", merr))
+				} else {
+					out = append(out, mbp)
+					logger.Info("sn360-es: workmail mailbox provider wired",
+						slog.String("region", cfg.WorkMail.Region),
+						slog.String("org_id", cfg.WorkMail.OrganizationID))
+				}
 			}
 		}
 	}

@@ -10,8 +10,11 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/config"
 	"github.com/kennguy3n/sn360-es/internal/service/action"
 	"github.com/kennguy3n/sn360-es/internal/service/onboarding"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/fastmail"
 	"github.com/kennguy3n/sn360-es/pkg/email_provider/gmail"
 	"github.com/kennguy3n/sn360-es/pkg/email_provider/outlook"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/workmail"
+	"github.com/kennguy3n/sn360-es/pkg/email_provider/zoho"
 )
 
 // providerKey uniquely identifies a per-tenant provider client. The
@@ -32,9 +35,11 @@ type providerEntry struct {
 	kind               action.LabelProviderKind
 	labelProvider      action.LabelProvider
 	quarantineProvider action.QuarantineProvider
-	gmailBanner        *gmail.BannerInjector   // nil for Outlook
-	outlookBanner      *outlook.BannerInjector // nil for Gmail
-	bodyRewriter       action.BodyRewriter     // nil when no rewriter configured
+	// bannerInjector is the per-provider BannerInjector implementation.
+	// Stored as the generic action.BannerInjector interface so the
+	// registry doesn't need a typed field per provider.
+	bannerInjector action.BannerInjector
+	bodyRewriter   action.BodyRewriter // nil when no rewriter configured
 }
 
 // providerRegistry holds the per-tenant provider clients used by the
@@ -111,17 +116,8 @@ func (r *providerRegistry) quarantineProviders() []action.QuarantineProvider {
 func (r *providerRegistry) bannerInjectorFor(tenant string, kind action.LabelProviderKind) action.BannerInjector {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	if e, ok := r.entries[providerKey{tenant: tenant, kind: kind}]; ok {
-		switch kind {
-		case action.LabelProviderGmail:
-			if e.gmailBanner != nil {
-				return e.gmailBanner
-			}
-		case action.LabelProviderOutlook:
-			if e.outlookBanner != nil {
-				return e.outlookBanner
-			}
-		}
+	if e, ok := r.entries[providerKey{tenant: tenant, kind: kind}]; ok && e.bannerInjector != nil {
+		return e.bannerInjector
 	}
 	return r.fallbackInjector
 }
@@ -143,11 +139,16 @@ func (r *providerRegistry) bodyRewriterFor(tenant string, kind action.LabelProvi
 func (r *providerRegistry) resolveKind(tenant string) action.LabelProviderKind {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	if _, ok := r.entries[providerKey{tenant: tenant, kind: action.LabelProviderGmail}]; ok {
-		return action.LabelProviderGmail
-	}
-	if _, ok := r.entries[providerKey{tenant: tenant, kind: action.LabelProviderOutlook}]; ok {
-		return action.LabelProviderOutlook
+	for _, k := range []action.LabelProviderKind{
+		action.LabelProviderGmail,
+		action.LabelProviderOutlook,
+		action.LabelProviderZoho,
+		action.LabelProviderFastmail,
+		action.LabelProviderWorkmail,
+	} {
+		if _, ok := r.entries[providerKey{tenant: tenant, kind: k}]; ok {
+			return k
+		}
 	}
 	return ""
 }
@@ -168,11 +169,16 @@ func (r *providerRegistry) hasAny() bool {
 func (r *providerRegistry) lookup(tenant string) *providerEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	if e, ok := r.entries[providerKey{tenant: tenant, kind: action.LabelProviderGmail}]; ok {
-		return e
-	}
-	if e, ok := r.entries[providerKey{tenant: tenant, kind: action.LabelProviderOutlook}]; ok {
-		return e
+	for _, k := range []action.LabelProviderKind{
+		action.LabelProviderGmail,
+		action.LabelProviderOutlook,
+		action.LabelProviderZoho,
+		action.LabelProviderFastmail,
+		action.LabelProviderWorkmail,
+	} {
+		if e, ok := r.entries[providerKey{tenant: tenant, kind: k}]; ok {
+			return e
+		}
 	}
 	return nil
 }
@@ -234,6 +240,45 @@ func buildProviderRegistry(ctx context.Context, cfg *config.Config, logger *slog
 		}
 	}
 
+	if cfg.Zoho.HasZoho() {
+		tenant := zohoProviderTenant(cfg)
+		entry, err := buildZohoEntry(ctx, cfg, logger)
+		if err != nil {
+			logger.Warn("sn360-es: zoho provider init failed", slog.Any("error", err))
+		} else {
+			reg.register(tenant, entry)
+			logger.Info("sn360-es: zoho provider registered",
+				slog.String("tenant", tenant),
+				slog.String("data_center", cfg.Zoho.DataCenter))
+		}
+	}
+
+	if cfg.Fastmail.HasFastmail() {
+		tenant := fastmailProviderTenant(cfg)
+		entry, err := buildFastmailEntry(ctx, cfg, logger)
+		if err != nil {
+			logger.Warn("sn360-es: fastmail provider init failed", slog.Any("error", err))
+		} else {
+			reg.register(tenant, entry)
+			logger.Info("sn360-es: fastmail provider registered",
+				slog.String("tenant", tenant),
+				slog.String("account_id", cfg.Fastmail.AccountID))
+		}
+	}
+
+	if cfg.WorkMail.HasWorkMail() {
+		tenant := workmailProviderTenant(cfg)
+		entry, err := buildWorkmailEntry(ctx, cfg, logger)
+		if err != nil {
+			logger.Warn("sn360-es: workmail provider init failed", slog.Any("error", err))
+		} else {
+			reg.register(tenant, entry)
+			logger.Info("sn360-es: workmail provider registered",
+				slog.String("tenant", tenant),
+				slog.String("region", cfg.WorkMail.Region))
+		}
+	}
+
 	if !reg.hasAny() {
 		logger.Info("sn360-es: no email providers configured; action consumers will run in degraded mode")
 	}
@@ -262,6 +307,31 @@ func gmailProviderTenant(cfg *config.Config) string {
 // the caller-side HasOutlook() gate guarantees a non-empty value.
 func outlookProviderTenant(cfg *config.Config) string {
 	return cfg.O365.TenantID
+}
+
+// zohoProviderTenant returns the registry key for the Zoho entry.
+// HasZoho requires OrgID to be non-empty; we prefer the operator-set
+// Domain when present so the registry key matches the tenant id the
+// Zoho MailboxProvider emits, falling back to OrgID otherwise.
+func zohoProviderTenant(cfg *config.Config) string {
+	if cfg.Zoho.Domain != "" {
+		return cfg.Zoho.Domain
+	}
+	return cfg.Zoho.OrgID
+}
+
+// fastmailProviderTenant returns the registry key for the Fastmail
+// entry. AccountID is required by HasFastmail() so the value is
+// always available.
+func fastmailProviderTenant(cfg *config.Config) string {
+	return cfg.Fastmail.AccountID
+}
+
+// workmailProviderTenant returns the registry key for the WorkMail
+// entry. OrganizationID is required by HasWorkMail() so the value is
+// always available.
+func workmailProviderTenant(cfg *config.Config) string {
+	return cfg.WorkMail.OrganizationID
 }
 
 // buildGmailEntry constructs the Gmail label provider + banner
@@ -306,7 +376,7 @@ func buildGmailEntry(_ context.Context, cfg *config.Config, logger *slog.Logger)
 		kind:               action.LabelProviderGmail,
 		labelProvider:      label,
 		quarantineProvider: quarantine,
-		gmailBanner:        banner,
+		bannerInjector:     banner,
 		bodyRewriter:       gmail.NewBodyRewriter(banner),
 	}, nil
 }
@@ -350,7 +420,7 @@ func buildOutlookEntry(_ context.Context, cfg *config.Config, logger *slog.Logge
 		kind:               action.LabelProviderOutlook,
 		labelProvider:      label,
 		quarantineProvider: quarantine,
-		outlookBanner:      banner,
+		bannerInjector:     banner,
 		bodyRewriter:       outlook.NewBodyRewriter(banner),
 	}, nil
 }
@@ -393,6 +463,30 @@ func (a *providerRegistrarAdapter) RegisterFromToken(ctx context.Context, tenant
 		}
 		a.registry.register(tenantID, entry)
 		a.logger.Info("provider-registrar: outlook provider registered from token",
+			slog.String("tenant_id", tenantID))
+		return nil
+	case onboarding.ProviderZoho:
+		entry, err := buildZohoEntryFromToken(ctx, a.cfg, tenantID, a.svc, a.logger)
+		if err != nil {
+			return fmt.Errorf("provider-registrar: build zoho entry: %w", err)
+		}
+		a.registry.register(tenantID, entry)
+		a.logger.Info("provider-registrar: zoho provider registered from token",
+			slog.String("tenant_id", tenantID))
+		return nil
+	case onboarding.ProviderFastmail:
+		// Fastmail uses static API tokens, not OAuth. The static
+		// boot-time registration in buildProviderRegistry covers the
+		// configured Fastmail account; per-tenant onboarding tokens
+		// have no semantics for Fastmail.
+		a.logger.Info("provider-registrar: fastmail uses static API token; runtime path is boot-time registration",
+			slog.String("tenant_id", tenantID))
+		return nil
+	case onboarding.ProviderWorkmail:
+		// WorkMail uses AWS IAM credentials, not OAuth. Same
+		// behaviour as Fastmail: boot-time registration is the
+		// only runtime path.
+		a.logger.Info("provider-registrar: workmail uses AWS IAM credentials; runtime path is boot-time registration",
 			slog.String("tenant_id", tenantID))
 		return nil
 	default:
@@ -440,7 +534,224 @@ func buildOutlookEntryFromToken(_ context.Context, cfg *config.Config, tenantID 
 		kind:               action.LabelProviderOutlook,
 		labelProvider:      label,
 		quarantineProvider: quarantine,
-		outlookBanner:      banner,
+		bannerInjector:     banner,
 		bodyRewriter:       outlook.NewBodyRewriter(banner),
+	}, nil
+}
+
+// buildZohoEntry constructs the Zoho label provider + banner injector
+// + quarantine provider using the configured OAuth refresh-token. All
+// providers share a single token source so refresh roundtrips are
+// amortised across them.
+func buildZohoEntry(_ context.Context, cfg *config.Config, logger *slog.Logger) (*providerEntry, error) {
+	tokens, err := zoho.NewRefreshTokenSource(zoho.RefreshTokenConfig{
+		ClientID:     cfg.Zoho.ClientID,
+		ClientSecret: cfg.Zoho.ClientSecret,
+		RefreshToken: cfg.Zoho.RefreshToken,
+		AccountsURL:  cfg.Zoho.AccountsURL,
+		DataCenter:   cfg.Zoho.DataCenter,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("token source: %w", err)
+	}
+	client, err := zoho.NewClient(zoho.ClientConfig{
+		TokenSource: tokens,
+		BaseURL:     cfg.Zoho.BaseURL,
+		DataCenter:  cfg.Zoho.DataCenter,
+		OrgID:       cfg.Zoho.OrgID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("zoho client: %w", err)
+	}
+	label, err := zoho.New(zoho.Config{Client: client})
+	if err != nil {
+		return nil, fmt.Errorf("label provider: %w", err)
+	}
+	banner, err := zoho.NewBannerInjector(zoho.BannerInjectorConfig{Client: client})
+	if err != nil {
+		return nil, fmt.Errorf("banner injector: %w", err)
+	}
+	body, err := zoho.NewBodyRewriter(banner)
+	if err != nil {
+		return nil, fmt.Errorf("body rewriter: %w", err)
+	}
+	quarantine, err := zoho.NewQuarantineProvider(zoho.QuarantineProviderConfig{Client: client})
+	if err != nil {
+		return nil, fmt.Errorf("quarantine provider: %w", err)
+	}
+	if logger != nil {
+		logger.Debug("sn360-es: zoho provider wired",
+			slog.String("data_center", cfg.Zoho.DataCenter),
+			slog.String("org_id", cfg.Zoho.OrgID))
+	}
+	return &providerEntry{
+		kind:               action.LabelProviderZoho,
+		labelProvider:      label,
+		quarantineProvider: quarantine,
+		bannerInjector:     banner,
+		bodyRewriter:       body,
+	}, nil
+}
+
+// buildZohoEntryFromToken constructs a Zoho providerEntry whose
+// token source loads the refresh token via the onboarding service's
+// TokenFor method on every call, so per-tenant tokens stored in the
+// encrypted token store remain the source of truth.
+func buildZohoEntryFromToken(_ context.Context, cfg *config.Config, tenantID string, svc *onboarding.Service, logger *slog.Logger) (*providerEntry, error) {
+	tokens := zoho.TokenSourceFunc(func(ctx context.Context) (string, error) {
+		tok, err := svc.TokenFor(ctx, tenantID, onboarding.ProviderZoho)
+		if err != nil {
+			return "", fmt.Errorf("zoho token refresh: %w", err)
+		}
+		return tok.AccessToken, nil
+	})
+	client, err := zoho.NewClient(zoho.ClientConfig{
+		TokenSource: tokens,
+		BaseURL:     cfg.Zoho.BaseURL,
+		DataCenter:  cfg.Zoho.DataCenter,
+		OrgID:       cfg.Zoho.OrgID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("zoho client: %w", err)
+	}
+	label, err := zoho.New(zoho.Config{Client: client})
+	if err != nil {
+		return nil, fmt.Errorf("label provider: %w", err)
+	}
+	banner, err := zoho.NewBannerInjector(zoho.BannerInjectorConfig{Client: client})
+	if err != nil {
+		return nil, fmt.Errorf("banner injector: %w", err)
+	}
+	body, err := zoho.NewBodyRewriter(banner)
+	if err != nil {
+		return nil, fmt.Errorf("body rewriter: %w", err)
+	}
+	quarantine, err := zoho.NewQuarantineProvider(zoho.QuarantineProviderConfig{Client: client})
+	if err != nil {
+		return nil, fmt.Errorf("quarantine provider: %w", err)
+	}
+	if logger != nil {
+		logger.Debug("sn360-es: zoho provider wired from token",
+			slog.String("tenant_id", tenantID))
+	}
+	return &providerEntry{
+		kind:               action.LabelProviderZoho,
+		labelProvider:      label,
+		quarantineProvider: quarantine,
+		bannerInjector:     banner,
+		bodyRewriter:       body,
+	}, nil
+}
+
+// buildFastmailEntry constructs the Fastmail provider stack. Fastmail
+// uses a static API token (app-specific password with JMAP scope) so
+// the token source is a simple StaticTokenSource. The same Client is
+// shared by every provider in the entry — JMAP method calls are
+// idempotent so the shared session cache adds no contention.
+func buildFastmailEntry(_ context.Context, cfg *config.Config, logger *slog.Logger) (*providerEntry, error) {
+	tokens := fastmail.StaticTokenSource{APIToken: cfg.Fastmail.APIToken}
+	client, err := fastmail.NewClient(fastmail.ClientConfig{
+		TokenSource: tokens,
+		BaseURL:     cfg.Fastmail.BaseURL,
+		AccountID:   cfg.Fastmail.AccountID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fastmail client: %w", err)
+	}
+	label, err := fastmail.NewLabelProvider(fastmail.LabelProviderConfig{Client: client})
+	if err != nil {
+		return nil, fmt.Errorf("label provider: %w", err)
+	}
+	banner, err := fastmail.NewBannerInjector(fastmail.BannerInjectorConfig{Client: client})
+	if err != nil {
+		return nil, fmt.Errorf("banner injector: %w", err)
+	}
+	body, err := fastmail.NewBodyRewriter(banner)
+	if err != nil {
+		return nil, fmt.Errorf("body rewriter: %w", err)
+	}
+	quarantine, err := fastmail.NewQuarantineProvider(fastmail.QuarantineProviderConfig{Client: client})
+	if err != nil {
+		return nil, fmt.Errorf("quarantine provider: %w", err)
+	}
+	if logger != nil {
+		logger.Debug("sn360-es: fastmail provider wired",
+			slog.String("account_id", cfg.Fastmail.AccountID))
+	}
+	return &providerEntry{
+		kind:               action.LabelProviderFastmail,
+		labelProvider:      label,
+		quarantineProvider: quarantine,
+		bannerInjector:     banner,
+		bodyRewriter:       body,
+	}, nil
+}
+
+// buildWorkmailEntry constructs the WorkMail provider stack. WorkMail
+// uses AWS IAM credentials (static via config, or the standard env
+// chain) signed with SigV4. The same Signer backs both the JSON API
+// client and the EWS client because WorkMail's IAM scope covers both.
+func buildWorkmailEntry(_ context.Context, cfg *config.Config, logger *slog.Logger) (*providerEntry, error) {
+	creds := workmail.ChainedCredentials{
+		Providers: []workmail.CredentialsProvider{
+			workmail.StaticCredentials{Credentials: workmail.Credentials{
+				AccessKeyID:     cfg.WorkMail.AccessKeyID,
+				SecretAccessKey: cfg.WorkMail.SecretAccessKey,
+			}},
+			workmail.EnvCredentials{},
+		},
+	}
+	signer, err := workmail.NewSigner(workmail.SignerConfig{
+		Region:      cfg.WorkMail.Region,
+		Service:     "workmail",
+		Credentials: creds,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("signer: %w", err)
+	}
+	client, err := workmail.NewClient(workmail.ClientConfig{
+		Signer: signer,
+		Region: cfg.WorkMail.Region,
+		OrgID:  cfg.WorkMail.OrganizationID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("workmail client: %w", err)
+	}
+	ews, err := workmail.NewEWSClient(workmail.EWSClientConfig{
+		Signer:   signer,
+		Endpoint: cfg.WorkMail.EWSBaseURL,
+		Region:   cfg.WorkMail.Region,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ews client: %w", err)
+	}
+	label, err := workmail.NewLabelProvider(workmail.LabelProviderConfig{EWS: ews})
+	if err != nil {
+		return nil, fmt.Errorf("label provider: %w", err)
+	}
+	banner, err := workmail.NewBannerInjector(workmail.BannerInjectorConfig{EWS: ews})
+	if err != nil {
+		return nil, fmt.Errorf("banner injector: %w", err)
+	}
+	body, err := workmail.NewBodyRewriter(ews)
+	if err != nil {
+		return nil, fmt.Errorf("body rewriter: %w", err)
+	}
+	quarantine, err := workmail.NewQuarantineProvider(workmail.QuarantineProviderConfig{EWS: ews})
+	if err != nil {
+		return nil, fmt.Errorf("quarantine provider: %w", err)
+	}
+	_ = client // future use: SDK calls outside the directory client
+	if logger != nil {
+		logger.Debug("sn360-es: workmail provider wired",
+			slog.String("region", cfg.WorkMail.Region),
+			slog.String("org_id", cfg.WorkMail.OrganizationID))
+	}
+	return &providerEntry{
+		kind:               action.LabelProviderWorkmail,
+		labelProvider:      label,
+		quarantineProvider: quarantine,
+		bannerInjector:     banner,
+		bodyRewriter:       body,
 	}, nil
 }
