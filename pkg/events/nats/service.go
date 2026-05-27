@@ -189,7 +189,12 @@ func (s *Service) Client() *Client { return s.client }
 func (s *Service) Publisher() *Publisher { return s.publisher }
 
 // streamForSubject finds the stream that owns subject. It tolerates wildcard
-// subjects in the spec (e.g. "es.evaluate.>" matches "es.evaluate.request").
+// subjects in the spec (e.g. "es.evaluate.request.>" matches
+// "es.evaluate.request.failing"). After the ES_EVALUATE / ES_EVALUATE_RESULT
+// split, the two relevant patterns are "es.evaluate.request[.>]" and
+// "es.evaluate.result[.>]"; an unrecognised "es.evaluate.<other>" subject
+// falls through to StreamForSubject and returns "" rather than
+// guessing a stream.
 func (s *Service) streamForSubject(subject string) string {
 	if name, ok := s.streamFor[subject]; ok {
 		return name

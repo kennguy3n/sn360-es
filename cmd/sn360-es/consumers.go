@@ -53,6 +53,19 @@ import (
 // a new result consumer, put it ABOVE the evaluate-svc subscription;
 // if you add a new request consumer, put it AT OR AFTER the existing
 // request consumer.
+//
+// Defense in depth: a fail-fast checkpoint between the result-side
+// block and the evaluate-svc block aborts startup with an error
+// before any producer is registered if ANY of the result consumer
+// subscriptions failed. Without that early return, evaluate-svc
+// would bind successfully even when a result consumer had errored
+// out, and every message produced during the window between
+// evaluate-svc binding and an operator restarting the binary would
+// be permanently lost for the missing consumer (the alternative
+// "log error and continue" pattern that was here before — and is
+// still used for purely best-effort consumers below — is unsafe
+// under interest retention). See the checkpoint just before the
+// evaluate-svc subscription for the precise semantics.
 func (a *application) StartConsumers(ctx context.Context) error {
 	if a.eventBus == nil {
 		return nil
@@ -125,6 +138,28 @@ func (a *application) StartConsumers(ctx context.Context) error {
 		} else {
 			a.trackSub(sub)
 		}
+	}
+
+	// Fail-fast checkpoint — see INVARIANT block at the top of
+	// StartConsumers. If ANY of the wired es.evaluate.result
+	// consumers (management-persist, education-trigger,
+	// ingestion-action) or es.action.feedback consumer
+	// (feedback-persist) failed to subscribe, we must NOT register
+	// evaluate-svc below: doing so would start producing onto the
+	// ES_EVALUATE_RESULT interest stream while one of the listed
+	// durables is missing. Under InterestPolicy retention, every
+	// message produced before the missing durable comes back online
+	// is permanently discarded for that consumer; there is no
+	// work-queue backlog to replay from once a result is acked by
+	// the consumers that DID bind. Returning here trades a noisier
+	// startup failure for a silent data-loss window.
+	//
+	// (The Tier-1 batch orchestrator below is also gated by this
+	// checkpoint, because it is the alternative producer onto
+	// es.evaluate.result.)
+	if len(critErrs) > 0 {
+		return fmt.Errorf("sn360-es: critical result-consumer subscription failed before evaluate-svc registration; refusing to start producers: %w",
+			errors.Join(critErrs...))
 	}
 
 	// es.evaluate.request → the multi-tier detection pipeline.

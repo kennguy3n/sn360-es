@@ -134,9 +134,9 @@ func DefaultStreamSpecs(cfg Config) []StreamSpec {
 			Name: StreamDLQ,
 			// Dead-letter subjects live under a separate top-level
 			// namespace so they do NOT overlap with the wildcard
-			// subjects of the primary streams (es.evaluate.>,
-			// es.action.>, etc.). NATS rejects subject overlap
-			// between streams.
+			// subjects of the primary streams (es.evaluate.request[.>],
+			// es.evaluate.result[.>], es.action.>, etc.). NATS
+			// rejects subject overlap between streams.
 			Subjects:    []string{"es.dlq.>"},
 			Retention:   jetstream.LimitsPolicy,
 			Storage:     storage,
