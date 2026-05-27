@@ -38,6 +38,21 @@ import (
 // repository layer is wired, and the education-trigger consumer is
 // critical when the micro-lesson service is wired. The DLQ processor
 // is always best-effort.
+//
+// INVARIANT (do not violate when adding new consumers): the three
+// es.evaluate.result consumers (management-persist, education-trigger,
+// ingestion-action) MUST be created here — before this method returns
+// — so that the StreamEvaluateResult interest stream has every
+// downstream consumer-group registered before the evaluate-svc
+// consumer below starts producing onto es.evaluate.result. Interest
+// retention discards messages for which no consumer is currently
+// interested, so a publisher that wins the race against any of the
+// three result consumers would lose that message permanently. The
+// existing top-to-bottom ordering in this function (result consumers
+// first, request consumer second) preserves the invariant. If you add
+// a new result consumer, put it ABOVE the evaluate-svc subscription;
+// if you add a new request consumer, put it AT OR AFTER the existing
+// request consumer.
 func (a *application) StartConsumers(ctx context.Context) error {
 	if a.eventBus == nil {
 		return nil

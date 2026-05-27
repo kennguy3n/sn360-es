@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -199,20 +200,94 @@ func EnsureAllStreams(ctx context.Context, js jetstream.JetStream, specs []Strea
 	return nil
 }
 
+// pruneOrphanResultConsumers removes durables on the legacy ES_EVALUATE
+// stream that were originally created to consume es.evaluate.result*.
+// Before the request / result split those durables were perfectly valid
+// — the stream covered es.evaluate.> — but after the split they sit
+// idle on the request work-queue stream while the new equivalents take
+// delivery from ES_EVALUATE_RESULT. Leaving the old definitions in
+// place is harmless functionally (the work-queue stream no longer
+// matches the result subjects) but confusing for operators inspecting
+// `nats consumer ls`.
+//
+// The function is best-effort: a missing stream, a consumer with a
+// non-result filter subject, or a server that doesn't list consumers
+// is left alone. Only durables whose filter is exactly the result
+// subject get deleted.
+func pruneOrphanResultConsumers(ctx context.Context, js jetstream.JetStream, logger *slog.Logger) error {
+	stream, err := js.Stream(ctx, StreamEvaluate)
+	if err != nil {
+		if errors.Is(err, jetstream.ErrStreamNotFound) {
+			return nil
+		}
+		return fmt.Errorf("lookup %s: %w", StreamEvaluate, err)
+	}
+	lister := stream.ListConsumers(ctx)
+	var orphans []string
+	for info := range lister.Info() {
+		if info == nil {
+			continue
+		}
+		if isResultFilter(info.Config.FilterSubject) {
+			orphans = append(orphans, info.Name)
+			continue
+		}
+		for _, f := range info.Config.FilterSubjects {
+			if isResultFilter(f) {
+				orphans = append(orphans, info.Name)
+				break
+			}
+		}
+	}
+	if err := lister.Err(); err != nil {
+		return fmt.Errorf("list consumers on %s: %w", StreamEvaluate, err)
+	}
+	for _, name := range orphans {
+		if err := stream.DeleteConsumer(ctx, name); err != nil {
+			if errors.Is(err, jetstream.ErrConsumerNotFound) {
+				continue
+			}
+			logger.WarnContext(ctx, "nats: delete orphan consumer",
+				slog.String("stream", StreamEvaluate),
+				slog.String("consumer", name),
+				slog.Any("error", err))
+			continue
+		}
+		logger.InfoContext(ctx, "nats: removed orphan result consumer",
+			slog.String("stream", StreamEvaluate),
+			slog.String("consumer", name))
+	}
+	return nil
+}
+
+func isResultFilter(subj string) bool {
+	return subj == "es.evaluate.result" || strings.HasPrefix(subj, "es.evaluate.result.")
+}
+
 // StreamForSubject returns the stream name that should hold a published
 // subject, or "" if none of the known streams cover it. This is used to
 // route DLQ publishes back to the correct stream.
 //
-// es.evaluate.result[.>] is routed to StreamEvaluateResult so the
-// fan-out interest stream takes ownership; all other es.evaluate.*
-// subjects fall through to the request work-queue stream.
+// Mapping (must stay in sync with DefaultStreamSpecs):
+//   - es.dlq.>                       → StreamDLQ
+//   - es.evaluate.result | result.>  → StreamEvaluateResult (interest fan-out)
+//   - es.evaluate.request | req.>    → StreamEvaluate (work-queue)
+//   - es.onboarding.>                → StreamOnboarding
+//   - es.education.>                 → StreamEducation
+//   - es.action.>                    → StreamAction
+//
+// Any other es.evaluate.* subject (e.g. a hypothetical
+// es.evaluate.status) is treated as unrouted and returns "" rather
+// than being silently steered to ES_EVALUATE — that would be a stale
+// hint now that the stream covers only request[.>], and DLQ re-publish
+// would land on a stream that doesn't accept the subject.
 func StreamForSubject(subject string) string {
 	switch {
 	case strings.HasPrefix(subject, "es.dlq."):
 		return StreamDLQ
 	case subject == "es.evaluate.result" || strings.HasPrefix(subject, "es.evaluate.result."):
 		return StreamEvaluateResult
-	case strings.HasPrefix(subject, "es.evaluate."):
+	case subject == "es.evaluate.request" || strings.HasPrefix(subject, "es.evaluate.request."):
 		return StreamEvaluate
 	case strings.HasPrefix(subject, "es.onboarding."):
 		return StreamOnboarding

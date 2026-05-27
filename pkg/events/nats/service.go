@@ -56,6 +56,18 @@ func NewService(ctx context.Context, cfg Config, source string, logger *slog.Log
 		_ = client.Close()
 		return nil, fmt.Errorf("nats: ensure streams: %w", err)
 	}
+	// Drop orphaned durables left behind by deployments where
+	// ES_EVALUATE owned es.evaluate.> and the result consumers were
+	// pinned to it. After the request / result split those durables
+	// (management-persist, education-trigger, ingestion-action) are
+	// re-created on StreamEvaluateResult, but the old definitions
+	// would otherwise linger forever on ES_EVALUATE confusing
+	// operators inspecting consumer state.
+	if err := pruneOrphanResultConsumers(ctx, client.JetStream(), logger); err != nil {
+		// Non-fatal: orphaned consumers don't block the new
+		// consumers, but log loudly so it gets cleaned up.
+		logger.WarnContext(ctx, "nats: prune orphan result consumers", slog.Any("error", err))
+	}
 
 	streamFor := map[string]string{}
 	for _, spec := range specs {
