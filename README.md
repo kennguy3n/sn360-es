@@ -3,10 +3,11 @@
 Cloud-native, privacy-first, AI-powered email security platform for SMEs.
 Zero-admin. Zero-trust. Delivered as SaaS.
 
-Protects Google Workspace and Microsoft 365 mailboxes using a 3-tier ML
-detection pipeline with post-delivery remediation, behavioral anomaly
-detection, in-client end-user warnings, and built-in email security
-education — all operated by AI agents.
+Protects Google Workspace, Microsoft 365, Zoho Mail, Fastmail, and
+Amazon WorkMail mailboxes using a 3-tier ML detection pipeline with
+post-delivery remediation, behavioral anomaly detection, in-client
+end-user warnings, and built-in email security education — all
+operated by AI agents.
 
 ## Why SN360-ES
 
@@ -17,7 +18,7 @@ education — all operated by AI agents.
 | Multilingual workforce | XLM-RoBERTa encoder handles 100+ languages natively |
 | Privacy regulations | Zero-knowledge architecture — no PII stored, all data encrypted |
 | Complex onboarding | One-click OAuth consent, auto-discovery of users and groups |
-| Vendor lock-in | Works across Google Workspace and Microsoft 365 simultaneously |
+| Vendor lock-in | Works across Google Workspace, Microsoft 365, Zoho Mail, Fastmail, and Amazon WorkMail simultaneously |
 | Confusing alerts | Tiered, color-coded banners + native labels (not just "FYI") |
 
 ## Architecture at a Glance
@@ -33,6 +34,9 @@ graph LR
     subgraph "Email Providers"
         GWS["Google Workspace"]
         O365["Microsoft 365"]
+        Zoho["Zoho Mail"]
+        FM["Fastmail"]
+        WM["Amazon WorkMail"]
     end
 
     subgraph "sn360-es binary (one process)"
@@ -61,6 +65,9 @@ graph LR
 
     GWS --> Ingestion
     O365 --> Ingestion
+    Zoho --> Ingestion
+    FM --> Ingestion
+    WM --> Ingestion
     Ingestion -->|"evaluate.request"| NATS
     NATS --> Evaluate
     Evaluate --> T0
@@ -84,7 +91,7 @@ they subscribe to and which HTTP routes they own.
 
 | Domain | Purpose |
 |---|---|
-| **Ingestion** | Polls GWS/O365 mailboxes, normalizes emails, publishes events, applies post-evaluation actions (tiered banners, native labels, quarantine) |
+| **Ingestion** | Polls Google Workspace / Microsoft 365 / Zoho Mail / Fastmail / Amazon WorkMail mailboxes, normalizes emails, publishes events, applies post-evaluation actions (tiered banners, native labels, quarantine) |
 | **Evaluation** | 3-tier ML detection: classification gate → encoder model → Ternary-Bonsai-8B. Parallel Rspamd heuristics. Weighted risk scoring |
 | **Management** | Multi-tenant admin: tenants, users, groups, labels, score engine, vendors, relationships, education campaigns |
 | **Education** | Manages phishing simulations, micro-lessons, in-context teachable moments, and employee resilience scoring |
@@ -288,6 +295,16 @@ contract.
 | [`benchmarks/README.md`](./benchmarks/README.md) | Benchmark suite, baselines, and how to compare runs |
 | [`deployments/helm/sn360-es/README.md`](./deployments/helm/sn360-es/README.md) | Helm chart values, subcharts, and upgrade notes |
 | [`migrations/README.md`](./migrations/README.md) | golang-migrate SQL schema evolution |
+
+## Related Repositories
+
+| Repo | Purpose |
+|---|---|
+| [`sn360-security-platform`](https://github.com/kennguy3n/sn360-security-platform) | Multi-tenant control plane |
+| [`sn360-desktop-agent`](https://github.com/kennguy3n/sn360-desktop-agent) | Endpoint agent (Windows / Linux / macOS) |
+| [`sn360-agent-vm`](https://github.com/kennguy3n/sn360-agent-vm) | Server / VM agent |
+| [`sn360-agent-k8s`](https://github.com/kennguy3n/sn360-agent-k8s) | Kubernetes agent |
+| [`cautious-fishstick`](https://github.com/kennguy3n/cautious-fishstick) | Zero-trust access control plane |
 
 ## Repository Structure
 
