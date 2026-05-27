@@ -104,24 +104,16 @@ func (a *application) StartConsumers(ctx context.Context) error {
 		}
 	}
 
-	// es.evaluate.request → the multi-tier detection pipeline.
-	// Mutually exclusive with the Tier 1 batch orchestrator.
-	if a.evaluator != nil && a.batchOrch == nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.request", a.handleEvaluateRequest,
-			events.WithDurable("evaluate-svc"),
-			events.WithMaxDeliver(5))
-		if err != nil {
-			a.logger.Error("sn360-es: subscribe evaluate.request (evaluate-svc) failed",
-				slog.Any("error", err))
-			critErrs = append(critErrs, fmt.Errorf("evaluate-svc: %w", err))
-		} else {
-			a.trackSub(sub)
-		}
-	}
-
 	// es.evaluate.result → ingestion-action chain: render the banner,
 	// apply the native tier label, rewrite URLs for risky tiers, and
 	// quarantine on Blocked.
+	//
+	// MUST be registered before the evaluate-svc consumer below so the
+	// ES_EVALUATE_RESULT interest stream has all three result-side
+	// durables (management-persist, education-trigger,
+	// ingestion-action) bound before evaluate-svc starts producing
+	// onto es.evaluate.result. See the INVARIANT block at the top of
+	// StartConsumers.
 	if a.bannerRenderer != nil || a.urlRewriter != nil || a.quarantineSvc != nil || a.labelApplier != nil {
 		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.result", a.handleIngestionAction,
 			events.WithDurable("ingestion-action"),
@@ -130,6 +122,25 @@ func (a *application) StartConsumers(ctx context.Context) error {
 			a.logger.Error("sn360-es: subscribe evaluate.result (ingestion-action) failed",
 				slog.Any("error", err))
 			critErrs = append(critErrs, fmt.Errorf("ingestion-action: %w", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
+	// es.evaluate.request → the multi-tier detection pipeline.
+	// Mutually exclusive with the Tier 1 batch orchestrator.
+	//
+	// Comes AFTER all three es.evaluate.result consumers above so the
+	// interest stream cannot lose a produced result message to a
+	// not-yet-bound durable.
+	if a.evaluator != nil && a.batchOrch == nil {
+		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.request", a.handleEvaluateRequest,
+			events.WithDurable("evaluate-svc"),
+			events.WithMaxDeliver(5))
+		if err != nil {
+			a.logger.Error("sn360-es: subscribe evaluate.request (evaluate-svc) failed",
+				slog.Any("error", err))
+			critErrs = append(critErrs, fmt.Errorf("evaluate-svc: %w", err))
 		} else {
 			a.trackSub(sub)
 		}
