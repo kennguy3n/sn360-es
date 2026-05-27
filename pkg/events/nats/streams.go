@@ -13,11 +13,25 @@ import (
 // Well-known SN360-ES streams. The names are uppercased per JetStream
 // convention.
 const (
-	StreamEvaluate   = "ES_EVALUATE"
-	StreamOnboarding = "ES_ONBOARDING"
-	StreamEducation  = "ES_EDUCATION"
-	StreamAction     = "ES_ACTION"
-	StreamDLQ        = "ES_DLQ"
+	// StreamEvaluate is the work-queue stream that carries
+	// es.evaluate.request[.>] — one worker handles each request.
+	StreamEvaluate = "ES_EVALUATE"
+	// StreamEvaluateResult is the fan-out stream that carries
+	// es.evaluate.result[.>]. The architecture requires three
+	// independent consumers (management-persist, education-trigger,
+	// ingestion-action) to each see every result message, which is
+	// incompatible with the work-queue retention policy on
+	// StreamEvaluate (NATS rejects filtered consumers with
+	// overlapping subject filters on work-queue streams with
+	// err_code=10100 "filtered consumer not unique on workqueue
+	// stream"). The fan-out path uses an interest stream instead so
+	// every consumer group receives every result and the message is
+	// freed only after all groups have acked.
+	StreamEvaluateResult = "ES_EVALUATE_RESULT"
+	StreamOnboarding     = "ES_ONBOARDING"
+	StreamEducation      = "ES_EDUCATION"
+	StreamAction         = "ES_ACTION"
+	StreamDLQ            = "ES_DLQ"
 )
 
 // StreamSpec describes a JetStream stream that SN360-ES requires.
@@ -49,8 +63,14 @@ func DefaultStreamSpecs(cfg Config) []StreamSpec {
 	}
 	return []StreamSpec{
 		{
-			Name:        StreamEvaluate,
-			Subjects:    []string{"es.evaluate.>"},
+			Name: StreamEvaluate,
+			// Narrowed to request-only subjects so the work-queue
+			// retention policy can coexist with the multi-consumer
+			// fan-out on es.evaluate.result (which lives on
+			// StreamEvaluateResult). Subjects must NOT overlap
+			// es.evaluate.result[.>] or NATS will reject
+			// StreamEvaluateResult creation with subject-overlap.
+			Subjects:    []string{"es.evaluate.request", "es.evaluate.request.>"},
 			Retention:   jetstream.WorkQueuePolicy,
 			Storage:     storage,
 			MaxAge:      24 * time.Hour,
@@ -58,7 +78,26 @@ func DefaultStreamSpecs(cfg Config) []StreamSpec {
 			DedupWindow: orDefault(cfg.DedupWindow, 2*time.Minute),
 			Replicas:    replicas,
 			Discard:     jetstream.DiscardOld,
-			Description: "SN360-ES evaluation pipeline events",
+			Description: "SN360-ES evaluation request pipeline (work-queue, one worker per request)",
+		},
+		{
+			Name: StreamEvaluateResult,
+			// Result fan-out. Interest retention means each consumer
+			// group receives the message independently, and the
+			// message is freed once every interested consumer has
+			// acked. This is the canonical NATS pattern for the
+			// "par Fan-out" block in the message-flow diagram
+			// (ingestion-action || management-persist ||
+			// education-trigger).
+			Subjects:    []string{"es.evaluate.result", "es.evaluate.result.>"},
+			Retention:   jetstream.InterestPolicy,
+			Storage:     storage,
+			MaxAge:      24 * time.Hour,
+			MaxMsgSize:  10 * 1024 * 1024,
+			DedupWindow: orDefault(cfg.DedupWindow, 2*time.Minute),
+			Replicas:    replicas,
+			Discard:     jetstream.DiscardOld,
+			Description: "SN360-ES evaluation result fan-out (interest, multi-consumer)",
 		},
 		{
 			Name:        StreamOnboarding,
@@ -163,10 +202,16 @@ func EnsureAllStreams(ctx context.Context, js jetstream.JetStream, specs []Strea
 // StreamForSubject returns the stream name that should hold a published
 // subject, or "" if none of the known streams cover it. This is used to
 // route DLQ publishes back to the correct stream.
+//
+// es.evaluate.result[.>] is routed to StreamEvaluateResult so the
+// fan-out interest stream takes ownership; all other es.evaluate.*
+// subjects fall through to the request work-queue stream.
 func StreamForSubject(subject string) string {
 	switch {
 	case strings.HasPrefix(subject, "es.dlq."):
 		return StreamDLQ
+	case subject == "es.evaluate.result" || strings.HasPrefix(subject, "es.evaluate.result."):
+		return StreamEvaluateResult
 	case strings.HasPrefix(subject, "es.evaluate."):
 		return StreamEvaluate
 	case strings.HasPrefix(subject, "es.onboarding."):

@@ -318,6 +318,10 @@ func (a *application) handleEvaluateResult(ctx context.Context, msg events.Messa
 		return nil
 	}
 	if err := a.repos.EvaluationResults.Create(ctx, row); err != nil {
+		a.logger.ErrorContext(ctx, "sn360-es: persist evaluate.result failed",
+			slog.String("tenant_id", res.TenantID),
+			slog.String("message_id", res.MessageID),
+			slog.Any("error", err))
 		return fmt.Errorf("persist evaluate.result: %w", err)
 	}
 	return nil
