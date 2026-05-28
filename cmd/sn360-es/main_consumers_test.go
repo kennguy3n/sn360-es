@@ -24,10 +24,23 @@ import (
 // values for Subscribe so we can exercise both the critical and
 // best-effort branches of StartConsumers.
 type recordingBus struct {
-	mu           sync.Mutex
-	publishes    []recordedPublish
-	subscribes   []recordedSubscribe
+	mu sync.Mutex
+
+	publishes  []recordedPublish
+	subscribes []recordedSubscribe
+
+	// subscribeErr, if set, is returned for EVERY Subscribe call.
+	// Useful for the catastrophic "bus down" cases where no
+	// consumer can attach.
 	subscribeErr error
+
+	// subscribeErrBySubject lets a test target a single durable
+	// without taking down every other Subscribe call. The map is
+	// keyed by the literal subject string passed to Subscribe
+	// (e.g. "es.evaluate.request"); a nil error pre-attached for a
+	// missing key behaves as success. Checked AFTER subscribeErr
+	// so the global hatch still wins when both are set.
+	subscribeErrBySubject map[string]error
 }
 
 type recordedPublish struct {
@@ -54,6 +67,10 @@ func (b *recordingBus) Subscribe(_ context.Context, subject string, _ events.Mes
 	defer b.mu.Unlock()
 	if b.subscribeErr != nil {
 		err := b.subscribeErr
+		b.subscribes = append(b.subscribes, recordedSubscribe{Subject: subject, Err: err})
+		return nil, err
+	}
+	if err, ok := b.subscribeErrBySubject[subject]; ok && err != nil {
 		b.subscribes = append(b.subscribes, recordedSubscribe{Subject: subject, Err: err})
 		return nil, err
 	}
@@ -706,12 +723,27 @@ func TestStartConsumers_WiresExpectedSubjects(t *testing.T) {
 }
 
 // TestStartConsumers_CriticalEvaluateSubFailureSurfaces verifies the
-// fail-fast contract for the evaluate.request consumer: if the bus
-// refuses the subscription, StartConsumers must return a wrapped error
-// so the binary fails to start instead of silently dropping evaluation
+// fail-fast contract for the evaluate.request consumer specifically:
+// if every es.evaluate.result durable attaches successfully but the
+// evaluate.request subscription fails, StartConsumers must surface a
+// wrapped error that names the evaluate-svc consumer group so the
+// binary fails to start instead of silently dropping evaluation
 // traffic.
+//
+// IMPORTANT: this test must NOT use the catastrophic
+// `subscribeErr` global on recordingBus — that would fail the FIRST
+// result-consumer subscription (management-persist or
+// education-trigger) and trip the upstream result-consumer
+// checkpoint instead, which is a different contract covered by
+// TestStartConsumers_ResultConsumerFailureTripsCheckpoint. We use
+// subscribeErrBySubject to target only the request subject so this
+// test exercises the path it claims to.
 func TestStartConsumers_CriticalEvaluateSubFailureSurfaces(t *testing.T) {
-	bus := &recordingBus{subscribeErr: errors.New("simulated bus down")}
+	bus := &recordingBus{
+		subscribeErrBySubject: map[string]error{
+			"es.evaluate.request": errors.New("simulated evaluate.request subscribe failure"),
+		},
+	}
 	app := newTestApp(t)
 	app.eventBus = bus
 	app.evaluator = buildEvaluator(t, fakeTier1{score: 30})
@@ -721,9 +753,79 @@ func TestStartConsumers_CriticalEvaluateSubFailureSurfaces(t *testing.T) {
 		t.Fatal("expected StartConsumers to fail when evaluator subscription fails")
 	}
 	// The error must mention the consumer group so operators can
-	// diagnose which subscription tripped.
-	if msg := err.Error(); !contains(msg, "evaluate-svc") {
+	// diagnose which subscription tripped. We also explicitly want
+	// the upstream result-consumer checkpoint to NOT have fired —
+	// otherwise the test name is misleading. The checkpoint's error
+	// message is the literal "refusing to start producers"; the
+	// real evaluate-svc subscribe-failure wrapper uses a different
+	// prefix ("subscribe es.evaluate.request (evaluate-svc) failed")
+	// so we assert on both shape and content.
+	msg := err.Error()
+	if !contains(msg, "evaluate-svc") {
 		t.Errorf("error %q does not name the failing consumer group", msg)
+	}
+	if contains(msg, "refusing to start producers") {
+		t.Errorf("error %q tripped the result-consumer checkpoint, not the evaluate-svc subscribe path; recordingBus.subscribeErrBySubject is too broad", msg)
+	}
+}
+
+// TestStartConsumers_ResultConsumerFailureTripsCheckpoint verifies
+// the OTHER contract that the prior test was previously verifying by
+// coincidence: an es.evaluate.result durable failure (here:
+// management-persist) must trip the upstream checkpoint and prevent
+// the evaluator (and Tier-1 batch orchestrator) from registering as
+// a producer. Without this gate the binary would happily start
+// producing onto the ES_EVALUATE_RESULT interest stream while one of
+// its three required durables was absent, silently dropping every
+// result message for the missing consumer until an operator
+// restarted the process.
+func TestStartConsumers_ResultConsumerFailureTripsCheckpoint(t *testing.T) {
+	bus := &recordingBus{
+		subscribeErrBySubject: map[string]error{
+			// Fail management-persist specifically. The two other
+			// es.evaluate.result durables share the same subject
+			// string and would also be re-attempted here, but
+			// recordingBus serialises Subscribe calls so the first
+			// failure wins and the checkpoint trips immediately.
+			"es.evaluate.result": errors.New("simulated result-consumer subscribe failure"),
+		},
+	}
+	app := newTestApp(t)
+	app.eventBus = bus
+	app.evaluator = buildEvaluator(t, fakeTier1{score: 30})
+
+	err := app.StartConsumers(context.Background())
+	if err == nil {
+		t.Fatal("expected StartConsumers to fail when an es.evaluate.result durable subscription fails")
+	}
+	msg := err.Error()
+	if !contains(msg, "refusing to start producers") {
+		t.Errorf("error %q does not look like the result-consumer checkpoint (missing 'refusing to start producers')", msg)
+	}
+	// At least ONE of the three es.evaluate.result durables must
+	// be named in the error so operators can diagnose which
+	// subscription tripped. Which one fires first depends on which
+	// dependencies newTestApp wires (e.g. repos==nil skips
+	// management-persist), so we accept any of the three.
+	namedOne := false
+	for _, n := range []string{"management-persist", "education-trigger", "ingestion-action"} {
+		if contains(msg, n) {
+			namedOne = true
+			break
+		}
+	}
+	if !namedOne {
+		t.Errorf("error %q does not name any of the three result-consumer durables (management-persist, education-trigger, ingestion-action)", msg)
+	}
+	// Belt-and-braces: the evaluate-svc subscribe must NOT have
+	// been attempted past the checkpoint. recordingBus records
+	// every Subscribe call regardless of success; if evaluate-svc
+	// was attempted the test would prove the checkpoint isn't
+	// gating.
+	for _, s := range bus.subscribes {
+		if s.Subject == "es.evaluate.request" {
+			t.Errorf("evaluate.request was attempted after a result-consumer failure; checkpoint did not gate the evaluator producer")
+		}
 	}
 }
 

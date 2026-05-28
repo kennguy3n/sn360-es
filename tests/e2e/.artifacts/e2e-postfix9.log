@@ -1,0 +1,84 @@
+=== RUN   TestE2E_IngestEvaluateActionFlow
+2026/05/27 23:26:33 github.com/testcontainers/testcontainers-go - Connected to docker: 
+  Server Version: 27.4.1
+  API Version: 1.47
+  Operating System: Ubuntu 22.04.5 LTS
+  Total Memory: 32110 MB
+  Testcontainers for Go Version: v0.42.0
+  Resolved Docker Host: unix:///var/run/docker.sock
+  Resolved Docker Socket Path: /var/run/docker.sock
+  Test SessionID: 1bbf7a982b39a1a5729fe5cb3c84d7a401215df275ed6a06675a3f4ad835a23e
+  Test ProcessID: 61cf085e-8682-4de6-89a6-c876c07ba5ef
+2026/05/27 23:26:33 🐳 Creating container for image postgres:16-alpine
+2026/05/27 23:26:33 🐳 Creating container for image testcontainers/ryuk:0.13.0
+2026/05/27 23:26:33 ✅ Container created: d9f615163459
+2026/05/27 23:26:33 🐳 Starting container: d9f615163459
+2026/05/27 23:26:33 ✅ Container started: d9f615163459
+2026/05/27 23:26:33 ⏳ Waiting for container id d9f615163459 image: testcontainers/ryuk:0.13.0. Waiting for: port 8080/tcp to be listening
+2026/05/27 23:26:33 Shell not executable in container, only external port validated
+2026/05/27 23:26:33 🔔 Container is ready: d9f615163459
+2026/05/27 23:26:33 ✅ Container created: a5417d05083e
+2026/05/27 23:26:33 🐳 Starting container: a5417d05083e
+2026/05/27 23:26:34 ✅ Container started: a5417d05083e
+2026/05/27 23:26:34 ⏳ Waiting for container id a5417d05083e image: postgres:16-alpine. Waiting for: all of: [log message "database system is ready to accept connections" (occurrence: 2), port 5432/tcp to be listening]
+2026/05/27 23:26:35 🔔 Container is ready: a5417d05083e
+2026/05/27 23:26:35 🐳 Creating container for image redis:7-alpine
+2026/05/27 23:26:35 ✅ Container created: 4e07f61dcda5
+2026/05/27 23:26:35 🐳 Starting container: 4e07f61dcda5
+2026/05/27 23:26:35 ✅ Container started: 4e07f61dcda5
+2026/05/27 23:26:35 ⏳ Waiting for container id 4e07f61dcda5 image: redis:7-alpine. Waiting for: all of: [port 6379/tcp to be listening, log message "* Ready to accept connections"]
+2026/05/27 23:26:36 🔔 Container is ready: 4e07f61dcda5
+2026/05/27 23:26:36 🐳 Creating container for image nats:2.10-alpine
+2026/05/27 23:26:36 ✅ Container created: 78228a5b1f1f
+2026/05/27 23:26:36 🐳 Starting container: 78228a5b1f1f
+2026/05/27 23:26:36 ✅ Container started: 78228a5b1f1f
+2026/05/27 23:26:36 ⏳ Waiting for container id 78228a5b1f1f image: nats:2.10-alpine. Waiting for: all of: [port 4222/tcp to be listening]
+2026/05/27 23:26:36 🔔 Container is ready: 78228a5b1f1f
+[sn360-es] time=2026-05-27T23:26:36.560Z level=INFO msg="sn360-es: starting" app=sn360-es-e2e env=local event_bus=nats
+[sn360-es] time=2026-05-27T23:26:36.582Z level=INFO msg="sn360-es: url rewriter using mock KMS encryptor (envelope encryption in-process)"
+[sn360-es] time=2026-05-27T23:26:36.593Z level=INFO msg="sn360-es: no email providers configured; action consumers will run in degraded mode"
+[sn360-es] time=2026-05-27T23:26:36.593Z level=INFO msg="sn360-es: url rewriter using mock KMS encryptor (envelope encryption in-process)"
+[sn360-es] time=2026-05-27T23:26:36.594Z level=INFO msg="sn360-es: ingestion polling disabled via config" mode=poll
+[sn360-es] time=2026-05-27T23:26:36.594Z level=INFO msg="sn360-es: push ingestion disabled via config" mode=poll
+[sn360-es] time=2026-05-27T23:26:36.594Z level=INFO msg="sn360-es: relationship worker wired" interval=4h0m0s
+[sn360-es] time=2026-05-27T23:26:36.594Z level=INFO msg="sn360-es: vendor worker wired" interval=168h0m0s
+[sn360-es] time=2026-05-27T23:26:36.594Z level=INFO msg="sn360-es: cleanup worker wired" pruners=3 interval=24h0m0s retention_days=90
+[sn360-es] time=2026-05-27T23:26:36.594Z level=INFO msg="sn360-es: directory sync worker skipped; no directory client"
+[sn360-es] time=2026-05-27T23:26:36.594Z level=INFO msg="sn360-es: support agent wired"
+[sn360-es] time=2026-05-27T23:26:36.594Z level=INFO msg="sn360-es: tuning agent wired"
+[sn360-es] time=2026-05-27T23:26:36.594Z level=INFO msg="sn360-es: onboarding service disabled (ONBOARDING_STATE_SECRET or ONBOARDING_CALLBACK_URL not set)"
+[sn360-es] time=2026-05-27T23:26:36.594Z level=WARN msg="sn360-es: quarantine handler init failed" error="quarantine handler: release service is required"
+[sn360-es] time=2026-05-27T23:26:36.598Z level=INFO msg="sn360-es: subscribed evaluate.result -> ingestion-action"
+[sn360-es] time=2026-05-27T23:26:36.605Z level=INFO msg="sn360-es: http server listening" port=41359
+[sn360-es] time=2026-05-27T23:26:36.608Z level=INFO msg="worker.cleanup: pruned" pruner=evaluation_results removed=0
+[sn360-es] time=2026-05-27T23:26:36.610Z level=INFO msg="worker.cleanup: pruned" pruner=feedback_events removed=0
+[sn360-es] time=2026-05-27T23:26:36.612Z level=INFO msg="worker.cleanup: pruned" pruner=communication_histories removed=0
+[sn360-es] time=2026-05-27T23:26:36.612Z level=INFO msg="worker: cycle completed" worker=cleanup duration=6.52396ms
+[sn360-es] time=2026-05-27T23:26:36.619Z level=INFO msg="worker.relationship: cycle complete" tenants=1 rows=0 decayed_count_7d=0 reclassified=0 race_skipped=0 corrupt_skipped=0 watermarks_pruned=0
+[sn360-es] time=2026-05-27T23:26:36.619Z level=INFO msg="worker: cycle completed" worker=relationship-aggregation duration=11.957261ms
+[sn360-es] time=2026-05-27T23:26:36.619Z level=INFO msg="worker.vendor: cycle complete" tenants=1 proposed=0
+[sn360-es] time=2026-05-27T23:26:36.619Z level=INFO msg="worker: cycle completed" worker=vendor-discovery duration=12.081625ms
+[sn360-es] time=2026-05-27T23:26:37.056Z level=DEBUG msg="readyz: provider registry has no tenants registered"
+    smoke_test.go:124: sn360-es: ready ({"status":"ok","checks":{"agent_tuning":{"status":"ok","latency_ms":0},"event_bus":{"status":"ok","latency_ms":0},"postgres":{"status":"ok","latency_ms":0},"provider_registry":{"status":"ok","latency_ms":0},"redis":{"status":"ok","latency_ms":0},"tier1_encoder":{"status":"ok","latency_ms":0},"worker_cleanup":{"status":"ok","latency_ms":0},"worker_relationship":{"status":"ok","latency_ms":0},"worker_vendor":{"status":"ok","latency_ms":0}}})
+[sn360-es] time=2026-05-27T23:26:37.070Z level=WARN msg="evaluate: tier2 unavailable" message_id=e2e-msg-1-ditujfq6qagp error="tier2: HTTP 404: 404 page not found"
+[sn360-es] time=2026-05-27T23:26:37.071Z level=INFO msg="sn360-es: ingestion-action invoked" tenant_id=00000000-0000-0000-0000-0000e2e10000 message_id=e2e-msg-1-ditujfq6qagp tier=Blocked banner_renderer=true tier_valid=true tier_trusted=false
+[sn360-es] time=2026-05-27T23:26:37.071Z level=INFO msg="sn360-es: management-persist invoked" tenant_id=00000000-0000-0000-0000-0000e2e10000 message_id=e2e-msg-1-ditujfq6qagp
+[sn360-es] time=2026-05-27T23:26:37.073Z level=DEBUG msg="sn360-es: action.url_rewrite: no provider registered" tenant_id=00000000-0000-0000-0000-0000e2e10000
+    smoke_test.go:194: evaluation_results: 1 row(s) for tenant=00000000-0000-0000-0000-0000e2e10000 message_id=e2e-msg-1-ditujfq6qagp
+[sn360-es] time=2026-05-27T23:26:37.082Z level=DEBUG msg="readyz: provider registry has no tenants registered"
+[sn360-es] time=2026-05-27T23:26:37.083Z level=INFO msg="sn360-es: shutdown signal received"
+2026/05/27 23:26:37 🐳 Stopping container: 78228a5b1f1f
+2026/05/27 23:26:37 ✅ Container stopped: 78228a5b1f1f
+2026/05/27 23:26:37 🐳 Terminating container: 78228a5b1f1f
+2026/05/27 23:26:37 🚫 Container terminated: 78228a5b1f1f
+2026/05/27 23:26:37 🐳 Stopping container: 4e07f61dcda5
+2026/05/27 23:26:37 ✅ Container stopped: 4e07f61dcda5
+2026/05/27 23:26:37 🐳 Terminating container: 4e07f61dcda5
+2026/05/27 23:26:37 🚫 Container terminated: 4e07f61dcda5
+2026/05/27 23:26:37 🐳 Stopping container: a5417d05083e
+2026/05/27 23:26:38 ✅ Container stopped: a5417d05083e
+2026/05/27 23:26:38 🐳 Terminating container: a5417d05083e
+2026/05/27 23:26:38 🚫 Container terminated: a5417d05083e
+--- PASS: TestE2E_IngestEvaluateActionFlow (6.15s)
+PASS
+ok  	github.com/kennguy3n/sn360-es/tests/e2e	6.179s

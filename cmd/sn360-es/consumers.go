@@ -71,7 +71,29 @@ func (a *application) StartConsumers(ctx context.Context) error {
 		return nil
 	}
 
+	// resultConsumerErrs is the narrow bucket that gates the
+	// fail-fast checkpoint below: subscription failures on the
+	// three es.evaluate.result durables (management-persist,
+	// education-trigger, ingestion-action) are the ONLY errors
+	// that can cause produce-while-missing-consumer data loss
+	// against the ES_EVALUATE_RESULT interest stream. Failures on
+	// other consumers (e.g. feedback-persist on the
+	// work-queue–retention ES_ACTION stream) are still critical
+	// for normal binary startup but cannot cause silent message
+	// loss on the result fan-out, so they go into critErrs and
+	// surface at the end of StartConsumers instead.
+	var resultConsumerErrs []error
 	var critErrs []error
+	// resultSubsAttached counts the es.evaluate.result durables
+	// that subscribed successfully. Used by the operability check
+	// just before the evaluate-svc registration: if the evaluator
+	// is wired but every result-side durable was either disabled
+	// (nil dependency) or failed to subscribe, every result the
+	// evaluator publishes will be immediately discarded by the
+	// interest stream (no interested consumer to retain it for).
+	// Better to refuse to start than to silently drop production
+	// traffic.
+	resultSubsAttached := 0
 
 	// es.evaluate.result → persist to the management Postgres layer.
 	if a.repos != nil {
@@ -81,9 +103,10 @@ func (a *application) StartConsumers(ctx context.Context) error {
 		if err != nil {
 			a.logger.Error("sn360-es: subscribe evaluate.result (management-persist) failed",
 				slog.Any("error", err))
-			critErrs = append(critErrs, fmt.Errorf("management-persist: %w", err))
+			resultConsumerErrs = append(resultConsumerErrs, fmt.Errorf("management-persist: %w", err))
 		} else {
 			a.trackSub(sub)
+			resultSubsAttached++
 		}
 	}
 
@@ -95,15 +118,22 @@ func (a *application) StartConsumers(ctx context.Context) error {
 		if err != nil {
 			a.logger.Error("sn360-es: subscribe evaluate.result (education-trigger) failed",
 				slog.Any("error", err))
-			critErrs = append(critErrs, fmt.Errorf("education-trigger: %w", err))
+			resultConsumerErrs = append(resultConsumerErrs, fmt.Errorf("education-trigger: %w", err))
 		} else {
 			a.trackSub(sub)
+			resultSubsAttached++
 		}
 	}
 
 	// es.action.feedback.> → persist each verified banner click into
 	// feedback_events (migration 0002) so the dashboard FeedbackStats
-	// aggregate has rows to count.
+	// aggregate has rows to count. This consumer is on ES_ACTION
+	// (work-queue retention) so a subscription failure here cannot
+	// cause interest-stream message loss — it just means feedback
+	// rows won't be persisted until the binary restarts. We still
+	// surface the error at end-of-function (the binary should not
+	// silently degrade), but it does NOT gate the evaluate-svc
+	// checkpoint below; see the comment block on resultConsumerErrs.
 	if a.repos != nil && a.repos.FeedbackEvents != nil {
 		sub, err := a.eventBus.Subscribe(ctx, "es.action.feedback.>", a.handleFeedbackPersist,
 			events.WithDurable("feedback-persist"),
@@ -134,32 +164,55 @@ func (a *application) StartConsumers(ctx context.Context) error {
 		if err != nil {
 			a.logger.Error("sn360-es: subscribe evaluate.result (ingestion-action) failed",
 				slog.Any("error", err))
-			critErrs = append(critErrs, fmt.Errorf("ingestion-action: %w", err))
+			resultConsumerErrs = append(resultConsumerErrs, fmt.Errorf("ingestion-action: %w", err))
 		} else {
 			a.trackSub(sub)
+			resultSubsAttached++
 		}
 	}
 
 	// Fail-fast checkpoint — see INVARIANT block at the top of
-	// StartConsumers. If ANY of the wired es.evaluate.result
-	// consumers (management-persist, education-trigger,
-	// ingestion-action) or es.action.feedback consumer
-	// (feedback-persist) failed to subscribe, we must NOT register
-	// evaluate-svc below: doing so would start producing onto the
-	// ES_EVALUATE_RESULT interest stream while one of the listed
-	// durables is missing. Under InterestPolicy retention, every
-	// message produced before the missing durable comes back online
-	// is permanently discarded for that consumer; there is no
-	// work-queue backlog to replay from once a result is acked by
-	// the consumers that DID bind. Returning here trades a noisier
-	// startup failure for a silent data-loss window.
+	// StartConsumers. If ANY of the three wired
+	// es.evaluate.result durables (management-persist,
+	// education-trigger, ingestion-action) failed to subscribe,
+	// we must NOT register evaluate-svc below: doing so would
+	// start producing onto the ES_EVALUATE_RESULT interest stream
+	// while one of the listed durables is missing. Under
+	// InterestPolicy retention, every message produced before the
+	// missing durable comes back online is permanently discarded
+	// for that consumer; there is no work-queue backlog to replay
+	// from once a result is acked by the consumers that DID
+	// bind. Returning here trades a noisier startup failure for a
+	// silent data-loss window.
+	//
+	// Note: feedback-persist failures are tracked in critErrs (not
+	// resultConsumerErrs) because that durable lives on the
+	// work-queue–retention ES_ACTION stream where the interest-loss
+	// concern does NOT apply. They surface at the end of
+	// StartConsumers via the final errors.Join(critErrs...) return.
 	//
 	// (The Tier-1 batch orchestrator below is also gated by this
 	// checkpoint, because it is the alternative producer onto
 	// es.evaluate.result.)
-	if len(critErrs) > 0 {
+	if len(resultConsumerErrs) > 0 {
 		return fmt.Errorf("sn360-es: critical result-consumer subscription failed before evaluate-svc registration; refusing to start producers: %w",
-			errors.Join(critErrs...))
+			errors.Join(resultConsumerErrs...))
+	}
+
+	// Operability check: refuse to register the evaluator (or the
+	// Tier-1 batch orchestrator) if NO result-side durable would
+	// retain the results it produces. Under InterestPolicy
+	// retention, every message produced to es.evaluate.result is
+	// immediately discarded if there are zero interested
+	// consumers — there is no backlog to replay from. Rather than
+	// silently dropping every evaluation, fail loudly so the
+	// operator wires at least one of:
+	//   - repos.* (management-persist)
+	//   - microLessonSvc (education-trigger)
+	//   - any of bannerRenderer / urlRewriter / quarantineSvc /
+	//     labelApplier (ingestion-action)
+	if resultSubsAttached == 0 && (a.evaluator != nil || a.batchOrch != nil) {
+		return fmt.Errorf("sn360-es: evaluator is wired but no es.evaluate.result durable was attached (management-persist, education-trigger, ingestion-action); refusing to start producers because the ES_EVALUATE_RESULT interest stream would silently discard every result message")
 	}
 
 	// es.evaluate.request → the multi-tier detection pipeline.

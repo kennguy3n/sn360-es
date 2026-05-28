@@ -1,0 +1,33 @@
+go test -race -timeout 120s -tags=e2e -timeout 300s ./tests/e2e/...
+[sn360-es] time=2026-05-27T23:14:46.010Z level=INFO msg="sn360-es: starting" app=sn360-es-e2e env=local event_bus=nats
+[sn360-es] time=2026-05-27T23:14:46.031Z level=INFO msg="sn360-es: url rewriter using mock KMS encryptor (envelope encryption in-process)"
+[sn360-es] time=2026-05-27T23:14:46.041Z level=INFO msg="sn360-es: no email providers configured; action consumers will run in degraded mode"
+[sn360-es] time=2026-05-27T23:14:46.041Z level=INFO msg="sn360-es: url rewriter using mock KMS encryptor (envelope encryption in-process)"
+[sn360-es] time=2026-05-27T23:14:46.041Z level=INFO msg="sn360-es: ingestion polling disabled via config" mode=poll
+[sn360-es] time=2026-05-27T23:14:46.041Z level=INFO msg="sn360-es: push ingestion disabled via config" mode=poll
+[sn360-es] time=2026-05-27T23:14:46.041Z level=INFO msg="sn360-es: relationship worker wired" interval=4h0m0s
+[sn360-es] time=2026-05-27T23:14:46.042Z level=INFO msg="sn360-es: vendor worker wired" interval=168h0m0s
+[sn360-es] time=2026-05-27T23:14:46.042Z level=INFO msg="sn360-es: cleanup worker wired" pruners=3 interval=24h0m0s retention_days=90
+[sn360-es] time=2026-05-27T23:14:46.042Z level=INFO msg="sn360-es: directory sync worker skipped; no directory client"
+[sn360-es] time=2026-05-27T23:14:46.042Z level=INFO msg="sn360-es: support agent wired"
+[sn360-es] time=2026-05-27T23:14:46.042Z level=INFO msg="sn360-es: tuning agent wired"
+[sn360-es] time=2026-05-27T23:14:46.042Z level=INFO msg="sn360-es: onboarding service disabled (ONBOARDING_STATE_SECRET or ONBOARDING_CALLBACK_URL not set)"
+[sn360-es] time=2026-05-27T23:14:46.042Z level=WARN msg="sn360-es: quarantine handler init failed" error="quarantine handler: release service is required"
+[sn360-es] time=2026-05-27T23:14:46.053Z level=INFO msg="sn360-es: http server listening" port=41183
+[sn360-es] time=2026-05-27T23:14:46.056Z level=INFO msg="worker.relationship: cycle complete" tenants=0 rows=0 decayed_count_7d=0 reclassified=0 race_skipped=0 corrupt_skipped=0 watermarks_pruned=0
+[sn360-es] time=2026-05-27T23:14:46.056Z level=INFO msg="worker: cycle completed" worker=relationship-aggregation duration=2.502151ms
+[sn360-es] time=2026-05-27T23:14:46.062Z level=INFO msg="worker.cleanup: pruned" pruner=evaluation_results removed=0
+[sn360-es] time=2026-05-27T23:14:46.063Z level=INFO msg="worker.vendor: cycle complete" tenants=0 proposed=0
+[sn360-es] time=2026-05-27T23:14:46.063Z level=INFO msg="worker: cycle completed" worker=vendor-discovery duration=8.619165ms
+[sn360-es] time=2026-05-27T23:14:46.064Z level=INFO msg="worker.cleanup: pruned" pruner=feedback_events removed=0
+[sn360-es] time=2026-05-27T23:14:46.065Z level=INFO msg="worker.cleanup: pruned" pruner=communication_histories removed=0
+[sn360-es] time=2026-05-27T23:14:46.065Z level=INFO msg="worker: cycle completed" worker=cleanup duration=10.755358ms
+[sn360-es] time=2026-05-27T23:14:46.520Z level=INFO msg="sn360-es: shutdown signal received"
+[sn360-es] time=2026-05-27T23:14:46.521Z level=WARN msg="nats: disconnected" error=<nil>
+--- FAIL: TestE2E_IngestEvaluateActionFlow (6.07s)
+    smoke_test.go:123: sn360-es: ready ({"status":"ok","checks":{"agent_tuning":{"status":"ok","latency_ms":0},"event_bus":{"status":"ok","latency_ms":0},"postgres":{"status":"ok","latency_ms":0},"provider_registry":{"status":"ok","latency_ms":0},"redis":{"status":"ok","latency_ms":0},"tier1_encoder":{"status":"ok","latency_ms":0},"worker_cleanup":{"status":"ok","latency_ms":0},"worker_relationship":{"status":"ok","latency_ms":0},"worker_vendor":{"status":"ok","latency_ms":0}}})
+    smoke_test.go:130: create consumer for es.action.banner: nats: API error: code=400 err_code=10101 description=consumer must be deliver all on workqueue stream
+FAIL
+FAIL	github.com/kennguy3n/sn360-es/tests/e2e	6.126s
+FAIL
+make: *** [Makefile:43: test-e2e] Error 1
