@@ -100,7 +100,7 @@ func TestBus_NATSBackedByFlag(t *testing.T) {
 		t.Fatalf("new nats: %v", err)
 	}
 	defer bus.CloseWithTimeout(svc, 5*time.Second)
-	runPublishSubscribe(t, svc, "es.evaluate.factory", "it-factory-nats")
+	runPublishSubscribe(t, svc, "es.evaluate.request.factory", "it-factory-nats")
 }
 
 func TestBus_RedisBackedByFlag(t *testing.T) {
@@ -117,7 +117,7 @@ func TestBus_RedisBackedByFlag(t *testing.T) {
 		t.Fatalf("new redis: %v", err)
 	}
 	defer bus.CloseWithTimeout(svc, 5*time.Second)
-	runPublishSubscribe(t, svc, "es.evaluate.factory", "it-factory-redis")
+	runPublishSubscribe(t, svc, "es.evaluate.request.factory", "it-factory-redis")
 }
 
 func TestBus_UnknownTypeIsRejected(t *testing.T) {

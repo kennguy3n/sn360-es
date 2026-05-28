@@ -34,3 +34,11 @@ scripts/corpus/evaluation/*.json
 !scripts/corpus/evaluation/sample.json
 scripts/corpus/loadtest/*.json
 !scripts/corpus/loadtest/README.md
+
+
+# E2E test artifacts (logs, decision-trace JSON, postfix dumps).
+# Generated per-run by `make test-e2e` / `tests/e2e/run.sh`;
+# committing them creates stale evidence that misleads reviewers
+# about the current code's behaviour and grows the repo with
+# transient debug output.
+tests/e2e/.artifacts/

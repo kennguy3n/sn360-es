@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -13,11 +14,25 @@ import (
 // Well-known SN360-ES streams. The names are uppercased per JetStream
 // convention.
 const (
-	StreamEvaluate   = "ES_EVALUATE"
-	StreamOnboarding = "ES_ONBOARDING"
-	StreamEducation  = "ES_EDUCATION"
-	StreamAction     = "ES_ACTION"
-	StreamDLQ        = "ES_DLQ"
+	// StreamEvaluate is the work-queue stream that carries
+	// es.evaluate.request[.>] — one worker handles each request.
+	StreamEvaluate = "ES_EVALUATE"
+	// StreamEvaluateResult is the fan-out stream that carries
+	// es.evaluate.result[.>]. The architecture requires three
+	// independent consumers (management-persist, education-trigger,
+	// ingestion-action) to each see every result message, which is
+	// incompatible with the work-queue retention policy on
+	// StreamEvaluate (NATS rejects filtered consumers with
+	// overlapping subject filters on work-queue streams with
+	// err_code=10100 "filtered consumer not unique on workqueue
+	// stream"). The fan-out path uses an interest stream instead so
+	// every consumer group receives every result and the message is
+	// freed only after all groups have acked.
+	StreamEvaluateResult = "ES_EVALUATE_RESULT"
+	StreamOnboarding     = "ES_ONBOARDING"
+	StreamEducation      = "ES_EDUCATION"
+	StreamAction         = "ES_ACTION"
+	StreamDLQ            = "ES_DLQ"
 )
 
 // StreamSpec describes a JetStream stream that SN360-ES requires.
@@ -49,8 +64,14 @@ func DefaultStreamSpecs(cfg Config) []StreamSpec {
 	}
 	return []StreamSpec{
 		{
-			Name:        StreamEvaluate,
-			Subjects:    []string{"es.evaluate.>"},
+			Name: StreamEvaluate,
+			// Narrowed to request-only subjects so the work-queue
+			// retention policy can coexist with the multi-consumer
+			// fan-out on es.evaluate.result (which lives on
+			// StreamEvaluateResult). Subjects must NOT overlap
+			// es.evaluate.result[.>] or NATS will reject
+			// StreamEvaluateResult creation with subject-overlap.
+			Subjects:    []string{"es.evaluate.request", "es.evaluate.request.>"},
 			Retention:   jetstream.WorkQueuePolicy,
 			Storage:     storage,
 			MaxAge:      24 * time.Hour,
@@ -58,7 +79,26 @@ func DefaultStreamSpecs(cfg Config) []StreamSpec {
 			DedupWindow: orDefault(cfg.DedupWindow, 2*time.Minute),
 			Replicas:    replicas,
 			Discard:     jetstream.DiscardOld,
-			Description: "SN360-ES evaluation pipeline events",
+			Description: "SN360-ES evaluation request pipeline (work-queue, one worker per request)",
+		},
+		{
+			Name: StreamEvaluateResult,
+			// Result fan-out. Interest retention means each consumer
+			// group receives the message independently, and the
+			// message is freed once every interested consumer has
+			// acked. This is the canonical NATS pattern for the
+			// "par Fan-out" block in the message-flow diagram
+			// (ingestion-action || management-persist ||
+			// education-trigger).
+			Subjects:    []string{"es.evaluate.result", "es.evaluate.result.>"},
+			Retention:   jetstream.InterestPolicy,
+			Storage:     storage,
+			MaxAge:      24 * time.Hour,
+			MaxMsgSize:  10 * 1024 * 1024,
+			DedupWindow: orDefault(cfg.DedupWindow, 2*time.Minute),
+			Replicas:    replicas,
+			Discard:     jetstream.DiscardOld,
+			Description: "SN360-ES evaluation result fan-out (interest, multi-consumer)",
 		},
 		{
 			Name:        StreamOnboarding,
@@ -94,9 +134,9 @@ func DefaultStreamSpecs(cfg Config) []StreamSpec {
 			Name: StreamDLQ,
 			// Dead-letter subjects live under a separate top-level
 			// namespace so they do NOT overlap with the wildcard
-			// subjects of the primary streams (es.evaluate.>,
-			// es.action.>, etc.). NATS rejects subject overlap
-			// between streams.
+			// subjects of the primary streams (es.evaluate.request[.>],
+			// es.evaluate.result[.>], es.action.>, etc.). NATS
+			// rejects subject overlap between streams.
 			Subjects:    []string{"es.dlq.>"},
 			Retention:   jetstream.LimitsPolicy,
 			Storage:     storage,
@@ -160,14 +200,113 @@ func EnsureAllStreams(ctx context.Context, js jetstream.JetStream, specs []Strea
 	return nil
 }
 
+// pruneOrphanResultConsumers removes durables on the legacy ES_EVALUATE
+// stream that were originally created to consume es.evaluate.result*.
+// Before the request / result split those durables were perfectly valid
+// — the stream covered es.evaluate.> — but after the split they sit
+// idle on the request work-queue stream while the new equivalents take
+// delivery from ES_EVALUATE_RESULT. Leaving the old definitions in
+// place is harmless functionally (the work-queue stream no longer
+// matches the result subjects) but confusing for operators inspecting
+// `nats consumer ls`.
+//
+// The function is best-effort: a missing stream, a consumer with a
+// non-result filter subject, or a server that doesn't list consumers
+// is left alone. Only durables whose filter is exactly the result
+// subject get deleted.
+func pruneOrphanResultConsumers(ctx context.Context, js jetstream.JetStream, logger *slog.Logger) error {
+	stream, err := js.Stream(ctx, StreamEvaluate)
+	if err != nil {
+		if errors.Is(err, jetstream.ErrStreamNotFound) {
+			return nil
+		}
+		return fmt.Errorf("lookup %s: %w", StreamEvaluate, err)
+	}
+	lister := stream.ListConsumers(ctx)
+	var orphans []string
+	for info := range lister.Info() {
+		if info == nil {
+			continue
+		}
+		// Mark for deletion ONLY when EVERY filter subject on the
+		// consumer is a result-side subject. The legacy code only
+		// ever created single-filter consumers (FilterSubject set,
+		// FilterSubjects empty), so the common path is the first
+		// branch below. The multi-filter branch defends against a
+		// hypothetical future where someone hand-crafts a mixed
+		// consumer like FilterSubjects: ["es.evaluate.request",
+		// "es.evaluate.result"] — that consumer still serves the
+		// request side and must NOT be deleted just because one of
+		// its filters happens to be a result subject.
+		if info.Config.FilterSubject != "" {
+			if isResultFilter(info.Config.FilterSubject) {
+				orphans = append(orphans, info.Name)
+			}
+			continue
+		}
+		if len(info.Config.FilterSubjects) == 0 {
+			continue
+		}
+		allResult := true
+		for _, f := range info.Config.FilterSubjects {
+			if !isResultFilter(f) {
+				allResult = false
+				break
+			}
+		}
+		if allResult {
+			orphans = append(orphans, info.Name)
+		}
+	}
+	if err := lister.Err(); err != nil {
+		return fmt.Errorf("list consumers on %s: %w", StreamEvaluate, err)
+	}
+	for _, name := range orphans {
+		if err := stream.DeleteConsumer(ctx, name); err != nil {
+			if errors.Is(err, jetstream.ErrConsumerNotFound) {
+				continue
+			}
+			logger.WarnContext(ctx, "nats: delete orphan consumer",
+				slog.String("stream", StreamEvaluate),
+				slog.String("consumer", name),
+				slog.Any("error", err))
+			continue
+		}
+		logger.InfoContext(ctx, "nats: removed orphan result consumer",
+			slog.String("stream", StreamEvaluate),
+			slog.String("consumer", name))
+	}
+	return nil
+}
+
+func isResultFilter(subj string) bool {
+	return subj == "es.evaluate.result" || strings.HasPrefix(subj, "es.evaluate.result.")
+}
+
 // StreamForSubject returns the stream name that should hold a published
 // subject, or "" if none of the known streams cover it. This is used to
 // route DLQ publishes back to the correct stream.
+//
+// Mapping (must stay in sync with DefaultStreamSpecs):
+//   - es.dlq.>                       → StreamDLQ
+//   - es.evaluate.result | result.>  → StreamEvaluateResult (interest fan-out)
+//   - es.evaluate.request | req.>    → StreamEvaluate (work-queue)
+//   - es.onboarding.>                → StreamOnboarding
+//   - es.education.>                 → StreamEducation
+//   - es.action.>                    → StreamAction
+//
+// Any other es.evaluate.* subject (e.g. a hypothetical
+// es.evaluate.status) is treated as unrouted and returns "" rather
+// than being silently steered to ES_EVALUATE — that would be a stale
+// hint now that the stream covers only request[.>], and DLQ re-publish
+// would land on a stream that doesn't accept the subject.
 func StreamForSubject(subject string) string {
 	switch {
 	case strings.HasPrefix(subject, "es.dlq."):
 		return StreamDLQ
-	case strings.HasPrefix(subject, "es.evaluate."):
+	case subject == "es.evaluate.result" || strings.HasPrefix(subject, "es.evaluate.result."):
+		return StreamEvaluateResult
+	case subject == "es.evaluate.request" || strings.HasPrefix(subject, "es.evaluate.request."):
 		return StreamEvaluate
 	case strings.HasPrefix(subject, "es.onboarding."):
 		return StreamOnboarding

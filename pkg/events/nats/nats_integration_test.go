@@ -183,7 +183,7 @@ func TestNATSIntegration_DLQOnExhaustedDeliveries(t *testing.T) {
 	defer cancel()
 
 	var attempts atomic.Int32
-	primary, err := svc.Subscribe(ctx, "es.evaluate.failing",
+	primary, err := svc.Subscribe(ctx, "es.evaluate.request.failing",
 		func(_ context.Context, _ events.Message) error {
 			attempts.Add(1)
 			return errors.New("boom")
@@ -211,7 +211,7 @@ func TestNATSIntegration_DLQOnExhaustedDeliveries(t *testing.T) {
 	}
 	defer dlqSub.Close()
 
-	if err := svc.Publish(ctx, "es.evaluate.failing", []byte("payload"),
+	if err := svc.Publish(ctx, "es.evaluate.request.failing", []byte("payload"),
 		events.WithMessageID("dlq-once"),
 	); err != nil {
 		t.Fatalf("publish: %v", err)
@@ -238,7 +238,7 @@ func TestNATSIntegration_DedupWindowSuppressesDuplicates(t *testing.T) {
 	defer cancel()
 
 	var delivered atomic.Int32
-	sub, err := svc.Subscribe(ctx, "es.evaluate.dedup",
+	sub, err := svc.Subscribe(ctx, "es.evaluate.request.dedup",
 		func(_ context.Context, _ events.Message) error {
 			delivered.Add(1)
 			return nil
@@ -251,7 +251,7 @@ func TestNATSIntegration_DedupWindowSuppressesDuplicates(t *testing.T) {
 	defer sub.Close()
 
 	for i := 0; i < 5; i++ {
-		if err := svc.Publish(ctx, "es.evaluate.dedup", []byte(fmt.Sprintf("v=%d", i)),
+		if err := svc.Publish(ctx, "es.evaluate.request.dedup", []byte(fmt.Sprintf("v=%d", i)),
 			events.WithMessageID("same-id"),
 		); err != nil {
 			t.Fatalf("publish %d: %v", i, err)

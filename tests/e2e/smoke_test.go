@@ -100,6 +100,7 @@ func TestE2E_IngestEvaluateActionFlow(t *testing.T) {
 	natsURL := startNATS(ctx, t)
 
 	applyMigrations(ctx, t, repoRoot, pgCfg)
+	seedTenant(ctx, t, pgCfg, "00000000-0000-0000-0000-0000e2e10000")
 
 	// --- 3. Mock the AI inference endpoints ----------------------
 	// The user's rule says mocks are allowed only when the real
@@ -130,9 +131,16 @@ func TestE2E_IngestEvaluateActionFlow(t *testing.T) {
 	bannerCh := subscribeSubject(ctx, t, js, "es.action.banner", "e2e-test-banner-watcher")
 
 	// --- 6. Publish the synthetic ingestion message --------------
+	// TenantID must be a UUID — sn360-es persists into the
+	// communication_histories table where tenant_id is typed
+	// `uuid`, and the signal enricher / tenant-config loader
+	// reject non-UUID strings with SQLSTATE 22P02. The previous
+	// "e2e-tenant" value silently degraded the evaluator to the
+	// base-signals path and produced a TierTrusted verdict, which
+	// caused the downstream banner action to be skipped.
 	req := dto.EvaluateRequest{
 		MessageID:     "e2e-msg-" + uniqueID(),
-		TenantID:      "e2e-tenant",
+		TenantID:      "00000000-0000-0000-0000-0000e2e10000",
 		CorrelationID: "e2e-corr-" + uniqueID(),
 		Sender:        "ceo-impostor@example.com",
 		Recipient:     "finance@acme.test",
@@ -352,6 +360,29 @@ func applyMigrations(ctx context.Context, t *testing.T, repoRoot string, cfg pos
 	}
 }
 
+// seedTenant inserts a tenant row so evaluation_results /
+// communication_histories foreign keys resolve. Without this the
+// management-persist consumer hits SQLSTATE 23503 and the test
+// assertion on evaluation_results count returns zero.
+func seedTenant(ctx context.Context, t *testing.T, cfg postgres.Config, tenantID string) {
+	t.Helper()
+	db, err := postgres.Open(ctx, cfg)
+	if err != nil {
+		t.Fatalf("seed tenant: open: %v", err)
+	}
+	defer db.Close()
+	execCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	const ins = `
+INSERT INTO tenants (id, name, display_name, provider, primary_domain, kms_key_arn)
+VALUES ($1, $2, $3, 'gws', 'acme.test', 'arn:aws:kms:ap-southeast-1:000000000000:key/e2e')
+ON CONFLICT (id) DO NOTHING
+`
+	if _, err := db.ExecContext(execCtx, ins, tenantID, "e2e-tenant-"+tenantID[:8], "e2e-tenant"); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------
 // HTTP mocks for AI inference endpoints
 // ---------------------------------------------------------------
@@ -363,17 +394,41 @@ func applyMigrations(ctx context.Context, t *testing.T, repoRoot string, cfg pos
 func startTier1Mock(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
+	// /health is the readiness probe that the sn360-es /readyz aggregator
+	// calls via the tier1.Client.Health path (default HealthPath="/health").
+	// Without it the e2e smoke would report tier1_encoder=error and the
+	// /readyz check would never flip to 200.
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "ok",
+			"model":  "xlm-roberta-stub",
+		})
+	})
+	// /predict returns a single tier1.PredictResponse — the production
+	// client at internal/service/tier1/encoder.go::doSingle decodes
+	// the body directly into PredictResponse. The previous
+	// {"messages":[{...}]} envelope silently decoded to score=0, which
+	// then drove the verdict tier all the way down to Trusted.
 	mux.HandleFunc("/predict", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"messages": []map[string]any{{
-				"message_id":      "ignored",
-				"score":           92,
-				"confidence":      0.94,
-				"primary":         "likely_phishing",
-				"category_scores": map[string]float64{"likely_phishing": 0.94},
+			"score":        92,
+			"confidence":   0.94,
+			"language":     "en",
+			"model_tag":    "xlm-roberta-stub",
+			"reason_codes": []string{"WIRE_REQUEST", "URGENT_TONE"},
+		})
+	})
+	mux.HandleFunc("/predict/batch", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"items": []map[string]any{{
+				"score":      92,
+				"confidence": 0.94,
+				"language":   "en",
+				"model_tag":  "xlm-roberta-stub",
 			}},
-			"model": "xlm-roberta-stub",
 		})
 	})
 	srv := httptest.NewServer(mux)
@@ -607,11 +662,17 @@ func subscribeSubject(ctx context.Context, t *testing.T, js jetstream.JetStream,
 		t.Fatalf("stream for %q never appeared", subject)
 	}
 
+	// DeliverAllPolicy works on every retention policy this smoke
+	// touches; DeliverNewPolicy is rejected by JetStream on
+	// workqueue streams (ES_ACTION, ES_ONBOARDING) with
+	// err_code=10101 "consumer must be deliver all on workqueue
+	// stream". The smoke subscribes BEFORE publishing, so there is
+	// no replay risk from DeliverAll either way.
 	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Name:              name,
 		FilterSubject:     subject,
 		AckPolicy:         jetstream.AckExplicitPolicy,
-		DeliverPolicy:     jetstream.DeliverNewPolicy,
+		DeliverPolicy:     jetstream.DeliverAllPolicy,
 		MaxAckPending:     1024,
 		InactiveThreshold: 5 * time.Minute,
 	})
