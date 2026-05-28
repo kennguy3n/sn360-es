@@ -228,15 +228,34 @@ func pruneOrphanResultConsumers(ctx context.Context, js jetstream.JetStream, log
 		if info == nil {
 			continue
 		}
-		if isResultFilter(info.Config.FilterSubject) {
-			orphans = append(orphans, info.Name)
+		// Mark for deletion ONLY when EVERY filter subject on the
+		// consumer is a result-side subject. The legacy code only
+		// ever created single-filter consumers (FilterSubject set,
+		// FilterSubjects empty), so the common path is the first
+		// branch below. The multi-filter branch defends against a
+		// hypothetical future where someone hand-crafts a mixed
+		// consumer like FilterSubjects: ["es.evaluate.request",
+		// "es.evaluate.result"] — that consumer still serves the
+		// request side and must NOT be deleted just because one of
+		// its filters happens to be a result subject.
+		if info.Config.FilterSubject != "" {
+			if isResultFilter(info.Config.FilterSubject) {
+				orphans = append(orphans, info.Name)
+			}
 			continue
 		}
+		if len(info.Config.FilterSubjects) == 0 {
+			continue
+		}
+		allResult := true
 		for _, f := range info.Config.FilterSubjects {
-			if isResultFilter(f) {
-				orphans = append(orphans, info.Name)
+			if !isResultFilter(f) {
+				allResult = false
 				break
 			}
+		}
+		if allResult {
+			orphans = append(orphans, info.Name)
 		}
 	}
 	if err := lister.Err(); err != nil {
