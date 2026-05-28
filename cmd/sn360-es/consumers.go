@@ -362,6 +362,20 @@ func (a *application) StartConsumers(ctx context.Context) error {
 		}
 	}
 
+	// Final fail-fast: if any subscription above (es.action.*,
+	// es.education.*, escalation, quarantine-release …) failed,
+	// surface the joined error BEFORE we launch the Tier-1 batch
+	// orchestrator or DLQ processor. Starting either of those two
+	// background services and then returning an error leaves the
+	// caller with running goroutines it can only clean up by
+	// calling StopConsumers — a subtle lifecycle trap. Doing the
+	// gate here means the orchestrator and DLQ are only started
+	// once we know StartConsumers will return nil.
+	if len(critErrs) > 0 {
+		return fmt.Errorf("sn360-es: critical consumer subscriptions failed: %w",
+			errors.Join(critErrs...))
+	}
+
 	// Optional Tier 1 batch orchestrator.
 	if a.batchOrch != nil {
 		a.batchOrch.Start(ctx)
@@ -385,10 +399,6 @@ func (a *application) StartConsumers(ctx context.Context) error {
 		a.dlqProc = dlq
 	}
 
-	if len(critErrs) > 0 {
-		return fmt.Errorf("sn360-es: critical consumer subscriptions failed: %w",
-			errors.Join(critErrs...))
-	}
 	return nil
 }
 

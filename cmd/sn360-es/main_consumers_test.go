@@ -802,13 +802,54 @@ func TestStartConsumers_ResultConsumerFailureTripsCheckpoint(t *testing.T) {
 	app.eventBus = bus
 	app.evaluator = buildEvaluator(t, fakeTier1{score: 30})
 
+	// Defence-in-depth: the test's contract is that an
+	// es.evaluate.result *subscribe* failure trips the checkpoint
+	// at consumers.go:203. If newTestApp leaves all three of
+	// repos / microLessonSvc / action-services nil, NO subscribe
+	// is ever attempted, resultConsumerErrs stays empty, and we
+	// fall through to the operability check at consumers.go:222
+	// instead — a different code path that also contains
+	// "refusing to start producers" and lists the same three
+	// durable names. Without an explicit guard the test would
+	// silently exercise the operability check and the bug it is
+	// trying to catch (post-checkpoint evaluator registration on
+	// a real subscribe failure) would slip through. Assert here
+	// that the wiring we need is present.
+	if app.microLessonSvc == nil && app.repos == nil &&
+		app.bannerRenderer == nil && app.urlRewriter == nil &&
+		app.quarantineSvc == nil && app.labelApplier == nil {
+		t.Fatal("newTestApp wired none of the three result-consumer dependencies (repos, microLessonSvc, ingestion action services); the test would exercise the operability check at consumers.go:222 instead of the result-consumer checkpoint at consumers.go:203")
+	}
+
 	err := app.StartConsumers(context.Background())
 	if err == nil {
 		t.Fatal("expected StartConsumers to fail when an es.evaluate.result durable subscription fails")
 	}
 	msg := err.Error()
+	// Pin to the checkpoint's unique wording ("result-consumer
+	// subscription failed"); the operability path uses different
+	// wording ("no es.evaluate.result durable was attached"), so
+	// this disambiguates the two code paths even though both
+	// contain "refusing to start producers".
+	if !contains(msg, "result-consumer subscription failed") {
+		t.Errorf("error %q does not look like the result-consumer checkpoint at consumers.go:203 (missing 'result-consumer subscription failed'); did the test fall through to the operability check at consumers.go:222?", msg)
+	}
 	if !contains(msg, "refusing to start producers") {
-		t.Errorf("error %q does not look like the result-consumer checkpoint (missing 'refusing to start producers')", msg)
+		t.Errorf("error %q does not contain the canonical 'refusing to start producers' phrase", msg)
+	}
+	// Belt-and-braces: the bus MUST have recorded at least one
+	// attempt to subscribe to es.evaluate.result. If it didn't,
+	// no result-consumer subscription ever failed; the error
+	// came from somewhere else.
+	attemptedResult := false
+	for _, s := range bus.subscribes {
+		if s.Subject == "es.evaluate.result" {
+			attemptedResult = true
+			break
+		}
+	}
+	if !attemptedResult {
+		t.Errorf("no Subscribe call against es.evaluate.result was ever attempted; the test cannot have exercised the result-consumer-subscribe-failure checkpoint")
 	}
 	// At least ONE of the three es.evaluate.result durables must
 	// be named in the error so operators can diagnose which
