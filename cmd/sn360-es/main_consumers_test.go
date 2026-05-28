@@ -782,11 +782,19 @@ func TestStartConsumers_CriticalEvaluateSubFailureSurfaces(t *testing.T) {
 func TestStartConsumers_ResultConsumerFailureTripsCheckpoint(t *testing.T) {
 	bus := &recordingBus{
 		subscribeErrBySubject: map[string]error{
-			// Fail management-persist specifically. The two other
-			// es.evaluate.result durables share the same subject
-			// string and would also be re-attempted here, but
-			// recordingBus serialises Subscribe calls so the first
-			// failure wins and the checkpoint trips immediately.
+			// Fail every Subscribe call targeting the
+			// es.evaluate.result subject. All three result
+			// durables (management-persist, education-trigger,
+			// ingestion-action) share that subject string, so
+			// whichever StartConsumers attempts first under the
+			// dependency wiring chosen by newTestApp will fail
+			// and trip the upstream result-consumer checkpoint.
+			// (newTestApp currently leaves repos == nil so
+			// management-persist is skipped entirely, which means
+			// education-trigger is the one that actually fails
+			// here today — but the test's contract is "ANY
+			// result-side durable failure trips the checkpoint",
+			// and the assertions below match any of the three.)
 			"es.evaluate.result": errors.New("simulated result-consumer subscribe failure"),
 		},
 	}

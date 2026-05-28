@@ -188,15 +188,23 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	// Note: feedback-persist failures are tracked in critErrs (not
 	// resultConsumerErrs) because that durable lives on the
 	// work-queue–retention ES_ACTION stream where the interest-loss
-	// concern does NOT apply. They surface at the end of
-	// StartConsumers via the final errors.Join(critErrs...) return.
+	// concern does NOT apply. They normally surface at the
+	// end of StartConsumers via the final
+	// errors.Join(critErrs...) return — but if we trip the
+	// result-consumer checkpoint here we will never reach that
+	// return, so we fold critErrs into the checkpoint error too
+	// so the operator gets the complete failure picture on the
+	// first restart attempt instead of fixing the result-consumer
+	// issue and then discovering feedback-persist was also broken.
 	//
 	// (The Tier-1 batch orchestrator below is also gated by this
 	// checkpoint, because it is the alternative producer onto
 	// es.evaluate.result.)
 	if len(resultConsumerErrs) > 0 {
+		allErrs := append([]error(nil), resultConsumerErrs...)
+		allErrs = append(allErrs, critErrs...)
 		return fmt.Errorf("sn360-es: critical result-consumer subscription failed before evaluate-svc registration; refusing to start producers: %w",
-			errors.Join(resultConsumerErrs...))
+			errors.Join(allErrs...))
 	}
 
 	// Operability check: refuse to register the evaluator (or the
