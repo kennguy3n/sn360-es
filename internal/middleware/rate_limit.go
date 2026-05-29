@@ -58,6 +58,19 @@ var ErrBucketStoreUnavailable = errors.New("rate-limit: bucket store unavailable
 // still see the underlying error via errors.Unwrap.
 var ErrFallbackStore = errors.New("rate-limit: fallback store error")
 
+// IdleSweeper is implemented by BucketStore implementations that
+// hold per-client state in-process and need an external janitor to
+// evict idle entries. The RateLimiter calls SweepIdle on the
+// owned in-process store AND on any FailureModeFallback store that
+// implements it, so a memory store wired as the Redis fallback
+// doesn't leak entries during a Redis outage.
+//
+// Redis-backed stores intentionally do NOT implement this — Redis
+// handles its own eviction via PEXPIRE on the per-bucket key.
+type IdleSweeper interface {
+	SweepIdle(now time.Time, idleTTL time.Duration) int
+}
+
 // RateLimitConfig configures per-IP token-bucket rate limiting.
 //
 // The middleware maintains one bucket per remote IP. Each bucket
@@ -251,11 +264,20 @@ func NewRateLimiter(next http.Handler, cfg RateLimitConfig) *RateLimiter {
 		stopped:  make(chan struct{}),
 	}
 	if cfg.Store != nil {
-		// Caller-supplied store (typically the Redis adapter). The
-		// in-process janitor does not run — the store is
-		// responsible for its own eviction (Redis PEXPIRE).
+		// Caller-supplied store (typically the Redis adapter).
+		// The primary store handles its own eviction (Redis
+		// PEXPIRE), but if FailureModeFallback is a stateful
+		// in-process store — the standard wiring for Redis +
+		// memory soft-fall — the janitor MUST run so that
+		// fallback's per-client map doesn't accumulate entries
+		// during a Redis outage. We detect that case by probing
+		// for the IdleSweeper interface.
 		rl.store = cfg.Store
-		close(rl.stopped)
+		if _, ok := cfg.FailureModeFallback.(IdleSweeper); ok && cfg.CleanupInterval > 0 {
+			go rl.runJanitor()
+		} else {
+			close(rl.stopped)
+		}
 	} else {
 		// Default in-process store, owned by this limiter.
 		mem := newMemoryBucketStore(cfg.Now)
@@ -393,12 +415,28 @@ func (rl *RateLimiter) runJanitor() {
 
 // sweepIdle evicts buckets that have not been touched within IdleTTL.
 // Exposed for tests so they can drive eviction deterministically.
-// Returns 0 when the limiter is not using the in-process store.
+//
+// Sweeps two stores when wired:
+//
+//  1. rl.memStore — the owned in-process store (when the primary
+//     is the default memory store). Same behaviour as before.
+//  2. rl.cfg.FailureModeFallback — when it implements
+//     [IdleSweeper] (i.e. it's a memory store wired as the
+//     soft-fall behind Redis). Without this, the fallback map
+//     grows unboundedly across repeated Redis outages — each
+//     unique IP that hits the fallback path adds one entry that
+//     never gets evicted.
+//
+// Returns the total number of entries removed across both stores.
 func (rl *RateLimiter) sweepIdle(now time.Time) int {
-	if rl.memStore == nil {
-		return 0
+	removed := 0
+	if rl.memStore != nil {
+		removed += rl.memStore.sweepIdle(now, rl.cfg.IdleTTL)
 	}
-	return rl.memStore.sweepIdle(now, rl.cfg.IdleTTL)
+	if sweeper, ok := rl.cfg.FailureModeFallback.(IdleSweeper); ok {
+		removed += sweeper.SweepIdle(now, rl.cfg.IdleTTL)
+	}
+	return removed
 }
 
 // DefaultClientIP extracts the originating client IP from a request

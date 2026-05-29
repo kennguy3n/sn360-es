@@ -1,9 +1,53 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
+
+// TestPartitionTemplates_UseSinglePercentSpecifiers is the structural
+// guardrail against the `%%I` / `%%L` regression Devin Review caught
+// on the first push of this file.
+//
+// Postgres' format() treats `%%` as a literal `%`, so a template
+// containing `%%I` renders the literal text `%I` instead of
+// identifier-quoting its argument; the resulting DDL is invalid SQL
+// and ExecContext fails at runtime. Catching this at unit-test time
+// is much cheaper than diagnosing it from a failed production
+// reconcile cycle.
+//
+// The asserts pin the exact specifier shape we want:
+//
+//   - At least one `%I` and `%L` specifier present (so we know we
+//     ARE using format() identifier / literal quoting at all).
+//   - NO `%%I` or `%%L` substrings anywhere in any of the three
+//     templates (the actual regression).
+func TestPartitionTemplates_UseSinglePercentSpecifiers(t *testing.T) {
+	cases := []struct {
+		name     string
+		tmpl     string
+		wantSpec []string
+	}{
+		{"createPartitionTmpl", createPartitionTmpl, []string{"%I", "%L"}},
+		{"detachPartitionTmpl", detachPartitionTmpl, []string{"%I"}},
+		{"dropPartitionTmpl", dropPartitionTmpl, []string{"%I"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, spec := range tc.wantSpec {
+				if !strings.Contains(tc.tmpl, spec) {
+					t.Errorf("%s missing %q specifier; format() would not quote its arguments", tc.name, spec)
+				}
+			}
+			for _, bad := range []string{"%%I", "%%L"} {
+				if strings.Contains(tc.tmpl, bad) {
+					t.Errorf("%s contains %q — Postgres format() would render it as literal text, breaking DDL execution", tc.name, bad)
+				}
+			}
+		})
+	}
+}
 
 // TestParsePartitionBound_Canonical pins the canonical
 // `FOR VALUES FROM ('lo') TO ('hi')` shape the 0017 migration
