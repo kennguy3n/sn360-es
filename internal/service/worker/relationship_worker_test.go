@@ -25,6 +25,19 @@ func (f *fakeTenantLister) List(_ context.Context, _ int) ([]repository.Tenant, 
 	return f.tenants, nil
 }
 
+// IterateActive yields the fake's tenants in a single batch. Tests
+// that need batch-boundary behaviour can override this with a fake
+// that overrides IterateActive directly.
+func (f *fakeTenantLister) IterateActive(_ context.Context, _ int, yield func([]repository.Tenant) error) error {
+	if f.err != nil {
+		return f.err
+	}
+	if len(f.tenants) == 0 {
+		return nil
+	}
+	return yield(f.tenants)
+}
+
 type fakeCommunicationStore struct {
 	rowsByTenant map[string][]repository.CommunicationHistory
 	err          error

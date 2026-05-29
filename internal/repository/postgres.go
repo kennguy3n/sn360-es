@@ -111,6 +111,94 @@ SELECT id,name,display_name,provider,primary_domain,region,kms_key_arn,score_bas
 	return out, rows.Err()
 }
 
+// defaultIterateBatchSize is the per-batch ceiling for IterateActive
+// when the caller passes batchSize <= 0. 100 tenants per round-trip is
+// the sweet spot for the worker workloads: small enough to keep peak
+// memory negligible (≤ ~50 KiB per batch at the current Tenant row
+// size) and large enough that the per-batch query cost (network +
+// planner) is amortised across enough tenants. Workers that want a
+// different trade-off pass their own batchSize.
+const defaultIterateBatchSize = 100
+
+// IterateActive yields non-deleted tenants in keyset-paginated batches
+// ordered by (name, id). The (name, id) compound cursor is necessary
+// because `name` is NOT unique \u2014 two tenants can share a display name
+// during onboarding \u2014 so name alone could skip or duplicate a row
+// across batches. id (UUID) is the tiebreaker.
+//
+// The query plan is index-friendly: `tenants(name)` has an implicit
+// btree from the UNIQUE constraint check, and keyset on (name, id)
+// translates to a range scan on that index. No OFFSET is used, so
+// iteration cost is O(batchSize) per batch regardless of how far
+// into the table we are.
+func (p *pgTenants) IterateActive(ctx context.Context, batchSize int, yield func([]Tenant) error) error {
+	if batchSize <= 0 {
+		batchSize = defaultIterateBatchSize
+	}
+	// Cursor: (lastName, lastID). The (>, >) tuple comparison
+	// expressed as (name > $1) OR (name = $1 AND id > $2) gives
+	// strict ordering after the previous batch's last row.
+	var lastName string
+	var lastID string
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		batch, err := p.fetchTenantBatch(ctx, lastName, lastID, batchSize)
+		if err != nil {
+			return err
+		}
+		if len(batch) == 0 {
+			return nil
+		}
+		if err := yield(batch); err != nil {
+			return err
+		}
+		last := batch[len(batch)-1]
+		lastName = last.Name
+		lastID = last.ID
+		if len(batch) < batchSize {
+			return nil
+		}
+	}
+}
+
+// fetchTenantBatch runs one page of the keyset query and returns the
+// rows. Pulled out so `defer rows.Close()` handles cleanup (including
+// the gosec/errcheck unhandled-error concern) regardless of which
+// branch returns first.
+func (p *pgTenants) fetchTenantBatch(ctx context.Context, lastName, lastID string, batchSize int) ([]Tenant, error) {
+	rows, err := p.db.QueryContext(ctx, `
+SELECT id,name,display_name,provider,primary_domain,region,kms_key_arn,score_base,retention_days,
+       locale,status,metadata,created_at,updated_at
+  FROM tenants
+ WHERE deleted_at IS NULL
+   AND (name > $1 OR (name = $1 AND id::text > $2))
+ ORDER BY name, id
+ LIMIT $3
+`, lastName, lastID, batchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	batch := make([]Tenant, 0, batchSize)
+	for rows.Next() {
+		var t Tenant
+		var meta []byte
+		if err := rows.Scan(&t.ID, &t.Name, &t.DisplayName, &t.Provider, &t.PrimaryDomain, &t.Region,
+			&t.KMSKeyARN, &t.ScoreBase, &t.RetentionDays, &t.Locale, &t.Status, &meta,
+			&t.CreatedAt, &t.UpdatedAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(meta, &t.Metadata)
+		batch = append(batch, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return batch, nil
+}
+
 // scanOne executes a single-row tenant query and projects the row
 // into a *Tenant.
 //

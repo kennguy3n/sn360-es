@@ -114,6 +114,51 @@ func (m *memoryTenants) List(_ context.Context, limit int) ([]Tenant, error) {
 	return out, nil
 }
 
+// IterateActive yields non-deleted tenants in (name, id) order in
+// batches of batchSize. The in-memory implementation snapshots the
+// store under the read-lock and then yields outside the lock so
+// long-running per-tenant work in yield cannot block writes. The
+// snapshot is bounded by the in-memory tenant count (test/dev
+// fixtures), so this is acceptable; the Postgres implementation
+// uses keyset pagination instead.
+func (m *memoryTenants) IterateActive(ctx context.Context, batchSize int, yield func([]Tenant) error) error {
+	if batchSize <= 0 {
+		batchSize = 100
+	}
+	m.mu.RLock()
+	snapshot := make([]Tenant, 0, len(m.byID))
+	for _, t := range m.byID {
+		// Note: memory store does not model deleted_at; status
+		// "deleted" maps to the same exclusion behaviour as the
+		// Postgres `deleted_at IS NULL` clause so the two
+		// implementations stay drop-in compatible.
+		if t.Status == "deleted" {
+			continue
+		}
+		snapshot = append(snapshot, t)
+	}
+	m.mu.RUnlock()
+	sort.Slice(snapshot, func(i, j int) bool {
+		if snapshot[i].Name == snapshot[j].Name {
+			return snapshot[i].ID < snapshot[j].ID
+		}
+		return snapshot[i].Name < snapshot[j].Name
+	})
+	for start := 0; start < len(snapshot); start += batchSize {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		end := start + batchSize
+		if end > len(snapshot) {
+			end = len(snapshot)
+		}
+		if err := yield(snapshot[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // --- users --------------------------------------------------------------
 
 type memoryUsers struct {

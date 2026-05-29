@@ -36,6 +36,117 @@ func TestMemoryTenants(t *testing.T) {
 	}
 }
 
+// TestMemoryTenants_IterateActive is the keyset-pagination contract
+// test for the in-memory backend. The same contract must hold on the
+// Postgres backend; an integration test would assert against a real
+// db. The contract is:
+//  1. Every active (non-deleted) tenant is yielded exactly once.
+//  2. Yielded order is stable: (name, id) ascending.
+//  3. Each yielded batch has at most batchSize entries.
+//  4. Empty batches are never yielded.
+//  5. Deleted tenants are skipped.
+//  6. yield's error short-circuits iteration.
+//
+// The (name, id) compound cursor is overdetermined for tenants
+// because tenants.name is UNIQUE — id is the tiebreaker only in
+// defensive depth against future migrations that relax uniqueness or
+// against in-flight concurrent inserts that bypass the index. The
+// test does NOT seed colliding names because the memory backend
+// (correctly) rejects them; we still validate sort order matches the
+// query's ORDER BY name, id.
+func TestMemoryTenants_IterateActive(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+
+	// Seed 7 tenants: 6 active in a deliberately-non-alphabetical
+	// insertion order, plus 1 deleted. IterateActive must (a) yield
+	// all 6 active ones in name-ascending order, (b) skip the
+	// deleted one, (c) respect batchSize=2, (d) honour ctx
+	// cancellation and yield errors.
+	seed := []Tenant{
+		{Name: "gamma", DisplayName: "Gamma", Provider: "gws", PrimaryDomain: "gamma.test", Region: "ap-southeast-1", KMSKeyARN: "k", Status: "active"},
+		{Name: "alpha", DisplayName: "Alpha", Provider: "gws", PrimaryDomain: "alpha.test", Region: "ap-southeast-1", KMSKeyARN: "k", Status: "active"},
+		{Name: "delta", DisplayName: "Delta", Provider: "gws", PrimaryDomain: "delta.test", Region: "ap-southeast-1", KMSKeyARN: "k", Status: "active"},
+		{Name: "beta", DisplayName: "Beta", Provider: "gws", PrimaryDomain: "beta.test", Region: "ap-southeast-1", KMSKeyARN: "k", Status: "active"},
+		{Name: "epsilon", DisplayName: "Eps", Provider: "gws", PrimaryDomain: "eps.test", Region: "ap-southeast-1", KMSKeyARN: "k", Status: "active"},
+		{Name: "zeta", DisplayName: "Zeta", Provider: "gws", PrimaryDomain: "zeta.test", Region: "ap-southeast-1", KMSKeyARN: "k", Status: "active"},
+		{Name: "ghost", DisplayName: "Deleted", Provider: "gws", PrimaryDomain: "ghost.test", Region: "ap-southeast-1", KMSKeyARN: "k", Status: "deleted"},
+	}
+	for i := range seed {
+		if err := r.Tenants.Create(ctx, &seed[i]); err != nil {
+			t.Fatalf("Create %s: %v", seed[i].Name, err)
+		}
+	}
+
+	// Exhaustive yield with small batchSize forces multiple batches.
+	var seen []Tenant
+	var batchSizes []int
+	if err := r.Tenants.IterateActive(ctx, 2, func(batch []Tenant) error {
+		batchSizes = append(batchSizes, len(batch))
+		seen = append(seen, batch...)
+		return nil
+	}); err != nil {
+		t.Fatalf("IterateActive: %v", err)
+	}
+	if len(seen) != 6 {
+		t.Fatalf("expected 6 active tenants, got %d: %+v", len(seen), seen)
+	}
+	for _, sz := range batchSizes {
+		if sz == 0 || sz > 2 {
+			t.Fatalf("invariant violation: batch sizes must be 1..2, got %v", batchSizes)
+		}
+	}
+	wantOrder := []string{"alpha", "beta", "delta", "epsilon", "gamma", "zeta"}
+	for i, want := range wantOrder {
+		if seen[i].Name != want {
+			t.Fatalf("position %d: got %q want %q (full order: %v)", i, seen[i].Name, want, tenantNames(seen))
+		}
+	}
+	idSet := make(map[string]struct{}, len(seen))
+	for _, ts := range seen {
+		if ts.Status == "deleted" {
+			t.Fatalf("deleted tenant leaked into IterateActive: %s", ts.Name)
+		}
+		if _, dup := idSet[ts.ID]; dup {
+			t.Fatalf("duplicate tenant in iteration: %s", ts.ID)
+		}
+		idSet[ts.ID] = struct{}{}
+	}
+
+	// yield error must short-circuit.
+	errBoom := errors.New("boom")
+	var calls int
+	err := r.Tenants.IterateActive(ctx, 2, func(batch []Tenant) error {
+		calls++
+		return errBoom
+	})
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("expected yield error to propagate, got %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected iteration to stop after first error, yield called %d times", calls)
+	}
+
+	// Cancelled context must abort iteration.
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	err = r.Tenants.IterateActive(cctx, 2, func(batch []Tenant) error {
+		t.Fatal("yield should not run for a cancelled context")
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func tenantNames(ts []Tenant) []string {
+	out := make([]string, len(ts))
+	for i, t := range ts {
+		out[i] = t.Name
+	}
+	return out
+}
+
 func TestMemoryUsers(t *testing.T) {
 	ctx := context.Background()
 	r := NewInMemoryRegistry()

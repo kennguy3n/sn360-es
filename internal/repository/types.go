@@ -251,12 +251,31 @@ const TypicalHourUnset = -1
 // ----------------------------------------------------------------------
 
 // TenantRepository persists Tenant rows.
+//
+// Background workers that need to process every tenant should use
+// IterateActive — it streams results in keyset-paginated batches so
+// memory stays O(batchSize) regardless of tenant count. Reserve List
+// for admin/operator queries on small bounded sets (the operator CLI,
+// onboarding dashboards, etc.). At 10k+ tenants, List(ctx, 0) is a
+// silent OOM waiting to happen.
 type TenantRepository interface {
 	Create(ctx context.Context, t *Tenant) error
 	GetByID(ctx context.Context, id string) (*Tenant, error)
 	GetByName(ctx context.Context, name string) (*Tenant, error)
 	UpdateStatus(ctx context.Context, id, status string) error
 	List(ctx context.Context, limit int) ([]Tenant, error)
+	// IterateActive yields non-deleted tenants in keyset-paginated
+	// batches. batchSize <= 0 selects a 100-tenant default. yield is
+	// called once per batch (potentially with a short final batch).
+	// Returning a non-nil error from yield stops iteration and the
+	// error is returned from IterateActive. Implementations MUST
+	// NOT assume the caller retains the slice across batches —
+	// callers may modify it in-place.
+	//
+	// Memory footprint is O(batchSize), not O(tenant_count). Use
+	// this from background workers that need to fan out per-tenant
+	// work; use List for finite small admin queries.
+	IterateActive(ctx context.Context, batchSize int, yield func([]Tenant) error) error
 }
 
 // UserRepository persists User rows.

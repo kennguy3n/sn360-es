@@ -13,10 +13,25 @@ import (
 
 type fakeDirSyncTenantLister struct {
 	tenants []repository.Tenant
+	err     error
 }
 
 func (f *fakeDirSyncTenantLister) List(_ context.Context, _ int) ([]repository.Tenant, error) {
-	return f.tenants, nil
+	return f.tenants, f.err
+}
+
+// IterateActive satisfies the keyset-pagination contract on
+// TenantLister. The fake yields all configured tenants in a single
+// batch — tests that want to exercise multi-batch boundary behaviour
+// should construct a custom lister that yields in chunks.
+func (f *fakeDirSyncTenantLister) IterateActive(_ context.Context, _ int, yield func([]repository.Tenant) error) error {
+	if f.err != nil {
+		return f.err
+	}
+	if len(f.tenants) == 0 {
+		return nil
+	}
+	return yield(f.tenants)
 }
 
 type fakeDirSyncDirectoryClient struct {
