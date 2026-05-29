@@ -25,11 +25,17 @@
 
   Mutual exclusivity with the per-role HPA: when keda.enabled is
   true, the per-role HPA template (`hpa-role.yaml`) skips emission
-  for ALL roles to avoid duplicate ownership warnings. If you
-  want CPU-based HPA on api + workers with KEDA on consumers,
-  you can either (a) extend this template to scope KEDA-only to
-  consumers and keep HPA for the others (preferred) or (b)
-  manage api/workers manually. Going with (a) here.
+  ONLY for the consumers role to avoid duplicate ownership
+  warnings on the deployment KEDA manages. The api role continues
+  to emit its CPU-based HPA unchanged. The workers role
+  intentionally has autoscaling disabled in values.yaml — it's a
+  fixed-replica singleton with leader election via the Redis
+  distributed lock, so it never produces an HPA regardless of
+  KEDA state. This is the "(a) scope KEDA-only to consumers and
+  keep HPA for the others" path referenced in the original
+  design notes — see hpa-role.yaml's
+  $skipForKeda := and $kedaOn (eq $role "consumers") for the
+  per-role gate.
 */}}
 {{- if and .Values.roleSplit.enabled .Values.keda.enabled }}
 {{- if hasKey .Values.roleSplit.roles "consumers" }}

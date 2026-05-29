@@ -836,8 +836,35 @@ func buildVendorRunner(cfg *config.Config, logger *slog.Logger, app *application
 func buildCleanupRunner(cfg *config.Config, logger *slog.Logger, app *application, locks worker.LockFactory, metrics worker.MetricsRecorder) *worker.Runner {
 	pruners := make([]worker.Pruner, 0, 4)
 	if app.pgDB != nil {
-		pruners = append(pruners, newPgPruner(app.pgDB, "evaluation_results", logger))
-		pruners = append(pruners, newPgPruner(app.pgDB, "feedback_events", logger))
+		// Tables managed by the partition worker (DROP PARTITION
+		// at O(1) is strictly cheaper than the row-level DELETE
+		// loop here) only need the cleanup pruner when the
+		// operator has disabled the partition worker via
+		// WORKER_PARTITION_INTERVAL=0. Otherwise running both is
+		// pure redundant work — the row-level DELETE finds
+		// nothing in dropped partitions and is bounded by
+		// retention inside the surviving ones, so it produces
+		// non-zero metric noise without ever pruning meaningful
+		// data. Devin Review flagged this on PR #46 alongside
+		// the partition-worker landing; the gate keeps the row-
+		// level fallback available for operators who choose to
+		// run without the partition worker while skipping the
+		// redundant pass for the default configuration.
+		partitionWorkerActive := cfg.Worker.PartitionInterval > 0
+		for _, t := range partitionedAppendOnlyTables() {
+			if !partitionWorkerActive {
+				pruners = append(pruners, newPgPruner(app.pgDB, t.Parent, logger))
+			}
+		}
+		if !partitionWorkerActive {
+			logger.Info("sn360-es: cleanup worker handling partitioned tables (partition worker disabled)",
+				slog.Duration("partition_interval", cfg.Worker.PartitionInterval))
+		}
+		// communication_histories is NOT partitioned (it's an
+		// upsert/aggregate, the wrong shape for time-range
+		// partitioning — see PR #45 migration 0017 design notes).
+		// The cleanup worker is its only retention path
+		// regardless of partition-worker state.
 		pruners = append(pruners, newPgPruner(app.pgDB, "communication_histories", logger))
 	}
 	if len(pruners) == 0 {
