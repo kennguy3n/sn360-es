@@ -41,8 +41,19 @@ type RspamdCacheConfig struct {
 	KeyPrefix string
 }
 
-// RspamdCache caches Rspamd verdicts keyed by the SHA-256 of the raw
-// mail bytes. It is safe for concurrent use.
+// RspamdCache caches Rspamd verdicts keyed by tenantID + the SHA-256 of
+// the raw mail bytes. It is safe for concurrent use.
+//
+// The tenant ID is a mandatory component of the key even though Rspamd
+// scoring itself is content-pure (SPF/DKIM/DMARC + regex-driven
+// symbols). Sharing entries across tenants would create a
+// content-addressed timing side-channel: tenant A could probe whether a
+// known-content email had recently been seen by any other tenant by
+// observing cache hit/miss latency. The cost of an extra Rspamd call on
+// a cross-tenant miss is small (Rspamd is in-cluster) and the privacy
+// property (tenant A learns nothing about tenant B's mail flow) is
+// worth more than the inter-tenant cache reuse. The same rationale that
+// applies to AICache (see ai_cache.go) applies here.
 type RspamdCache struct {
 	client *redisclient.Client
 	cfg    RspamdCacheConfig
@@ -62,17 +73,35 @@ func NewRspamdCache(client *redisclient.Client, cfg RspamdCacheConfig) (*RspamdC
 	return &RspamdCache{client: client, cfg: cfg}, nil
 }
 
-// Key returns the cache key for raw mail bytes. Exposed so callers and
-// tests can verify determinism.
-func (c *RspamdCache) Key(rawMail []byte) string {
+// Key returns the cache key for (tenantID, rawMail). The returned key
+// is namespaced by tenant so two tenants cannot share cache entries
+// even when they receive byte-identical content. Empty tenantID is
+// rejected at the public Get/Set/Invalidate entry points; Key panics
+// on empty tenantID to make accidental cross-tenant fingerprinting
+// impossible (the panic is caught by tests, never reached at runtime
+// because Get/Set/Invalidate validate first).
+func (c *RspamdCache) Key(tenantID string, rawMail []byte) string {
+	if tenantID == "" {
+		panic("rspamd_cache: Key called with empty tenantID — callers must use Get/Set/Invalidate which validate")
+	}
 	h := sha256.New()
+	// tenantID is bound into the key first so it cannot collide with a
+	// rawMail payload from another tenant. The 0x00 separator is
+	// length-binding so neither tenantID nor rawMail can be crafted to
+	// reproduce another tenant's hash.
+	h.Write([]byte(tenantID))
+	h.Write([]byte{0})
 	h.Write(rawMail)
-	return c.cfg.KeyPrefix + hex.EncodeToString(h.Sum(nil))
+	return c.cfg.KeyPrefix + tenantID + ":" + hex.EncodeToString(h.Sum(nil))
 }
 
-// Get returns the cached Rspamd verdict for rawMail.
-func (c *RspamdCache) Get(ctx context.Context, rawMail []byte) (RspamdResult, bool, error) {
-	raw, ok, err := c.client.Get(ctx, c.Key(rawMail))
+// Get returns the cached Rspamd verdict for (tenantID, rawMail).
+// Returns ErrMissingTenantID if tenantID is empty.
+func (c *RspamdCache) Get(ctx context.Context, tenantID string, rawMail []byte) (RspamdResult, bool, error) {
+	if tenantID == "" {
+		return RspamdResult{}, false, ErrMissingTenantID
+	}
+	raw, ok, err := c.client.Get(ctx, c.Key(tenantID, rawMail))
 	if err != nil || !ok {
 		return RspamdResult{}, false, err
 	}
@@ -83,8 +112,12 @@ func (c *RspamdCache) Get(ctx context.Context, rawMail []byte) (RspamdResult, bo
 	return out, true, nil
 }
 
-// Set caches result under TTL.
-func (c *RspamdCache) Set(ctx context.Context, rawMail []byte, result RspamdResult) error {
+// Set caches result for (tenantID, rawMail) under TTL. Returns
+// ErrMissingTenantID if tenantID is empty.
+func (c *RspamdCache) Set(ctx context.Context, tenantID string, rawMail []byte, result RspamdResult) error {
+	if tenantID == "" {
+		return ErrMissingTenantID
+	}
 	if result.StoredAt.IsZero() {
 		result.StoredAt = time.Now().UTC()
 	}
@@ -92,10 +125,14 @@ func (c *RspamdCache) Set(ctx context.Context, rawMail []byte, result RspamdResu
 	if err != nil {
 		return fmt.Errorf("rspamd_cache: marshal: %w", err)
 	}
-	return c.client.Set(ctx, c.Key(rawMail), string(blob), c.cfg.TTL)
+	return c.client.Set(ctx, c.Key(tenantID, rawMail), string(blob), c.cfg.TTL)
 }
 
-// Invalidate removes the cache entry for rawMail.
-func (c *RspamdCache) Invalidate(ctx context.Context, rawMail []byte) error {
-	return c.client.Del(ctx, c.Key(rawMail))
+// Invalidate removes the cache entry for (tenantID, rawMail). Returns
+// ErrMissingTenantID if tenantID is empty.
+func (c *RspamdCache) Invalidate(ctx context.Context, tenantID string, rawMail []byte) error {
+	if tenantID == "" {
+		return ErrMissingTenantID
+	}
+	return c.client.Del(ctx, c.Key(tenantID, rawMail))
 }

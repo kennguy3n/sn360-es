@@ -109,6 +109,19 @@ var tenantScopedTables = map[string]struct{}{
 	"org_graphs":                {},
 }
 
+// tableREs holds one pre-compiled regexp per tenant-scoped table,
+// populated at init time so the hot path (every SQL literal in the
+// codebase) does a map lookup instead of recompiling a regexp. With 16
+// tables and ~hundreds of SQL literals across the codebase, naive
+// per-call regexp.MustCompile was the dominant cost of the analyser.
+var tableREs = func() map[string]*regexp.Regexp {
+	out := make(map[string]*regexp.Regexp, len(tenantScopedTables))
+	for t := range tenantScopedTables {
+		out[t] = compileTableRE(t)
+	}
+	return out
+}()
+
 // excludedFiles is paths the linter never inspects. Migrations
 // (`migrations/`) are SQL files (not Go) so they are excluded
 // automatically by the .go filter, but Go files that legitimately
@@ -125,10 +138,11 @@ var excludedFiles = []string{
 // match keywords embedded in comments or inside string concatenations.
 var statementRE = regexp.MustCompile(`(?is)^\s*(?:--[^\n]*\n\s*)*(SELECT|INSERT|UPDATE|DELETE|WITH|UPSERT|MERGE)\b`)
 
-// tableRE matches `<tableName>` as a whole word, case-insensitive.
-// Used both to detect that a tenant-scoped table appears in the SQL
-// and to anchor the predicate search around it.
-func tableRE(name string) *regexp.Regexp {
+// compileTableRE returns a fresh regexp that matches `<tableName>` as a
+// whole word, case-insensitive. Called once per table at init time;
+// the hot path (table-scan in checkSQL) reads from the pre-compiled
+// tableREs map directly.
+func compileTableRE(name string) *regexp.Regexp {
 	// (?i) — case-insensitive; \b — word boundary so `users` does not
 	// also match `users_active`.
 	return regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(name) + `\b`)
@@ -319,7 +333,7 @@ func scanFile(fset *token.FileSet, f *ast.File) []violation {
 func tablesInSQL(sql string) []string {
 	var out []string
 	for t := range tenantScopedTables {
-		if tableRE(t).MatchString(sql) {
+		if tableREs[t].MatchString(sql) {
 			out = append(out, t)
 		}
 	}

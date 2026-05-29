@@ -134,8 +134,12 @@ func TestBuildMux_RegistersAllRoutes(t *testing.T) {
 	// context key the JWT middleware would. Tests that want to
 	// exercise the unauthenticated path simply omit the header.
 	authedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if t := r.Header.Get("X-Test-Tenant"); t != "" {
-			r = r.WithContext(middleware.ContextWithTenantID(r.Context(), t))
+		// Rename to `tid` so the closure parameter does not shadow
+		// the enclosing *testing.T (which is intentionally NOT
+		// captured here — handlers reach for the request, not the
+		// test, and shadowing makes that easy to misread).
+		if tid := r.Header.Get("X-Test-Tenant"); tid != "" {
+			r = r.WithContext(middleware.ContextWithTenantID(r.Context(), tid))
 		}
 		mux.ServeHTTP(w, r)
 	})
