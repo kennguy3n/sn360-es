@@ -553,6 +553,13 @@ type escalationCreateEnvelope struct {
 }
 
 type escalationResolveEnvelope struct {
+	// TenantID is the canonical tenant scoping for the resolution.
+	// It is sourced from the verified message header on the NATS
+	// subject (events.HeaderTenantID) — never from the JSON body —
+	// so a publisher cannot resolve another tenant's ticket by
+	// crafting a body. The field is still present in the JSON so
+	// tests can construct envelopes directly.
+	TenantID     string                `json:"tenant_id,omitempty"`
 	TicketID     string                `json:"ticket_id"`
 	ResolverHash string                `json:"resolver_hash"`
 	Outcome      dto.EscalationOutcome `json:"outcome"`
@@ -590,7 +597,21 @@ func (a *application) handleEscalation(ctx context.Context, msg events.Message) 
 		if env.TicketID == "" {
 			return nil
 		}
-		if _, err := a.escalationSvc.ResolveEscalation(ctx, env.TicketID, env.ResolverHash, env.Outcome, env.Notes); err != nil {
+		// Prefer the verified header tenant_id over the JSON body so
+		// a malformed publisher cannot smuggle in a different tenant.
+		// Fall back to the body only if the publisher did not stamp
+		// a header (older clients during the rollout window) — the
+		// service-level tenantID validation rejects empty values.
+		tenantID := msg.Headers()[events.HeaderTenantID]
+		if tenantID == "" {
+			tenantID = env.TenantID
+		}
+		if tenantID == "" {
+			a.logger.WarnContext(ctx, "sn360-es: escalation.resolved missing tenant_id",
+				slog.String("ticket_id", env.TicketID))
+			return nil
+		}
+		if _, err := a.escalationSvc.ResolveEscalation(ctx, tenantID, env.TicketID, env.ResolverHash, env.Outcome, env.Notes); err != nil {
 			return fmt.Errorf("escalation.resolved: %w", err)
 		}
 	default:

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/kennguy3n/sn360-es/internal/dto"
+	"github.com/kennguy3n/sn360-es/internal/middleware"
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
 )
 
@@ -55,7 +56,16 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "ticket_id is required")
 		return
 	}
-	ticket, err := h.svc.ResolveEscalation(r.Context(), req.TicketID, req.ResolverHash, req.Outcome, req.Notes)
+	// tenantID is sourced from the verified JWT claim, never from the
+	// request body — a caller cannot trick the service into resolving
+	// another tenant's ticket by lying about which tenant they belong
+	// to. An unauthenticated request (no claim) is rejected.
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	if tenantID == "" {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	ticket, err := h.svc.ResolveEscalation(r.Context(), tenantID, req.TicketID, req.ResolverHash, req.Outcome, req.Notes)
 	if err != nil {
 		h.logger.WarnContext(r.Context(), "escalation: resolve failed",
 			slog.String("ticket_id", req.TicketID),
@@ -87,7 +97,12 @@ func (h *EscalationHandler) ServeGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ticket_id is required")
 		return
 	}
-	ticket, ok, err := h.svc.Load(r.Context(), ticketID)
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	if tenantID == "" {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	ticket, ok, err := h.svc.Load(r.Context(), tenantID, ticketID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "lookup failed")
 		return

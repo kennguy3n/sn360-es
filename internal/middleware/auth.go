@@ -30,6 +30,25 @@ func TenantIDFromContext(ctx context.Context) string {
 	return v
 }
 
+// ContextWithTenantID returns ctx augmented with the supplied tenantID
+// under the same key JWTAuth uses to inject the verified claim. It is
+// the inverse of TenantIDFromContext and is intended for two specific
+// call-sites:
+//
+//   - tests, which need to seed an authenticated request context
+//     without standing up a real JWT issuer; and
+//   - internal callers (e.g. event-bus consumers) that have already
+//     verified the tenant via the message header and want to make it
+//     available to downstream handler-style code that reads from
+//     context.
+//
+// Outside those two cases, the JWT middleware is the only thing that
+// should set this key. Setting it from a request handler that
+// otherwise reads it would be a bypass of the auth check.
+func ContextWithTenantID(ctx context.Context, tenantID string) context.Context {
+	return context.WithValue(ctx, ctxKeyTenantID, tenantID)
+}
+
 // ClaimsFromContext returns the full JWT claims if the request was
 // authenticated, or nil otherwise.
 func ClaimsFromContext(ctx context.Context) *privacy.ActionClaims {

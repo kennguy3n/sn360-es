@@ -93,7 +93,7 @@ func TestEscalation_ResolveRecordsOutcomeAndFeedsML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Escalate: %v", err)
 	}
-	resolved, err := svc.ResolveEscalation(context.Background(), tk.TicketID, "soc-analyst-1",
+	resolved, err := svc.ResolveEscalation(context.Background(), "acme", tk.TicketID, "soc-analyst-1",
 		dto.OutcomeConfirmedPhishing, "Phishing confirmed; user notified.")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -115,8 +115,8 @@ func TestEscalation_ResolveRecordsOutcomeAndFeedsML(t *testing.T) {
 func TestEscalation_DoubleResolveRejected(t *testing.T) {
 	svc, _ := NewEscalationService(EscalationServiceConfig{Publisher: &fakeEscPub{}})
 	tk, _ := svc.Escalate(context.Background(), "acme", dto.EscalationIncident{Reason: dto.EscalationReasonUserRequested})
-	_, _ = svc.ResolveEscalation(context.Background(), tk.TicketID, "a", dto.OutcomeFalsePositive, "")
-	if _, err := svc.ResolveEscalation(context.Background(), tk.TicketID, "b", dto.OutcomeConfirmedPhishing, ""); err == nil {
+	_, _ = svc.ResolveEscalation(context.Background(), "acme", tk.TicketID, "a", dto.OutcomeFalsePositive, "")
+	if _, err := svc.ResolveEscalation(context.Background(), "acme", tk.TicketID, "b", dto.OutcomeConfirmedPhishing, ""); err == nil {
 		t.Fatal("expected error for double-resolve")
 	}
 }
@@ -124,7 +124,7 @@ func TestEscalation_DoubleResolveRejected(t *testing.T) {
 func TestEscalation_ResolveValidatesOutcome(t *testing.T) {
 	svc, _ := NewEscalationService(EscalationServiceConfig{Publisher: &fakeEscPub{}})
 	tk, _ := svc.Escalate(context.Background(), "acme", dto.EscalationIncident{Reason: dto.EscalationReasonUserRequested})
-	if _, err := svc.ResolveEscalation(context.Background(), tk.TicketID, "a", "garbage", ""); err == nil {
+	if _, err := svc.ResolveEscalation(context.Background(), "acme", tk.TicketID, "a", "garbage", ""); err == nil {
 		t.Fatal("expected error for invalid outcome")
 	}
 }

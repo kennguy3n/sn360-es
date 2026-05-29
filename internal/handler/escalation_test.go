@@ -12,9 +12,20 @@ import (
 	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/dto"
+	"github.com/kennguy3n/sn360-es/internal/middleware"
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
 	"github.com/kennguy3n/sn360-es/pkg/events"
 )
+
+// authReq wraps httptest.NewRequest with an authenticated context for
+// the supplied tenant — matches what the JWT middleware would do in
+// production. Tests that need to assert the unauthenticated path call
+// httptest.NewRequest directly.
+func authReq(method, target, body, tenantID string) *http.Request {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req = req.WithContext(middleware.ContextWithTenantID(req.Context(), tenantID))
+	return req
+}
 
 type stubEscalationPublisher struct{}
 
@@ -62,7 +73,7 @@ func TestEscalationHandler_ServeResolve_OK(t *testing.T) {
 		"outcome":       string(dto.OutcomeConfirmedPhishing),
 		"notes":         "Verified",
 	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/escalation/resolve", strings.NewReader(string(body)))
+	req := authReq(http.MethodPost, "/v1/escalation/resolve", string(body), "acme")
 	rec := httptest.NewRecorder()
 	h.ServeResolve(rec, req)
 
@@ -96,7 +107,7 @@ func TestEscalationHandler_ServeResolve_Rejections(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(tc.method, "/v1/escalation/resolve", strings.NewReader(tc.body))
+			req := authReq(tc.method, "/v1/escalation/resolve", tc.body, "acme")
 			rec := httptest.NewRecorder()
 			h.ServeResolve(rec, req)
 			if rec.Code != tc.want {
@@ -106,12 +117,77 @@ func TestEscalationHandler_ServeResolve_Rejections(t *testing.T) {
 	}
 }
 
+// TestEscalationHandler_RejectsCrossTenant is the regression test for
+// the bug where ServeResolve / ServeGet sourced ticket_id from the
+// request but never enforced the caller's tenant. Tenant B must not
+// be able to load or resolve a ticket created by tenant A.
+func TestEscalationHandler_RejectsCrossTenant(t *testing.T) {
+	svc := newTestEscalationService(t)
+	tk := seedTicket(t, svc) // seeded under tenant "acme"
+	h := NewEscalationHandler(nil, svc)
+
+	// GET as a different tenant must return 404, not 200.
+	getReq := authReq(http.MethodGet, "/v1/escalation/"+tk.TicketID, "", "other-tenant")
+	getRec := httptest.NewRecorder()
+	h.ServeGet(getRec, getReq)
+	if getRec.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant GET: status=%d want=404 body=%s", getRec.Code, getRec.Body.String())
+	}
+
+	// POST resolve as a different tenant must fail (the service
+	// returns ticket-not-found which the handler maps to 400 by
+	// design — the contract is that a successful cross-tenant
+	// resolution is impossible).
+	body, _ := json.Marshal(map[string]any{
+		"ticket_id":     tk.TicketID,
+		"resolver_hash": "attacker",
+		"outcome":       string(dto.OutcomeClosedNoAction),
+	})
+	resolveReq := authReq(http.MethodPost, "/v1/escalation/resolve", string(body), "other-tenant")
+	resolveRec := httptest.NewRecorder()
+	h.ServeResolve(resolveRec, resolveReq)
+	if resolveRec.Code == http.StatusOK {
+		t.Fatalf("cross-tenant POST resolve unexpectedly succeeded: body=%s", resolveRec.Body.String())
+	}
+
+	// Sanity: the rightful owner can still load it.
+	owner := authReq(http.MethodGet, "/v1/escalation/"+tk.TicketID, "", "acme")
+	ownerRec := httptest.NewRecorder()
+	h.ServeGet(ownerRec, owner)
+	if ownerRec.Code != http.StatusOK {
+		t.Fatalf("owner GET: status=%d body=%s", ownerRec.Code, ownerRec.Body.String())
+	}
+}
+
+// TestEscalationHandler_RejectsUnauthenticated covers the
+// no-JWT-claim path. The handler must refuse the request with 401 so
+// missing auth cannot be papered over by a default tenant.
+func TestEscalationHandler_RejectsUnauthenticated(t *testing.T) {
+	svc := newTestEscalationService(t)
+	h := NewEscalationHandler(nil, svc)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/escalation/anything", nil)
+	getRec := httptest.NewRecorder()
+	h.ServeGet(getRec, getReq)
+	if getRec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated GET: status=%d want=401", getRec.Code)
+	}
+
+	resolveReq := httptest.NewRequest(http.MethodPost, "/v1/escalation/resolve",
+		strings.NewReader(`{"ticket_id":"x","outcome":"closed_no_action"}`))
+	resolveRec := httptest.NewRecorder()
+	h.ServeResolve(resolveRec, resolveReq)
+	if resolveRec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated POST: status=%d want=401", resolveRec.Code)
+	}
+}
+
 func TestEscalationHandler_ServeGet_OK(t *testing.T) {
 	svc := newTestEscalationService(t)
 	tk := seedTicket(t, svc)
 	h := NewEscalationHandler(nil, svc)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/escalation/"+tk.TicketID, nil)
+	req := authReq(http.MethodGet, "/v1/escalation/"+tk.TicketID, "", "acme")
 	rec := httptest.NewRecorder()
 	h.ServeGet(rec, req)
 
@@ -141,7 +217,7 @@ func TestEscalationHandler_ServeGet_Rejections(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(tc.method, tc.path, nil)
+			req := authReq(tc.method, tc.path, "", "acme")
 			rec := httptest.NewRecorder()
 			h.ServeGet(rec, req)
 			if rec.Code != tc.want {
