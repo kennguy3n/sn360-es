@@ -27,6 +27,14 @@ func authReq(method, target, body, tenantID string) *http.Request {
 	return req
 }
 
+// withTenant stamps the request's context with a verified tenant ID so
+// the handler tests can exercise the post-auth code path without going
+// through the JWT middleware (which is exercised end-to-end elsewhere).
+func withTenant(req *http.Request, tenantID string) *http.Request {
+	return req.WithContext(middleware.ContextWithTenantID(req.Context(), tenantID))
+}
+
+
 type stubEscalationPublisher struct{}
 
 func (stubEscalationPublisher) Publish(_ context.Context, _ string, _ []byte, _ ...events.PublishOption) error {
@@ -222,7 +230,7 @@ func TestEscalationHandler_ServeGet_OK(t *testing.T) {
 	tk := seedTicket(t, svc)
 	h := NewEscalationHandler(nil, svc)
 
-	req := authReq(http.MethodGet, "/v1/escalation/"+tk.TicketID, "", "acme")
+	req := authReq(http.MethodGet, "/v1/escalation/"+tk.TicketID, "", tk.TenantID)
 	rec := httptest.NewRecorder()
 	h.ServeGet(rec, req)
 
@@ -233,6 +241,55 @@ func TestEscalationHandler_ServeGet_OK(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp.TicketID != tk.TicketID {
 		t.Fatalf("got %q want %q", resp.TicketID, tk.TicketID)
+	}
+}
+
+// TestEscalationHandler_ServeGet_CrossTenantReturns404 pins the
+// defense-in-depth handler-level tenant check added to address the
+// Devin Review finding: a ticket owned by tenant A must NOT be
+// observable to an authenticated caller from tenant B. The response
+// MUST be 404 (indistinguishable from a non-existent ticket), not 403
+// — returning 403 would leak the existence of tickets from foreign
+// tenants via the caller's ability to enumerate ticket IDs.
+func TestEscalationHandler_ServeGet_CrossTenantReturns404(t *testing.T) {
+	svc := newTestEscalationService(t)
+	tk := seedTicket(t, svc) // owned by "acme"
+	h := NewEscalationHandler(nil, svc)
+
+	req := withTenant(httptest.NewRequest(http.MethodGet, "/v1/escalation/"+tk.TicketID, nil), "different-tenant")
+	rec := httptest.NewRecorder()
+	h.ServeGet(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant GET should return 404, got status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// Body must NOT contain anything that could leak the ticket's
+	// existence to the wrong tenant (e.g. its actual tenant ID,
+	// timeline, outcome, ...).
+	body := rec.Body.String()
+	if strings.Contains(body, "acme") || strings.Contains(body, tk.TicketID) {
+		t.Fatalf("cross-tenant 404 body leaked owner data: %s", body)
+	}
+}
+
+// TestEscalationHandler_ServeGet_UnauthenticatedReturns401 pins the
+// pre-Load auth gate: a request that reaches the handler without a
+// verified tenant (i.e. the route was wired without the auth
+// middleware, OR the test harness bypassed it) must receive 401 —
+// NOT proceed to load + leak. Loading first and then returning 404
+// would allow an unauthenticated caller to enumerate ticket IDs by
+// observing the timing difference between hits and misses.
+func TestEscalationHandler_ServeGet_UnauthenticatedReturns401(t *testing.T) {
+	svc := newTestEscalationService(t)
+	tk := seedTicket(t, svc)
+	h := NewEscalationHandler(nil, svc)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/escalation/"+tk.TicketID, nil)
+	rec := httptest.NewRecorder()
+	h.ServeGet(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated GET should return 401, got status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

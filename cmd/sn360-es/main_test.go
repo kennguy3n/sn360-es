@@ -227,6 +227,14 @@ func TestBuildMux_RegistersAllRoutes(t *testing.T) {
 	// body) for unknown ticket IDs, which is indistinguishable by
 	// status from the bare-mux 404 above. Round-trip a created ticket
 	// to prove the route is genuinely wired.
+	//
+	// Note: ServeGet now requires a verified tenant in request
+	// context (Devin Review BUG_0001 fix) — without going through
+	// wrapMiddleware the bare mux can't inject it, so we assert 401
+	// instead of 200. 401 still proves the route is wired (we
+	// reached the handler's auth gate, not the mux's fallback 404).
+	// Authenticated round-trip is covered by the unit tests at
+	// internal/handler/escalation_test.go.
 	t.Run("escalation get wired via round-trip", func(t *testing.T) {
 		if app.escalationSvc == nil {
 			t.Skip("escalation service not configured")
@@ -248,8 +256,8 @@ func TestBuildMux_RegistersAllRoutes(t *testing.T) {
 			t.Fatalf("get: %v", err)
 		}
 		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("status: got %d, want 200", resp.StatusCode)
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("status: got %d, want 401 (route wired, auth gate hit)", resp.StatusCode)
 		}
 	})
 }

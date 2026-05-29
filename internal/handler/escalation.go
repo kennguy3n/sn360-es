@@ -129,5 +129,28 @@ func (h *EscalationHandler) ServeGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "ticket not found")
 		return
 	}
+	// Tenant isolation: cross-tenant accesses return 404 (not 403)
+	// so the response is indistinguishable from a non-existent
+	// ticket. Returning 403 would leak the existence of a ticket
+	// owned by a different tenant; the OpenAPI spec for this route
+	// explicitly documents this 404-on-mismatch behaviour, and a
+	// caller cannot distinguish "ticket exists, wrong tenant" from
+	// "ticket never existed" via the response alone.
+	//
+	// This is a defense-in-depth check at the handler boundary;
+	// when PR #44's `WHERE tenant_id = $1` store-level filter lands,
+	// the store will also refuse the lookup before the row ever
+	// reaches us. Both layers are intentional — the handler check
+	// also covers in-memory and mock stores used in tests + the
+	// CommunityEdition demo deployment.
+	if ticket.TenantID != tenantID {
+		h.logger.WarnContext(r.Context(), "escalation: cross-tenant GET attempt",
+			slog.String("ticket_id", ticketID),
+			slog.String("caller_tenant", tenantID),
+			slog.String("ticket_tenant", ticket.TenantID),
+		)
+		writeError(w, http.StatusNotFound, "ticket not found")
+		return
+	}
 	writeJSON(w, http.StatusOK, ticket)
 }

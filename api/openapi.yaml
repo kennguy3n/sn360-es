@@ -697,18 +697,43 @@ components:
           type: string
 
     EscalationResolveRequest:
+      description: |
+        Payload for POST /v1/escalation/resolve. Field names + enum
+        values are the canonical SOC-outcome vocabulary used by
+        `internal/dto.EscalationOutcome`; the handler decodes with
+        `DisallowUnknownFields()` so this schema must stay in lock-
+        step with the Go struct tags at internal/handler/escalation.go.
       type: object
-      required: [ticket_id, resolution]
+      required: [ticket_id, outcome]
       properties:
         ticket_id:
           type: string
-        resolution:
+        resolver_hash:
           type: string
-          enum: [confirmed_threat, false_positive, ignored]
+          description: |
+            Privacy-hash identifying the SecOps engineer who resolved
+            the ticket. Optional in the request; populated by the
+            handler from request context if not supplied.
+        outcome:
+          type: string
+          description: |
+            SOC verdict on the escalated incident. Drives the feedback
+            sink + training pipeline at internal/service/agent/escalation.go.
+          enum:
+            - confirmed_phishing
+            - false_positive
+            - requires_hunting
+            - closed_no_action
         notes:
           type: string
 
     EscalationResolveResponse:
+      description: |
+        Successful resolve responses return the full updated
+        EscalationTicket (including timeline, outcome, resolution
+        notes). This schema documents the response wrapper kept for
+        backward compatibility with first-generation clients; new
+        clients should consume EscalationTicket directly.
       type: object
       properties:
         status:
