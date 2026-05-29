@@ -226,6 +226,12 @@ CREATE INDEX IF NOT EXISTS idx_comm_hist_tenant_recipient
     ON communication_histories (tenant_id, recipient_hash);
 CREATE INDEX IF NOT EXISTS idx_comm_hist_relationship
     ON communication_histories (tenant_id, relationship);
+-- Supports ListByTenant: `WHERE tenant_id=$1 AND last_seen_at >= $2
+-- ORDER BY last_seen_at DESC`. The DESC on the index column lets
+-- the planner return rows already-sorted, avoiding a per-tenant
+-- sort step on top of the bitmap scan.
+CREATE INDEX IF NOT EXISTS idx_comm_hist_tenant_last_seen
+    ON communication_histories (tenant_id, last_seen_at DESC);
 
 -- ----------------------------------------------------------------------
 -- 10. Campaigns (phishing-simulation lifecycle)

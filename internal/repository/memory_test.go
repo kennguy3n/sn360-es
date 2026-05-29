@@ -475,3 +475,59 @@ func TestMemoryFeedbackEvents_TenantIsolation(t *testing.T) {
 		t.Fatalf("tenant-b counts: %+v", got)
 	}
 }
+
+// TestMemoryCommHistory_ListByTenant_Limits pins the clamp
+// contract introduced when the Postgres backend stopped using
+// `LIMIT NULLIF($N,0)` (which silently meant "no cap"). The
+// in-memory backend must clamp identically so tests that use
+// NewInMemoryRegistry observe the same bounded result as
+// production.
+func TestMemoryCommHistory_ListByTenant_Limits(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+	// Seed three rows for tenant tx with distinct LastSeenAt so
+	// the deterministic DESC sort lets us check ordering.
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		err := r.CommunicationHistories.Upsert(ctx, &CommunicationHistory{
+			TenantID:         "tx",
+			SenderHash:       []byte{byte('s'), byte('0' + i)},
+			RecipientHash:    []byte("r"),
+			SenderDomainHash: []byte("sd"),
+			LastSeenAt:       base.Add(time.Duration(i) * time.Hour),
+		})
+		if err != nil {
+			t.Fatalf("seed %d: %v", i, err)
+		}
+	}
+
+	// limit <= 0 ⇒ clamp to CommHistoryListByTenantMaxLimit, which
+	// is much larger than 3, so all rows come back.
+	all, err := r.CommunicationHistories.ListByTenant(ctx, "tx", time.Time{}, 0)
+	if err != nil {
+		t.Fatalf("ListByTenant(0): %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("ListByTenant(0) len: got %d, want 3", len(all))
+	}
+
+	// Explicit limit smaller than the row count truncates.
+	two, err := r.CommunicationHistories.ListByTenant(ctx, "tx", time.Time{}, 2)
+	if err != nil {
+		t.Fatalf("ListByTenant(2): %v", err)
+	}
+	if len(two) != 2 {
+		t.Fatalf("ListByTenant(2) len: got %d, want 2", len(two))
+	}
+
+	// limit > CommHistoryListByTenantMaxLimit is silently clamped
+	// — the in-memory backend should still return every matching
+	// row (3) without error.
+	big, err := r.CommunicationHistories.ListByTenant(ctx, "tx", time.Time{}, CommHistoryListByTenantMaxLimit+1)
+	if err != nil {
+		t.Fatalf("ListByTenant(over-cap): %v", err)
+	}
+	if len(big) != 3 {
+		t.Fatalf("ListByTenant(over-cap) len: got %d, want 3", len(big))
+	}
+}

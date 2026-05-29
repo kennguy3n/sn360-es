@@ -966,7 +966,12 @@ type vendorScannerAdapter struct {
 }
 
 func (v *vendorScannerAdapter) ScanRecentSenders(ctx context.Context, tenantID string, since time.Time) ([]agent.VendorCandidate, error) {
-	histories, err := v.histories.ListByTenant(ctx, tenantID, since, 0)
+	// Pass the documented hard cap explicitly rather than relying on
+	// the repository's clamp default. Vendor discovery only needs
+	// the top-N most-recent senders per tenant; if a tenant ever
+	// exceeds the cap, vendor discovery will resume from the
+	// freshest rows on the next worker pass.
+	histories, err := v.histories.ListByTenant(ctx, tenantID, since, repository.CommHistoryListByTenantMaxLimit)
 	if err != nil {
 		return nil, err
 	}

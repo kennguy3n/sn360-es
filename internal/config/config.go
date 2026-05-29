@@ -741,14 +741,17 @@ func Load() (Config, error) {
 			FetchBatchSize:   getInt("REDIS_FETCH_BATCH_SIZE", 10),
 		},
 		Postgres: Postgres{
-			Host:            getStr("PG_HOST", "127.0.0.1"),
-			Port:            getInt("PG_PORT", 5432),
-			User:            getStr("PG_USER", "sn360es"),
-			Password:        getStr("PG_PASSWORD", "sn360es"),
-			Database:        getStr("PG_DATABASE", "sn360es"),
-			SSLMode:         getStr("PG_SSLMODE", "disable"),
-			MaxOpenConns:    getInt("PG_MAX_OPEN_CONNS", 20),
-			MaxIdleConns:    getInt("PG_MAX_IDLE_CONNS", 5),
+			Host:     getStr("PG_HOST", "127.0.0.1"),
+			Port:     getInt("PG_PORT", 5432),
+			User:     getStr("PG_USER", "sn360es"),
+			Password: getStr("PG_PASSWORD", "sn360es"),
+			Database: getStr("PG_DATABASE", "sn360es"),
+			// Default to require so a forgotten PG_SSLMODE in a new
+			// deployment fails secure. Production environments also
+			// refuse the explicit value "disable" in validate().
+			SSLMode:         getStr("PG_SSLMODE", "require"),
+			MaxOpenConns:    getInt("PG_MAX_OPEN_CONNS", 40),
+			MaxIdleConns:    getInt("PG_MAX_IDLE_CONNS", 10),
 			ConnMaxLifetime: getDuration("PG_CONN_MAX_LIFETIME", time.Hour),
 		},
 		AWS: AWS{
@@ -1080,6 +1083,29 @@ func (c Config) validate() error {
 		}
 		if c.SMTP.SkipVerify {
 			return errors.New("SMTP_SKIP_VERIFY=true is not allowed in production environments (UAT/prod)")
+		}
+		// PG_SSLMODE=disable would send the Postgres password (and
+		// every subsequent row) over an unencrypted TCP connection.
+		// Same fail-closed treatment as NATS_TLS_INSECURE /
+		// SMTP_SKIP_VERIFY: refuse at boot rather than ship a quiet
+		// downgrade. Empty / unset is treated as "library default"
+		// (which is "prefer" for lib/pq) and is intentionally not
+		// rejected here — the rolling default in load() lands on
+		// "require", so only an operator who explicitly sets
+		// PG_SSLMODE=disable trips this guard.
+		if strings.EqualFold(strings.TrimSpace(c.Postgres.SSLMode), "disable") {
+			return errors.New("PG_SSLMODE=disable is not allowed in production environments (UAT/prod); set PG_SSLMODE=require or PG_SSLMODE=verify-full")
+		}
+		// CORS_ALLOWED_ORIGINS=* (wildcard) defeats browser SOP for
+		// every authenticated route. middleware/cors.go already
+		// fails closed by defaulting to no origins in non-dev, but
+		// an operator who explicitly sets the wildcard in their
+		// production .env would otherwise sail past that guard.
+		// Catch it at config-load.
+		for _, o := range c.CORS.AllowedOrigins {
+			if strings.TrimSpace(o) == "*" {
+				return errors.New("CORS_ALLOWED_ORIGINS=* (wildcard) is not allowed in production environments (UAT/prod); specify explicit origin(s)")
+			}
 		}
 		secret := c.Banner.TokenSecret
 		if secret != "" {
