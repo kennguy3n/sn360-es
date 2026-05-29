@@ -12,6 +12,7 @@ import (
 
 	"github.com/kennguy3n/sn360-es/internal/config"
 	"github.com/kennguy3n/sn360-es/internal/constant"
+	"github.com/kennguy3n/sn360-es/internal/dto"
 	"github.com/kennguy3n/sn360-es/internal/handler"
 	"github.com/kennguy3n/sn360-es/internal/repository"
 	"github.com/kennguy3n/sn360-es/internal/service"
@@ -680,6 +681,22 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 					// per-relationship signals for the same input.
 					Enricher: app.signalEnricher,
 					Logger:   logger,
+					// Surface legacy-shape arrivals so operators
+					// can pinpoint the publisher fleet that still
+					// emits a flat dto.EvaluateRequest payload.
+					// The orchestrator handles both shapes — the
+					// metric only exists to gate the eventual
+					// removal of the tolerance shim.
+					OnLegacyPayload: func(req dto.EvaluateRequest) {
+						if app.metrics == nil {
+							return
+						}
+						tenant := req.TenantID
+						if tenant == "" {
+							tenant = "unknown"
+						}
+						app.metrics.Tier1BatchLegacyPayloadTotal.WithLabelValues(tenant).Inc()
+					},
 				})
 				if oerr != nil {
 					logger.Warn("sn360-es: tier1 batch orchestrator init failed; falling back to single-message consumer",
