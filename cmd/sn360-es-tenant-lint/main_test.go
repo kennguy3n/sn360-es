@@ -74,6 +74,29 @@ func TestViolates(t *testing.T) {
 			expect: false,   // INSERT target is email_classifications (not scoped)
 		},
 		{
+			// Regression: INSERT INTO <non-scoped> SELECT FROM <scoped>
+			// without a tenant filter was the blind spot Devin Review
+			// flagged. Rows from every tenant would flow into a
+			// shared table — exactly what tenant-lint is meant to
+			// prevent.
+			name:   "INSERT...SELECT FROM scoped table without tenant_id violates",
+			sql:    "INSERT INTO email_classifications (domain) SELECT email FROM users",
+			table:  "users",
+			expect: true,
+		},
+		{
+			name:   "INSERT...SELECT FROM scoped table with tenant_id passes",
+			sql:    "INSERT INTO export_jobs (domain) SELECT email FROM users WHERE tenant_id = $1",
+			table:  "users",
+			expect: false,
+		},
+		{
+			name:   "INSERT...SELECT FROM scoped into scoped with tenant_id col passes",
+			sql:    "INSERT INTO audit_logs (tenant_id, action) SELECT tenant_id, 'export' FROM users WHERE tenant_id = $1",
+			table:  "users",
+			expect: false,
+		},
+		{
 			name:   "tenant_id IN clause is accepted",
 			sql:    "SELECT * FROM groups WHERE tenant_id IN ($1, $2)",
 			table:  "groups",

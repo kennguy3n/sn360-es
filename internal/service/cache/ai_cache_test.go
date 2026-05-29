@@ -41,12 +41,22 @@ func TestAICache_KeyIsDeterministic(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Same canonical input → same key, regardless of whitespace or case.
-	k1 := c.Key(testTenantA, "Hello   WORLD\n", "Example.com")
-	k2 := c.Key(testTenantA, "hello world", "example.com")
+	k1, err := c.Key(testTenantA, "Hello   WORLD\n", "Example.com")
+	if err != nil {
+		t.Fatalf("Key: %v", err)
+	}
+	k2, err := c.Key(testTenantA, "hello world", "example.com")
+	if err != nil {
+		t.Fatalf("Key: %v", err)
+	}
 	if k1 != k2 {
 		t.Fatalf("normalised inputs should yield same key:\nk1=%s\nk2=%s", k1, k2)
 	}
-	if k3 := c.Key(testTenantA, "hello world", "other.com"); k3 == k1 {
+	k3, err := c.Key(testTenantA, "hello world", "other.com")
+	if err != nil {
+		t.Fatalf("Key: %v", err)
+	}
+	if k3 == k1 {
 		t.Fatal("different sender domain must change the key")
 	}
 }
@@ -63,8 +73,14 @@ func TestAICache_KeyTenantIsolation(t *testing.T) {
 	c, _ := NewAICache(client, AICacheConfig{TTL: time.Minute})
 
 	body, sender := "identical body", "vendor.example.com"
-	kA := c.Key(testTenantA, body, sender)
-	kB := c.Key(testTenantB, body, sender)
+	kA, err := c.Key(testTenantA, body, sender)
+	if err != nil {
+		t.Fatalf("Key A: %v", err)
+	}
+	kB, err := c.Key(testTenantB, body, sender)
+	if err != nil {
+		t.Fatalf("Key B: %v", err)
+	}
 	if kA == kB {
 		t.Fatalf("tenants must not share cache entries:\nkA=%s\nkB=%s", kA, kB)
 	}
@@ -79,16 +95,23 @@ func TestAICache_KeyTenantIsolation(t *testing.T) {
 	}
 }
 
-func TestAICache_KeyPanicsOnEmptyTenantID(t *testing.T) {
+// TestAICache_KeyReturnsErrorOnEmptyTenantID is the contract that
+// keeps misuse loud: Key never silently returns a (non-tenant) key for
+// an empty tenantID — it returns ErrMissingTenantID, identical to the
+// public Get/Set/Invalidate entry points. This prevents a future
+// caller from inadvertently writing an entry under a no-tenant prefix
+// that another tenant could then read.
+func TestAICache_KeyReturnsErrorOnEmptyTenantID(t *testing.T) {
 	client, _, done := newTestClient(t)
 	defer done()
 	c, _ := NewAICache(client, AICacheConfig{TTL: time.Minute})
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected Key to panic on empty tenantID")
-		}
-	}()
-	_ = c.Key("", "body", "sender.com")
+	key, err := c.Key("", "body", "sender.com")
+	if !errors.Is(err, ErrMissingTenantID) {
+		t.Fatalf("expected ErrMissingTenantID, got %v", err)
+	}
+	if key != "" {
+		t.Fatalf("expected empty key on validation failure, got %q", key)
+	}
 }
 
 func TestAICache_GetMiss(t *testing.T) {

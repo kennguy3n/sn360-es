@@ -12,13 +12,39 @@ func TestRspamdCache_KeyDependsOnContent(t *testing.T) {
 	client, _, done := newTestClient(t)
 	defer done()
 	c, _ := NewRspamdCache(client, RspamdCacheConfig{TTL: time.Minute})
-	k1 := c.Key("acme", []byte("payload-1"))
-	k2 := c.Key("acme", []byte("payload-2"))
+	k1, err := c.Key("acme", []byte("payload-1"))
+	if err != nil {
+		t.Fatalf("Key: %v", err)
+	}
+	k2, err := c.Key("acme", []byte("payload-2"))
+	if err != nil {
+		t.Fatalf("Key: %v", err)
+	}
 	if k1 == k2 {
 		t.Fatal("different payloads must produce different keys")
 	}
-	if k3 := c.Key("acme", []byte("payload-1")); k3 != k1 {
+	k3, err := c.Key("acme", []byte("payload-1"))
+	if err != nil {
+		t.Fatalf("Key: %v", err)
+	}
+	if k3 != k1 {
 		t.Fatal("same (tenant, payload) must produce same key")
+	}
+}
+
+// TestRspamdCache_KeyReturnsErrorOnEmptyTenantID is the contract that
+// the Key constructor degrades gracefully on misuse: an empty
+// tenantID returns ErrMissingTenantID and an empty key, not a panic.
+func TestRspamdCache_KeyReturnsErrorOnEmptyTenantID(t *testing.T) {
+	client, _, done := newTestClient(t)
+	defer done()
+	c, _ := NewRspamdCache(client, RspamdCacheConfig{TTL: time.Minute})
+	key, err := c.Key("", []byte("raw"))
+	if !errors.Is(err, ErrMissingTenantID) {
+		t.Fatalf("expected ErrMissingTenantID, got %v", err)
+	}
+	if key != "" {
+		t.Fatalf("expected empty key on validation failure, got %q", key)
 	}
 }
 
@@ -32,8 +58,14 @@ func TestRspamdCache_KeyTenantIsolation(t *testing.T) {
 	client, _, done := newTestClient(t)
 	defer done()
 	c, _ := NewRspamdCache(client, RspamdCacheConfig{TTL: time.Minute})
-	kA := c.Key("tenant-a", []byte("same-payload"))
-	kB := c.Key("tenant-b", []byte("same-payload"))
+	kA, err := c.Key("tenant-a", []byte("same-payload"))
+	if err != nil {
+		t.Fatalf("Key A: %v", err)
+	}
+	kB, err := c.Key("tenant-b", []byte("same-payload"))
+	if err != nil {
+		t.Fatalf("Key B: %v", err)
+	}
 	if kA == kB {
 		t.Fatal("two tenants must not share the same cache key for identical content")
 	}

@@ -77,38 +77,42 @@ func NewAICache(client *redisclient.Client, cfg AICacheConfig) (*AICache, error)
 	return &AICache{client: client, cfg: cfg}, nil
 }
 
-// Key returns the cache key for (tenantID, body, senderDomain). The
-// returned key is namespaced by tenant so two tenants cannot share
-// cache entries even when they receive byte-identical content. Empty
-// tenantID is rejected at the public Get/Set/Invalidate entry points;
-// Key panics on empty tenantID to make accidental cross-tenant fingerprinting
-// impossible (the panic is caught by tests, never reached at runtime
-// because Get/Set/Invalidate validate first).
-func (c *AICache) Key(tenantID, body, senderDomain string) string {
+// Key returns the cache key for (tenantID, body, senderDomain) along
+// with a validation error. The returned key is namespaced by tenant so
+// two tenants cannot share cache entries even when they receive
+// byte-identical content. An empty tenantID returns ErrMissingTenantID
+// and a zero-value key — Go's error-return idiom rather than a panic,
+// so a misuse by future direct callers degrades gracefully instead of
+// crashing the request.
+//
+// The 0x00 separators between the tenantID, body, and sender domain
+// are length-binding: no choice of inputs can craft an alternative
+// (tenantID, body, sender) tuple that hashes to the same value for a
+// different tenant. The tenantID is also embedded verbatim in the key
+// prefix so an operator can run `SCAN MATCH ai_cache:<tid>:*` for
+// per-tenant invalidation.
+func (c *AICache) Key(tenantID, body, senderDomain string) (string, error) {
 	if tenantID == "" {
-		panic("ai_cache: Key called with empty tenantID — callers must use Get/Set/Invalidate which validate")
+		return "", ErrMissingTenantID
 	}
 	h := sha256.New()
-	// tenantID is bound into the key first so it cannot collide with a
-	// (body, sender) pair from another tenant. The 0x00 separators are
-	// length-binding so neither tenantID nor body can be crafted to
-	// reproduce another tenant's hash.
 	h.Write([]byte(tenantID))
 	h.Write([]byte{0})
 	h.Write([]byte(normaliseBody(body)))
 	h.Write([]byte{0})
 	h.Write([]byte(strings.ToLower(strings.TrimSpace(senderDomain))))
-	return c.cfg.KeyPrefix + tenantID + ":" + hex.EncodeToString(h.Sum(nil))
+	return c.cfg.KeyPrefix + tenantID + ":" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // Get returns the cached result for (tenantID, body, senderDomain). The
 // bool is false when there is no cache entry. Returns ErrMissingTenantID
 // if tenantID is empty.
 func (c *AICache) Get(ctx context.Context, tenantID, body, senderDomain string) (AIResult, bool, error) {
-	if tenantID == "" {
-		return AIResult{}, false, ErrMissingTenantID
+	key, err := c.Key(tenantID, body, senderDomain)
+	if err != nil {
+		return AIResult{}, false, err
 	}
-	raw, ok, err := c.client.Get(ctx, c.Key(tenantID, body, senderDomain))
+	raw, ok, err := c.client.Get(ctx, key)
 	if err != nil || !ok {
 		return AIResult{}, false, err
 	}
@@ -122,8 +126,9 @@ func (c *AICache) Get(ctx context.Context, tenantID, body, senderDomain string) 
 // Set caches result for (tenantID, body, senderDomain) under TTL.
 // Returns ErrMissingTenantID if tenantID is empty.
 func (c *AICache) Set(ctx context.Context, tenantID, body, senderDomain string, result AIResult) error {
-	if tenantID == "" {
-		return ErrMissingTenantID
+	key, err := c.Key(tenantID, body, senderDomain)
+	if err != nil {
+		return err
 	}
 	if result.StoredAt.IsZero() {
 		result.StoredAt = time.Now().UTC()
@@ -132,16 +137,17 @@ func (c *AICache) Set(ctx context.Context, tenantID, body, senderDomain string, 
 	if err != nil {
 		return fmt.Errorf("ai_cache: marshal: %w", err)
 	}
-	return c.client.Set(ctx, c.Key(tenantID, body, senderDomain), string(blob), c.cfg.TTL)
+	return c.client.Set(ctx, key, string(blob), c.cfg.TTL)
 }
 
 // Invalidate removes the cache entry for (tenantID, body, senderDomain).
 // Returns ErrMissingTenantID if tenantID is empty.
 func (c *AICache) Invalidate(ctx context.Context, tenantID, body, senderDomain string) error {
-	if tenantID == "" {
-		return ErrMissingTenantID
+	key, err := c.Key(tenantID, body, senderDomain)
+	if err != nil {
+		return err
 	}
-	return c.client.Del(ctx, c.Key(tenantID, body, senderDomain))
+	return c.client.Del(ctx, key)
 }
 
 // normaliseBody collapses whitespace and lowercases the body so trivial

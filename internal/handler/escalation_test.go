@@ -182,6 +182,41 @@ func TestEscalationHandler_RejectsUnauthenticated(t *testing.T) {
 	}
 }
 
+// TestEscalationHandler_AuthChecksBeforeBodyParsing locks in the
+// auth-first ordering: an unauthenticated caller must see 401 for
+// every malformed-body variant the handler would otherwise reject
+// with 400. Without this ordering, an unauthenticated caller could
+// probe the request schema (field names, DisallowUnknownFields rules,
+// length limits) by observing 400 vs. 401 — a minor information leak
+// that compounds with any future schema rev.
+func TestEscalationHandler_AuthChecksBeforeBodyParsing(t *testing.T) {
+	svc := newTestEscalationService(t)
+	h := NewEscalationHandler(nil, svc)
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{name: "malformed JSON", body: "garbage"},
+		{name: "missing ticket_id", body: `{"outcome":"confirmed_phishing"}`},
+		{name: "unknown field", body: `{"ticket_id":"x","outcome":"closed_no_action","extra":"x"}`},
+		{name: "empty body", body: ""},
+		{name: "huge body", body: strings.Repeat("a", 1024*1024)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/escalation/resolve",
+				strings.NewReader(tc.body))
+			rec := httptest.NewRecorder()
+			h.ServeResolve(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("unauthenticated %s: status=%d want=401 (auth must fire before body parsing)",
+					tc.name, rec.Code)
+			}
+		})
+	}
+}
+
 func TestEscalationHandler_ServeGet_OK(t *testing.T) {
 	svc := newTestEscalationService(t)
 	tk := seedTicket(t, svc)

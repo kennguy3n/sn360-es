@@ -44,6 +44,18 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusServiceUnavailable, "escalation service not configured")
 		return
 	}
+	// Authenticate BEFORE parsing the body so unauthenticated callers
+	// cannot probe the request schema (field names, length limits,
+	// DisallowUnknownFields rejections) by observing 400 vs. 401
+	// responses. tenantID is sourced from the verified JWT claim,
+	// never from the request body — a caller cannot trick the service
+	// into resolving another tenant's ticket by lying about which
+	// tenant they belong to.
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	if tenantID == "" {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
 	var req resolveRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024))
 	dec.DisallowUnknownFields()
@@ -54,15 +66,6 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 	req.TicketID = strings.TrimSpace(req.TicketID)
 	if req.TicketID == "" {
 		writeError(w, http.StatusBadRequest, "ticket_id is required")
-		return
-	}
-	// tenantID is sourced from the verified JWT claim, never from the
-	// request body — a caller cannot trick the service into resolving
-	// another tenant's ticket by lying about which tenant they belong
-	// to. An unauthenticated request (no claim) is rejected.
-	tenantID := middleware.TenantIDFromContext(r.Context())
-	if tenantID == "" {
-		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	ticket, err := h.svc.ResolveEscalation(r.Context(), tenantID, req.TicketID, req.ResolverHash, req.Outcome, req.Notes)
@@ -91,15 +94,17 @@ func (h *EscalationHandler) ServeGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "escalation service not configured")
 		return
 	}
+	// Authenticate before reading the URL ticket_id so unauthenticated
+	// callers cannot probe path-routing rules via 400 vs. 401.
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	if tenantID == "" {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
 	ticketID := strings.TrimPrefix(r.URL.Path, "/v1/escalation/")
 	ticketID = strings.TrimSpace(ticketID)
 	if ticketID == "" {
 		writeError(w, http.StatusBadRequest, "ticket_id is required")
-		return
-	}
-	tenantID := middleware.TenantIDFromContext(r.Context())
-	if tenantID == "" {
-		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	ticket, ok, err := h.svc.Load(r.Context(), tenantID, ticketID)

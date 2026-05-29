@@ -167,6 +167,18 @@ var updateTableRE = regexp.MustCompile(`(?is)\bupdate\s+([a-z_][a-z_0-9]*)\b`)
 // deleteFromRE captures the target of a DELETE FROM.
 var deleteFromRE = regexp.MustCompile(`(?is)\bdelete\s+from\s+([a-z_][a-z_0-9]*)\b`)
 
+// insertColTenantIDRE matches `tenant_id` as a column identifier inside
+// an INSERT column list. Pre-compiled at package scope so the violates()
+// hot path is a regexp match, not a per-call compile — same rationale
+// as the other module-scope REs above.
+var insertColTenantIDRE = regexp.MustCompile(`(?i)\btenant_id\b`)
+
+// insertSelectFromRE captures the FROM clause of an INSERT...SELECT
+// form, so we can detect when an INSERT INTO non-tenant-scoped target
+// pulls rows from a tenant-scoped source without filtering. Used to
+// close the linter's INSERT...SELECT blind spot.
+var insertSelectFromRE = regexp.MustCompile(`(?is)\binsert\s+into\s+[a-z_][a-z_0-9]*(?:\s*\([^)]*\))?\s*select\b.*?\bfrom\s+([a-z_][a-z_0-9]*)\b`)
+
 type violation struct {
 	pos    token.Position
 	table  string
@@ -411,22 +423,42 @@ func violates(sql, table string) (string, bool) {
 		// caught at lint time before someone writes ON CONFLICT DO
 		// UPDATE without re-asserting tenant_id.
 		m := insertColListRE.FindStringSubmatch(sql)
+		if len(m) >= 3 {
+			targetTable := strings.ToLower(m[1])
+			if _, scoped := tenantScopedTables[targetTable]; scoped {
+				cols := strings.ToLower(m[2])
+				if !insertColTenantIDRE.MatchString(cols) {
+					return "INSERT INTO tenant-scoped table missing `tenant_id` in the column list", true
+				}
+				return "", false
+			}
+			// INSERT targets a non-tenant-scoped table — still
+			// check for INSERT...SELECT from a tenant-scoped
+			// source, see below.
+		}
+		// INSERT...SELECT from a tenant-scoped table requires a
+		// tenant predicate on the SELECT side; otherwise rows from
+		// every tenant flow into the (possibly non-tenant-scoped)
+		// target table — exactly the cross-tenant leak the linter
+		// is meant to catch. We treat this as the same class of bug
+		// regardless of whether the target is itself scoped.
+		if sm := insertSelectFromRE.FindStringSubmatch(sql); len(sm) >= 2 {
+			sourceTable := strings.ToLower(sm[1])
+			if _, scoped := tenantScopedTables[sourceTable]; scoped {
+				if tenantIDPredicateRE.MatchString(sql) {
+					return "", false
+				}
+				return "INSERT ... SELECT FROM tenant-scoped table `" + sourceTable + "` without `tenant_id =` predicate — rows from every tenant would be copied", true
+			}
+		}
 		if len(m) < 3 {
-			// INSERT … SELECT or other dynamic form — fall back to
-			// the global predicate check.
+			// INSERT without explicit column list on a tenant-scoped
+			// target. Fall back to the global predicate check (e.g.
+			// INSERT ... SELECT with a WHERE tenant_id = $1).
 			if tenantIDPredicateRE.MatchString(sql) {
 				return "", false
 			}
 			return "INSERT without explicit column list on tenant-scoped table — cannot verify tenant_id is set", true
-		}
-		targetTable := strings.ToLower(m[1])
-		if _, scoped := tenantScopedTables[targetTable]; !scoped {
-			// INSERT targets a non-tenant-scoped table — irrelevant.
-			return "", false
-		}
-		cols := strings.ToLower(m[2])
-		if !regexp.MustCompile(`(?i)\btenant_id\b`).MatchString(cols) {
-			return "INSERT INTO tenant-scoped table missing `tenant_id` in the column list", true
 		}
 		return "", false
 	case "UPSERT", "MERGE":
