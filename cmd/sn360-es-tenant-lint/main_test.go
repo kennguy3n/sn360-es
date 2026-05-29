@@ -222,7 +222,7 @@ func crossTenantOK(db DB, ctx context.Context) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	got := scanFile(fset, f)
+	got := scanFile(fset, f, []byte(src))
 	if len(got) != 1 {
 		for _, v := range got {
 			t.Logf("violation: %s:%d table=%s stmt=%s reason=%s",
@@ -256,9 +256,76 @@ func notExempt(db DB, ctx context.Context) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	got := scanFile(fset, f)
+	got := scanFile(fset, f, []byte(src))
 	if len(got) != 1 {
 		t.Fatalf("expected 1 violation, got %d", len(got))
+	}
+}
+
+// TestCollectExemptionLines_ToleratesBlankLineBeforeSQL verifies that
+// a blank line between the `tenant-lint:cross-tenant` annotation and
+// the SQL literal does NOT silently lose the exemption. Devin Review
+// flagged this fragility in PR #44 — a contributor adding a blank
+// line for readability would previously have re-introduced a
+// violation. The analyser now walks forward through blank /
+// comment-only lines until it finds the first real source line.
+func TestCollectExemptionLines_ToleratesBlankLineBeforeSQL(t *testing.T) {
+	src := `package x
+
+import "context"
+
+type DB interface {
+	ExecContext(context.Context, string, ...any) (any, error)
+}
+
+func crossTenantWithBlankLine(db DB, ctx context.Context) {
+	// tenant-lint:cross-tenant — boot-time enumeration of every tenant's tokens.
+
+	_, _ = db.ExecContext(ctx, ` + "`SELECT tenant_id, provider FROM oauth_tokens ORDER BY created_at`" + `)
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "fixture.go", src, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got := scanFile(fset, f, []byte(src))
+	if len(got) != 0 {
+		for _, v := range got {
+			t.Logf("unexpected violation: %s:%d table=%s stmt=%s",
+				v.pos.Filename, v.pos.Line, v.table, v.stmt)
+		}
+		t.Fatalf("expected blank line before SQL to be tolerated; got %d violation(s)", len(got))
+	}
+}
+
+// TestCollectExemptionLines_ToleratesInterleavedComment exercises the
+// case where a sub-comment (“// note: ...”) sits between the marker
+// comment-group and the SQL literal. The forward walk treats comment-
+// only lines as transparent in the same way as blank lines.
+func TestCollectExemptionLines_ToleratesInterleavedComment(t *testing.T) {
+	src := `package x
+
+import "context"
+
+type DB interface {
+	ExecContext(context.Context, string, ...any) (any, error)
+}
+
+func crossTenantWithInlineComment(db DB, ctx context.Context) {
+	// tenant-lint:cross-tenant — boot-time enumeration of every tenant's tokens.
+	// note: kept here so the next person reading the query knows what's up.
+	_, _ = db.ExecContext(ctx, ` + "`SELECT tenant_id, provider FROM oauth_tokens ORDER BY created_at`" + `)
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "fixture.go", src, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got := scanFile(fset, f, []byte(src))
+	if len(got) != 0 {
+		t.Fatalf("expected interleaved comment to be tolerated; got %d violation(s)", len(got))
 	}
 }
 

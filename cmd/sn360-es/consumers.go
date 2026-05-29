@@ -554,11 +554,18 @@ type escalationCreateEnvelope struct {
 
 type escalationResolveEnvelope struct {
 	// TenantID is the canonical tenant scoping for the resolution.
-	// It is sourced from the verified message header on the NATS
-	// subject (events.HeaderTenantID) — never from the JSON body —
-	// so a publisher cannot resolve another tenant's ticket by
-	// crafting a body. The field is still present in the JSON so
-	// tests can construct envelopes directly.
+	// The consumer sources tenantID preferentially from the verified
+	// message header on the NATS subject (events.HeaderTenantID),
+	// falling back to this JSON body field only when the header is
+	// absent — a transitional shim for older publishers during the
+	// header rollout, see verifiedTenantID. The header path is
+	// trusted because the publisher's outbox/middleware stamps it
+	// after authentication; the body fallback is less trusted but
+	// the downstream store's tenant-scoped LoadForUpdate/Update
+	// prevents a crafted body from resolving a different tenant's
+	// ticket (the ticket_id+tenant_id composite key would simply
+	// fail to match). The field is also kept in the JSON so tests
+	// can construct envelopes directly.
 	TenantID     string                `json:"tenant_id,omitempty"`
 	TicketID     string                `json:"ticket_id"`
 	ResolverHash string                `json:"resolver_hash"`

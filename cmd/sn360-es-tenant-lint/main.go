@@ -53,6 +53,14 @@
 // `tenant-lint:cross-tenant`. The justification text is required to
 // force the author to articulate why the cross-tenant access is safe.
 //
+// Blank lines between the annotation and the SQL literal are
+// tolerated: the analyser walks forward through any number of blank
+// or comment-only lines and exempts the first non-blank, non-comment
+// source line it finds. This matches the way authors actually
+// format code — keeping a justification comment readable above a
+// query body — without forcing the annotation to be glued to the
+// literal.
+//
 // Usage:
 //
 //	go run ./cmd/sn360-es-tenant-lint ./...
@@ -459,12 +467,17 @@ func main() {
 				return nil
 			}
 		}
-		f, perr := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		src, rerr := os.ReadFile(path)
+		if rerr != nil {
+			fmt.Fprintf(os.Stderr, "tenant-lint: read %s: %v\n", rel, rerr)
+			os.Exit(2)
+		}
+		f, perr := parser.ParseFile(fset, path, src, parser.ParseComments)
 		if perr != nil {
 			fmt.Fprintf(os.Stderr, "tenant-lint: parse %s: %v\n", rel, perr)
 			os.Exit(2)
 		}
-		violations = append(violations, scanFile(fset, f)...)
+		violations = append(violations, scanFile(fset, f, src)...)
 		return nil
 	})
 	if err != nil {
@@ -502,13 +515,23 @@ var crossTenantAnnotation = regexp.MustCompile(`(?i)tenant-lint:cross-tenant\b\s
 // collectExemptionLines returns the set of file lines (1-indexed) that
 // are exempt because of a `tenant-lint:cross-tenant — <reason>`
 // annotation. A SQL literal whose start line is in the returned set
-// is suppressed. When the annotation appears anywhere in a comment
-// group (single- or multi-line), every line of the group AND the
-// line immediately following the group is marked exempt — this lets
-// authors place a multi-line justification directly above the SQL
-// literal without having to keep them on adjacent lines.
-func collectExemptionLines(fset *token.FileSet, f *ast.File) map[int]struct{} {
+// is suppressed.
+//
+// Behaviour. Every line of the annotated comment group is marked
+// exempt, and the analyser then walks forward through any number of
+// blank or comment-only source lines and marks the first non-blank,
+// non-comment line it encounters as exempt as well. This makes the
+// exemption robust to formatting — a contributor who inserts a blank
+// line between the justification comment and the SQL literal for
+// readability does not silently lose the exemption.
+//
+// `src` is the original file's bytes; required so we can probe each
+// candidate line for blank/comment-only content. Passing the bytes
+// in (instead of re-reading) keeps the cost amortised over the whole
+// file walk.
+func collectExemptionLines(fset *token.FileSet, f *ast.File, src []byte) map[int]struct{} {
 	out := map[int]struct{}{}
+	lines := splitLines(src)
 	for _, cg := range f.Comments {
 		var hit bool
 		for _, c := range cg.List {
@@ -522,15 +545,46 @@ func collectExemptionLines(fset *token.FileSet, f *ast.File) map[int]struct{} {
 		}
 		startLine := fset.Position(cg.Pos()).Line
 		endLine := fset.Position(cg.End()).Line
-		for ln := startLine; ln <= endLine+1; ln++ {
+		for ln := startLine; ln <= endLine; ln++ {
 			out[ln] = struct{}{}
+		}
+		// Walk forward through blank-only / comment-only lines
+		// and exempt the first real source line we find. The
+		// upper bound (16) is a sanity cap so a stray annotation
+		// at end-of-file cannot exempt unbounded subsequent
+		// content.
+		for ln, scanned := endLine+1, 0; scanned < 16; ln, scanned = ln+1, scanned+1 {
+			if ln-1 >= len(lines) {
+				break
+			}
+			content := strings.TrimSpace(lines[ln-1])
+			if content == "" || strings.HasPrefix(content, "//") || strings.HasPrefix(content, "/*") {
+				out[ln] = struct{}{}
+				continue
+			}
+			out[ln] = struct{}{}
+			break
 		}
 	}
 	return out
 }
 
-func scanFile(fset *token.FileSet, f *ast.File) []violation {
-	exempt := collectExemptionLines(fset, f)
+// splitLines returns the source split into individual lines (1-indexed
+// as `out[line-1]`), preserving CRLF / LF terminators by stripping
+// trailing \r so blank-line detection works on Windows-edited files.
+func splitLines(src []byte) []string {
+	if len(src) == 0 {
+		return nil
+	}
+	lines := strings.Split(string(src), "\n")
+	for i, ln := range lines {
+		lines[i] = strings.TrimRight(ln, "\r")
+	}
+	return lines
+}
+
+func scanFile(fset *token.FileSet, f *ast.File, src []byte) []violation {
+	exempt := collectExemptionLines(fset, f, src)
 	var out []violation
 	ast.Inspect(f, func(n ast.Node) bool {
 		lit, ok := n.(*ast.BasicLit)

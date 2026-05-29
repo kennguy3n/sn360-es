@@ -40,17 +40,23 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	// Authenticate BEFORE every other observable branch — body parse,
-	// nil-service infrastructure check, anything that could differ on
-	// status code or body. An unauthenticated caller therefore sees
-	// exactly one response (401) regardless of whether the body is
-	// malformed, the service is unwired, or the request is otherwise
-	// fine. Without this ordering an unauth caller could distinguish
-	// 503 (service unconfigured) from 400 (bad body) from 405 (wrong
-	// method) and use the differential to fingerprint deployments.
-	// tenantID is sourced from the verified JWT claim, never from
-	// the request body — a caller cannot trick the service into
-	// resolving another tenant's ticket by lying about their tenant.
+	// Authenticate BEFORE every *resource-observable* branch — body
+	// parse, nil-service infrastructure check, ticket lookup, anything
+	// whose result could differ across deployments or tenants. The
+	// HTTP method check above is intentionally allowed to precede
+	// auth because 405 is a protocol-level signal that the route
+	// exists for a different verb; it is the same for every caller,
+	// the same in every environment, and conveys nothing about the
+	// resource or the tenant. From this point onward, however, an
+	// unauthenticated caller sees exactly one response (401)
+	// regardless of whether the body is malformed, the service is
+	// unwired, or the ticket is missing. Without this ordering an
+	// unauth caller could distinguish 503 (service unconfigured) from
+	// 400 (bad body) and use the differential to fingerprint
+	// deployments. tenantID is sourced from the verified JWT claim,
+	// never from the request body — a caller cannot trick the service
+	// into resolving another tenant's ticket by lying about their
+	// tenant.
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	if tenantID == "" {
 		writeError(w, http.StatusUnauthorized, "authentication required")
@@ -94,11 +100,11 @@ func (h *EscalationHandler) ServeGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	// Authenticate before any other observable branch — see the
-	// rationale on ServeResolve. Without auth-first, an unauth caller
-	// could distinguish 503 (nil service) from 400 (empty ticket_id)
-	// from 401 (auth required) and use the differential to fingerprint
-	// deployments.
+	// Authenticate before any other resource-observable branch — see
+	// the rationale on ServeResolve. The 405 method check above is
+	// allowed to precede auth (constant protocol-level signal); from
+	// here on, an unauth caller cannot distinguish 503 (nil service)
+	// from 400 (empty ticket_id) because both collapse to 401.
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	if tenantID == "" {
 		writeError(w, http.StatusUnauthorized, "authentication required")
