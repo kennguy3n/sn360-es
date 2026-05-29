@@ -192,28 +192,70 @@ func TestDiff_AllowOnlyInSpecExactMatch(t *testing.T) {
 }
 
 // TestAllowOnlyInGoPrefixes_SubtreeEntriesEndInSlash locks in the
-// rule that subtree allow-list entries MUST end in `/` so a bare
-// prefix like `/v1/push` cannot accidentally allow-list an
-// unrelated future route like `/v1/pushback`. Exact-route entries
-// (`/healthz`, `/metrics`, `/openapi.yaml`) are exempt because
-// they're registered as exact routes in routes.go, not as
-// subtrees.
+// structural rule that EVERY entry in allowOnlyInGoPrefixes must
+// end in `/`. No exact-exempt list — file-style endpoints belong
+// in allowOnlyInGoExact (where they are matched exactly), not in
+// the prefix list (where they would silently over-match: `/healthz`
+// would prefix-match `/healthzCheck`, exactly the failure mode the
+// gate is supposed to catch).
+//
+// This test is the test-time companion of validateAllowList(),
+// which enforces the same invariant at runtime in main().
 func TestAllowOnlyInGoPrefixes_SubtreeEntriesEndInSlash(t *testing.T) {
-	// Entries that legitimately match exact routes (file-style
-	// endpoints). Any other entry MUST end in `/`.
-	exactExempt := map[string]struct{}{
-		"/healthz":      {},
-		"/readyz":       {},
-		"/metrics":      {},
-		"/docs":         {}, // routes.go registers both /docs and /docs/
-		"/openapi.yaml": {},
-	}
 	for _, p := range allowOnlyInGoPrefixes {
-		if _, ok := exactExempt[p]; ok {
-			continue
-		}
 		if !strings.HasSuffix(p, "/") {
-			t.Errorf("allowOnlyInGoPrefixes contains bare prefix %q; subtree entries must end in `/` to avoid over-matching (see ANALYSIS_0002, round 2)", p)
+			t.Errorf(
+				"allowOnlyInGoPrefixes contains bare prefix %q; "+
+					"subtree entries MUST end in `/` to avoid over-matching. "+
+					"Move exact-route entries to allowOnlyInGoExact instead.",
+				p)
+		}
+	}
+}
+
+// TestValidateAllowList exercises the same structural rule from the
+// runtime side: validateAllowList() must return nil for the current
+// configuration AND must return an error if a bare-prefix entry is
+// introduced. We assert both polarities to catch a future refactor
+// that drops the validation logic.
+func TestValidateAllowList(t *testing.T) {
+	if err := validateAllowList(); err != nil {
+		t.Fatalf("validateAllowList on current config: %v; want nil", err)
+	}
+	// Simulate a regression by temporarily replacing the global
+	// with an invalid entry; restore on exit.
+	saved := allowOnlyInGoPrefixes
+	t.Cleanup(func() { allowOnlyInGoPrefixes = saved })
+	allowOnlyInGoPrefixes = []string{"/healthz"} // missing trailing slash
+	if err := validateAllowList(); err == nil {
+		t.Errorf("validateAllowList(bare prefix) = nil; want error")
+	}
+}
+
+// TestAllowOnlyInGoExact_HasNoTrailingSlashEntries enforces the
+// inverse rule: an entry with a trailing `/` in the exact map would
+// be useless (the corresponding subtree should be in the prefix
+// list instead). Catches a future maintainer accidentally moving a
+// subtree entry into the exact map and silently breaking the gate.
+func TestAllowOnlyInGoExact_HasNoTrailingSlashEntries(t *testing.T) {
+	for p := range allowOnlyInGoExact {
+		if p != "/" && strings.HasSuffix(p, "/") {
+			t.Errorf(
+				"allowOnlyInGoExact contains subtree entry %q; "+
+					"trailing-slash entries belong in allowOnlyInGoPrefixes, not here",
+				p)
+		}
+	}
+}
+
+// TestAllowOnlyInGo_NoOverlap asserts the two allow-lists are
+// disjoint. A path showing up in both is at best dead-code and at
+// worst evidence of a maintainer split-brain on whether the route
+// is exact or subtree; either way, fix-on-the-spot.
+func TestAllowOnlyInGo_NoOverlap(t *testing.T) {
+	for _, p := range allowOnlyInGoPrefixes {
+		if _, ok := allowOnlyInGoExact[p]; ok {
+			t.Errorf("path %q appears in BOTH allowOnlyInGoPrefixes and allowOnlyInGoExact; pick one", p)
 		}
 	}
 }

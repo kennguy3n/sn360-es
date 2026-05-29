@@ -176,8 +176,11 @@ deployment shape and aren't modelled here.
 # Regenerate the JSON output
 python3 scripts/cost_model/project.py --profile all --out benchmarks/cost_model.json
 
-# Run the regression tests
-python3 -m unittest scripts.cost_model.test_project -v
+# Run the regression tests (file-path form matches CI in
+# .github/workflows/ci.yml and avoids relying on PEP 420 namespace
+# package discovery, which depends on cwd being a parent of
+# `scripts/`).
+python3 -m unittest scripts/cost_model/test_project.py -v
 
 # Render the headline table from the JSON
 python3 -c '

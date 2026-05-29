@@ -65,44 +65,71 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// allowOnlyInGoPrefixes is the set of route prefixes Go is allowed
-// to serve without an OpenAPI entry. Each entry is a prefix that Go
-// routes must START WITH to be accepted. Operational endpoints by
-// design.
+// allowOnlyInGoPrefixes is the set of route subtrees Go is allowed
+// to serve without an OpenAPI entry. Each entry MUST end in `/`,
+// matching the net/http stdlib's subtree-pattern syntax — the prefix
+// is matched via strings.HasPrefix, and the trailing `/` is what makes
+// the match shape-correct (`/v1/push/` matches `/v1/push/foo` but not
+// `/v1/pushback`). The invariant is enforced at startup by
+// validateAllowList() so a future contributor can't add a bare-prefix
+// entry that silently over-matches; the regression test at
+// TestAllowOnlyInGoPrefixes_SubtreeEntriesEndInSlash also pins it.
 //
-// Subtree entries MUST keep their trailing `/` (e.g. `/v1/push/`),
-// matching the net/http stdlib's subtree-pattern syntax. Bare
-// prefixes without a trailing slash would over-match: `/v1/push`
-// would also allow-list a hypothetical `/v1/pushback` route. Exact
-// endpoint files (`/healthz`, `/metrics`, `/openapi.yaml`) stay as-is
-// because they're registered as exact routes in routes.go, not as
-// subtrees — they have no descendants to worry about.
+// Exact routes (files like `/healthz`, `/metrics`, `/openapi.yaml`)
+// belong in allowOnlyInGoExact, NOT here. Adding them here would mean
+// `/healthz` prefix-matches a hypothetical future route like
+// `/healthzCheck` and silently lets it through without an OpenAPI
+// entry. That's the exact failure mode the gate exists to prevent.
 //
 // Entries are added ONLY when the matching route is actually
 // registered in routes.go. Pre-emptive entries for "future" routes
-// (e.g. /v1/feedback/, /v1/agent/, /internal/) were intentionally
-// dropped on 2026-05: the cost of a developer having to add a single
-// allow-list line when they wire a new operational endpoint is far
-// cheaper than the cost of accidentally allow-listing a future
+// were intentionally not introduced: the cost of a developer adding
+// a single allow-list line when they wire a new operational endpoint
+// is far cheaper than the cost of accidentally allow-listing a future
 // customer-facing endpoint without OpenAPI coverage.
 var allowOnlyInGoPrefixes = []string{
-	"/healthz",
-	"/readyz",
-	"/metrics",
-	"/docs", // exact + subtree both registered in routes.go
-	"/openapi.yaml",
+	"/docs/",    // Swagger UI assets — operational, separate from REST API
 	"/l/",       // URL-rewrite interstitial — internal-only
 	"/v1/push/", // SaaS push webhooks — operational ingress, not REST API
 }
 
 // allowOnlyInGoExact is the set of EXACT routes Go is allowed to
-// serve without an OpenAPI entry. Used for "/" specifically: the
-// net/http stdlib requires a catch-all handler at "/" — it is the
-// 404 sink for unmatched routes, NOT a customer API surface.
-// Using exact-match here so the entry doesn't accidentally allow-
-// list every route in the prefix-match table.
+// serve without an OpenAPI entry. These are file-style operational
+// endpoints with no descendants — they MUST be in the exact map and
+// NOT in allowOnlyInGoPrefixes, otherwise a HasPrefix check would
+// accidentally allow-list any route whose path starts with the same
+// characters (e.g. `/healthz` prefix-matching `/healthzCheck`).
+//
+// `/` is also here because net/http requires a catch-all handler at
+// `/` to serve as the 404 sink — it is NOT a customer API surface,
+// so it's allow-listed exactly (not as a prefix, which would match
+// every URL ever).
 var allowOnlyInGoExact = map[string]struct{}{
-	"/": {},
+	"/":             {},
+	"/healthz":      {},
+	"/readyz":       {},
+	"/metrics":      {},
+	"/docs":         {}, // exact form; subtree form is in allowOnlyInGoPrefixes
+	"/openapi.yaml": {},
+}
+
+// validateAllowList asserts the structural invariant: every entry in
+// allowOnlyInGoPrefixes must end in `/`. Without this guard, a future
+// edit that adds a bare-prefix entry (e.g. "/healthz") would silently
+// over-match every route starting with the same characters. Calling
+// this from main() makes the invariant a hard build-time check, not a
+// doc-comment suggestion.
+func validateAllowList() error {
+	for _, p := range allowOnlyInGoPrefixes {
+		if !strings.HasSuffix(p, "/") {
+			return fmt.Errorf(
+				"allowOnlyInGoPrefixes entry %q does not end in `/`; "+
+					"bare prefixes silently over-match (e.g. /healthz would match /healthzCheck); "+
+					"move exact-route entries to allowOnlyInGoExact, or add a trailing `/` for true subtrees",
+				p)
+		}
+	}
+	return nil
 }
 
 // allowOnlyInSpec is the set of spec paths Go is NOT yet wiring.
@@ -123,6 +150,11 @@ func main() {
 	openapiPath := flag.String("openapi", "api/openapi.yaml", "path to OpenAPI YAML")
 	routesPath := flag.String("routes", "cmd/sn360-es/routes.go", "path to routes.go")
 	flag.Parse()
+
+	if err := validateAllowList(); err != nil {
+		fmt.Fprintf(os.Stderr, "handler-coverage allow-list invariant violated: %v\n", err)
+		os.Exit(2)
+	}
 
 	specPaths, err := loadSpecPaths(*openapiPath)
 	if err != nil {
