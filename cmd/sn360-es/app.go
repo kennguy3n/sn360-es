@@ -152,6 +152,7 @@ type application struct {
 	vendorRunner        *worker.Runner
 	cleanupRunner       *worker.Runner
 	directorySyncRunner *worker.Runner
+	partitionRunner     *worker.Runner
 
 	// AI agents.
 	onboardAgent  *agent.OnboardingAgent
@@ -792,7 +793,7 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	}
 
 	// Periodic workers.
-	app.relationshipRunner, app.vendorRunner, app.cleanupRunner, app.directorySyncRunner = buildWorkers(cfg, logger, app)
+	app.relationshipRunner, app.vendorRunner, app.cleanupRunner, app.directorySyncRunner, app.partitionRunner = buildWorkers(cfg, logger, app)
 
 	// AI agents.
 	app.onboardAgent, app.tuningAgent, app.supportAgent = buildAgents(cfg, logger, app)
@@ -976,6 +977,12 @@ func (a *application) StartBackground(ctx context.Context) {
 			return nil
 		}
 		return a.directorySyncRunner.Run(ctx)
+	})
+	a.spawn(ctx, "partition worker", func(ctx context.Context) error {
+		if a.partitionRunner == nil {
+			return nil
+		}
+		return a.partitionRunner.Run(ctx)
 	})
 	a.spawn(ctx, "memoryLabelCache janitor", func(ctx context.Context) error {
 		if a.memLabelCache == nil {

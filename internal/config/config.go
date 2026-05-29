@@ -625,6 +625,26 @@ type Worker struct {
 	// DirectorySyncInterval is the gap between directory sync cycles.
 	// Default 6h.
 	DirectorySyncInterval time.Duration
+	// PartitionInterval is the gap between
+	// partition-maintenance cycles for the partitioned append-only
+	// tables (see migrations/0017_partition_append_only_tables.up.sql).
+	// Default 24h — monthly partition cadence is generous enough
+	// that running daily still leaves a wide forward-creation
+	// window even if several cycles are missed.
+	PartitionInterval time.Duration
+	// PartitionLookaheadMonths controls how far ahead the
+	// maintenance worker pre-creates monthly partitions. Default 3:
+	// even if the worker is offline for a couple of months, the
+	// parent table still has somewhere to route inserts.
+	PartitionLookaheadMonths int
+	// PartitionRetentionMonths bounds how many calendar months of
+	// historical data each partitioned table keeps. Default 12. The
+	// maintenance worker DROPS partitions whose upper bound is at-
+	// or-before `now - PartitionRetentionMonths`; the legacy
+	// (pre-cutover) partition is always preserved and operators
+	// archive + drop it manually. Set to 0 to disable partition-
+	// drop entirely (forward-creation still runs).
+	PartitionRetentionMonths int
 }
 
 // Onboarding holds the OAuth onboarding flow configuration.
@@ -961,12 +981,15 @@ func Load() (Config, error) {
 			PushMicrosoftClientStateSecret: getStr("INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET", ""),
 		},
 		Worker: Worker{
-			RelationshipInterval:    getDuration("WORKER_RELATIONSHIP_INTERVAL", 4*time.Hour),
-			VendorDiscoveryInterval: getDuration("WORKER_VENDOR_DISCOVERY_INTERVAL", 7*24*time.Hour),
-			CleanupInterval:         getDuration("WORKER_CLEANUP_INTERVAL", 24*time.Hour),
-			RetentionDays:           getInt("WORKER_RETENTION_DAYS", 90),
-			LockTTL:                 getDuration("WORKER_LOCK_TTL", 5*time.Minute),
-			DirectorySyncInterval:   getDuration("WORKER_DIRECTORY_SYNC_INTERVAL", 6*time.Hour),
+			RelationshipInterval:     getDuration("WORKER_RELATIONSHIP_INTERVAL", 4*time.Hour),
+			VendorDiscoveryInterval:  getDuration("WORKER_VENDOR_DISCOVERY_INTERVAL", 7*24*time.Hour),
+			CleanupInterval:          getDuration("WORKER_CLEANUP_INTERVAL", 24*time.Hour),
+			RetentionDays:            getInt("WORKER_RETENTION_DAYS", 90),
+			LockTTL:                  getDuration("WORKER_LOCK_TTL", 5*time.Minute),
+			DirectorySyncInterval:    getDuration("WORKER_DIRECTORY_SYNC_INTERVAL", 6*time.Hour),
+			PartitionInterval:        getDuration("WORKER_PARTITION_INTERVAL", 24*time.Hour),
+			PartitionLookaheadMonths: getInt("WORKER_PARTITION_LOOKAHEAD_MONTHS", 3),
+			PartitionRetentionMonths: getInt("WORKER_PARTITION_RETENTION_MONTHS", 12),
 		},
 		Onboarding: Onboarding{
 			StateSecret: getStr("ONBOARDING_STATE_SECRET", ""),

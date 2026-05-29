@@ -709,10 +709,10 @@ func buildPushSignatureVerifier(cfg *config.Config, receivers []ingestion.PushRe
 // Periodic worker wiring.
 // ---------------------------------------------------------------------
 
-func buildWorkers(cfg *config.Config, logger *slog.Logger, app *application) (*worker.Runner, *worker.Runner, *worker.Runner, *worker.Runner) {
+func buildWorkers(cfg *config.Config, logger *slog.Logger, app *application) (*worker.Runner, *worker.Runner, *worker.Runner, *worker.Runner, *worker.Runner) {
 	if app.repos == nil {
 		logger.Info("sn360-es: periodic workers skipped; repository registry not wired")
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 
 	lockFactory := buildWorkerLockFactory(cfg, logger, app)
@@ -722,8 +722,9 @@ func buildWorkers(cfg *config.Config, logger *slog.Logger, app *application) (*w
 	vendorRunner := buildVendorRunner(cfg, logger, app, lockFactory, metricsRec)
 	cleanupRunner := buildCleanupRunner(cfg, logger, app, lockFactory, metricsRec)
 	dirSyncRunner := buildDirectorySyncRunner(cfg, logger, app, lockFactory, metricsRec)
+	partitionRunner := buildPartitionRunner(cfg, logger, app, lockFactory, metricsRec)
 
-	return relRunner, vendorRunner, cleanupRunner, dirSyncRunner
+	return relRunner, vendorRunner, cleanupRunner, dirSyncRunner, partitionRunner
 }
 
 func buildWorkerLockFactory(cfg *config.Config, logger *slog.Logger, app *application) worker.LockFactory {
