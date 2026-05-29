@@ -419,6 +419,98 @@ func TestLoadWaivers_MissingFile(t *testing.T) {
 	}
 }
 
+// TestLoadWaivers_MultiLineJustification locks in the multi-line
+// comment accumulation behaviour: a stack of consecutive # lines
+// immediately above a module path must be joined into one
+// justification, with blank-line separated comment groups not bleeding
+// across unrelated waivers.
+func TestLoadWaivers_MultiLineJustification(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "waivers.txt")
+	const content = `# Approved by legal
+# MPL-2.0 file-level copyleft does not apply (no upstream mods)
+# Re-reviewed 2026-Q2
+github.com/example/multi-line
+
+# stale group with blank line after it should be DROPPED, not attached to anything below
+
+github.com/example/dangling-no-justification
+
+# fresh group
+github.com/example/single-line`
+	if err := writeTempFile(path, content); err != nil {
+		t.Fatalf("failed to write fixture: %v", err)
+	}
+	waivers, err := loadWaivers(path)
+	if err != nil {
+		t.Fatalf("loadWaivers: %v", err)
+	}
+	multi, ok := waivers["github.com/example/multi-line"]
+	if !ok {
+		t.Fatalf("missing multi-line waiver: %v", waivers)
+	}
+	// All three comment lines must be captured, in order, joined by spaces.
+	expectedFragments := []string{"Approved by legal", "MPL-2.0 file-level copyleft", "Re-reviewed 2026-Q2"}
+	for _, frag := range expectedFragments {
+		if !strings.Contains(multi, frag) {
+			t.Errorf("multi-line justification missing fragment %q; got %q", frag, multi)
+		}
+	}
+	// The stale group separated by a blank line must NOT have leaked into
+	// the dangling module's justification — that one should fall back to
+	// the no-justification sentinel.
+	dang, ok := waivers["github.com/example/dangling-no-justification"]
+	if !ok {
+		t.Fatalf("missing dangling waiver: %v", waivers)
+	}
+	if !strings.Contains(dang, "no justification recorded") {
+		t.Errorf("blank-line-separated comment leaked into dangling waiver: %q", dang)
+	}
+	if strings.Contains(dang, "stale group") {
+		t.Errorf("blank-line-separated comment leaked into dangling waiver: %q", dang)
+	}
+	single, ok := waivers["github.com/example/single-line"]
+	if !ok || !strings.Contains(single, "fresh group") {
+		t.Errorf("single-line waiver missing or wrong justification: %q (ok=%v)", single, ok)
+	}
+}
+
+// TestClassifyModule_EmptyLicenseFile_DiagnosticDistinguishesFromMissing
+// locks in the UX disambiguation between "LICENSE file is present but
+// empty" and "no LICENSE file found at all" — both classify as UNKNOWN
+// (or WAIVERED) but operators triaging the report need to be able to
+// tell the two cases apart at a glance.
+func TestClassifyModule_EmptyLicenseFile_DiagnosticDistinguishesFromMissing(t *testing.T) {
+	// Case 1: directory with an empty LICENSE file present.
+	dirEmpty := t.TempDir()
+	if err := writeTempFile(filepath.Join(dirEmpty, "LICENSE"), ""); err != nil {
+		t.Fatalf("write empty LICENSE: %v", err)
+	}
+	empty := classifyModule(module{Path: "github.com/x/empty", Version: "v1.0.0", Dir: dirEmpty}, nil)
+	if empty.Class != classUnknown {
+		t.Errorf("expected UNKNOWN for empty LICENSE file, got %s", empty.Class)
+	}
+	if !strings.Contains(empty.Note, "empty") {
+		t.Errorf("expected note to mention 'empty', got %q", empty.Note)
+	}
+
+	// Case 2: directory with no LICENSE-shaped file at all.
+	dirMissing := t.TempDir()
+	missing := classifyModule(module{Path: "github.com/x/missing", Version: "v1.0.0", Dir: dirMissing}, nil)
+	if missing.Class != classUnknown {
+		t.Errorf("expected UNKNOWN for missing LICENSE, got %s", missing.Class)
+	}
+	if !strings.Contains(missing.Note, "no LICENSE file found") {
+		t.Errorf("expected note to say 'no LICENSE file found', got %q", missing.Note)
+	}
+
+	// The two notes must NOT be identical — that's the whole point of
+	// the disambiguation.
+	if empty.Note == missing.Note {
+		t.Errorf("empty-file and missing-file diagnostics collapsed to same note: %q", empty.Note)
+	}
+}
+
 func TestFirstNonEmptyLine(t *testing.T) {
 	cases := []struct {
 		in, want string

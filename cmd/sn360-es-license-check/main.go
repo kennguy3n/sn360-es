@@ -461,11 +461,25 @@ func classifyModule(m module, waivers map[string]string) finding {
 
 	licensePath, licenseText := readLicenseFile(m.Dir)
 	if licenseText == "" {
+		// Disambiguate "no LICENSE file present at all" from "file
+		// is present but empty" — both collapse to UNKNOWN /
+		// WAIVERED classification, but an operator triaging a
+		// false-positive needs to know whether to add a LICENSE file
+		// upstream (case 1) vs. fix a packaging bug that shipped an
+		// empty one (case 2). readLicenseFile returns a non-empty
+		// path iff a file was actually opened, so this branch is the
+		// authoritative discriminator.
+		var reason string
+		if licensePath == "" {
+			reason = "no LICENSE file found in " + m.Dir
+		} else {
+			reason = "LICENSE file " + filepath.Join(m.Dir, licensePath) + " is empty"
+		}
 		if just, ok := waivers[m.Path]; ok {
 			out.Class = classWaivered
-			out.Note = "waivered (no LICENSE file): " + just
+			out.Note = "waivered (" + reason + "): " + just
 		} else {
-			out.Note = "no LICENSE file found in " + m.Dir
+			out.Note = reason
 		}
 		return out
 	}
@@ -578,15 +592,24 @@ func loadWaivers(path string) (map[string]string, error) {
 	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
-	var pendingComment string
+	// pendingComment accumulates CONSECUTIVE comment lines (each
+	// trimmed and "#"-stripped) immediately above a module path, so a
+	// multi-line justification like:
+	//   # Approved by legal
+	//   # MPL-2.0 file-level copyleft does not apply (no upstream mods)
+	//   some/module/path
+	// is captured in full rather than only the last line. A blank line
+	// resets the accumulator, so a stray comment further up in the
+	// file does not bleed into an unrelated waiver below.
+	var pendingComment []string
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
-			pendingComment = ""
+			pendingComment = pendingComment[:0]
 			continue
 		}
 		if strings.HasPrefix(line, "#") {
-			pendingComment = strings.TrimSpace(strings.TrimPrefix(line, "#"))
+			pendingComment = append(pendingComment, strings.TrimSpace(strings.TrimPrefix(line, "#")))
 			continue
 		}
 		// Module path (with optional inline comment).
@@ -594,12 +617,14 @@ func loadWaivers(path string) (map[string]string, error) {
 		if idx := strings.Index(line, "#"); idx >= 0 {
 			modPath = strings.TrimSpace(line[:idx])
 		}
-		justification := pendingComment
-		if justification == "" {
+		var justification string
+		if len(pendingComment) > 0 {
+			justification = strings.Join(pendingComment, " ")
+		} else {
 			justification = "(no justification recorded)"
 		}
 		waivers[modPath] = justification
-		pendingComment = ""
+		pendingComment = pendingComment[:0]
 	}
 	return waivers, scanner.Err()
 }
