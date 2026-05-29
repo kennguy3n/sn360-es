@@ -293,6 +293,80 @@ func TestRateLimiter_PrimaryNonAvailabilityError_DoesNotFallBack(t *testing.T) {
 	}
 }
 
+// TestRateLimiter_FallbackMemoryStore_EvictedByJanitor is the
+// regression test for the "fallback memory leak across Redis flaps"
+// finding Devin Review flagged on PR #45.
+//
+// Setup mirrors the production wiring:
+//   - Primary = a Redis stub that always reports
+//     ErrBucketStoreUnavailable (cluster-wide hard-down).
+//   - FailureModeFallback = a real memoryBucketStore — the one
+//     production builds via middleware.NewMemoryBucketStore().
+//
+// In that configuration every Take routes through the fallback,
+// which adds one entry per unique client IP to its internal
+// sync.Map. Before this fix, those entries leaked: the limiter's
+// janitor only swept rl.memStore (nil here because primary is
+// Redis), so unique IPs that hit the fallback path were never
+// evicted. Across repeated Redis flaps the map grew unboundedly.
+//
+// The fix: memoryBucketStore implements IdleSweeper (SweepIdle),
+// the RateLimiter sees that and sweeps it from runJanitor /
+// sweepIdle. This test drives sweepIdle directly via the
+// export-only helper RateLimiterSweepIdle and asserts:
+//
+//  1. The fallback created entries for the unique IPs that hit it
+//     (we send 3 requests from 3 different IPs).
+//  2. After advancing the clock past IdleTTL and running the
+//     janitor, the entries are gone.
+//
+// Without the fix the second assert fails — entries persist
+// because the limiter's janitor only swept rl.memStore.
+func TestRateLimiter_FallbackMemoryStore_EvictedByJanitor(t *testing.T) {
+	t.Parallel()
+	primary := &stubBucketStore{
+		err: fmt.Errorf("%w: redis dial: connection refused", middleware.ErrBucketStoreUnavailable),
+	}
+	clk := &stubClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	fallback := middleware.NewMemoryBucketStoreWithClock(clk.Now)
+	backend := &countedHandler{}
+	rl := middleware.NewRateLimiter(backend, middleware.RateLimitConfig{
+		Rate:                10,
+		Burst:               5,
+		Now:                 clk.Now,
+		Store:               primary,
+		FailureModeFallback: fallback,
+		FailureMode:         middleware.FailureModeOpen,
+		IdleTTL:             30 * time.Second,
+		// Disable the auto-janitor; we drive sweepIdle directly
+		// to keep the test deterministic.
+		CleanupInterval: -1,
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	defer rl.Stop()
+
+	// Send three requests from three unique IPs — the fallback
+	// adds one entry per IP.
+	for _, ip := range []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"} {
+		rec := httptest.NewRecorder()
+		rl.ServeHTTP(rec, newRequest(t, ip, "/v1/things"))
+	}
+
+	// Pre-sweep: entries are too young to evict; sweepIdle should
+	// return 0. This pins the lastSeen update path.
+	if removed := middleware.RateLimiterSweepIdle(rl, clk.Now()); removed != 0 {
+		t.Fatalf("pre-sweep removed=%d, want 0 (entries are fresh)", removed)
+	}
+
+	// Advance past IdleTTL and sweep. With the fix, all three
+	// entries are evicted. Without the fix, the limiter's janitor
+	// did not know about the fallback store and removed=0.
+	clk.advance(45 * time.Second)
+	if removed := middleware.RateLimiterSweepIdle(rl, clk.Now()); removed != 3 {
+		t.Fatalf("post-sweep removed=%d, want 3 (fallback entries should be evicted)", removed)
+	}
+}
+
 func TestMemoryBucketStore_RejectsInvalid(t *testing.T) {
 	t.Parallel()
 	store := middleware.NewMemoryBucketStore()

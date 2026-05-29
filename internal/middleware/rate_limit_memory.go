@@ -19,6 +19,11 @@ import (
 // the limiter's janitor invokes on a ticker). The store does not
 // run its own goroutine — the limiter owns lifecycle so it can be
 // cleanly Stopped.
+//
+// The store implements [IdleSweeper] (via SweepIdle) so a memory
+// store wired as FailureModeFallback (the standard Redis +
+// soft-fall configuration) is sweepable by the limiter's janitor
+// even though the limiter doesn't "own" it through rl.memStore.
 type memoryBucketStore struct {
 	now     func() time.Time
 	buckets sync.Map // string -> *memoryBucket
@@ -90,6 +95,16 @@ func (s *memoryBucketStore) bucketFor(clientKey string, now time.Time, burst int
 	return b
 }
 
+// SweepIdle is the exported counterpart of sweepIdle. It exists so
+// the store satisfies the [IdleSweeper] interface and can be
+// driven by a RateLimiter holding it through the BucketStore
+// abstraction (e.g. when wired as FailureModeFallback). Both names
+// resolve to the same implementation — the lowercase one stays
+// for symmetry with the original API and for internal callers.
+func (s *memoryBucketStore) SweepIdle(now time.Time, idleTTL time.Duration) int {
+	return s.sweepIdle(now, idleTTL)
+}
+
 // sweepIdle evicts buckets that have not been touched within
 // idleTTL. The conditional CompareAndDelete keeps the sweep safe
 // against the racing-update case where a request lands between the
@@ -155,4 +170,13 @@ func (b *memoryBucket) retryAfter(rate float64) time.Duration {
 // independent of the RateLimiter's owned-store lifecycle.
 func NewMemoryBucketStore() BucketStore {
 	return newMemoryBucketStore(time.Now)
+}
+
+// NewMemoryBucketStoreWithClock returns a fresh in-process
+// [BucketStore] using the supplied clock for refill / eviction
+// timing. Intended for tests that need to drive time
+// deterministically — production code paths should use
+// [NewMemoryBucketStore], which wires time.Now.
+func NewMemoryBucketStoreWithClock(now func() time.Time) BucketStore {
+	return newMemoryBucketStore(now)
 }

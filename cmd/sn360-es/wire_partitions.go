@@ -55,6 +55,30 @@ func NewPgPartitionManager(db *postgres.DB, logger *slog.Logger) worker.Partitio
 	return &pgPartitionManager{db: db, logger: logger}
 }
 
+// SQL templates for the partition manager. Extracted to package
+// scope so the regression tests in wire_partitions_test.go can
+// assert their literal shape — specifically, that they use single
+// %I / %L specifiers (not %%I / %%L). Postgres' format() treats
+// `%%` as a literal `%`, so a double-percent typo would silently
+// render invalid DDL and break partition CREATE/DROP at runtime.
+// Devin Review caught one such typo on the first push of this
+// file; the asserts are the structural guardrail that keeps it
+// from coming back.
+//
+// Identifier (%I) and literal (%L) quoting still flows through
+// Postgres' format() at execution time — we don't substitute in
+// Go because Go's fmt has no SQL-aware quoting.
+const (
+	createPartitionTmpl = `
+		SELECT format(
+		    'CREATE TABLE IF NOT EXISTS %I PARTITION OF %I FOR VALUES FROM (%L) TO (%L)',
+		    $1::text, $2::text, $3::text, $4::text
+		)
+	`
+	detachPartitionTmpl = `SELECT format('ALTER TABLE %I DETACH PARTITION %I', $1::text, $2::text)`
+	dropPartitionTmpl   = `SELECT format('DROP TABLE %I', $1::text)`
+)
+
 // ListPartitions queries the catalog for every partition currently
 // attached to `parent`. Each row also yields the partition's
 // inclusive lower / exclusive upper bound parsed out of the partition
@@ -153,18 +177,10 @@ func (m *pgPartitionManager) CreatePartition(ctx context.Context, parent, partit
 	if err != nil {
 		return fmt.Errorf("CreatePartition: invalid partition %q: %w", partition, err)
 	}
-	// format() with %I quotes identifiers; the timestamps are
-	// passed as text literals which Postgres interprets in the
-	// server's timezone — we use UTC RFC3339 so the timezone never
-	// matters.
-	const tmpl = `
-		SELECT format(
-		    'CREATE TABLE IF NOT EXISTS %%I PARTITION OF %%I FOR VALUES FROM (%%L) TO (%%L)',
-		    $1::text, $2::text, $3::text, $4::text
-		)
-	`
+	// See package-level createPartitionTmpl for the format-spec
+	// footgun the comment block above used to call out.
 	var ddl string
-	if err := m.db.QueryRowContext(ctx, tmpl,
+	if err := m.db.QueryRowContext(ctx, createPartitionTmpl,
 		sanitisedPart,
 		sanitisedParent,
 		lower.UTC().Format(time.RFC3339),
@@ -212,15 +228,14 @@ func (m *pgPartitionManager) DropPartition(ctx context.Context, parent, partitio
 	// expression, so we don't need a transaction to call it
 	// safely, and pulling the composition out of the tx keeps
 	// the tx-scope small (the transaction only spans the two
-	// DDL executions that mutate the catalog).
-	const tmplDetach = `SELECT format('ALTER TABLE %%I DETACH PARTITION %%I', $1::text, $2::text)`
+	// DDL executions that mutate the catalog). See package-level
+	// detachPartitionTmpl / dropPartitionTmpl for the templates.
 	var detachStmt string
-	if err := m.db.QueryRowContext(ctx, tmplDetach, sanitisedParent, sanitisedPart).Scan(&detachStmt); err != nil {
+	if err := m.db.QueryRowContext(ctx, detachPartitionTmpl, sanitisedParent, sanitisedPart).Scan(&detachStmt); err != nil {
 		return fmt.Errorf("compose DETACH DDL: %w", err)
 	}
-	const tmplDrop = `SELECT format('DROP TABLE %%I', $1::text)`
 	var dropStmt string
-	if err := m.db.QueryRowContext(ctx, tmplDrop, sanitisedPart).Scan(&dropStmt); err != nil {
+	if err := m.db.QueryRowContext(ctx, dropPartitionTmpl, sanitisedPart).Scan(&dropStmt); err != nil {
 		return fmt.Errorf("compose DROP DDL: %w", err)
 	}
 

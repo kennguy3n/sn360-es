@@ -70,12 +70,33 @@ BEGIN;
 -- The cutover boundary. Every row that exists at the moment this
 -- migration runs lives in the *_legacy partition (CHECK constraint
 -- bounded by this timestamp), and new writes land in the matching
--- *_YYYY_MM partition. We deliberately pin the boundary to a
--- statically-known timestamp rather than NOW() so the migration is
--- deterministic and re-runnable in dry-run environments. Operators
--- promoting this migration to production should bump
--- `sn360_partition_cutover` to a recent month-start in a copy of the
--- migration; the value here is a sane default for fresh deployments.
+-- *_YYYY_MM partition.
+--
+-- Idempotency / reproducibility note. The cutover is computed as
+-- DATE_TRUNC('month', NOW()) — i.e. the first of the current month
+-- in the database's local timezone — at migration-time. golang-
+-- migrate runs each migration file exactly once per database (the
+-- schema_migrations table records (version, dirty) and refuses to
+-- re-run), so within a single deployment lineage the cutover is
+-- effectively a constant: whatever the wall clock said on the day
+-- the migration first ran. The risk only matters if an operator
+-- re-applies this migration into a fresh database long after the
+-- original deployment (e.g. a regional rebuild, a disaster-
+-- recovery restore from a logical backup). In those cases the
+-- legacy partition will span an earlier range than the production
+-- master, but the partition layout is otherwise functionally
+-- identical (legacy partition exists, forward partitions exist,
+-- writes route correctly) and the cleanup worker drops the legacy
+-- partition once retention elapses regardless of which month it
+-- was anchored at. Operators rebuilding from a logical backup who
+-- want bit-for-bit-identical partition names should manually
+-- temporarily SET `app.partition_cutover` in their session and
+-- adapt this migration to read it via `current_setting` — kept out
+-- of the default path to avoid an extra knob no one needs.
+--
+-- Devin Review flagged this as a watch-out (PR #45, finding INFO);
+-- the gap is documented here rather than fixed because adding a
+-- knob without a real consumer would be over-engineering.
 DO $migration$
 DECLARE
     cutover    TIMESTAMPTZ := DATE_TRUNC('month', NOW());
