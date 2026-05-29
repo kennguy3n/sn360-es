@@ -35,7 +35,7 @@ cover:
 	$(GO) tool cover -func=coverage.out
 
 .PHONY: lint
-lint: openapi-check tenant-lint handler-coverage
+lint: openapi-check tenant-lint handler-coverage license-check
 	golangci-lint run ./...
 
 # --- Tenant isolation analyser ------------------------------------------
@@ -65,6 +65,25 @@ handler-coverage:
 	$(GO) run ./cmd/sn360-es-handler-coverage/ \
 		--openapi api/openapi.yaml \
 		--routes cmd/sn360-es/routes.go
+
+# --- License audit -------------------------------------------------------
+#
+# `make license-check` runs the in-tree license classifier against every
+# third-party module in go.sum. The classifier replaces google/go-licenses
+# for the CI gate because go-licenses 1.x and 2.x both regress on Go 1.21+
+# toolchain layouts (issue #128: stdlib packages are misreported as
+# "missing module info", which causes a fatal exit before any third-party
+# verdict can be rendered).
+#
+# Allow-list: MIT, Apache-2.0, BSD-2/3-Clause, ISC, MPL-1.1/2.0, Zlib,
+# Unlicense, CC0-1.0, BSL-1.0.
+# Deny-list: GPL/LGPL/AGPL (all versions), SSPL, BUSL-1.1, Commons-Clause.
+# UNKNOWN: fails the build unless waivered in .license-waivers.txt with
+# a justification comment.
+
+.PHONY: license-check
+license-check:
+	$(GO) run ./cmd/sn360-es-license-check
 
 .PHONY: test-e2e
 test-e2e:
