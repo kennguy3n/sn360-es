@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // classifyText is the unit-test entrypoint into the matcher: it mirrors
@@ -433,6 +434,40 @@ func TestFirstNonEmptyLine(t *testing.T) {
 		if got != c.want {
 			t.Errorf("case %d: firstNonEmptyLine(%q) = %q, want %q", i, c.in, got, c.want)
 		}
+	}
+}
+
+// TestTrunc covers the rune-safe truncation path used by the table
+// renderer. ASCII inputs are the realistic case (Go module paths are
+// RFC-required ASCII) but we also pin the multi-byte UTF-8 edge: a
+// byte-slice cut at n-1 could land in the middle of a multi-byte
+// sequence and produce invalid UTF-8 in the report. The fix slices
+// on rune boundaries, so the truncated prefix is always valid UTF-8.
+func TestTrunc(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		n    int
+		want string
+	}{
+		{name: "shorter than n", in: "abc", n: 10, want: "abc"},
+		{name: "equal to n", in: "abcdef", n: 6, want: "abcdef"},
+		{name: "ascii longer than n", in: "github.com/example/very-long-module-path", n: 20, want: "github.com/example/…"},
+		{name: "single-byte boundary", in: "abcdef", n: 4, want: "abc…"},
+		{name: "multi-byte runes preserved", in: "héllo-wörld-modüle-name", n: 10, want: "héllo-wör…"},
+		{name: "n less than 2 is a no-op", in: "anything", n: 1, want: "anything"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := trunc(c.in, c.n)
+			if got != c.want {
+				t.Fatalf("trunc(%q, %d) = %q, want %q", c.in, c.n, got, c.want)
+			}
+			// Defensive: the result must always be valid UTF-8.
+			if !utf8.ValidString(got) {
+				t.Fatalf("trunc(%q, %d) returned invalid UTF-8: % x", c.in, c.n, []byte(got))
+			}
+		})
 	}
 }
 

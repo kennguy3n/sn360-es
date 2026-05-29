@@ -55,6 +55,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // module mirrors the relevant subset of `go list -m -json` output.
@@ -331,8 +332,20 @@ func main() {
 
 	findings := make([]finding, 0, len(modules))
 	for _, m := range modules {
-		// Skip the main module and the stdlib (Dir under GOROOT).
 		if m.Main {
+			continue
+		}
+		// Skip the stdlib explicitly. In Go 1.21+, `go list -m all`
+		// can include a synthetic `std` (and `cmd`) entry with
+		// Main=false and Dir pointing at GOROOT/src, which would
+		// otherwise flow through the classifier (Go's LICENSE is
+		// BSD-3-Clause so it'd land as ALLOW — harmless but noisy
+		// in the report, and gives reviewers a false signal that
+		// the tool is auditing the stdlib's license posture, which
+		// it isn't). Filter by module Path rather than Dir-under-
+		// GOROOT because the GOROOT layout has shifted across
+		// recent Go versions and Path equality is stable.
+		if m.Path == "std" || m.Path == "cmd" {
 			continue
 		}
 		if m.Dir == "" {
@@ -397,7 +410,7 @@ func main() {
 // resulting JSON stream (one object per module, not a JSON array). A
 // 5-minute timeout bounds the worst case (e.g. cold module cache that
 // needs to download every dep) without blocking CI indefinitely.
-func listModules() ([]module, error) {
+func listModules() (mods []module, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-mod=readonly", "-json", "all")
@@ -409,6 +422,19 @@ func listModules() ([]module, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	// Always reap the subprocess: on the early-return-on-decode-error
+	// path, skipping Wait() leaves `go list` lingering until the 5-min
+	// ctx timeout fires. The decode error is the authoritative one to
+	// surface; the Wait() result is informational — if Wait fails AND
+	// we already have a decode error, we keep the decode error and
+	// log the wait failure to stderr (no other channel available
+	// inside a deferred cleanup).
+	defer func() {
+		waitErr := cmd.Wait()
+		if waitErr != nil && err == nil {
+			err = fmt.Errorf("go list exited non-zero: %w", waitErr)
+		}
+	}()
 	dec := json.NewDecoder(out)
 	var modules []module
 	for {
@@ -420,9 +446,6 @@ func listModules() ([]module, error) {
 			return nil, fmt.Errorf("decode go list output: %w", err)
 		}
 		modules = append(modules, m)
-	}
-	if err := cmd.Wait(); err != nil {
-		return nil, fmt.Errorf("go list exited non-zero: %w", err)
 	}
 	return modules, nil
 }
@@ -623,11 +646,23 @@ func report(findings []finding) {
 		allow, warn, deny, waivered, unknown, len(findings))
 }
 
+// trunc returns s shortened to at most n display columns (runes), with
+// a trailing ellipsis when truncation happens. We slice on rune
+// boundaries rather than byte boundaries because (a) Go's fmt verbs
+// `%-Ns` pad on rune width, so a byte-slice cut would mis-align the
+// column when s contains multi-byte UTF-8, and (b) a byte slice can
+// land in the middle of a multi-byte sequence producing invalid UTF-8
+// in the report. Module paths and version strings are RFC-required
+// ASCII so this is purely defensive, but cheap.
 func trunc(s string, n int) string {
-	if len(s) <= n {
+	if n <= 1 {
 		return s
 	}
-	return s[:n-1] + "…"
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	runes := []rune(s)
+	return string(runes[:n-1]) + "…"
 }
 
 // writeJSON serialises the findings list to a path.
