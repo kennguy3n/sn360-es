@@ -77,17 +77,22 @@ import (
 // endpoint files (`/healthz`, `/metrics`, `/openapi.yaml`) stay as-is
 // because they're registered as exact routes in routes.go, not as
 // subtrees — they have no descendants to worry about.
+//
+// Entries are added ONLY when the matching route is actually
+// registered in routes.go. Pre-emptive entries for "future" routes
+// (e.g. /v1/feedback/, /v1/agent/, /internal/) were intentionally
+// dropped on 2026-05: the cost of a developer having to add a single
+// allow-list line when they wire a new operational endpoint is far
+// cheaper than the cost of accidentally allow-listing a future
+// customer-facing endpoint without OpenAPI coverage.
 var allowOnlyInGoPrefixes = []string{
 	"/healthz",
 	"/readyz",
 	"/metrics",
 	"/docs", // exact + subtree both registered in routes.go
 	"/openapi.yaml",
-	"/l/",           // URL-rewrite interstitial — internal-only
-	"/v1/push/",     // SaaS push webhooks — separate from REST API
-	"/v1/feedback/", // feedback events — separate from REST API
-	"/v1/agent/",    // AI agent control surface — separate from REST API
-	"/internal/",    // ops surface (alert router) — separate from REST API
+	"/l/",       // URL-rewrite interstitial — internal-only
+	"/v1/push/", // SaaS push webhooks — operational ingress, not REST API
 }
 
 // allowOnlyInGoExact is the set of EXACT routes Go is allowed to

@@ -446,6 +446,88 @@ func TestServeHTTP_FailedRemediationOnWarningDoesNotEscalate(t *testing.T) {
 	}
 }
 
+// TestDispatch_NilRemediatorDoesNotPanicWhenForced exercises the
+// defense-in-depth nil guard inside dispatch(). The normal decision
+// tree never produces ActionRemediate without a wired remediator
+// (Classify enforces that), so we synthesise a Decision directly to
+// simulate a future refactor that adds a new ActionRemediate-producing
+// path which forgets the Classify-side nil check. The router must
+// (a) NOT panic, (b) log the contract violation, and (c) fall back to
+// the escalation path for critical severities — same observable
+// behaviour as the Classify-side nil-remediator fallback.
+func TestDispatch_NilRemediatorDoesNotPanicWhenForced(t *testing.T) {
+	esc := &fakeEscalator{}
+	r, err := NewAlertRouter(RouterConfig{
+		Escalator: esc,
+		TenantID:  "platform-owner",
+		// Note: no Remediator wired. Classify would route any
+		// alert through ActionEscalate, but we bypass Classify and
+		// force the ActionRemediate branch directly.
+		Clock: func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("NewAlertRouter: %v", err)
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			t.Fatalf("dispatch panicked on nil remediator (defense-in-depth guard missing): %v", rec)
+		}
+	}()
+	forced := Decision{
+		Alert: Alert{
+			Status: "firing",
+			Labels: map[string]string{
+				"alertname": "SN360ESWorkerCycleStalled",
+				"severity":  "critical",
+				"component": "workers",
+			},
+			Annotations: map[string]string{"summary": "stalled"},
+		},
+		Action: ActionRemediate,
+		Reason: "synthetic test forcing remediator-nil path",
+	}
+	r.dispatch(t.Context(), forced)
+	if got := esc.count(); got != 1 {
+		t.Errorf("escalator calls=%d; want 1 (critical-severity nil-remediator must fall through to escalation)", got)
+	}
+	got := esc.snapshot()
+	if len(got) == 0 || !strings.Contains(got[0].AISummary, "remediation_failed") {
+		t.Errorf("escalation incident=%+v; want AISummary to record remediation_failed prefix", got)
+	}
+}
+
+// TestDispatch_NilRemediatorOnWarningDoesNotEscalate locks in that
+// the synthetic-bypass nil-remediator path stays consistent with the
+// real failed-remediation path: warnings stay logged-only, only
+// critical severities fall through to escalation.
+func TestDispatch_NilRemediatorOnWarningDoesNotEscalate(t *testing.T) {
+	esc := &fakeEscalator{}
+	r, err := NewAlertRouter(RouterConfig{
+		Escalator: esc,
+		TenantID:  "platform-owner",
+		Clock:     func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("NewAlertRouter: %v", err)
+	}
+	forced := Decision{
+		Alert: Alert{
+			Status: "firing",
+			Labels: map[string]string{
+				"alertname": "SN360ESTier1LatencyHigh",
+				"severity":  "warning",
+				"component": "tier1",
+			},
+		},
+		Action: ActionRemediate,
+		Reason: "synthetic test forcing remediator-nil path on warning severity",
+	}
+	r.dispatch(t.Context(), forced)
+	if got := esc.count(); got != 0 {
+		t.Errorf("escalator calls=%d; want 0 (warning-severity nil-remediator stays logged-only)", got)
+	}
+}
+
 func TestBuildIncidentFromAlert_StartsAtPreserved(t *testing.T) {
 	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 	start := time.Date(2026, 1, 15, 11, 55, 0, 0, time.UTC)

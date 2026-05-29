@@ -331,6 +331,24 @@ func (r *AlertRouter) dispatch(ctx context.Context, d Decision) {
 			slog.String("runbook_url", d.Alert.Annotations["runbook_url"]),
 			slog.String("reason", d.Reason))
 	case ActionRemediate:
+		// Defense in depth: Classify only produces ActionRemediate
+		// when r.remediator != nil (and the alertname is on the
+		// allow-list), so this nil check is unreachable on the
+		// current decision tree. But Classify is exported and the
+		// switch above does NOT panic-on-default — if a future
+		// refactor adds a new ActionRemediate-producing path that
+		// forgets the nil guard, we'd dereference nil here. Surface
+		// the contract violation through the escalation fallback so
+		// the alert still reaches a human rather than producing a
+		// silent webhook crash.
+		if r.remediator == nil {
+			r.logger.Error("ops.alert_router: ActionRemediate produced without a wired remediator (Classify contract violated)",
+				slog.String("alert", d.Alert.Labels["alertname"]))
+			if strings.EqualFold(d.Alert.Labels["severity"], "critical") {
+				r.escalateAfterRemediationFailure(ctx, d.Alert, errors.New("remediator not wired"))
+			}
+			return
+		}
 		if err := r.remediator.Remediate(ctx, d.Alert); err != nil {
 			r.logger.Error("ops.alert_router: remediation failed",
 				slog.String("alert", d.Alert.Labels["alertname"]),

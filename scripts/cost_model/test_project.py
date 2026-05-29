@@ -287,6 +287,66 @@ class TestCostModel(unittest.TestCase):
             project.PROFILES["high"].tier0_eligible_pct,
         )
 
+    def test_traffic_profile_rejects_eligibility_ceiling_above_one(self) -> None:
+        # If a future profile literal accidentally specifies a Tier 0
+        # eligibility ceiling above 1.0 (e.g. via copy-paste of
+        # pct_internal + pct_known_partner that sum to >1), the
+        # downstream `effective_bypass_rate = lever * ceiling` would
+        # exceed 1.0 and produce a negative `tier1_msgs` count plus
+        # negative cost numbers. The dataclass invariant in
+        # __post_init__ should reject this at construction.
+        with self.assertRaises(ValueError):
+            project.TrafficProfile(
+                name="bad",
+                messages_per_tenant_per_day=100,
+                avg_message_kb=10.0,
+                pct_internal=0.6,
+                pct_known_partner=0.5,  # 0.6 + 0.5 = 1.1 -> reject
+                tier1_inference_cost_per_1k=0.012,
+                tier2_pct_after_tier1=0.10,
+                avg_tier2_tokens_in=900,
+                avg_tier2_tokens_out=120,
+                storage_retention_days=90,
+            )
+
+    def test_traffic_profile_rejects_negative_fraction(self) -> None:
+        # Negative percentages are meaningless for the cost model and
+        # would also break the downstream math (negative bypassed,
+        # tier1_msgs > total). Rejected at construction.
+        with self.assertRaises(ValueError):
+            project.TrafficProfile(
+                name="bad",
+                messages_per_tenant_per_day=100,
+                avg_message_kb=10.0,
+                pct_internal=-0.1,
+                pct_known_partner=0.5,
+                tier1_inference_cost_per_1k=0.012,
+                tier2_pct_after_tier1=0.10,
+                avg_tier2_tokens_in=900,
+                avg_tier2_tokens_out=120,
+                storage_retention_days=90,
+            )
+
+    def test_traffic_profile_accepts_exact_boundary(self) -> None:
+        # 0.5 + 0.5 = 1.0 is the structural maximum (every message
+        # eligible for Tier 0 bypass) and MUST be accepted. The
+        # invariant deliberately allows a small floating-point slack
+        # so e.g. 0.3 + 0.7 doesn't fail spuriously due to IEEE 754
+        # representation.
+        p = project.TrafficProfile(
+            name="boundary",
+            messages_per_tenant_per_day=100,
+            avg_message_kb=10.0,
+            pct_internal=0.5,
+            pct_known_partner=0.5,
+            tier1_inference_cost_per_1k=0.012,
+            tier2_pct_after_tier1=0.10,
+            avg_tier2_tokens_in=900,
+            avg_tier2_tokens_out=120,
+            storage_retention_days=90,
+        )
+        self.assertAlmostEqual(p.tier0_eligible_pct, 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

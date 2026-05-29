@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
-import math
 import sys
 from typing import Dict, List, Tuple
 
@@ -99,6 +98,42 @@ class TrafficProfile:
         This property is the upper bound on the effective bypass rate.
         """
         return self.pct_internal + self.pct_known_partner
+
+    def __post_init__(self) -> None:
+        # Invariant: the structural ceiling is a fraction, so each of
+        # the two contributing fractions must be in [0, 1] AND their
+        # sum must not exceed 1. Without this guard, a typo in a
+        # future PROFILES literal (e.g. pct_internal=0.55 + pct_known
+        # _partner=0.55) would produce a tier0_eligible_pct > 1.0,
+        # which cascades to effective_bypass_rate > 1.0 and a
+        # negative tier1_msgs count — i.e. silently-nonsensical
+        # cost numbers. Fail loud at construction so the regression
+        # tests catch it immediately and benchmarks/COST_MODEL.md
+        # never publishes impossible figures.
+        for field, value in (
+            ("pct_internal", self.pct_internal),
+            ("pct_known_partner", self.pct_known_partner),
+        ):
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(
+                    f"{type(self).__name__}({self.name}).{field}={value} "
+                    f"is outside [0, 1]"
+                )
+        total = self.pct_internal + self.pct_known_partner
+        # Allow a tiny floating-point slack so e.g. 0.7 + 0.3 doesn't
+        # raise spuriously when the literal is exact in math but not
+        # in IEEE 754.
+        if total > 1.0 + 1e-9:
+            raise ValueError(
+                f"{type(self).__name__}({self.name}): "
+                f"pct_internal + pct_known_partner = {total} > 1.0; "
+                f"the Tier 0 eligibility ceiling cannot exceed 100% of mail"
+            )
+        if self.messages_per_tenant_per_day < 0:
+            raise ValueError(
+                f"{type(self).__name__}({self.name}): "
+                f"messages_per_tenant_per_day = {self.messages_per_tenant_per_day} < 0"
+            )
 
 
 PROFILES: Dict[str, TrafficProfile] = {
