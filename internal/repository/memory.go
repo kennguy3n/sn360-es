@@ -705,6 +705,12 @@ func (m *memoryCommHistory) UpdateCountsIfFresh(_ context.Context, h *Communicat
 	if h == nil || h.ID == "" {
 		return false, errors.New("repository: UpdateCountsIfFresh requires a row id")
 	}
+	if h.TenantID == "" {
+		// Mirror the Postgres implementation: tenant_id is part of
+		// the optimistic-lock predicate so a poisoned row id cannot
+		// reach across tenants.
+		return false, errors.New("repository: UpdateCountsIfFresh requires a tenant id")
+	}
 	if readAt.IsZero() {
 		return false, errors.New("repository: UpdateCountsIfFresh requires a non-zero readAt")
 	}
@@ -713,6 +719,12 @@ func (m *memoryCommHistory) UpdateCountsIfFresh(_ context.Context, h *Communicat
 	defer m.mu.Unlock()
 	cur, ok := m.rows[key]
 	if !ok {
+		return false, ErrNotFound
+	}
+	// Defence in depth: even though commKey already incorporates
+	// tenantID, an attacker who somehow forged the in-memory map
+	// keys would still be blocked by this tenant_id comparison.
+	if cur.TenantID != h.TenantID {
 		return false, ErrNotFound
 	}
 	if !cur.UpdatedAt.Equal(readAt) {

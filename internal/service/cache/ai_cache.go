@@ -17,6 +17,22 @@ import (
 	redisclient "github.com/kennguy3n/sn360-es/pkg/storage/redis"
 )
 
+// ErrMissingTenantID is returned when any tenant-scoped cache operation
+// is called without a tenant ID. Every cache entry in this package is
+// tenant-scoped: an AICache verdict depends on per-tenant Tier 2
+// context (vendor list, org graph, sensitivity tier) and an RspamdCache
+// entry is keyed by the raw-mail content addressed to a specific
+// tenant. Sharing either across tenants is both a correctness bug
+// (wrong verdict for the second tenant) and a cost / timing side-channel
+// (tenant A could observe whether tenant B has already cached a
+// particular mail). Tenant ID is therefore mandatory and validated at
+// the entry of every public method on both caches.
+//
+// The error string uses the neutral `cache:` prefix because this
+// sentinel is shared by AICache and RspamdCache — an `ai_cache:` prefix
+// would mislead operators reading Rspamd-path logs.
+var ErrMissingTenantID = errors.New("cache: tenant id is required")
+
 // AIResult is the cached AI verdict. It is intentionally minimal so the
 // cache stays small and the schema is stable.
 type AIResult struct {
@@ -40,7 +56,15 @@ type AICacheConfig struct {
 }
 
 // AICache caches AI evaluation results keyed by a content fingerprint
-// (normalised body + sender domain). It is safe for concurrent use.
+// (tenant ID + normalised body + sender domain). It is safe for
+// concurrent use.
+//
+// The tenant ID is a mandatory component of the key. Two tenants that
+// receive identical content do not share cache entries because Tier 2
+// reasoning depends on tenant-specific context (vendor catalogue, org
+// graph, sensitivity tier, per-tenant model fine-tuning). Sharing
+// across tenants would (a) return a verdict computed under tenant A's
+// context to tenant B and (b) act as a cross-tenant cost side-channel.
 type AICache struct {
 	client *redisclient.Client
 	cfg    AICacheConfig
@@ -60,20 +84,42 @@ func NewAICache(client *redisclient.Client, cfg AICacheConfig) (*AICache, error)
 	return &AICache{client: client, cfg: cfg}, nil
 }
 
-// Key returns the cache key for normalised body + sender domain.
-// Exposed so callers (and tests) can verify determinism.
-func (c *AICache) Key(body, senderDomain string) string {
+// Key returns the cache key for (tenantID, body, senderDomain) along
+// with a validation error. The returned key is namespaced by tenant so
+// two tenants cannot share cache entries even when they receive
+// byte-identical content. An empty tenantID returns ErrMissingTenantID
+// and a zero-value key — Go's error-return idiom rather than a panic,
+// so a misuse by future direct callers degrades gracefully instead of
+// crashing the request.
+//
+// The 0x00 separators between the tenantID, body, and sender domain
+// are length-binding: no choice of inputs can craft an alternative
+// (tenantID, body, sender) tuple that hashes to the same value for a
+// different tenant. The tenantID is also embedded verbatim in the key
+// prefix so an operator can run `SCAN MATCH ai_cache:<tid>:*` for
+// per-tenant invalidation.
+func (c *AICache) Key(tenantID, body, senderDomain string) (string, error) {
+	if tenantID == "" {
+		return "", ErrMissingTenantID
+	}
 	h := sha256.New()
+	h.Write([]byte(tenantID))
+	h.Write([]byte{0})
 	h.Write([]byte(normaliseBody(body)))
 	h.Write([]byte{0})
 	h.Write([]byte(strings.ToLower(strings.TrimSpace(senderDomain))))
-	return c.cfg.KeyPrefix + hex.EncodeToString(h.Sum(nil))
+	return c.cfg.KeyPrefix + tenantID + ":" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Get returns the cached result for (body, senderDomain). The bool is
-// false when there is no cache entry.
-func (c *AICache) Get(ctx context.Context, body, senderDomain string) (AIResult, bool, error) {
-	raw, ok, err := c.client.Get(ctx, c.Key(body, senderDomain))
+// Get returns the cached result for (tenantID, body, senderDomain). The
+// bool is false when there is no cache entry. Returns ErrMissingTenantID
+// if tenantID is empty.
+func (c *AICache) Get(ctx context.Context, tenantID, body, senderDomain string) (AIResult, bool, error) {
+	key, err := c.Key(tenantID, body, senderDomain)
+	if err != nil {
+		return AIResult{}, false, err
+	}
+	raw, ok, err := c.client.Get(ctx, key)
 	if err != nil || !ok {
 		return AIResult{}, false, err
 	}
@@ -84,8 +130,13 @@ func (c *AICache) Get(ctx context.Context, body, senderDomain string) (AIResult,
 	return out, true, nil
 }
 
-// Set caches result for (body, senderDomain) under TTL.
-func (c *AICache) Set(ctx context.Context, body, senderDomain string, result AIResult) error {
+// Set caches result for (tenantID, body, senderDomain) under TTL.
+// Returns ErrMissingTenantID if tenantID is empty.
+func (c *AICache) Set(ctx context.Context, tenantID, body, senderDomain string, result AIResult) error {
+	key, err := c.Key(tenantID, body, senderDomain)
+	if err != nil {
+		return err
+	}
 	if result.StoredAt.IsZero() {
 		result.StoredAt = time.Now().UTC()
 	}
@@ -93,12 +144,17 @@ func (c *AICache) Set(ctx context.Context, body, senderDomain string, result AIR
 	if err != nil {
 		return fmt.Errorf("ai_cache: marshal: %w", err)
 	}
-	return c.client.Set(ctx, c.Key(body, senderDomain), string(blob), c.cfg.TTL)
+	return c.client.Set(ctx, key, string(blob), c.cfg.TTL)
 }
 
-// Invalidate removes the cache entry for (body, senderDomain).
-func (c *AICache) Invalidate(ctx context.Context, body, senderDomain string) error {
-	return c.client.Del(ctx, c.Key(body, senderDomain))
+// Invalidate removes the cache entry for (tenantID, body, senderDomain).
+// Returns ErrMissingTenantID if tenantID is empty.
+func (c *AICache) Invalidate(ctx context.Context, tenantID, body, senderDomain string) error {
+	key, err := c.Key(tenantID, body, senderDomain)
+	if err != nil {
+		return err
+	}
+	return c.client.Del(ctx, key)
 }
 
 // normaliseBody collapses whitespace and lowercases the body so trivial

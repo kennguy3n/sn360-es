@@ -812,6 +812,13 @@ func (p *pgCommHistory) UpdateCountsIfFresh(ctx context.Context, h *Communicatio
 	if h == nil || h.ID == "" {
 		return false, errors.New("repository: UpdateCountsIfFresh requires a row id")
 	}
+	if h.TenantID == "" {
+		// tenant_id is part of the WHERE predicate so a worker that
+		// mis-loaded a row (or that received a poisoned ID from an
+		// attacker) cannot overwrite a row in another tenant's
+		// partition.
+		return false, errors.New("repository: UpdateCountsIfFresh requires a tenant id")
+	}
 	if readAt.IsZero() {
 		// A zero readAt would match every row whose updated_at is
 		// also zero — a class of bug we'd rather surface than
@@ -829,12 +836,12 @@ UPDATE communication_histories
    SET count_7d = $1,
        relationship = $2,
        typical_hour = CASE
-           WHEN $5 >= 0 AND $5 < 24 THEN $5
+           WHEN $6 >= 0 AND $6 < 24 THEN $6
            ELSE communication_histories.typical_hour
        END,
        updated_at = NOW()
- WHERE id = $3 AND updated_at = $4
-`, h.Count7d, h.Relationship, h.ID, readAt, typicalHour)
+ WHERE tenant_id = $3 AND id = $4 AND updated_at = $5
+`, h.Count7d, h.Relationship, h.TenantID, h.ID, readAt, typicalHour)
 	if err != nil {
 		return false, err
 	}

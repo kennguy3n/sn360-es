@@ -35,8 +35,24 @@ cover:
 	$(GO) tool cover -func=coverage.out
 
 .PHONY: lint
-lint: openapi-check
+lint: openapi-check tenant-lint
 	golangci-lint run ./...
+
+# --- Tenant isolation analyser ------------------------------------------
+#
+# `make tenant-lint` runs the in-tree AST analyser at
+# ./cmd/sn360-es-tenant-lint which fails the build when a SQL string
+# literal touches a tenant-scoped table (users, vendors, audit_logs, …)
+# without a `tenant_id = $N` predicate. The analyser is part of `make
+# lint` so CI catches missing tenant predicates before they ship.
+#
+# Legitimate cross-tenant queries (boot-time provider registry rebuild,
+# worker fan-out) are exempt via a comment annotation; see the package
+# doc-comment on cmd/sn360-es-tenant-lint/main.go.
+
+.PHONY: tenant-lint
+tenant-lint:
+	$(GO) run ./cmd/sn360-es-tenant-lint .
 
 .PHONY: test-e2e
 test-e2e:

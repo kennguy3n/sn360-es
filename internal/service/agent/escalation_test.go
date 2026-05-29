@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -93,7 +94,7 @@ func TestEscalation_ResolveRecordsOutcomeAndFeedsML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Escalate: %v", err)
 	}
-	resolved, err := svc.ResolveEscalation(context.Background(), tk.TicketID, "soc-analyst-1",
+	resolved, err := svc.ResolveEscalation(context.Background(), "acme", tk.TicketID, "soc-analyst-1",
 		dto.OutcomeConfirmedPhishing, "Phishing confirmed; user notified.")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -115,8 +116,8 @@ func TestEscalation_ResolveRecordsOutcomeAndFeedsML(t *testing.T) {
 func TestEscalation_DoubleResolveRejected(t *testing.T) {
 	svc, _ := NewEscalationService(EscalationServiceConfig{Publisher: &fakeEscPub{}})
 	tk, _ := svc.Escalate(context.Background(), "acme", dto.EscalationIncident{Reason: dto.EscalationReasonUserRequested})
-	_, _ = svc.ResolveEscalation(context.Background(), tk.TicketID, "a", dto.OutcomeFalsePositive, "")
-	if _, err := svc.ResolveEscalation(context.Background(), tk.TicketID, "b", dto.OutcomeConfirmedPhishing, ""); err == nil {
+	_, _ = svc.ResolveEscalation(context.Background(), "acme", tk.TicketID, "a", dto.OutcomeFalsePositive, "")
+	if _, err := svc.ResolveEscalation(context.Background(), "acme", tk.TicketID, "b", dto.OutcomeConfirmedPhishing, ""); err == nil {
 		t.Fatal("expected error for double-resolve")
 	}
 }
@@ -124,7 +125,42 @@ func TestEscalation_DoubleResolveRejected(t *testing.T) {
 func TestEscalation_ResolveValidatesOutcome(t *testing.T) {
 	svc, _ := NewEscalationService(EscalationServiceConfig{Publisher: &fakeEscPub{}})
 	tk, _ := svc.Escalate(context.Background(), "acme", dto.EscalationIncident{Reason: dto.EscalationReasonUserRequested})
-	if _, err := svc.ResolveEscalation(context.Background(), tk.TicketID, "a", "garbage", ""); err == nil {
+	if _, err := svc.ResolveEscalation(context.Background(), "acme", tk.TicketID, "a", "garbage", ""); err == nil {
 		t.Fatal("expected error for invalid outcome")
+	}
+}
+
+// TestMemoryTicketStore_RequiresTenantID locks in the defense-in-depth
+// contract: every TicketStore method refuses an empty tenantID with
+// ErrTicketTenantIDRequired. The service layer already validates
+// tenantID before reaching the store, so this guards the case of a
+// future caller that goes straight to the store interface — without
+// the check, Save would write under a blank-tenant key that any
+// caller passing tenantID="" could then read with Load.
+func TestMemoryTicketStore_RequiresTenantID(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryTicketStore()
+
+	if err := store.Save(ctx, dto.EscalationTicket{TicketID: "esc_x"}); !errors.Is(err, ErrTicketTenantIDRequired) {
+		t.Fatalf("Save(empty tenant) = %v, want ErrTicketTenantIDRequired", err)
+	}
+	if _, _, err := store.Load(ctx, "", "esc_x"); !errors.Is(err, ErrTicketTenantIDRequired) {
+		t.Fatalf("Load(empty tenant) = %v, want ErrTicketTenantIDRequired", err)
+	}
+	if _, err := store.Update(ctx, "", "esc_x", func(*dto.EscalationTicket) error { return nil }); !errors.Is(err, ErrTicketTenantIDRequired) {
+		t.Fatalf("Update(empty tenant) = %v, want ErrTicketTenantIDRequired", err)
+	}
+
+	// And the cross-check: a valid tenantID still works after the
+	// rejected calls (no state was mutated by the rejected Save).
+	if err := store.Save(ctx, dto.EscalationTicket{TicketID: "esc_y", TenantID: "acme"}); err != nil {
+		t.Fatalf("Save(valid tenant): %v", err)
+	}
+	if _, _, err := store.Load(ctx, "", "esc_y"); !errors.Is(err, ErrTicketTenantIDRequired) {
+		t.Fatalf("Load with empty tenant must still reject after a successful Save, got %v", err)
+	}
+	got, ok, err := store.Load(ctx, "acme", "esc_y")
+	if err != nil || !ok || got.TicketID != "esc_y" {
+		t.Fatalf("Load(acme, esc_y) = (%+v, %v, %v); want ok=true", got, ok, err)
 	}
 }

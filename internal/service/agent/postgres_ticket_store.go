@@ -44,8 +44,15 @@ type ticketContext struct {
 	Timeline []dto.EscalationStep   `json:"timeline,omitempty"`
 }
 
-// Save implements TicketStore.
+// Save implements TicketStore. Refuses to persist a ticket with an
+// empty TenantID — the schema's tenant_id column is NOT NULL and the
+// INSERT would fail at the database, but failing fast in Go gives a
+// clearer error and skips the round-trip. Same defense-in-depth
+// rationale as MemoryTicketStore.Save.
 func (s *PostgresTicketStore) Save(ctx context.Context, t dto.EscalationTicket) error {
+	if t.TenantID == "" {
+		return ErrTicketTenantIDRequired
+	}
 	payload, err := json.Marshal(ticketContext{Incident: t.Incident, Timeline: t.Timeline})
 	if err != nil {
 		return fmt.Errorf("escalation: marshal context: %w", err)
@@ -96,24 +103,31 @@ func (s *PostgresTicketStore) Save(ctx context.Context, t dto.EscalationTicket) 
 	return nil
 }
 
-// Load implements TicketStore.
-func (s *PostgresTicketStore) Load(ctx context.Context, ticketID string) (dto.EscalationTicket, bool, error) {
+// Load implements TicketStore. The (tenant_id, ticket_number) pair is
+// the logical primary key from the caller's perspective: ticket_number
+// alone is unique-within-tenant but the query MUST also filter by
+// tenant_id so a caller cannot fetch another tenant's ticket by
+// guessing or by being passed a ticket_number from logs.
+func (s *PostgresTicketStore) Load(ctx context.Context, tenantID, ticketID string) (dto.EscalationTicket, bool, error) {
+	if tenantID == "" {
+		return dto.EscalationTicket{}, false, ErrTicketTenantIDRequired
+	}
 	const q = `
         SELECT tenant_id, ticket_number, trigger_reason, context,
                assigned_to, resolved_at, resolution, resolution_code,
                created_at
           FROM escalation_tickets
-         WHERE ticket_number = $1
+         WHERE tenant_id = $1 AND ticket_number = $2
     `
 	var (
-		tenantID, ticketNumber, triggerReason string
-		contextPayload                        []byte
-		assignedTo, resolution, resolutionCd  sql.NullString
-		resolvedAt                            sql.NullTime
-		createdAt                             time.Time
+		loadedTenantID, ticketNumber, triggerReason string
+		contextPayload                              []byte
+		assignedTo, resolution, resolutionCd        sql.NullString
+		resolvedAt                                  sql.NullTime
+		createdAt                                   time.Time
 	)
-	err := s.db.QueryRowContext(ctx, q, ticketID).Scan(
-		&tenantID, &ticketNumber, &triggerReason, &contextPayload,
+	err := s.db.QueryRowContext(ctx, q, tenantID, ticketID).Scan(
+		&loadedTenantID, &ticketNumber, &triggerReason, &contextPayload,
 		&assignedTo, &resolvedAt, &resolution, &resolutionCd,
 		&createdAt,
 	)
@@ -131,7 +145,7 @@ func (s *PostgresTicketStore) Load(ctx context.Context, ticketID string) (dto.Es
 	}
 	ticket := dto.EscalationTicket{
 		TicketID:        ticketNumber,
-		TenantID:        tenantID,
+		TenantID:        loadedTenantID,
 		CreatedAt:       createdAt,
 		Reason:          dto.EscalationReason(triggerReason),
 		Incident:        payload.Incident,
@@ -148,8 +162,12 @@ func (s *PostgresTicketStore) Load(ctx context.Context, ticketID string) (dto.Es
 
 // Update implements TicketStore. It performs the mutation under a
 // single SELECT-FOR-UPDATE so concurrent ResolveEscalation calls do
-// not race on the same ticket.
-func (s *PostgresTicketStore) Update(ctx context.Context, ticketID string, mutate func(*dto.EscalationTicket) error) (dto.EscalationTicket, error) {
+// not race on the same ticket. Like Load, the (tenant_id, ticket_number)
+// pair is required to scope the SELECT FOR UPDATE.
+func (s *PostgresTicketStore) Update(ctx context.Context, tenantID, ticketID string, mutate func(*dto.EscalationTicket) error) (dto.EscalationTicket, error) {
+	if tenantID == "" {
+		return dto.EscalationTicket{}, ErrTicketTenantIDRequired
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return dto.EscalationTicket{}, fmt.Errorf("escalation: postgres update: begin: %w", err)
@@ -161,18 +179,18 @@ func (s *PostgresTicketStore) Update(ctx context.Context, ticketID string, mutat
                assigned_to, resolved_at, resolution, resolution_code,
                created_at
           FROM escalation_tickets
-         WHERE ticket_number = $1
+         WHERE tenant_id = $1 AND ticket_number = $2
          FOR UPDATE
     `
 	var (
-		tenantID, ticketNumber, triggerReason string
-		contextPayload                        []byte
-		assignedTo, resolution, resolutionCd  sql.NullString
-		resolvedAt                            sql.NullTime
-		createdAt                             time.Time
+		loadedTenantID, ticketNumber, triggerReason string
+		contextPayload                              []byte
+		assignedTo, resolution, resolutionCd        sql.NullString
+		resolvedAt                                  sql.NullTime
+		createdAt                                   time.Time
 	)
-	if err := tx.QueryRowContext(ctx, selectQ, ticketID).Scan(
-		&tenantID, &ticketNumber, &triggerReason, &contextPayload,
+	if err := tx.QueryRowContext(ctx, selectQ, tenantID, ticketID).Scan(
+		&loadedTenantID, &ticketNumber, &triggerReason, &contextPayload,
 		&assignedTo, &resolvedAt, &resolution, &resolutionCd,
 		&createdAt,
 	); err != nil {
@@ -189,7 +207,7 @@ func (s *PostgresTicketStore) Update(ctx context.Context, ticketID string, mutat
 	}
 	ticket := dto.EscalationTicket{
 		TicketID:        ticketNumber,
-		TenantID:        tenantID,
+		TenantID:        loadedTenantID,
 		CreatedAt:       createdAt,
 		Reason:          dto.EscalationReason(triggerReason),
 		Incident:        payload.Incident,
@@ -235,12 +253,13 @@ func (s *PostgresTicketStore) Update(ctx context.Context, ticketID string, mutat
                resolution      = $7,
                resolution_code = $8,
                updated_at      = NOW()
-         WHERE ticket_number   = $9
+         WHERE tenant_id       = $9
+           AND ticket_number   = $10
     `
 	if _, err := tx.ExecContext(ctx, updateQ,
 		string(ticket.Reason), priority, status, newPayload,
 		newAssignedTo, newResolvedAt, newResolutionTx, resolutionCode,
-		ticketID,
+		tenantID, ticketID,
 	); err != nil {
 		return dto.EscalationTicket{}, fmt.Errorf("escalation: postgres update: %w", err)
 	}

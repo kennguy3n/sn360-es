@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/kennguy3n/sn360-es/internal/dto"
+	"github.com/kennguy3n/sn360-es/internal/middleware"
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
 )
 
@@ -39,6 +40,28 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	// Authenticate BEFORE every *resource-observable* branch — body
+	// parse, nil-service infrastructure check, ticket lookup, anything
+	// whose result could differ across deployments or tenants. The
+	// HTTP method check above is intentionally allowed to precede
+	// auth because 405 is a protocol-level signal that the route
+	// exists for a different verb; it is the same for every caller,
+	// the same in every environment, and conveys nothing about the
+	// resource or the tenant. From this point onward, however, an
+	// unauthenticated caller sees exactly one response (401)
+	// regardless of whether the body is malformed, the service is
+	// unwired, or the ticket is missing. Without this ordering an
+	// unauth caller could distinguish 503 (service unconfigured) from
+	// 400 (bad body) and use the differential to fingerprint
+	// deployments. tenantID is sourced from the verified JWT claim,
+	// never from the request body — a caller cannot trick the service
+	// into resolving another tenant's ticket by lying about their
+	// tenant.
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	if tenantID == "" {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
 	if h.svc == nil {
 		writeError(w, http.StatusServiceUnavailable, "escalation service not configured")
 		return
@@ -55,7 +78,7 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "ticket_id is required")
 		return
 	}
-	ticket, err := h.svc.ResolveEscalation(r.Context(), req.TicketID, req.ResolverHash, req.Outcome, req.Notes)
+	ticket, err := h.svc.ResolveEscalation(r.Context(), tenantID, req.TicketID, req.ResolverHash, req.Outcome, req.Notes)
 	if err != nil {
 		h.logger.WarnContext(r.Context(), "escalation: resolve failed",
 			slog.String("ticket_id", req.TicketID),
@@ -77,6 +100,16 @@ func (h *EscalationHandler) ServeGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
+	// Authenticate before any other resource-observable branch — see
+	// the rationale on ServeResolve. The 405 method check above is
+	// allowed to precede auth (constant protocol-level signal); from
+	// here on, an unauth caller cannot distinguish 503 (nil service)
+	// from 400 (empty ticket_id) because both collapse to 401.
+	tenantID := middleware.TenantIDFromContext(r.Context())
+	if tenantID == "" {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
 	if h.svc == nil {
 		writeError(w, http.StatusServiceUnavailable, "escalation service not configured")
 		return
@@ -87,7 +120,7 @@ func (h *EscalationHandler) ServeGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ticket_id is required")
 		return
 	}
-	ticket, ok, err := h.svc.Load(r.Context(), ticketID)
+	ticket, ok, err := h.svc.Load(r.Context(), tenantID, ticketID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "lookup failed")
 		return

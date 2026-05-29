@@ -14,6 +14,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/config"
 	"github.com/kennguy3n/sn360-es/internal/constant"
 	"github.com/kennguy3n/sn360-es/internal/dto"
+	"github.com/kennguy3n/sn360-es/internal/middleware"
 	"github.com/kennguy3n/sn360-es/internal/repository"
 	"github.com/kennguy3n/sn360-es/internal/service/action"
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
@@ -125,7 +126,24 @@ func TestBuildMux_RegistersAllRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildMux: %v", err)
 	}
-	srv := httptest.NewServer(mux)
+	// buildMux registers handlers but does not wire JWTAuth (which
+	// needs an Issuer the test fixture does not stand up). The
+	// escalation handlers now require a tenant in context, so we
+	// wrap the mux with a minimal test middleware that reads the
+	// tenant from an "X-Test-Tenant" header and seeds the same
+	// context key the JWT middleware would. Tests that want to
+	// exercise the unauthenticated path simply omit the header.
+	authedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Rename to `tid` so the closure parameter does not shadow
+		// the enclosing *testing.T (which is intentionally NOT
+		// captured here — handlers reach for the request, not the
+		// test, and shadowing makes that easy to misread).
+		if tid := r.Header.Get("X-Test-Tenant"); tid != "" {
+			r = r.WithContext(middleware.ContextWithTenantID(r.Context(), tid))
+		}
+		mux.ServeHTTP(w, r)
+	})
+	srv := httptest.NewServer(authedMux)
 	t.Cleanup(srv.Close)
 
 	cases := []struct {
@@ -217,7 +235,12 @@ func TestBuildMux_RegistersAllRoutes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("seed ticket: %v", err)
 		}
-		resp, err := client.Get(srv.URL + "/v1/escalation/" + ticket.TicketID)
+		// Pass the tenant through the test middleware (the JWT
+		// middleware is not wired in this test fixture; see the
+		// authedMux comment in TestBuildMux_RegistersAllRoutes).
+		getReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/escalation/"+ticket.TicketID, nil)
+		getReq.Header.Set("X-Test-Tenant", "t-1")
+		resp, err := client.Do(getReq)
 		if err != nil {
 			t.Fatalf("get: %v", err)
 		}

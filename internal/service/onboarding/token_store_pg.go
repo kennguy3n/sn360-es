@@ -100,8 +100,14 @@ DELETE FROM oauth_tokens WHERE tenant_id=$1 AND provider=$2`,
 }
 
 // ListAll returns all (tenantID, provider) pairs. Used on boot to
-// restore provider registry entries from stored tokens.
+// restore provider registry entries from stored tokens. The result
+// always echoes tenant_id back to the caller so the provider registry
+// can re-key by tenant; one tenant's rows are never surfaced under
+// another tenant's identity.
 func (s *PgTokenStore) ListAll(ctx context.Context) ([]StoredTokenRef, error) {
+	// tenant-lint:cross-tenant — boot-time provider registry rebuild;
+	// returns (tenant_id, provider) tuples that the registry re-keys
+	// per tenant downstream.
 	rows, err := s.db.QueryContext(ctx, `
 SELECT tenant_id, provider FROM oauth_tokens ORDER BY created_at`)
 	if err != nil {

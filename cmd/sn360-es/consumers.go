@@ -553,14 +553,46 @@ type escalationCreateEnvelope struct {
 }
 
 type escalationResolveEnvelope struct {
+	// TenantID is the canonical tenant scoping for the resolution.
+	// The consumer sources tenantID preferentially from the verified
+	// message header on the NATS subject (events.HeaderTenantID),
+	// falling back to this JSON body field only when the header is
+	// absent — a transitional shim for older publishers during the
+	// header rollout, see verifiedTenantID. The header path is
+	// trusted because the publisher's outbox/middleware stamps it
+	// after authentication; the body fallback is less trusted but
+	// the downstream store's tenant-scoped LoadForUpdate/Update
+	// prevents a crafted body from resolving a different tenant's
+	// ticket (the ticket_id+tenant_id composite key would simply
+	// fail to match). The field is also kept in the JSON so tests
+	// can construct envelopes directly.
+	TenantID     string                `json:"tenant_id,omitempty"`
 	TicketID     string                `json:"ticket_id"`
 	ResolverHash string                `json:"resolver_hash"`
 	Outcome      dto.EscalationOutcome `json:"outcome"`
 	Notes        string                `json:"notes,omitempty"`
 }
 
+// verifiedTenantID returns the tenant_id stamped on the message's
+// verified header, falling back to the (less-trusted) JSON body field
+// only if the publisher did not stamp a header. This is the trust
+// boundary for cross-domain event traffic: the header is set by the
+// publisher’s outbox/middleware after authentication; a malformed
+// publisher that omits the header but lies in the body should not be
+// able to smuggle in a different tenant. The body fallback exists to
+// stay compatible with older publishers during a rollout window and is
+// safe because the downstream service layer still rejects empty
+// tenantIDs.
+func verifiedTenantID(msg events.Message, bodyFallback string) string {
+	if tid := msg.Headers()[events.HeaderTenantID]; tid != "" {
+		return tid
+	}
+	return bodyFallback
+}
+
 // handleEscalation dispatches by subject suffix between Escalate and
-// ResolveEscalation.
+// ResolveEscalation. Both branches source tenantID from the verified
+// header in preference to the JSON body — see verifiedTenantID.
 func (a *application) handleEscalation(ctx context.Context, msg events.Message) error {
 	if a.escalationSvc == nil {
 		return nil
@@ -574,10 +606,12 @@ func (a *application) handleEscalation(ctx context.Context, msg events.Message) 
 				slog.Any("error", err))
 			return nil
 		}
-		if env.TenantID == "" {
+		tenantID := verifiedTenantID(msg, env.TenantID)
+		if tenantID == "" {
+			a.logger.WarnContext(ctx, "sn360-es: escalation.created missing tenant_id")
 			return nil
 		}
-		if _, err := a.escalationSvc.Escalate(ctx, env.TenantID, env.Incident); err != nil {
+		if _, err := a.escalationSvc.Escalate(ctx, tenantID, env.Incident); err != nil {
 			return fmt.Errorf("escalation.created: %w", err)
 		}
 	case strings.HasSuffix(subject, ".resolved"):
@@ -590,7 +624,13 @@ func (a *application) handleEscalation(ctx context.Context, msg events.Message) 
 		if env.TicketID == "" {
 			return nil
 		}
-		if _, err := a.escalationSvc.ResolveEscalation(ctx, env.TicketID, env.ResolverHash, env.Outcome, env.Notes); err != nil {
+		tenantID := verifiedTenantID(msg, env.TenantID)
+		if tenantID == "" {
+			a.logger.WarnContext(ctx, "sn360-es: escalation.resolved missing tenant_id",
+				slog.String("ticket_id", env.TicketID))
+			return nil
+		}
+		if _, err := a.escalationSvc.ResolveEscalation(ctx, tenantID, env.TicketID, env.ResolverHash, env.Outcome, env.Notes); err != nil {
 			return fmt.Errorf("escalation.resolved: %w", err)
 		}
 	default:
