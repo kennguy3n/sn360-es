@@ -8,7 +8,7 @@ import (
 )
 
 // classifyText is the unit-test entrypoint into the matcher: it mirrors
-// the title-head + full-text bisection from classifyModule.
+// the title-head bisection from classifyModule.
 func classifyText(licenseText string) (string, classification) {
 	normalised := strings.ToLower(licenseText)
 	head := normalised
@@ -16,7 +16,7 @@ func classifyText(licenseText string) (string, classification) {
 		head = head[:titleHeadBytes]
 	}
 	for _, r := range rules {
-		if matchesRule(normalised, head, r) {
+		if matchesRule(head, r) {
 			return r.SPDX, r.class
 		}
 	}
@@ -188,6 +188,76 @@ software and other kinds of works.`
 	}
 }
 
+// TestClassify_GPL3_WithCanonicalAppendix is the regression test for the
+// bug where the GPL-3.0 rule's `mustNotContain: ["lesser general public
+// license"]` previously scanned the FULL file text. The canonical
+// GPL-3.0 license is ~35 KiB and ends with a “How to Apply” appendix
+// containing the line:
+//
+//	If the program does terminal interaction, […] we recommend
+//	that you use the GNU Lesser General Public License instead
+//	of this License.
+//
+// Under the pre-fix scope (mustNotContain over the entire file), that
+// mention tripped the exclusion and bounced the GPL-3.0 rule, causing
+// a real GPL-3.0 module to fall through to classUnknown instead of
+// classDeny. The fix scopes mustNotContain to the title head (the
+// same window as mustContain), where the LGPL/AGPL exclusions belong
+// because they are the title-level differentiator for those families.
+func TestClassify_GPL3_WithCanonicalAppendix(t *testing.T) {
+	// Build a realistic 35 KiB-ish GPL-3.0 text: title head + bulk
+	// filler + the canonical appendix paragraph that mentions LGPL.
+	var sb strings.Builder
+	sb.WriteString(`                    GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc.
+
+                            Preamble
+
+  The GNU General Public License is a free, copyleft license for
+software and other kinds of works.
+`)
+	// ~32 KiB of body filler that does NOT mention LGPL/AGPL — this
+	// guarantees the title head (first 2 KiB) is the original GPL-3.0
+	// boilerplate and the LGPL mention only lives in the appendix.
+	sb.WriteString(strings.Repeat("The terms and conditions of redistribution and modification follow. ", 500))
+	sb.WriteString(`\n                     END OF TERMS AND CONDITIONS\n
+            How to Apply These Terms to Your New Programs\n\n
+  If the program does terminal interaction, make it output a short
+notice like this when it starts in an interactive mode:\n\n
+  The hypothetical commands 'show w' and 'show c' should show the
+appropriate parts of the General Public License. Of course, your
+program's commands might be different; for a GUI interface, you would
+use an "about box".\n\n
+  You should also get your employer (if you work as a programmer) or
+school, if any, to sign a "copyright disclaimer" for the program, if
+necessary. For more information on this, and how to apply and follow
+the GNU GPL, see <https://www.gnu.org/licenses/>.\n\n
+  The GNU General Public License does not permit incorporating your
+program into proprietary programs. If your program is a subroutine
+library, you may consider it more useful to permit linking proprietary
+applications with the library. If this is what you want to do, use
+the GNU Lesser General Public License instead of this License. But
+first, please read <https://www.gnu.org/licenses/why-not-lgpl.html>.\n
+`)
+	gpl3 := sb.String()
+
+	if len(gpl3) <= titleHeadBytes {
+		t.Fatalf("setup error: synthetic GPL-3.0 must exceed titleHeadBytes (%d), got %d", titleHeadBytes, len(gpl3))
+	}
+	// Sanity-check: the LGPL mention must live past the title head.
+	appendixIdx := strings.Index(strings.ToLower(gpl3), "lesser general public license")
+	if appendixIdx < titleHeadBytes {
+		t.Fatalf("setup error: LGPL mention at offset %d should be past titleHeadBytes %d", appendixIdx, titleHeadBytes)
+	}
+
+	spdx, class := classifyText(gpl3)
+	if spdx != "GPL-3.0" || class != classDeny {
+		t.Fatalf("canonical GPL-3.0 with appendix must classify as GPL-3.0/DENY, got %s/%s \u2014 the mustNotContain scope must be the title head, not the full text", spdx, class)
+	}
+}
+
 func TestClassify_AGPL3(t *testing.T) {
 	const agpl = `                    GNU AFFERO GENERAL PUBLIC LICENSE
                        Version 3, 19 November 2007
@@ -247,6 +317,61 @@ the terms of a separate commercial agreement.`
 	spdx, class := classifyText(obscure)
 	if class != classUnknown {
 		t.Fatalf("expected UNKNOWN for unrecognised license, got %s/%s", spdx, class)
+	}
+}
+
+// TestClassifyModule_WaiveredNoLicenseFile pins the new classWaivered
+// branch: a module with no LICENSE file but listed in the waiver map
+// must come back as WAIVERED (not UNKNOWN) so the report and exit
+// logic can distinguish operator-accepted modules from genuine
+// supply-chain risks.
+func TestClassifyModule_WaiveredNoLicenseFile(t *testing.T) {
+	dir := t.TempDir() // empty directory — no LICENSE file inside
+	m := module{Path: "github.com/example/proprietary", Version: "v1.0.0", Dir: dir}
+	waivers := map[string]string{"github.com/example/proprietary": "approved by legal team"}
+
+	f := classifyModule(m, waivers)
+	if f.Class != classWaivered {
+		t.Fatalf("expected classWaivered, got %s (note=%q)", f.Class, f.Note)
+	}
+	if !strings.Contains(f.Note, "approved by legal team") {
+		t.Errorf("waiver justification must surface in Note, got %q", f.Note)
+	}
+}
+
+// TestClassifyModule_WaiveredNoRuleMatched mirrors the above for the
+// other waivered path: a module that DOES have a LICENSE file but the
+// text doesn't match any rule. Without a waiver it would be UNKNOWN;
+// with a waiver it must come back WAIVERED.
+func TestClassifyModule_WaiveredNoRuleMatched(t *testing.T) {
+	dir := t.TempDir()
+	licensePath := filepath.Join(dir, "LICENSE")
+	const obscure = "Acme Custom License v0.1\n\nThis software is licensed exclusively under a private contract."
+	if err := os.WriteFile(licensePath, []byte(obscure), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	m := module{Path: "acme.example/private", Version: "v0.1.0", Dir: dir}
+	waivers := map[string]string{"acme.example/private": "vendored from internal repo"}
+
+	f := classifyModule(m, waivers)
+	if f.Class != classWaivered {
+		t.Fatalf("expected classWaivered for waivered-and-unmatched module, got %s (note=%q)", f.Class, f.Note)
+	}
+	if !strings.Contains(f.Note, "vendored from internal repo") {
+		t.Errorf("waiver justification must surface in Note, got %q", f.Note)
+	}
+}
+
+// TestClassifyModule_UnknownNotWaivered exercises the failure branch:
+// a module with no LICENSE file and no waiver must remain UNKNOWN so
+// the strict-mode exit-code logic fails the build.
+func TestClassifyModule_UnknownNotWaivered(t *testing.T) {
+	dir := t.TempDir()
+	m := module{Path: "github.com/unknown/thing", Version: "v1.0.0", Dir: dir}
+
+	f := classifyModule(m, nil)
+	if f.Class != classUnknown {
+		t.Fatalf("expected classUnknown for non-waivered no-LICENSE module, got %s", f.Class)
 	}
 }
 

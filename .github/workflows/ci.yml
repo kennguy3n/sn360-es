@@ -139,28 +139,11 @@ jobs:
         # update in the same PR.
         run: python -m unittest scripts/cost_model/test_project.py
 
-  license-check:
-    # Enforces the dependency-license allow-list using the in-tree
-    # `sn360-es-license-check` classifier (see cmd/sn360-es-license-check/
-    # for rules + .license-waivers.txt at repo root for overrides). The
-    # gate complements security-scan: govulncheck/Trivy catch vulnerable
-    # code, license-check catches viral / SaaS-hostile copyleft sneaking
-    # in via transitive dependencies. Parallel with security-scan because
-    # both depend only on `lint+test` having passed.
-    name: License Check
-    runs-on: ubuntu-latest
-    needs: [lint, test]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-
-      - name: Run license-check
-        run: make license-check
+  # NOTE: license-check used to live in a dedicated job here, but that
+  # duplicated work the `lint` job already does — `make lint` depends
+  # on `make license-check` via the Makefile prereq. One CI surface
+  # (matching what contributors run locally) is the correct shape.
+  # See cmd/sn360-es-license-check/ for the classifier + .license-waivers.txt.
 
   security-scan:
     name: Security Scan
@@ -216,11 +199,13 @@ jobs:
     #     unit-economics dashboard. Treat it as a build-gating
     #     contract.
     #
-    #   - license-check: a viral / SaaS-hostile copyleft license
-    #     reaching the image registry would force a contractual
-    #     remediation. Treat it as a build-gating contract on the
-    #     dependency closure.
-    needs: [lint, test, test-integration, migrate-check-online, cost-model, license-check, security-scan]
+    # license-check is intentionally NOT a separate `needs` here:
+    # it runs inside the `lint` job via `make lint`'s Makefile
+    # prereq, so `needs: [lint, ...]` already gates the build on a
+    # green license verdict. One CI surface for static-analysis
+    # gates (matching what contributors run locally) is the
+    # correct shape.
+    needs: [lint, test, test-integration, migrate-check-online, cost-model, security-scan]
     steps:
       - uses: actions/checkout@v4
 

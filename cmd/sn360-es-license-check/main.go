@@ -45,8 +45,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,6 +67,14 @@ type module struct {
 }
 
 // classification is the verdict for a single module's license.
+//
+// classWaivered is distinct from classUnknown so the report can show
+// reviewers exactly how many modules are explicitly accepted via the
+// .license-waivers.txt allow-list — vs. how many are genuinely
+// unrecognised and require operator attention. Lumping the two under
+// classUnknown made the summary line ambiguous ("2 UNKNOWN" — were
+// they waivered or do I need to act?) and forced a brittle string
+// prefix check on f.Note in the exit-code path.
 type classification int
 
 const (
@@ -72,6 +82,7 @@ const (
 	classWarn
 	classDeny
 	classUnknown
+	classWaivered
 )
 
 func (c classification) String() string {
@@ -82,6 +93,8 @@ func (c classification) String() string {
 		return "WARN"
 	case classDeny:
 		return "DENY"
+	case classWaivered:
+		return "WAIVERED"
 	default:
 		return "UNKNOWN"
 	}
@@ -91,19 +104,29 @@ func (c classification) String() string {
 // uniquely identify its boilerplate. The matcher requires ALL phrases
 // in `mustContain` to appear in the LICENSE *title* region (first
 // `titleHeadBytes` bytes, case-insensitive) AND none of the phrases in
-// `mustNotContain` to appear anywhere in the file. This keeps the
-// classifier deterministic without pulling in a 5 MB licenseclassifier
+// `mustNotContain` to also appear in the same title region. This keeps
+// the classifier deterministic without pulling in a 5 MB licenseclassifier
 // dependency, while still being precise enough to distinguish e.g.
 // GPL-2.0 from LGPL-2.1 (both share most boilerplate but LGPL has an
 // explicit "Lesser" prefix in the title) and avoiding cross-license
 // false positives from compatibility clauses (MPL-2.0 §3.3 references
 // "Lesser General Public License" by name, which would otherwise trip
 // the LGPL rule on an actually-MPL module like pgregory.net/rapid).
+//
+// Why mustNotContain matches against the title head and NOT the full
+// text: the canonical GPL-3.0 license is ~35 KiB and includes an
+// appendix paragraph ("… we recommend that you use the GNU Lesser
+// General Public License instead …") which would trip a full-text
+// `mustNotContain: ["lesser general public license"]` and bounce the
+// rule, causing real GPL-3.0 modules to fall through to UNKNOWN. The
+// LGPL/AGPL exclusions belong on the TITLE because that is what
+// distinguishes those families from plain GPL — body-text mentions in
+// the appendix are noise, not signal.
 type licenseRule struct {
 	SPDX           string
 	class          classification
 	mustContain    []string // matched against the title head (first titleHeadBytes)
-	mustNotContain []string // matched against the full text
+	mustNotContain []string // matched against the title head (first titleHeadBytes)
 }
 
 // titleHeadBytes is the size of the title window inspected by `mustContain`.
@@ -341,7 +364,14 @@ func main() {
 		}
 	}
 
-	// Determine exit code.
+	// Determine exit code. classWaivered is intentionally NOT in the
+	// failure path: the operator has explicitly accepted those modules
+	// via .license-waivers.txt with a justification, and the report
+	// surfaces them as a distinct class so reviewers can audit the
+	// allow-list. classUnknown is what we fail on (in strict mode) —
+	// those are modules where neither a rule matched nor a waiver
+	// exists, which is the supply-chain risk we built this tool to
+	// catch.
 	var (
 		denyCount    int
 		unknownCount int
@@ -351,9 +381,7 @@ func main() {
 		case classDeny:
 			denyCount++
 		case classUnknown:
-			if !strings.HasPrefix(f.Note, "waivered:") {
-				unknownCount++
-			}
+			unknownCount++
 		}
 	}
 
@@ -386,7 +414,7 @@ func listModules() ([]module, error) {
 	for {
 		var m module
 		if err := dec.Decode(&m); err != nil {
-			if err.Error() == "EOF" {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return nil, fmt.Errorf("decode go list output: %w", err)
@@ -411,7 +439,8 @@ func classifyModule(m module, waivers map[string]string) finding {
 	licensePath, licenseText := readLicenseFile(m.Dir)
 	if licenseText == "" {
 		if just, ok := waivers[m.Path]; ok {
-			out.Note = "waivered: " + just
+			out.Class = classWaivered
+			out.Note = "waivered (no LICENSE file): " + just
 		} else {
 			out.Note = "no LICENSE file found in " + m.Dir
 		}
@@ -425,7 +454,7 @@ func classifyModule(m module, waivers map[string]string) finding {
 		head = head[:titleHeadBytes]
 	}
 	for _, r := range rules {
-		if matchesRule(normalised, head, r) {
+		if matchesRule(head, r) {
 			out.License = r.SPDX
 			out.Class = r.class
 			return out
@@ -435,23 +464,27 @@ func classifyModule(m module, waivers map[string]string) finding {
 	// No rule matched — either an unrecognised license or a custom
 	// permissive that we haven't taught the classifier about yet.
 	if just, ok := waivers[m.Path]; ok {
-		out.Note = "waivered: " + just
+		out.Class = classWaivered
+		out.Note = "waivered (no rule matched " + licensePath + "): " + just
 	} else {
-		out.Note = fmt.Sprintf("no rule matched %s (first 80 bytes: %q)", licensePath, firstNonEmptyLine(licenseText))
+		out.Note = fmt.Sprintf("no rule matched %s (first non-empty line: %q)", licensePath, firstNonEmptyLine(licenseText))
 	}
 	return out
 }
 
-// matchesRule applies the mustContain (title-head only) and
-// mustNotContain (full-text) logic.
-func matchesRule(fullText, head string, r licenseRule) bool {
+// matchesRule applies the mustContain and mustNotContain logic — both
+// against the title head only. See the licenseRule doc comment for the
+// rationale (the canonical GPL-3.0 appendix mentions LGPL by name, so
+// a full-text scope would bounce every real GPL-3.0 module through to
+// UNKNOWN).
+func matchesRule(head string, r licenseRule) bool {
 	for _, p := range r.mustContain {
 		if !strings.Contains(head, p) {
 			return false
 		}
 	}
 	for _, p := range r.mustNotContain {
-		if strings.Contains(fullText, p) {
+		if strings.Contains(head, p) {
 			return false
 		}
 	}
@@ -462,17 +495,26 @@ func matchesRule(fullText, head string, r licenseRule) bool {
 // (case-sensitive on Linux). Returns (relative path, file contents) or
 // ("", "") if none found. Reads at most 64 KiB to bound memory.
 func readLicenseFile(dir string) (string, string) {
-	const maxBytes = 64 * 1024
+	const maxBytes int64 = 64 * 1024
 	for _, name := range licenseFileNames {
 		path := filepath.Join(dir, name)
 		f, err := os.Open(path) //#nosec G304 -- name is from a hard-coded allow-list, dir is a Go module cache path resolved by `go list`
 		if err != nil {
 			continue
 		}
-		buf := make([]byte, maxBytes)
-		n, _ := f.Read(buf)
+		// io.ReadAll over io.LimitReader, not a single Read(): the
+		// io.Reader contract permits a short read even on a local
+		// filesystem, and a license-text classifier silently
+		// processing a partial file is a correctness hazard — it
+		// could miss the title-head boilerplate entirely on a slow
+		// FUSE mount or fall into the UNKNOWN branch for a real GPL.
+		// LimitReader caps the memory footprint at maxBytes.
+		buf, readErr := io.ReadAll(io.LimitReader(f, maxBytes))
 		_ = f.Close()
-		return name, string(buf[:n])
+		if readErr != nil {
+			continue
+		}
+		return name, string(buf)
 	}
 	return "", ""
 }
@@ -547,7 +589,7 @@ func report(findings []finding) {
 	}
 
 	var (
-		allow, warn, deny, unknown int
+		allow, warn, deny, waivered, unknown int
 	)
 	for _, f := range findings {
 		switch f.Class {
@@ -557,6 +599,8 @@ func report(findings []finding) {
 			warn++
 		case classDeny:
 			deny++
+		case classWaivered:
+			waivered++
 		case classUnknown:
 			unknown++
 		}
@@ -570,13 +614,13 @@ func report(findings []finding) {
 			lic = "?"
 		}
 		fmt.Printf("%-60s %-15s %-15s %-8s\n", trunc(f.Module, 60), trunc(f.Version, 15), lic, f.Class)
-		if f.Note != "" && (f.Class == classUnknown || f.Class == classDeny) {
+		if f.Note != "" && (f.Class == classUnknown || f.Class == classDeny || f.Class == classWaivered) {
 			fmt.Printf("  └─ %s\n", f.Note)
 		}
 	}
 	fmt.Println(strings.Repeat("-", 100))
-	fmt.Printf("Summary: %d ALLOW, %d WARN, %d DENY, %d UNKNOWN (total %d modules)\n",
-		allow, warn, deny, unknown, len(findings))
+	fmt.Printf("Summary: %d ALLOW, %d WARN, %d DENY, %d WAIVERED, %d UNKNOWN (total %d modules)\n",
+		allow, warn, deny, waivered, unknown, len(findings))
 }
 
 func trunc(s string, n int) string {
