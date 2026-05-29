@@ -46,6 +46,27 @@ PRICE_KMS_REQUEST_PER_10K = 0.03
 
 HOURS_PER_MONTH = 730
 
+# Per-role compute coefficients used by cost_compute(). Each coefficient
+# is calibrated against the PR #45 benchmarks/bench_20260517.txt
+# single-tenant baseline (one tenant pushing 1 000 messages/day occupies
+# ~0.05 vCPU-hours of API replica over a month, ~0.18 of consumer
+# replica, and a singleton worker pulls ~0.02 vCPU-hours regardless of
+# message rate). The names encode the dimensional analysis so a future
+# maintainer doesn't have to re-derive it from the formula:
+#
+#   vCPU-hours/month/tenant
+#     = (vCPU-hours/month per 1k-msg/day) * (messages/day / 1000)
+#
+# i.e. the per-role coefficient already collapses the monthly hour-count
+# into its scalar — multiplying by `messages_per_tenant_per_day / 1000`
+# is the rate-scaling step, not a unit conversion. The legacy 0.05 /
+# 0.18 / 0.02 literals would be dimensionally ambiguous to a reader who
+# didn't realise the coefficient itself was a monthly figure; named
+# constants make the unit composition explicit.
+API_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY = 0.05
+CONSUMER_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY = 0.18
+WORKER_VCPU_HOURS_PER_MONTH = 0.02  # singleton: independent of message rate
+
 # Shared infrastructure (Redis, PG instance baseline, NAT GW)
 # amortises across all tenants on a deployment. The model expresses
 # per-tenant cost = shared infra / tenants + per-tenant marginal,
@@ -312,12 +333,15 @@ def cost_compute(profile: TrafficProfile, levers: CostLevers) -> Dict[str, float
     consolidation (a single process can share goroutines).
     """
 
-    # vCPU-hours per role per tenant per month, calibrated against
-    # the PR #45 benchmarks/bench_20260517.txt single-tenant run
-    # and extrapolated by the per-tenant message rate.
-    api_vcpu_h = 0.05 * (profile.messages_per_tenant_per_day / 1000.0)
-    consumer_vcpu_h = 0.18 * (profile.messages_per_tenant_per_day / 1000.0)
-    worker_vcpu_h = 0.02  # singleton: fixed regardless of profile
+    # Each role's per-tenant per-month vCPU-hours is its monthly
+    # coefficient (calibrated from benchmarks/bench_20260517.txt) times
+    # the per-tenant message-rate scaling factor. See the
+    # `*_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY` constants at the top of
+    # the file for the dimensional analysis behind the coefficients.
+    kmsg_per_day = profile.messages_per_tenant_per_day / 1000.0
+    api_vcpu_h = API_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY * kmsg_per_day
+    consumer_vcpu_h = CONSUMER_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY * kmsg_per_day
+    worker_vcpu_h = WORKER_VCPU_HOURS_PER_MONTH
 
     if levers.role_split_active:
         # KEDA on consumer lag: smoother utilization → fewer
