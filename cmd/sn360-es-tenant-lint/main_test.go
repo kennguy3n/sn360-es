@@ -180,6 +180,70 @@ func TestViolates(t *testing.T) {
 			table:  "users",
 			expect: false,
 		},
+		{
+			// Devin Review BUG #584ed0bf...0001 — when the multi-
+			// table check returned a non-empty `missing` slice,
+			// violates() previously returned true for EVERY
+			// scanFile() call (one per scoped table in the SQL),
+			// not just for the tables actually in `missing`. The
+			// JOIN-no-predicate-on-groups example also touches
+			// `users`, which IS scoped via `u.tenant_id = $1` —
+			// calling violates() with table=users on that SQL
+			// would falsely report a violation on users. Lock in
+			// the fix.
+			name:   "BUG-0001: properly-scoped table in multi-table query is NOT flagged",
+			sql:    "SELECT u.id FROM users u JOIN groups g ON u.id = g.user_id WHERE u.tenant_id = $1",
+			table:  "users",
+			expect: false,
+		},
+		{
+			// Companion case: the same SQL called with the
+			// unscoped table (groups) still flags. Verifies the
+			// per-table filter narrows reporting without
+			// suppressing real bugs.
+			name:   "BUG-0001: unscoped table in same multi-table query is still flagged",
+			sql:    "SELECT u.id FROM users u JOIN groups g ON u.id = g.user_id WHERE u.tenant_id = $1",
+			table:  "groups",
+			expect: true,
+		},
+		{
+			// Devin Review FLAG #584ed0bf...0003 — INSERT INTO
+			// <scoped> (tenant_id, ...) SELECT ... FROM <scoped>
+			// WITHOUT a WHERE was previously accepted because
+			// the col-list contained tenant_id and the INSERT
+			// branch returned false before reaching the
+			// INSERT...SELECT check. The unfiltered SELECT
+			// reads ALL tenants' rows even though each inserted
+			// row carries the correct tenant_id — a cross-
+			// tenant data flow that the linter must flag. The
+			// diagnostic is attached to the SOURCE table (the
+			// SELECT side is the actual scan that crosses
+			// tenants).
+			name:   "FLAG-0003: INSERT INTO scoped SELECT FROM scoped without WHERE violates on source",
+			sql:    "INSERT INTO audit_logs (tenant_id, action) SELECT tenant_id, 'export' FROM users",
+			table:  "users",
+			expect: true,
+		},
+		{
+			// Same SQL queried with the target table — the
+			// col-list is correct, so the target-table call
+			// must return false. The bug is on the SELECT side
+			// and gets reported via the source-table call
+			// above, not duplicated here.
+			name:   "FLAG-0003: target-side call on INSERT...SELECT scoped→scoped is not double-reported",
+			sql:    "INSERT INTO audit_logs (tenant_id, action) SELECT tenant_id, 'export' FROM users",
+			table:  "audit_logs",
+			expect: false,
+		},
+		{
+			// With the WHERE predicate the cross-tenant scan
+			// is closed and both calls (source + target) must
+			// return false.
+			name:   "FLAG-0003: INSERT INTO scoped SELECT FROM scoped WITH WHERE passes",
+			sql:    "INSERT INTO audit_logs (tenant_id, action) SELECT tenant_id, 'export' FROM users WHERE tenant_id = $1",
+			table:  "users",
+			expect: false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

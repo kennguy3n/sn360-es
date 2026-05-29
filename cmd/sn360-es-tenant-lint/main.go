@@ -672,8 +672,8 @@ func classify(sql string) string {
 // scoped reference has its own predicate (not just any predicate
 // somewhere in the SQL).
 func violates(sql, table string) (string, bool) {
-	_ = table // referenced by INSERT path indirectly via insertColListRE
 	stmt := classify(sql)
+	table = strings.ToLower(table)
 	switch stmt {
 	case "SELECT", "WITH":
 		// SELECT and CTEs are tenant-safe iff every tenant-scoped
@@ -693,7 +693,23 @@ func violates(sql, table string) (string, bool) {
 		//     `u` but nothing scoping `groups`, so `groups` rows
 		//     from every tenant join in. The per-alias check
 		//     catches this class.
+		//
+		// `table` parameter scoping. scanFile invokes violates()
+		// once per tenant-scoped table that appears in the SQL —
+		// see the loop in scanFile. When the multi-table check
+		// reports missing-predicate tables, only the table being
+		// inspected (the `table` arg) should yield a violation
+		// here; other entries in `missing` get their own
+		// violates() call from scanFile's loop. Without this
+		// per-table filter, a single multi-table query would
+		// emit a violation diagnostic for every scoped table in
+		// the SQL — even the ones that ARE correctly scoped —
+		// inflating output and misleading the author about which
+		// reference actually needs a predicate.
 		if missing := missingPerTablePredicates(sql); len(missing) > 0 {
+			if !containsTable(missing, table) {
+				return "", false
+			}
 			return "SELECT/WITH touches tenant-scoped tables " + strings.Join(missing, ", ") +
 				" without a `<alias>.tenant_id =` predicate scoping each one; bare predicate is insufficient when multiple scoped tables appear", true
 		}
@@ -704,10 +720,17 @@ func violates(sql, table string) (string, bool) {
 	case "UPDATE":
 		// UPDATE on a tenant-scoped table must be filtered by
 		// tenant_id even if the SET clause does not change tenant_id.
+		// Same per-table filtering as SELECT (see above) — only the
+		// `table` being inspected gets a violation when the multi-
+		// table check reports missing predicates; other entries in
+		// `missing` will be reported via their own violates() call.
 		if !updateTableRE.MatchString(sql) {
 			return "", false
 		}
 		if missing := missingPerTablePredicates(sql); len(missing) > 0 {
+			if !containsTable(missing, table) {
+				return "", false
+			}
 			return "UPDATE touches tenant-scoped tables " + strings.Join(missing, ", ") +
 				" without a `<alias>.tenant_id =` predicate scoping each one (UPDATE ... FROM <other_scoped>)", true
 		}
@@ -720,6 +743,9 @@ func violates(sql, table string) (string, bool) {
 			return "", false
 		}
 		if missing := missingPerTablePredicates(sql); len(missing) > 0 {
+			if !containsTable(missing, table) {
+				return "", false
+			}
 			return "DELETE touches tenant-scoped tables " + strings.Join(missing, ", ") +
 				" without a `<alias>.tenant_id =` predicate scoping each one (DELETE ... USING <other_scoped>)", true
 		}
@@ -734,29 +760,55 @@ func violates(sql, table string) (string, bool) {
 		// caught at lint time before someone writes ON CONFLICT DO
 		// UPDATE without re-asserting tenant_id.
 		m := insertColListRE.FindStringSubmatch(sql)
+		var targetTable string
+		var targetIsScoped bool
 		if len(m) >= 3 {
-			targetTable := strings.ToLower(m[1])
-			if _, scoped := tenantScopedTables[targetTable]; scoped {
+			targetTable = strings.ToLower(m[1])
+			_, targetIsScoped = tenantScopedTables[targetTable]
+			if targetIsScoped {
 				cols := strings.ToLower(m[2])
 				if !insertColTenantIDRE.MatchString(cols) {
+					// Only flag the col-list violation on the
+					// target-table call. scanFile may invoke
+					// violates() with another scoped table
+					// that happens to appear in the VALUES /
+					// SELECT clause; those calls should not
+					// double-report the same target-side bug.
+					if table != targetTable {
+						return "", false
+					}
 					return "INSERT INTO tenant-scoped table missing `tenant_id` in the column list", true
 				}
-				return "", false
+				// Do NOT return early. The col-list is correct
+				// — every row will carry tenant_id from the
+				// source — but if the source is an unfiltered
+				// SELECT from a tenant-scoped table, the
+				// SELECT side still reads ALL tenants' rows.
+				// That is a cross-tenant data flow regardless
+				// of whether the target is also scoped. Fall
+				// through to the INSERT...SELECT check below.
 			}
-			// INSERT targets a non-tenant-scoped table — still
-			// check for INSERT...SELECT from a tenant-scoped
-			// source, see below.
 		}
 		// INSERT...SELECT from a tenant-scoped table requires a
 		// tenant predicate on the SELECT side; otherwise rows from
-		// every tenant flow into the (possibly non-tenant-scoped)
-		// target table — exactly the cross-tenant leak the linter
-		// is meant to catch. We treat this as the same class of bug
-		// regardless of whether the target is itself scoped.
+		// every tenant flow into the target table — exactly the
+		// cross-tenant leak the linter is meant to catch. This
+		// applies regardless of whether the target is itself
+		// tenant-scoped: a scoped target with tenant_id propagated
+		// from the source rows ends up correctly partitioned, but
+		// the unfiltered SELECT still reads ALL tenants' rows.
 		if sm := insertSelectFromRE.FindStringSubmatch(sql); len(sm) >= 2 {
 			sourceTable := strings.ToLower(sm[1])
 			if _, scoped := tenantScopedTables[sourceTable]; scoped {
 				if tenantIDPredicateRE.MatchString(sql) {
+					return "", false
+				}
+				// Report once, on the source-table call —
+				// the SELECT side is the actual scan that
+				// reads cross-tenant rows. The target-table
+				// call (if scoped) returns clean here to
+				// avoid duplicating the diagnostic.
+				if table != sourceTable {
 					return "", false
 				}
 				return "INSERT ... SELECT FROM tenant-scoped table `" + sourceTable + "` without `tenant_id =` predicate — rows from every tenant would be copied", true
@@ -780,6 +832,20 @@ func violates(sql, table string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// containsTable reports whether the haystack contains the needle
+// table name (case-insensitive). Used by violates() to scope the
+// multi-table predicate diagnostic to the specific table the caller
+// is inspecting — see the comment in the SELECT/WITH branch for the
+// rationale.
+func containsTable(haystack []string, needle string) bool {
+	for _, h := range haystack {
+		if strings.EqualFold(h, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // oneLine collapses whitespace so the diagnostic stays on one line.
