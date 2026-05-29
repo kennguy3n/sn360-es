@@ -1,8 +1,11 @@
 package middleware
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -11,6 +14,42 @@ import (
 	"sync"
 	"time"
 )
+
+// BucketStore is the storage-agnostic interface a [RateLimiter]
+// consults to decide whether a request is allowed. Implementations
+// must be concurrency-safe — the middleware calls Take from any
+// number of goroutines on hot paths.
+//
+// Two implementations live in this package: the default in-memory
+// store (memoryBucketStore, used when RateLimitConfig.Store is nil)
+// and a Redis adapter (NewRedisBucketStore, used to share token
+// state across replicas). Tests may inject a third implementation
+// directly via RateLimitConfig.Store.
+//
+// Contract:
+//
+//   - Take consumes one token from the bucket identified by
+//     clientKey at the given rate / burst. Returns allowed=true if
+//     the request may proceed; allowed=false plus a positive
+//     retryAfter when the bucket is empty. An error must be returned
+//     only for truly exceptional conditions (Redis hard-down, etc.)
+//     — empty-bucket is a normal (allowed=false) result, not an
+//     error.
+//   - Implementations must apply refill / TTL atomically so two
+//     concurrent Takes against the same clientKey cannot both
+//     succeed if only one token is available.
+//   - rate and burst may change between calls (e.g. per-tenant
+//     limits) — Take must validate every call rather than assuming
+//     they were checked at construction.
+type BucketStore interface {
+	Take(ctx context.Context, clientKey string, rate float64, burst int) (allowed bool, retryAfter time.Duration, err error)
+}
+
+// ErrBucketStoreUnavailable is returned by Take when the backing
+// store is hard-down (e.g. Redis network partition). The middleware
+// applies the configured FailureMode to decide whether to allow or
+// deny the request in this state.
+var ErrBucketStoreUnavailable = errors.New("rate-limit: bucket store unavailable")
 
 // RateLimitConfig configures per-IP token-bucket rate limiting.
 //
@@ -31,6 +70,39 @@ type RateLimitConfig struct {
 	// Burst is the maximum number of tokens a single bucket can hold.
 	// Defaults to 60.
 	Burst int
+	// Store is the underlying [BucketStore] backing the limiter.
+	// When nil the middleware builds a default in-process
+	// memoryBucketStore — preserving the single-replica behaviour
+	// for callers that have not migrated to the Redis-backed store.
+	// Set Store to a [redisBucketStore] (via [NewRedisBucketStore])
+	// to share token state across every replica that points at the
+	// same Redis — that is the configuration required for the
+	// documented cluster-wide rate to actually hold.
+	Store BucketStore
+	// FailureMode controls how the middleware behaves when Store.Take
+	// returns [ErrBucketStoreUnavailable] (e.g. Redis hard-down).
+	// Defaults to FailureModeOpen for the HTTP-edge use case: a
+	// rate-limiter failure should not bring the whole API down. Set
+	// to FailureModeClosed for endpoints where an abusive client
+	// must NOT slip through even at the cost of availability.
+	FailureMode FailureMode
+	// FailureModeFallback, when non-nil, is consulted whenever
+	// Store.Take returns [ErrBucketStoreUnavailable] regardless of
+	// FailureMode. Wiring a memoryBucketStore here gives the
+	// limiter a soft-fall path: Redis hard-down degrades to per-
+	// replica counting (less correct, still safe) instead of
+	// fail-open or fail-closed. Optional.
+	FailureModeFallback BucketStore
+	// OnStoreError is called once per Take error. Use to emit
+	// metrics / log Redis outages without coupling the middleware
+	// to a particular logger. Optional.
+	OnStoreError func(err error, clientKey string)
+	// Logger receives a structured slog event each time the
+	// middleware falls back from the primary Store to
+	// FailureModeFallback. When nil the middleware logs via
+	// slog.Default(). Set to slog.New(slog.DiscardHandler) in tests
+	// that don't want the noise.
+	Logger *slog.Logger
 	// CleanupInterval is how often the janitor sweeps idle buckets.
 	// A zero value selects the 1-minute default (so callers that
 	// leave the field unset still get sensible behaviour). A
@@ -38,9 +110,13 @@ type RateLimitConfig struct {
 	// grows unbounded until [RateLimiter.Stop] is called, so use
 	// negative only in tests that drive eviction manually via
 	// the export-only helper RateLimiterSweepIdle.
+	//
+	// Only applies to the default in-process store; the Redis store
+	// relies on PEXPIRE for eviction.
 	CleanupInterval time.Duration
 	// IdleTTL is the grace period after which an idle bucket is
-	// evicted. Defaults to 5 minutes.
+	// evicted. Defaults to 5 minutes. Only applies to the default
+	// in-process store.
 	IdleTTL time.Duration
 	// Now is an injectable clock for tests. Defaults to time.Now.
 	Now func() time.Time
@@ -68,33 +144,54 @@ type RateLimitConfig struct {
 	OnLimited func(ip, path string)
 }
 
-// RateLimiter implements per-IP token-bucket rate limiting on top of
-// any http.Handler. It is concurrency-safe.
+// FailureMode describes how the middleware reacts to a hard
+// Store.Take failure (e.g. Redis network partition).
+type FailureMode int
+
+const (
+	// FailureModeOpen allows the request through when the bucket
+	// store is unavailable. This is the default — a stuck
+	// rate-limiter that 503s every request is usually worse than
+	// a temporarily un-counted request.
+	FailureModeOpen FailureMode = 0
+	// FailureModeClosed rejects requests with 503 when the bucket
+	// store is unavailable. Use for endpoints where an abusive
+	// client must NOT slip through (e.g. password-reset, auth
+	// flows) even at the cost of availability.
+	FailureModeClosed FailureMode = 1
+)
+
+// RateLimiter implements rate limiting on top of any http.Handler
+// using a pluggable [BucketStore]. It is concurrency-safe.
 type RateLimiter struct {
 	next     http.Handler
 	cfg      RateLimitConfig
+	logger   *slog.Logger
 	skip     map[string]bool
 	prefixes []string
 
-	buckets sync.Map // string -> *bucket
+	// store is the actively-consulted BucketStore. For the default
+	// in-process configuration this points at the same
+	// memoryBucketStore as memStore (memStore holds the typed
+	// reference so the janitor / sweepIdle stay reachable). When
+	// Store is supplied via RateLimitConfig.Store, memStore is nil
+	// and the embedded janitor never starts.
+	store BucketStore
+	// memStore is the in-process store. Non-nil only when the
+	// limiter owns it (i.e. RateLimitConfig.Store was unset). It
+	// keeps the per-IP map reachable so the janitor and the test
+	// helper RateLimiterSweepIdle can find it.
+	memStore *memoryBucketStore
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
 	stopped  chan struct{}
 }
 
-// bucket is the per-IP state. We carry the lock by value inside the
-// struct so the sync.Map entry holds a single pointer per IP.
-type bucket struct {
-	mu       sync.Mutex
-	tokens   float64
-	lastFill time.Time
-	lastSeen time.Time
-}
-
 // NewRateLimiter wraps next with a rate-limit gate. The optional
 // goroutine that sweeps idle buckets starts immediately when
-// CleanupInterval > 0; call [RateLimiter.Stop] to release it.
+// CleanupInterval > 0 AND the limiter owns an in-process store; call
+// [RateLimiter.Stop] to release it.
 func NewRateLimiter(next http.Handler, cfg RateLimitConfig) *RateLimiter {
 	if next == nil {
 		// Defensive: an http.HandlerFunc that 503s makes the
@@ -132,18 +229,36 @@ func NewRateLimiter(next http.Handler, cfg RateLimitConfig) *RateLimiter {
 		}
 	}
 
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	rl := &RateLimiter{
 		next:     next,
 		cfg:      cfg,
+		logger:   logger,
 		skip:     skip,
 		prefixes: prefixes,
 		stopCh:   make(chan struct{}),
 		stopped:  make(chan struct{}),
 	}
-	if cfg.CleanupInterval > 0 {
-		go rl.runJanitor()
-	} else {
+	if cfg.Store != nil {
+		// Caller-supplied store (typically the Redis adapter). The
+		// in-process janitor does not run — the store is
+		// responsible for its own eviction (Redis PEXPIRE).
+		rl.store = cfg.Store
 		close(rl.stopped)
+	} else {
+		// Default in-process store, owned by this limiter.
+		mem := newMemoryBucketStore(cfg.Now)
+		rl.memStore = mem
+		rl.store = mem
+		if cfg.CleanupInterval > 0 {
+			go rl.runJanitor()
+		} else {
+			close(rl.stopped)
+		}
 	}
 	return rl
 }
@@ -163,11 +278,12 @@ func (rl *RateLimiter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := rl.cfg.ClientIP(r)
-	now := rl.cfg.Now()
-
-	b := rl.bucketFor(ip, now)
-	if !b.take(now, rl.cfg.Rate, rl.cfg.Burst) {
-		retry := b.retryAfter(rl.cfg.Rate)
+	allowed, retry, err := rl.take(r.Context(), ip)
+	if err != nil {
+		rl.handleStoreError(w, r, ip, err)
+		return
+	}
+	if !allowed {
 		if rl.cfg.OnLimited != nil {
 			rl.cfg.OnLimited(ip, r.URL.Path)
 		}
@@ -177,30 +293,47 @@ func (rl *RateLimiter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rl.next.ServeHTTP(w, r)
 }
 
-// bucketFor returns the bucket for the given IP, creating it on first
-// use. The lastSeen timestamp is bumped so the janitor doesn't evict
-// active clients.
-func (rl *RateLimiter) bucketFor(ip string, now time.Time) *bucket {
-	if v, ok := rl.buckets.Load(ip); ok {
-		b := v.(*bucket)
-		b.mu.Lock()
-		b.lastSeen = now
-		b.mu.Unlock()
-		return b
+// take consults the configured store, falling back to
+// FailureModeFallback (if set) when the primary store is hard-down.
+// The fallback path preserves the per-replica counting behaviour for
+// callers that wired Redis as the primary store: a Redis outage
+// degrades correctness (back to per-replica buckets) but not
+// availability.
+func (rl *RateLimiter) take(ctx context.Context, ip string) (bool, time.Duration, error) {
+	allowed, retry, err := rl.store.Take(ctx, ip, rl.cfg.Rate, rl.cfg.Burst)
+	if err == nil {
+		return allowed, retry, nil
 	}
-	fresh := &bucket{
-		tokens:   float64(rl.cfg.Burst),
-		lastFill: now,
-		lastSeen: now,
+	if rl.cfg.OnStoreError != nil {
+		rl.cfg.OnStoreError(err, ip)
 	}
-	actual, _ := rl.buckets.LoadOrStore(ip, fresh)
-	b := actual.(*bucket)
-	if actual != fresh {
-		b.mu.Lock()
-		b.lastSeen = now
-		b.mu.Unlock()
+	if rl.cfg.FailureModeFallback != nil && errors.Is(err, ErrBucketStoreUnavailable) {
+		rl.logger.WarnContext(ctx, "rate-limit: primary store unavailable, using fallback",
+			slog.String("client_key", ip),
+			slog.Any("error", err))
+		return rl.cfg.FailureModeFallback.Take(ctx, ip, rl.cfg.Rate, rl.cfg.Burst)
 	}
-	return b
+	return false, 0, err
+}
+
+// handleStoreError emits the configured failure-mode response when
+// the primary store (and its fallback, if any) cannot answer.
+func (rl *RateLimiter) handleStoreError(w http.ResponseWriter, r *http.Request, ip string, err error) {
+	rl.logger.ErrorContext(r.Context(), "rate-limit: bucket store error",
+		slog.String("client_key", ip),
+		slog.String("path", r.URL.Path),
+		slog.Any("error", err))
+	switch rl.cfg.FailureMode {
+	case FailureModeClosed:
+		writeRateLimitError(w, http.StatusServiceUnavailable,
+			"rate limiter unavailable", time.Second)
+	default:
+		// FailureModeOpen — let the request through so a
+		// rate-limiter outage cannot 503 the entire API. The
+		// error is already logged and any caller-supplied metric
+		// callback (OnStoreError) has fired.
+		rl.next.ServeHTTP(w, r)
+	}
 }
 
 // shouldSkip mirrors JWTAuth's skip logic so the two middlewares
@@ -217,7 +350,9 @@ func (rl *RateLimiter) shouldSkip(path string) bool {
 	return false
 }
 
-// runJanitor sweeps idle buckets at CleanupInterval.
+// runJanitor sweeps idle buckets at CleanupInterval. Only the
+// default in-process store needs this; the Redis store relies on
+// PEXPIRE.
 func (rl *RateLimiter) runJanitor() {
 	defer close(rl.stopped)
 	t := time.NewTicker(rl.cfg.CleanupInterval)
@@ -234,62 +369,12 @@ func (rl *RateLimiter) runJanitor() {
 
 // sweepIdle evicts buckets that have not been touched within IdleTTL.
 // Exposed for tests so they can drive eviction deterministically.
+// Returns 0 when the limiter is not using the in-process store.
 func (rl *RateLimiter) sweepIdle(now time.Time) int {
-	removed := 0
-	rl.buckets.Range(func(key, value any) bool {
-		b := value.(*bucket)
-		b.mu.Lock()
-		idle := now.Sub(b.lastSeen) > rl.cfg.IdleTTL
-		b.mu.Unlock()
-		if idle {
-			// Conditional delete via CompareAndDelete keeps us safe
-			// against the racing-update case where a request lands
-			// between the idle check above and the delete.
-			if rl.buckets.CompareAndDelete(key, value) {
-				removed++
-			}
-		}
-		return true
-	})
-	return removed
-}
-
-// take attempts to consume one token from the bucket. Returns true
-// if the request is allowed.
-func (b *bucket) take(now time.Time, rate float64, burst int) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	// Refill since lastFill.
-	elapsed := now.Sub(b.lastFill).Seconds()
-	if elapsed > 0 {
-		b.tokens += elapsed * rate
-		if ceiling := float64(burst); b.tokens > ceiling {
-			b.tokens = ceiling
-		}
-		b.lastFill = now
-	}
-	if b.tokens < 1 {
-		return false
-	}
-	b.tokens--
-	b.lastSeen = now
-	return true
-}
-
-// retryAfter returns the duration until the bucket regains one full
-// token. Rate must be positive (NewRateLimiter enforces this).
-func (b *bucket) retryAfter(rate float64) time.Duration {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.tokens >= 1 {
+	if rl.memStore == nil {
 		return 0
 	}
-	deficit := 1 - b.tokens
-	secs := deficit / rate
-	if secs < 0 {
-		secs = 0
-	}
-	return time.Duration(secs * float64(time.Second))
+	return rl.memStore.sweepIdle(now, rl.cfg.IdleTTL)
 }
 
 // DefaultClientIP extracts the originating client IP from a request
@@ -439,9 +524,13 @@ func ParseTrustedProxies(csv string) ([]netip.Prefix, error) {
 func writeRateLimitError(w http.ResponseWriter, status int, message string, retry time.Duration) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if retry > 0 {
-		// HTTP/1.1 (RFC 7231 §7.1.3) allows Retry-After in seconds
-		// (we round up so the client never retries early).
-		secs := int(retry.Seconds())
+		// HTTP/1.1 (RFC 7231 §7.1.3) allows Retry-After in seconds.
+		// Round UP to the next whole second so a client respecting
+		// the header never retries before the bucket actually has a
+		// token — `int(retry.Seconds())` would truncate 1.5s to 1s
+		// and invite a doomed retry one tick before refill.
+		ms := retry.Milliseconds()
+		secs := int((ms + 999) / 1000)
 		if secs < 1 {
 			secs = 1
 		}
