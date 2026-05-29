@@ -76,6 +76,42 @@ func wire(mux *http.ServeMux) {
 	}
 }
 
+// TestLoadGoRoutes_NonLiteralPathRecordedAsSkip exercises the
+// skip-reporting path: a const-named route MUST be surfaced via the
+// `skips` return so main() can emit a CI warning. Without this,
+// const-named routes would be silently invisible to the gate and the
+// "missing from spec" check would never fire.
+func TestLoadGoRoutes_NonLiteralPathRecordedAsSkip(t *testing.T) {
+	body := `package main
+import "net/http"
+const route = "/v1/dyn"
+func wire(mux *http.ServeMux) {
+	mux.HandleFunc(route, nil)
+	mux.HandleFunc("/v1/literal", nil)
+	mux.Handle(buildPath("foo"), nil)
+}
+func buildPath(s string) string { return "/v1/" + s }
+`
+	routes, skips, err := loadGoRoutesWithSkips(writeTemp(t, "r.go", body))
+	if err != nil {
+		t.Fatalf("loadGoRoutesWithSkips: %v", err)
+	}
+	if !reflect.DeepEqual(routes, []string{"/v1/literal"}) {
+		t.Errorf("routes=%v; want [/v1/literal]", routes)
+	}
+	// Two skip entries expected: the const-named call AND the
+	// function-call argument. Both must surface so a future
+	// maintainer sees them in CI output.
+	if len(skips) != 2 {
+		t.Errorf("len(skips)=%d; want 2 (one const-named, one function-call)", len(skips))
+	}
+	for _, s := range skips {
+		if !strings.Contains(s, "<non-literal>") {
+			t.Errorf("skip entry %q missing <non-literal> marker", s)
+		}
+	}
+}
+
 func TestNormalize(t *testing.T) {
 	cases := []struct {
 		in, want string
@@ -218,17 +254,21 @@ func TestAllowOnlyInGoPrefixes_SubtreeEntriesEndInSlash(t *testing.T) {
 // configuration AND must return an error if a bare-prefix entry is
 // introduced. We assert both polarities to catch a future refactor
 // that drops the validation logic.
+//
+// The negative-path assertion calls validateAllowListPrefixes directly
+// with a local slice rather than mutating the package-level
+// allowOnlyInGoPrefixes. The previous design used a t.Cleanup shim to
+// swap the global in and out, which worked but would race if any test
+// in this package adopted t.Parallel() in the future. The
+// parameterised form is structurally race-free.
 func TestValidateAllowList(t *testing.T) {
+	t.Parallel()
 	if err := validateAllowList(); err != nil {
 		t.Fatalf("validateAllowList on current config: %v; want nil", err)
 	}
-	// Simulate a regression by temporarily replacing the global
-	// with an invalid entry; restore on exit.
-	saved := allowOnlyInGoPrefixes
-	t.Cleanup(func() { allowOnlyInGoPrefixes = saved })
-	allowOnlyInGoPrefixes = []string{"/healthz"} // missing trailing slash
-	if err := validateAllowList(); err == nil {
-		t.Errorf("validateAllowList(bare prefix) = nil; want error")
+	bareList := []string{"/healthz"} // missing trailing slash
+	if err := validateAllowListPrefixes(bareList); err == nil {
+		t.Errorf("validateAllowListPrefixes(bare prefix) = nil; want error")
 	}
 }
 

@@ -148,9 +148,24 @@ type Escalator interface {
 // RouterConfig wires the AlertRouter.
 type RouterConfig struct {
 	// Remediator is invoked for ActionRemediate decisions. May be nil
-	// — in which case every otherwise-remediate alert falls through
-	// to ActionEscalate so a human handles it. Default-nil is safe
-	// because automated remediation is opt-in, not opt-out.
+	// — in which case the dispatch is severity-dependent (mirroring
+	// Classify's decision tree, which is the contract the routes
+	// implement):
+	//   - critical: falls through to ActionEscalate so a human gets
+	//     a paged ticket. The router refuses to lose a critical alert
+	//     just because the remediation surface is unwired.
+	//   - warning / info: falls through to ActionRunbook. Alertmanager
+	//     itself already routed the alert to the on-call channel via
+	//     its own router; the AlertRouter records receipt so we have
+	//     an audit trail and observability over what the deployment
+	//     is signalling.
+	// Default-nil is safe in both cases because automated remediation
+	// is opt-in, not opt-out — leaving Remediator unwired produces
+	// the same observable behaviour as the pre-router deployment.
+	// See Classify() for the authoritative decision tree, and the
+	// TestClassify_AllowlistedAlertEscalatesWhenRemediatorNil /
+	// TestClassify_AllowlistedAlertRunbooksWhenRemediatorNil_Warning
+	// tests for the locked-in contract.
 	Remediator Remediator
 
 	// Escalator is invoked for ActionEscalate decisions. REQUIRED;

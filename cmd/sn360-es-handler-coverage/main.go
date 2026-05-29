@@ -119,8 +119,24 @@ var allowOnlyInGoExact = map[string]struct{}{
 // over-match every route starting with the same characters. Calling
 // this from main() makes the invariant a hard build-time check, not a
 // doc-comment suggestion.
+//
+// Thin wrapper over validateAllowListPrefixes — tests should call the
+// parameterised form rather than mutating the package-level global, so
+// the suite remains safe under `t.Parallel()` should a future
+// contributor enable it.
 func validateAllowList() error {
-	for _, p := range allowOnlyInGoPrefixes {
+	return validateAllowListPrefixes(allowOnlyInGoPrefixes)
+}
+
+// validateAllowListPrefixes is the testable core of validateAllowList:
+// it performs the trailing-slash check on an arbitrary prefix list so
+// negative-path tests can exercise the failure mode without touching
+// the package-level allowOnlyInGoPrefixes global. Keeping the logic in
+// a pure function means TestValidateAllowList does not have to install
+// a t.Cleanup-based restoration shim, and any future `t.Parallel()`
+// addition cannot race on the global.
+func validateAllowListPrefixes(prefixes []string) error {
+	for _, p := range prefixes {
 		if !strings.HasSuffix(p, "/") {
 			return fmt.Errorf(
 				"allowOnlyInGoPrefixes entry %q does not end in `/`; "+
@@ -161,10 +177,20 @@ func main() {
 		fmt.Fprintf(os.Stderr, "load spec: %v\n", err)
 		os.Exit(2)
 	}
-	goPaths, err := loadGoRoutes(*routesPath)
+	goPaths, skips, err := loadGoRoutesWithSkips(*routesPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "parse routes.go: %v\n", err)
 		os.Exit(2)
+	}
+	// Surface const-named / function-call route paths as a CI warning
+	// rather than silently dropping them. The gate is intentionally
+	// permissive here (resolving non-literal paths would require a
+	// full type-checker pass), but a future contributor adding e.g.
+	// `mux.HandleFunc(routesConst.Foo, h)` now gets visible feedback
+	// in build output: either rename to a literal so the gate sees
+	// the route, or add the route to the allow-lists explicitly.
+	for _, s := range skips {
+		fmt.Fprintf(os.Stderr, "handler-coverage WARN: non-literal route argument skipped — %s\n", s)
 	}
 
 	specNorm := normalizeSet(specPaths)
@@ -221,13 +247,35 @@ func loadSpecPaths(path string) ([]string, error) {
 // to mux.Handle / mux.HandleFunc. We accept ANY receiver name (not
 // just "mux") so a refactor that renames the variable doesn't silently
 // break the gate.
+//
+// Non-literal path arguments (e.g. mux.HandleFunc(someConst, h) or
+// mux.HandleFunc(buildRoutePath(...), h)) are skipped because the AST
+// walker cannot resolve them without a full type+const evaluator —
+// pulling in golang.org/x/tools/go/packages just for this gate is not
+// worth the dependency. To keep the skip from being a silent gap,
+// each skipped call is written to skipsOut (when non-nil) so main()
+// can surface it as a CI warning: an operator who adds a const-named
+// route sees the warning in build output and either renames to a
+// literal or adds the route to the allow-lists explicitly.
 func loadGoRoutes(path string) ([]string, error) {
+	out, _, err := loadGoRoutesWithSkips(path)
+	return out, err
+}
+
+// loadGoRoutesWithSkips is the testable core of loadGoRoutes: alongside
+// the resolved route literals it returns the source positions of any
+// mux.Handle / mux.HandleFunc call whose first argument was NOT a
+// string literal. Callers that want to surface the skips (main()) read
+// the positions; callers that just want the routes (most tests) ignore
+// them via the loadGoRoutes wrapper.
+func loadGoRoutesWithSkips(path string) ([]string, []string, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, nil, parser.AllErrors)
 	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	out := []string{}
+	skips := []string{}
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -246,8 +294,17 @@ func loadGoRoutes(path string) ([]string, error) {
 		lit, ok := call.Args[0].(*ast.BasicLit)
 		if !ok || lit.Kind != token.STRING {
 			// Path is not a literal — could be a constant or a
-			// function call. Skip rather than fail; the maintainer
-			// can document a workaround if it ever bites us.
+			// function call. Skip rather than fail (resolving
+			// non-literals requires a type-checker pass) but
+			// record the position so main() can warn. Without
+			// this warning, a const-named route would silently
+			// vanish from the gate's view: routes.go would have
+			// it, the gate wouldn't see it, and the "missing
+			// from spec" check would never fire.
+			pos := fset.Position(call.Pos())
+			skips = append(skips, fmt.Sprintf("%s:%d:%d: %s.%s(<non-literal>, ...)",
+				pos.Filename, pos.Line, pos.Column,
+				exprString(sel.X), sel.Sel.Name))
 			return true
 		}
 		// strconv.Unquote handles both `"foo"` and "`foo`" forms
@@ -267,7 +324,24 @@ func loadGoRoutes(path string) ([]string, error) {
 		return true
 	})
 	sort.Strings(out)
-	return out, nil
+	sort.Strings(skips)
+	return out, skips, nil
+}
+
+// exprString returns a best-effort textual rendering of an AST
+// expression for diagnostic messages. We only need enough to identify
+// which mux variable / receiver the call was on, so cover the two
+// common cases (bare identifier, selector) and fall back to the AST
+// node's stringer for anything else.
+func exprString(e ast.Expr) string {
+	switch v := e.(type) {
+	case *ast.Ident:
+		return v.Name
+	case *ast.SelectorExpr:
+		return exprString(v.X) + "." + v.Sel.Name
+	default:
+		return fmt.Sprintf("%T", e)
+	}
 }
 
 // httpMethodPrefixes is the set of method tokens Go 1.22+'s

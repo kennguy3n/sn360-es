@@ -167,6 +167,38 @@ func TestClassify_AllowlistedAlertEscalatesWhenRemediatorNil(t *testing.T) {
 	}
 }
 
+// TestClassify_AllowlistedAlertRunbooksWhenRemediatorNil_Warning is the
+// other half of the nil-remediator contract documented on
+// RouterConfig.Remediator: a warning-severity allow-listed alert with
+// no remediator falls through to ActionRunbook, NOT ActionEscalate.
+// Critical-severity is locked in by TestClassify_AllowlistedAlertEscalatesWhenRemediatorNil
+// above; the two together pin the severity-dependent fallback shape so
+// a future refactor that "unifies" the two paths is caught at test time.
+func TestClassify_AllowlistedAlertRunbooksWhenRemediatorNil_Warning(t *testing.T) {
+	esc := &fakeEscalator{}
+	r, err := NewAlertRouter(RouterConfig{
+		Escalator: esc,
+		TenantID:  "platform-owner",
+		RemediableAlerts: map[string]bool{
+			"SN360ESConsumerLagHigh": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAlertRouter: %v", err)
+	}
+	d := r.Classify(Alert{
+		Status: "firing",
+		Labels: map[string]string{"alertname": "SN360ESConsumerLagHigh", "severity": "warning"},
+	})
+	if d.Action != ActionRunbook {
+		t.Errorf("allowlisted-but-no-remediator (warning) action=%q; want %q (critical-only escalation fallback)", d.Action, ActionRunbook)
+	}
+	// Classify is a pure decision function (no side effects); verifying
+	// the action is sufficient to pin the routing contract. Dispatch-
+	// level absence of escalation is already covered by the broader
+	// ServeHTTP / handlePayload tests below.
+}
+
 func TestClassify_CriticalWithoutRemediatorEscalates(t *testing.T) {
 	r := newTestRouter(t, &fakeRemediator{}, &fakeEscalator{})
 	d := r.Classify(Alert{
