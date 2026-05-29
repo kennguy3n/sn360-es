@@ -262,12 +262,48 @@ func TestEscalationHandler_ServeGet_Rejections(t *testing.T) {
 	}
 }
 
+// TestEscalationHandler_NilService asserts the operator-facing 503
+// path: when the service is unwired, an *authenticated* caller sees
+// 503 so SREs can detect the misconfiguration. The unauthenticated
+// counterpart is covered by TestEscalationHandler_NilService_AuthFirst.
 func TestEscalationHandler_NilService(t *testing.T) {
 	h := NewEscalationHandler(nil, nil)
-	req := httptest.NewRequest(http.MethodPost, "/v1/escalation/resolve", strings.NewReader(`{"ticket_id":"x","outcome":"closed_no_action"}`))
+	// Authenticated request — the nil-service branch is reachable
+	// only after auth (see ServeResolve / ServeGet comments).
+	req := authReq(http.MethodPost, "/v1/escalation/resolve",
+		`{"ticket_id":"x","outcome":"closed_no_action"}`, "acme")
 	rec := httptest.NewRecorder()
 	h.ServeResolve(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status=%d", rec.Code)
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestEscalationHandler_NilService_AuthFirst locks in the
+// architecturally-correct auth-first ordering: an *unauthenticated*
+// caller hitting a handler whose service is unwired must see 401, not
+// 503. Without this ordering a probing client could distinguish "this
+// endpoint exists but is unconfigured" (503) from "this endpoint is
+// auth-protected" (401) and use the differential to fingerprint
+// deployments — exactly the schema-probing class Devin Review #6
+// flagged on the body-parsing branch.
+func TestEscalationHandler_NilService_AuthFirst(t *testing.T) {
+	h := NewEscalationHandler(nil, nil)
+	// Resolve: unauthenticated + nil service must be 401.
+	resolveReq := httptest.NewRequest(http.MethodPost, "/v1/escalation/resolve",
+		strings.NewReader(`{"ticket_id":"x","outcome":"closed_no_action"}`))
+	resolveRec := httptest.NewRecorder()
+	h.ServeResolve(resolveRec, resolveReq)
+	if resolveRec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth POST: status=%d want=401 body=%s",
+			resolveRec.Code, resolveRec.Body.String())
+	}
+	// Get: same property.
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/escalation/anything", nil)
+	getRec := httptest.NewRecorder()
+	h.ServeGet(getRec, getReq)
+	if getRec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth GET: status=%d want=401 body=%s",
+			getRec.Code, getRec.Body.String())
 	}
 }

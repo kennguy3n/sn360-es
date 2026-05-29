@@ -169,11 +169,16 @@ var tenantIDPredicateRE = regexp.MustCompile(`(?i)\btenant_id\s*(?:=|IN\b|::)`)
 // for tenant-scoped tables because it cannot set tenant_id.
 var insertColListRE = regexp.MustCompile(`(?is)\binsert\s+into\s+([a-z_][a-z_0-9]*)\s*\(([^)]*)\)`)
 
-// updateTableRE captures the target of an UPDATE statement.
-var updateTableRE = regexp.MustCompile(`(?is)\bupdate\s+([a-z_][a-z_0-9]*)\b`)
+// updateTableRE captures the target of an UPDATE statement and its
+// optional alias. Group 1 is the table; group 2 is the alias (with
+// or without `AS`). The post-table reserved-word filter in
+// sqlTableReferences rejects keywords like `SET` if they were
+// mis-captured as an alias.
+var updateTableRE = regexp.MustCompile(`(?is)\bupdate\s+([a-z_][a-z_0-9]*)(?:\s+(?:AS\s+)?([a-z_][a-z_0-9]*))?`)
 
-// deleteFromRE captures the target of a DELETE FROM.
-var deleteFromRE = regexp.MustCompile(`(?is)\bdelete\s+from\s+([a-z_][a-z_0-9]*)\b`)
+// deleteFromRE captures the target of a DELETE FROM and its optional
+// alias. Same alias handling as updateTableRE.
+var deleteFromRE = regexp.MustCompile(`(?is)\bdelete\s+from\s+([a-z_][a-z_0-9]*)(?:\s+(?:AS\s+)?([a-z_][a-z_0-9]*))?`)
 
 // insertColTenantIDRE matches `tenant_id` as a column identifier inside
 // an INSERT column list. Pre-compiled at package scope so the violates()
@@ -186,6 +191,224 @@ var insertColTenantIDRE = regexp.MustCompile(`(?i)\btenant_id\b`)
 // pulls rows from a tenant-scoped source without filtering. Used to
 // close the linter's INSERT...SELECT blind spot.
 var insertSelectFromRE = regexp.MustCompile(`(?is)\binsert\s+into\s+[a-z_][a-z_0-9]*(?:\s*\([^)]*\))?\s*select\b.*?\bfrom\s+([a-z_][a-z_0-9]*)\b`)
+
+// fromJoinRE captures every (table, alias) binding in FROM and JOIN
+// clauses. Group 1 is the table identifier, group 2 is the optional
+// alias (with or without `AS`). Used by sqlTableReferences to build
+// the alias map that the multi-table predicate check consults.
+var fromJoinRE = regexp.MustCompile(`(?is)\b(?:FROM|JOIN)\s+([a-z_][a-z_0-9]*)(?:\s+(?:AS\s+)?([a-z_][a-z_0-9]*))?`)
+
+// directBindRE matches a `<qualifier>.tenant_id` reference that
+// binds the qualifier to a non-qualifier value: a parameter
+// placeholder, literal, IN clause, function, or cast. These are
+// the "directly scoped" qualifiers — the ones that actually pin
+// rows to a tenant. Group 1 is the qualifier.
+//
+// A `<a>.tenant_id = <b>.tenant_id` form is intentionally NOT
+// matched here — those are transitive joins, handled separately
+// by transitiveJoinRE so the union-find can propagate scope from
+// the directly-scoped side to the transitively-scoped side.
+var directBindRE = regexp.MustCompile(
+	`(?i)\b([a-z_][a-z_0-9]*)\.tenant_id\s*(?:` +
+		// IN (...) — list / subquery predicate.
+		`IN\b|` +
+		// Postgres cast then comparison, e.g. ::text = $1.
+		`::|` +
+		// = <non-qualifier-RHS>: placeholder, literal, function,
+		// NULL, or any character that isn't the start of another
+		// identifier (the negative class catches '(' for function
+		// calls and '\'' for literals at minimum).
+		`=\s*(?:\$\d+|\d+|true\b|false\b|null\b|'[^']*'|current_setting\b|[^a-z_]))`)
+
+// transitiveJoinRE matches `<a>.tenant_id = <b>.tenant_id` join
+// conditions in either order. Both qualifiers are placed in the
+// same scoping equivalence class so a single directly-scoped
+// qualifier transitively scopes every other qualifier joined to
+// it via tenant_id. Without this, the linter would flag the
+// idiomatic JOIN-on-tenant_id pattern as a violation.
+var transitiveJoinRE = regexp.MustCompile(
+	`(?i)\b([a-z_][a-z_0-9]*)\.tenant_id\s*=\s*([a-z_][a-z_0-9]*)\.tenant_id\b`)
+
+// sqlReservedAfterTable is the set of SQL keywords that can legally
+// follow a table name in a FROM/JOIN clause. They must not be misread
+// as the table's alias — e.g. `JOIN groups ON ...` makes the alias
+// empty, not "on". The set covers the post-table positions for the
+// PG dialect actually used by the codebase; new ones can be added as
+// the codebase exercises them.
+var sqlReservedAfterTable = map[string]struct{}{
+	"on": {}, "where": {}, "inner": {}, "left": {}, "right": {},
+	"full": {}, "join": {}, "cross": {}, "using": {}, "order": {},
+	"group": {}, "having": {}, "limit": {}, "offset": {}, "returning": {},
+	"set": {}, "values": {}, "select": {}, "lateral": {}, "natural": {},
+	"for": {}, "into": {}, "from": {}, "with": {}, "as": {},
+}
+
+// sqlTableReferences extracts every table reference in the SQL,
+// returning a map of alias -> table name. The alias is the SQL-level
+// short name (e.g. `u` in `users u`); when no alias is given the map
+// uses the table name itself as the key. UPDATE / DELETE / INSERT
+// targets are included so an UPDATE with no FROM clause still has
+// its target in the map.
+//
+// This is the foundation for the multi-table predicate check:
+// `SELECT u.id FROM users u JOIN groups g ON u.id = g.user_id` has
+// two tenant-scoped references (users via `u`, groups via `g`) and
+// each needs its own `<alias>.tenant_id` predicate — a bare
+// `tenant_id = $1` is ambiguous and therefore insufficient.
+func sqlTableReferences(sql string) map[string]string {
+	refs := map[string]string{}
+	add := func(alias, table string) {
+		alias = strings.ToLower(alias)
+		table = strings.ToLower(table)
+		if alias == "" {
+			alias = table
+		}
+		if _, reserved := sqlReservedAfterTable[alias]; reserved {
+			alias = table
+		}
+		refs[alias] = table
+	}
+	for _, m := range fromJoinRE.FindAllStringSubmatch(sql, -1) {
+		add(m[2], m[1])
+	}
+	if m := updateTableRE.FindStringSubmatch(sql); len(m) >= 2 {
+		alias := ""
+		if len(m) >= 3 {
+			alias = m[2]
+		}
+		add(alias, m[1])
+	}
+	if m := deleteFromRE.FindStringSubmatch(sql); len(m) >= 2 {
+		alias := ""
+		if len(m) >= 3 {
+			alias = m[2]
+		}
+		add(alias, m[1])
+	}
+	if m := insertColListRE.FindStringSubmatch(sql); len(m) >= 2 {
+		add("", m[1])
+	}
+	return refs
+}
+
+// scopedRefs returns the subset of sqlTableReferences that point at
+// tenant-scoped tables, keyed by alias. Used to decide between the
+// permissive (single-scoped-table → bare predicate OK) and the
+// strict (multi-scoped-table → per-alias qualified predicate
+// required) check.
+func scopedRefs(sql string) map[string]string {
+	out := map[string]string{}
+	for alias, table := range sqlTableReferences(sql) {
+		if _, scoped := tenantScopedTables[table]; scoped {
+			out[alias] = table
+		}
+	}
+	return out
+}
+
+// scopedQualifiers computes the set of qualifiers (lower-cased) the
+// SQL actually scopes via a tenant_id predicate. The set includes:
+//
+//  1. Directly-scoped qualifiers from directBindRE — i.e. qualifiers
+//     bound to a literal / placeholder / IN clause / cast.
+//  2. Transitively-scoped qualifiers — qualifiers reachable from a
+//     directly-scoped one via `<a>.tenant_id = <b>.tenant_id`
+//     join conditions. The transitive set is computed with
+//     union-find so chains of joins propagate correctly:
+//     `a.tid = b.tid AND b.tid = c.tid AND a.tid = $1` scopes all
+//     of {a, b, c}.
+//
+// A qualifier is *not* in this set merely because `<q>.tenant_id`
+// appears in a SELECT list or other non-predicate position — the
+// regexes deliberately require a comparison-style suffix so a
+// reference is only "scoping" when it binds rows.
+func scopedQualifiers(sql string) map[string]struct{} {
+	// Step 1: collect direct bindings.
+	direct := map[string]struct{}{}
+	for _, m := range directBindRE.FindAllStringSubmatch(sql, -1) {
+		direct[strings.ToLower(m[1])] = struct{}{}
+	}
+	// Step 2: build union-find from transitive joins. Roots are
+	// keyed by qualifier; the root of a class is whichever member
+	// is lexicographically first (deterministic, doesn't matter
+	// for correctness).
+	parent := map[string]string{}
+	var find func(string) string
+	find = func(q string) string {
+		if p, ok := parent[q]; ok && p != q {
+			r := find(p)
+			parent[q] = r
+			return r
+		}
+		if _, ok := parent[q]; !ok {
+			parent[q] = q
+		}
+		return parent[q]
+	}
+	union := func(a, b string) {
+		ra, rb := find(a), find(b)
+		if ra == rb {
+			return
+		}
+		parent[ra] = rb
+	}
+	for _, m := range transitiveJoinRE.FindAllStringSubmatch(sql, -1) {
+		union(strings.ToLower(m[1]), strings.ToLower(m[2]))
+	}
+	// Step 3: anything in the same class as a directly-scoped
+	// qualifier inherits scope.
+	scopedRoots := map[string]struct{}{}
+	for q := range direct {
+		scopedRoots[find(q)] = struct{}{}
+	}
+	out := map[string]struct{}{}
+	for q := range direct {
+		out[q] = struct{}{}
+	}
+	for q := range parent {
+		if _, ok := scopedRoots[find(q)]; ok {
+			out[q] = struct{}{}
+		}
+	}
+	return out
+}
+
+// missingPerTablePredicates checks that every tenant-scoped table
+// reference has its OWN scoping predicate — directly via a literal
+// binding, or transitively via a `<a>.tenant_id = <b>.tenant_id`
+// join to something directly scoped. Returns the offending tables
+// (sorted, deduped) so the violation message can name them.
+// Returns nil when every scoped reference is covered.
+//
+// The "single scoped reference" case is handled by the caller, not
+// here — for one table a bare `tenant_id = $1` is unambiguous and
+// sufficient.
+func missingPerTablePredicates(sql string) []string {
+	refs := scopedRefs(sql)
+	if len(refs) < 2 {
+		return nil
+	}
+	scoped := scopedQualifiers(sql)
+	missing := map[string]struct{}{}
+	for alias, table := range refs {
+		if _, ok := scoped[alias]; ok {
+			continue
+		}
+		if _, ok := scoped[table]; ok {
+			continue
+		}
+		missing[table] = struct{}{}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(missing))
+	for t := range missing {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
 
 type violation struct {
 	pos    token.Position
@@ -390,21 +613,36 @@ func classify(sql string) string {
 // the statement type. The `table` argument is the specific
 // tenant-scoped table being checked (used by INSERT's column-list
 // path to decide whether the INSERT target is itself tenant-scoped);
-// other statement types only care that *some* tenant-scoped table
-// appears.
+// other statement types use the multi-table per-alias check in
+// scopedRefs / missingPerTablePredicates to ensure each tenant-
+// scoped reference has its own predicate (not just any predicate
+// somewhere in the SQL).
 func violates(sql, table string) (string, bool) {
 	_ = table // referenced by INSERT path indirectly via insertColListRE
 	stmt := classify(sql)
 	switch stmt {
 	case "SELECT", "WITH":
-		// SELECT and CTEs are tenant-safe if either:
-		//   (a) the SQL contains a tenant_id predicate anywhere
-		//       (the conservative reading: at least one filter is
-		//       present), OR
-		//   (b) the table appears only inside a JOIN whose top-level
-		//       SELECT already filters by tenant_id.
-		// For simplicity, we accept (a). The migration to RLS will
-		// add (b) implicitly because the DB enforces it.
+		// SELECT and CTEs are tenant-safe iff every tenant-scoped
+		// table reference has a tenant_id predicate. There are two
+		// regimes:
+		//
+		//   - Single scoped reference: a bare `tenant_id = $N` is
+		//     unambiguous (only one table to bind to) and accepted.
+		//   - Multi scoped reference: each scoped alias must have
+		//     its own `<alias>.tenant_id` (or `<table>.tenant_id`)
+		//     predicate. The reviewer's example
+		//
+		//        SELECT u.id FROM users u JOIN groups g
+		//        ON u.id = g.user_id WHERE u.tenant_id = $1
+		//
+		//     would otherwise pass — it has a bare-ish predicate on
+		//     `u` but nothing scoping `groups`, so `groups` rows
+		//     from every tenant join in. The per-alias check
+		//     catches this class.
+		if missing := missingPerTablePredicates(sql); len(missing) > 0 {
+			return "SELECT/WITH touches tenant-scoped tables " + strings.Join(missing, ", ") +
+				" without a `<alias>.tenant_id =` predicate scoping each one; bare predicate is insufficient when multiple scoped tables appear", true
+		}
 		if tenantIDPredicateRE.MatchString(sql) {
 			return "", false
 		}
@@ -415,11 +653,10 @@ func violates(sql, table string) (string, bool) {
 		if !updateTableRE.MatchString(sql) {
 			return "", false
 		}
-		// If this UPDATE targets a tenant-scoped table, require the
-		// predicate. (If the UPDATE targets a different table but
-		// the SQL also mentions a tenant-scoped table, the FROM-like
-		// clause must filter — same rule applies via the global
-		// regex.)
+		if missing := missingPerTablePredicates(sql); len(missing) > 0 {
+			return "UPDATE touches tenant-scoped tables " + strings.Join(missing, ", ") +
+				" without a `<alias>.tenant_id =` predicate scoping each one (UPDATE ... FROM <other_scoped>)", true
+		}
 		if tenantIDPredicateRE.MatchString(sql) {
 			return "", false
 		}
@@ -427,6 +664,10 @@ func violates(sql, table string) (string, bool) {
 	case "DELETE":
 		if !deleteFromRE.MatchString(sql) {
 			return "", false
+		}
+		if missing := missingPerTablePredicates(sql); len(missing) > 0 {
+			return "DELETE touches tenant-scoped tables " + strings.Join(missing, ", ") +
+				" without a `<alias>.tenant_id =` predicate scoping each one (DELETE ... USING <other_scoped>)", true
 		}
 		if tenantIDPredicateRE.MatchString(sql) {
 			return "", false

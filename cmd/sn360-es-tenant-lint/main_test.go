@@ -114,6 +114,72 @@ func TestViolates(t *testing.T) {
 			table:  "groups",
 			expect: false,
 		},
+		{
+			// Devin Review #3325590915 — the reviewer's
+			// canonical false-negative example. Without the
+			// per-alias check, this passed because
+			// `u.tenant_id = $1` matched anywhere in the SQL.
+			// With per-alias scoping, `groups` has no
+			// directly- or transitively-scoping predicate and
+			// the linter flags it correctly.
+			name:   "JOIN without scoping the joined tenant-scoped table violates",
+			sql:    "SELECT u.id FROM users u JOIN groups g ON u.id = g.user_id WHERE u.tenant_id = $1",
+			table:  "groups",
+			expect: true,
+		},
+		{
+			name:   "JOIN with explicit per-alias tenant_id predicates passes",
+			sql:    "SELECT u.id, g.name FROM users u JOIN groups g ON u.id = g.user_id WHERE u.tenant_id = $1 AND g.tenant_id = $1",
+			table:  "groups",
+			expect: false,
+		},
+		{
+			// Three-way transitive chain: a.tid = b.tid AND
+			// b.tid = c.tid AND a.tid = $1 → union-find
+			// propagates scope from a to b to c.
+			name:   "Chained transitive joins propagate scope across qualifiers",
+			sql:    "SELECT a.id FROM users a JOIN groups b ON a.tenant_id = b.tenant_id JOIN labels c ON b.tenant_id = c.tenant_id WHERE a.tenant_id = $1",
+			table:  "labels",
+			expect: false,
+		},
+		{
+			// `g.tenant_id` appears only in a non-predicate
+			// position (SELECT list). The qualifier is
+			// referenced in the SQL but never scopes anything,
+			// so the linter must still flag `groups`. This is
+			// the property that prevents a false negative from
+			// "merely listing a tenant_id column" as evidence
+			// of scoping.
+			name:   "Selecting tenant_id column does not count as scoping the table",
+			sql:    "SELECT u.id, g.tenant_id FROM users u JOIN groups g ON u.id = g.user_id WHERE u.tenant_id = $1",
+			table:  "groups",
+			expect: true,
+		},
+		{
+			// UPDATE ... FROM <other_scoped>: the joined
+			// table must also have its own predicate.
+			name:   "UPDATE ... FROM tenant-scoped without per-alias predicate violates",
+			sql:    "UPDATE communication_histories ch SET count_7d = $1 FROM users u WHERE u.id = ch.user_id AND u.tenant_id = $2",
+			table:  "communication_histories",
+			expect: true,
+		},
+		{
+			name:   "UPDATE ... FROM tenant-scoped with per-alias predicate passes",
+			sql:    "UPDATE communication_histories ch SET count_7d = $1 FROM users u WHERE u.id = ch.user_id AND ch.tenant_id = $2 AND u.tenant_id = $2",
+			table:  "communication_histories",
+			expect: false,
+		},
+		{
+			// Self-join is degenerate: both aliases refer to
+			// `users`. A single literal binding scopes both
+			// because the underlying table is the same — the
+			// table-name lookup in missingPerTablePredicates
+			// covers this.
+			name:   "Self-join with one literal binding passes",
+			sql:    "SELECT a.id FROM users a JOIN users b ON a.org_id = b.org_id WHERE users.tenant_id = $1",
+			table:  "users",
+			expect: false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -40,20 +40,24 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if h.svc == nil {
-		writeError(w, http.StatusServiceUnavailable, "escalation service not configured")
-		return
-	}
-	// Authenticate BEFORE parsing the body so unauthenticated callers
-	// cannot probe the request schema (field names, length limits,
-	// DisallowUnknownFields rejections) by observing 400 vs. 401
-	// responses. tenantID is sourced from the verified JWT claim,
-	// never from the request body — a caller cannot trick the service
-	// into resolving another tenant's ticket by lying about which
-	// tenant they belong to.
+	// Authenticate BEFORE every other observable branch — body parse,
+	// nil-service infrastructure check, anything that could differ on
+	// status code or body. An unauthenticated caller therefore sees
+	// exactly one response (401) regardless of whether the body is
+	// malformed, the service is unwired, or the request is otherwise
+	// fine. Without this ordering an unauth caller could distinguish
+	// 503 (service unconfigured) from 400 (bad body) from 405 (wrong
+	// method) and use the differential to fingerprint deployments.
+	// tenantID is sourced from the verified JWT claim, never from
+	// the request body — a caller cannot trick the service into
+	// resolving another tenant's ticket by lying about their tenant.
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	if tenantID == "" {
 		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if h.svc == nil {
+		writeError(w, http.StatusServiceUnavailable, "escalation service not configured")
 		return
 	}
 	var req resolveRequest
@@ -90,15 +94,18 @@ func (h *EscalationHandler) ServeGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if h.svc == nil {
-		writeError(w, http.StatusServiceUnavailable, "escalation service not configured")
-		return
-	}
-	// Authenticate before reading the URL ticket_id so unauthenticated
-	// callers cannot probe path-routing rules via 400 vs. 401.
+	// Authenticate before any other observable branch — see the
+	// rationale on ServeResolve. Without auth-first, an unauth caller
+	// could distinguish 503 (nil service) from 400 (empty ticket_id)
+	// from 401 (auth required) and use the differential to fingerprint
+	// deployments.
 	tenantID := middleware.TenantIDFromContext(r.Context())
 	if tenantID == "" {
 		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if h.svc == nil {
+		writeError(w, http.StatusServiceUnavailable, "escalation service not configured")
 		return
 	}
 	ticketID := strings.TrimPrefix(r.URL.Path, "/v1/escalation/")
