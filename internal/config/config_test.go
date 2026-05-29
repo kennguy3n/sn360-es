@@ -185,7 +185,10 @@ func withEnv(t *testing.T, m map[string]string) {
 }
 
 // validProdConfig returns a Config that passes validation in a
-// production-like environment.
+// production-like environment. KMSMasterKeyID is populated because
+// validate() refuses to load a prod config with KMS_USE_MOCK=false
+// and an empty key ARN — otherwise the URL rewriter would silently
+// fall back to the passthrough encryptor.
 func validProdConfig() Config {
 	return Config{
 		Environment: EnvironmentProd,
@@ -193,6 +196,7 @@ func validProdConfig() Config {
 		EventBus:    EventBusNATS,
 		HTTP:        HTTP{Port: 8080},
 		Score:       ScoreThresholds{Blocked: 90, HighRisk: 70, Warning: 50, Caution: 30, Info: 10},
+		AWS:         AWS{KMSMasterKeyID: "arn:aws:kms:us-east-1:000000000000:key/test"},
 	}
 }
 
@@ -798,5 +802,135 @@ func TestValidate_Tier1SuppressPartnerAcceptsNonPositive(t *testing.T) {
 		if err := cfg.validate(); err != nil {
 			t.Errorf("validate() rejected TIER1_SUPPRESS_PARTNER=%d: %v", good, err)
 		}
+	}
+}
+
+// TestValidate_PGSSLModeDisableBlockedInProd pins the boot-time
+// guard that refuses PG_SSLMODE=disable in UAT/prod. Without this
+// guard an operator who copy-pasted the dev .env would silently
+// ship a Postgres connection that sends the password (and every
+// subsequent row) over plaintext TCP — same fail-closed treatment
+// as NATS_TLS_INSECURE / SMTP_SKIP_VERIFY.
+func TestValidate_PGSSLModeDisableBlockedInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Postgres.SSLMode = "disable"
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for PG_SSLMODE=disable in prod")
+	}
+}
+
+// TestValidate_PGSSLModeDisableAllowedInDev verifies the prod-only
+// gate does not leak into local dev: developers commonly run
+// Postgres over a unix socket / loopback without TLS.
+func TestValidate_PGSSLModeDisableAllowedInDev(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Environment = EnvironmentDev
+	cfg.Postgres.SSLMode = "disable"
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("PG_SSLMODE=disable should be allowed in dev: %v", err)
+	}
+}
+
+// TestValidate_PGSSLModeRequireAcceptedInProd is the happy-path
+// counterpart — `require` and `verify-full` (both produce a TLS
+// connection) MUST pass.
+func TestValidate_PGSSLModeRequireAcceptedInProd(t *testing.T) {
+	for _, good := range []string{"require", "verify-ca", "verify-full"} {
+		cfg := validProdConfig()
+		cfg.Postgres.SSLMode = good
+		if err := cfg.validate(); err != nil {
+			t.Errorf("validate() rejected PG_SSLMODE=%q in prod: %v", good, err)
+		}
+	}
+}
+
+// TestValidate_CORSWildcardBlockedInProd pins the boot-time guard
+// that refuses CORS_ALLOWED_ORIGINS=* in UAT/prod. middleware/cors.go
+// already fails closed for unset/empty, but an operator who
+// explicitly sets the wildcard in their prod .env would otherwise
+// sail past every browser-SOP-dependent guard on the dashboard.
+func TestValidate_CORSWildcardBlockedInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.CORS.AllowedOrigins = []string{"*"}
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for CORS_ALLOWED_ORIGINS=* in prod")
+	}
+}
+
+// TestValidate_CORSWildcardBlockedInProdWithSurroundingWhitespace
+// verifies the guard is trim-aware so an operator who typed
+// CORS_ALLOWED_ORIGINS=" * " (e.g. by accidentally surrounding the
+// value with spaces in their .env loader) still trips it.
+func TestValidate_CORSWildcardBlockedInProdWhitespace(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.CORS.AllowedOrigins = []string{"https://dashboard.example.com", "  *  "}
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for CORS_ALLOWED_ORIGINS containing whitespace-padded * in prod")
+	}
+}
+
+// TestValidate_CORSExplicitOriginsAllowedInProd verifies the guard
+// only rejects the literal wildcard — explicit origins (the
+// supported production configuration) MUST pass.
+func TestValidate_CORSExplicitOriginsAllowedInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.CORS.AllowedOrigins = []string{
+		"https://dashboard.example.com",
+		"https://admin.example.com",
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("explicit CORS origins should be allowed in prod: %v", err)
+	}
+}
+
+// TestValidate_CORSWildcardAllowedInDev verifies the prod-only gate
+// does not leak into local dev: a wildcard is the standard local
+// .env value because the dashboard runs on an unpredictable port.
+func TestValidate_CORSWildcardAllowedInDev(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Environment = EnvironmentDev
+	cfg.CORS.AllowedOrigins = []string{"*"}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("CORS wildcard should be allowed in dev: %v", err)
+	}
+}
+
+// TestValidate_KMSMasterKeyIDRequiredInProd pins the boot-time guard
+// that refuses a production config with KMS_USE_MOCK=false and an
+// empty AWS_KMS_MASTER_KEY_ID. Without this guard the URL rewriter's
+// buildURLEncryptor would return an error, the caller in app.go
+// would log it as a warning, and the service would silently keep
+// running with URL rewriting and quarantine disabled — exactly the
+// "quiet downgrade" these production guards exist to prevent.
+func TestValidate_KMSMasterKeyIDRequiredInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.AWS.KMSMasterKeyID = ""
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for empty AWS_KMS_MASTER_KEY_ID in prod with KMS_USE_MOCK=false")
+	}
+}
+
+// TestValidate_KMSMasterKeyIDRequiredInProdWhitespace verifies the
+// guard is trim-aware: an operator who typed AWS_KMS_MASTER_KEY_ID=" "
+// (just whitespace) trips the same fail-closed path as an empty
+// value, not a "set-but-malformed" code path further downstream.
+func TestValidate_KMSMasterKeyIDRequiredInProdWhitespace(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.AWS.KMSMasterKeyID = "   "
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for whitespace-only AWS_KMS_MASTER_KEY_ID in prod")
+	}
+}
+
+// TestValidate_KMSMasterKeyIDEmptyAllowedInDev verifies the prod-only
+// gate does not leak into local dev: the URL rewriter falls back to
+// the passthrough encryptor with a warning in dev, which is the
+// supported local workflow.
+func TestValidate_KMSMasterKeyIDEmptyAllowedInDev(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Environment = EnvironmentDev
+	cfg.AWS.KMSMasterKeyID = ""
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("empty AWS_KMS_MASTER_KEY_ID should be allowed in dev: %v", err)
 	}
 }

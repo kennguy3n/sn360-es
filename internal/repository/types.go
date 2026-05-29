@@ -347,28 +347,51 @@ type EvaluationResultRepository interface {
 	ListRecent(ctx context.Context, tenantID string, limit int) ([]EvaluationResult, error)
 }
 
+// CommHistoryListByTenantMaxLimit is the hard cap on the number of
+// rows ListByTenant will return in a single call, regardless of
+// what the caller passes for `limit`. Sizing chosen to keep the
+// worst-case Postgres rowset comfortably under a few MB of network
+// + memory and well under the relationship worker's 10-minute
+// budget per tenant.
+const CommHistoryListByTenantMaxLimit = 10000
+
+// clampCommHistoryLimit normalises a caller-supplied `limit` to a
+// strictly positive, bounded value. Both the Postgres and in-memory
+// implementations MUST clamp identically so callers get the same
+// effective slice regardless of backend.
+//
+//   - limit <= 0 ⇒ CommHistoryListByTenantMaxLimit (no longer
+//     "unbounded" — `limit=0` used to silently mean "return every
+//     row in the tenant", which is now disallowed).
+//   - limit > CommHistoryListByTenantMaxLimit ⇒
+//     CommHistoryListByTenantMaxLimit.
+//   - otherwise ⇒ the caller's value.
+func clampCommHistoryLimit(limit int) int {
+	if limit <= 0 || limit > CommHistoryListByTenantMaxLimit {
+		return CommHistoryListByTenantMaxLimit
+	}
+	return limit
+}
+
 // CommunicationHistoryRepository persists CommunicationHistory rows.
 //
 // ListByTenant returns rows whose LastSeenAt is at or after `since`,
-// capped at `limit` entries. Both bounds carry zero-value semantics
-// every implementation MUST honour identically — otherwise the
-// relationship-aggregation and vendor-discovery periodic workers
-// degrade silently when wired in `cmd/sn360-es/main.go`:
+// capped at min(limit, CommHistoryListByTenantMaxLimit) entries. The
+// `since` zero-value semantics still apply (the in-memory backend
+// short-circuits the filter via `since.IsZero()`; the Postgres
+// backend relies on `last_seen_at >= 0001-01-01T00:00:00Z` matching
+// every persisted row because the column is NOT NULL).
 //
-//   - `since == time.Time{}` (Go zero) ⇒ no time filter; the call
-//     returns every row for the tenant. The in-memory backend
-//     short-circuits the filter via `since.IsZero()`; the Postgres
-//     backend relies on `last_seen_at >= 0001-01-01T00:00:00Z`
-//     matching every persisted row (the column is NOT NULL).
-//   - `limit <= 0` ⇒ no row cap. The in-memory backend skips the
-//     truncation step; the Postgres backend uses `LIMIT NULLIF($N,0)`
-//     so the planner sees `LIMIT NULL` (= unbounded).
-//
-// Callers that want the documented worker behaviour pass a non-zero
-// `since` (the rolling-window cutoff) and a positive `limit` (the
-// per-tenant scan cap). The zero-value semantics exist so ad-hoc
-// callers (tests, admin tools) can request an unfiltered tenant
-// scan without a sentinel API.
+// `limit <= 0` is treated as "use the max cap", NOT as "no cap";
+// every implementation clamps via clampCommHistoryLimit so that an
+// inadvertent caller cannot stream a multi-million-row scan.
+// CommHistoryListByTenantMaxLimit is a hard ceiling: callers that
+// pass a larger value (e.g. the relationship worker's
+// MaxPerTenant knob configured above the cap) are silently
+// truncated to the cap. Callers that legitimately need to iterate
+// the entire tenant must page across multiple ListByTenant calls
+// using the LastSeenAt of the final returned row as the next
+// `since` argument.
 type CommunicationHistoryRepository interface {
 	// Upsert writes the ingestion-time view of a (sender,
 	// recipient) pair. Implementations MUST NOT propagate

@@ -138,7 +138,29 @@ func buildURLEncryptor(cfg *config.Config, logger *slog.Logger) (action.URLEncry
 		)
 		return enc, nil
 	}
-	logger.Warn("sn360-es: url rewriter falling back to passthrough encryptor — URL pre-images will be stored UNENCRYPTED in Redis. Set AWS_KMS_USE_MOCK=true or AWS_KMS_MASTER_KEY_ID to fix.")
+	// Passthrough encryptor stores URL pre-images in Redis as plaintext.
+	// That is acceptable for local dev and CI but never in production —
+	// a Redis dump or rogue replica would leak every rewritten URL.
+	//
+	// In a healthy UAT/prod boot this branch is unreachable because
+	// Config.validate() already refuses to load a production config
+	// with KMS_USE_MOCK=false and an empty AWS_KMS_MASTER_KEY_ID. The
+	// guard below is defense-in-depth so the passthrough encryptor
+	// cannot reach a production process even if some future call site
+	// bypasses validate() or constructs a Config in-memory without
+	// going through Load(). The caller in app.go logs this error as a
+	// warning and continues with URL rewriting disabled, which is the
+	// right behaviour in dev (where the validate() guard does not
+	// fire) but would be a silent downgrade in prod — hence the
+	// upstream validate() check.
+	if cfg.Environment.IsProduction() {
+		// KMS_USE_MOCK=true is itself refused in UAT/prod by
+		// Config.validate(); the only valid remediation in
+		// production is a real KMS key ARN, so we do not point
+		// the operator at the mock as a workaround.
+		return nil, errors.New("sn360-es: url encryptor has no KMS configured; passthrough encryptor is not allowed in production environments (UAT/prod) — set AWS_KMS_MASTER_KEY_ID to a real KMS key ARN")
+	}
+	logger.Warn("sn360-es: url rewriter falling back to passthrough encryptor — URL pre-images will be stored UNENCRYPTED in Redis. Set KMS_USE_MOCK=true or AWS_KMS_MASTER_KEY_ID to fix.")
 	return passthroughEncryptor{}, nil
 }
 
@@ -913,28 +935,99 @@ var prunableTables = map[string]string{
 	"simulation_send_events":  "created_at",
 }
 
+// pgPruneBatchSize bounds the per-iteration DELETE in newPgPruner.
+//
+// A single unbounded `DELETE FROM ... WHERE ts < cutoff` against a
+// table that has accumulated millions of stale rows holds a row-lock
+// on every matched row, generates a single oversized WAL record,
+// and stalls every other writer on that table for the duration of
+// the transaction. Splitting into bounded batches keeps each
+// transaction small enough to fit comfortably in a single WAL
+// segment and gives ingestion-time INSERTs frequent windows to
+// commit between batches.
+const pgPruneBatchSize = 5000
+
+// pruneBatchFn is the per-batch DELETE callback that runBatchedPrune
+// drives. It returns the number of rows the batch removed; a value
+// strictly less than `batchSize` is interpreted as "no rows left
+// older than the cutoff" and terminates the loop. The
+// rowsAffectedUnknown sentinel lets a driver that cannot report
+// RowsAffected (very unusual; lib/pq always can) bail out cleanly
+// without spinning forever.
+type pruneBatchFn func(ctx context.Context) (rows int64, rowsAffectedUnknown bool, err error)
+
+// runBatchedPrune loops `batch` until it short-reads (rows <
+// batchSize), an error fires, or ctx is cancelled. Pulled out as a
+// pure function so it can be exercised with a fake batch closure
+// (see wire_infra_pruner_test.go) without spinning up a real
+// Postgres connection.
+func runBatchedPrune(ctx context.Context, batchSize int, batch pruneBatchFn) (int64, error) {
+	// Defensive guard: a non-positive batchSize would make the
+	// short-read termination condition (`n < int64(batchSize)`)
+	// unreachable for any non-negative RowsAffected, spinning the
+	// loop indefinitely. The only production caller passes the
+	// const pgPruneBatchSize = 5000, so this is hardening for
+	// any future caller that builds batchSize from configuration
+	// or test inputs.
+	if batchSize <= 0 {
+		return 0, nil
+	}
+	var total int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		n, unknown, err := batch(ctx)
+		if err != nil {
+			return total, err
+		}
+		if unknown {
+			// Driver couldn't report the affected count; we
+			// can't tell whether we just emptied the tail.
+			// Return progress so far rather than spinning.
+			return total, nil
+		}
+		total += n
+		if n < int64(batchSize) {
+			return total, nil
+		}
+	}
+}
+
 func newPgPruner(db *postgres.DB, table string, logger *slog.Logger) worker.Pruner {
 	column, ok := prunableTables[table]
 	if !ok {
 		panic(fmt.Sprintf("newPgPruner: table %q is not in the allow-list", table))
 	}
-	query := fmt.Sprintf("DELETE FROM %s WHERE %s < $1", table, column)
+	// ctid-IN-LIMIT is the canonical Postgres batched-delete shape:
+	// the planner uses the column's btree index to find a bounded
+	// candidate set, the outer DELETE then resolves those ctids
+	// directly. Looping with the same query is safe because each
+	// iteration sees the rows the previous DELETE committed (we
+	// commit per ExecContext via autocommit on the lib/pq driver).
+	query := fmt.Sprintf(
+		"DELETE FROM %s WHERE ctid IN (SELECT ctid FROM %s WHERE %s < $1 LIMIT %d)",
+		table, table, column, pgPruneBatchSize,
+	)
 	return worker.NewPruner(table, func(ctx context.Context, before time.Time) (int64, error) {
 		if db == nil {
 			return 0, nil
 		}
-		res, err := db.ExecContext(ctx, query, before)
-		if err != nil {
-			logger.Warn("sn360-es: cleanup prune failed",
-				slog.String("table", table),
-				slog.String("column", column),
-				slog.Any("error", err))
-			return 0, err
+		batch := func(ctx context.Context) (int64, bool, error) {
+			res, err := db.ExecContext(ctx, query, before)
+			if err != nil {
+				logger.Warn("sn360-es: cleanup prune batch failed",
+					slog.String("table", table),
+					slog.String("column", column),
+					slog.Any("error", err))
+				return 0, false, err
+			}
+			n, rerr := res.RowsAffected()
+			if rerr != nil {
+				return 0, true, nil
+			}
+			return n, false, nil
 		}
-		n, rerr := res.RowsAffected()
-		if rerr != nil {
-			return 0, nil
-		}
-		return n, nil
+		return runBatchedPrune(ctx, pgPruneBatchSize, batch)
 	})
 }

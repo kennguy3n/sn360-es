@@ -202,6 +202,25 @@ func NewRelationshipJob(cfg RelationshipJobConfig) (*RelationshipJob, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	// CommunicationHistoryRepository.ListByTenant silently clamps
+	// `limit` to CommHistoryListByTenantMaxLimit, so a worker
+	// configured above the cap would otherwise miss the
+	// difference and quietly process fewer rows per cycle than
+	// the operator asked for. Warn at config time AND clamp the
+	// internal field so j.maxPerTenant always reflects what
+	// ListByTenant will actually return — any future code that
+	// reads j.maxPerTenant for progress reporting, pagination, or
+	// metrics sees the effective value rather than the operator's
+	// over-large configured value. Operators who legitimately
+	// need to iterate more rows per tenant per cycle must page
+	// across multiple ListByTenant calls (see the docstring on
+	// CommunicationHistoryRepository).
+	if maxPerTenant > repository.CommHistoryListByTenantMaxLimit {
+		logger.Warn("worker.relationship: MaxPerTenant exceeds repository cap; clamping to the cap",
+			slog.Int("configured_max_per_tenant", maxPerTenant),
+			slog.Int("repository_cap", repository.CommHistoryListByTenantMaxLimit))
+		maxPerTenant = repository.CommHistoryListByTenantMaxLimit
+	}
 	return &RelationshipJob{
 		cfg:                cfg,
 		interval:           cfg.Interval,
@@ -792,7 +811,7 @@ func (j *VendorJob) Run(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		rows, err := j.cfg.Communications.ListByTenant(ctx, t.ID, since, 10000)
+		rows, err := j.cfg.Communications.ListByTenant(ctx, t.ID, since, repository.CommHistoryListByTenantMaxLimit)
 		if err != nil {
 			j.logger.Warn("worker.vendor: list communication histories failed",
 				slog.String("tenant_id", t.ID), slog.Any("error", err))

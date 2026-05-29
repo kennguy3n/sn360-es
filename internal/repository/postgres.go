@@ -111,6 +111,19 @@ SELECT id,name,display_name,provider,primary_domain,region,kms_key_arn,score_bas
 	return out, rows.Err()
 }
 
+// scanOne executes a single-row tenant query and projects the row
+// into a *Tenant.
+//
+// SECURITY: the `where` parameter is concatenated into the query
+// string and therefore MUST be a compile-time literal that uses
+// positional parameters ($1, $2, …) for any caller-supplied data.
+// It MUST NOT contain user input under any circumstance — passing
+// a request-derived string here would re-open a SQL injection
+// vector that the rest of this file is careful to close via
+// QueryRowContext / ExecContext placeholders. Today the only
+// call sites are GetByID and GetByName, both of which pass a
+// `WHERE col=$1 …` literal with the user value bound through
+// args; preserve that pattern.
 func (p *pgTenants) scanOne(ctx context.Context, where string, args ...any) (*Tenant, error) {
 	q := `
 SELECT id,name,display_name,provider,primary_domain,region,kms_key_arn,score_base,retention_days,
@@ -633,6 +646,29 @@ SELECT id, tenant_id, message_id_hash, COALESCE(correlation_id,''), score, tier,
 	return out, rows.Err()
 }
 
+// populateEvalJSON fills in the optional JSON / string-array fields
+// on an EvaluationResult after the caller has Scanned the row into
+// the text-typed intermediaries. Centralises the (somewhat fiddly)
+// "empty TEXT means leave JSON nil, otherwise []byte(s)" projection
+// so scanEval and scanEvalRows can share one implementation.
+func populateEvalJSON(r *EvaluationResult, secondary, reasons, degSvcs pq.StringArray, t0, t1, t2, rsp string) {
+	r.Secondary = []string(secondary)
+	r.ReasonCodes = []string(reasons)
+	r.DegradedServices = []string(degSvcs)
+	if t0 != "" {
+		r.Tier0OutcomeJSON = []byte(t0)
+	}
+	if t1 != "" {
+		r.Tier1OutcomeJSON = []byte(t1)
+	}
+	if t2 != "" {
+		r.Tier2OutcomeJSON = []byte(t2)
+	}
+	if rsp != "" {
+		r.RspamdOutcomeJSON = []byte(rsp)
+	}
+}
+
 func scanEval(row *sql.Row) (*EvaluationResult, error) {
 	var (
 		r                           EvaluationResult
@@ -648,19 +684,7 @@ func scanEval(row *sql.Row) (*EvaluationResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	r.Secondary, r.ReasonCodes, r.DegradedServices = []string(secondary), []string(reasons), []string(degSvcs)
-	if t0 != "" {
-		r.Tier0OutcomeJSON = []byte(t0)
-	}
-	if t1 != "" {
-		r.Tier1OutcomeJSON = []byte(t1)
-	}
-	if t2 != "" {
-		r.Tier2OutcomeJSON = []byte(t2)
-	}
-	if rsp != "" {
-		r.RspamdOutcomeJSON = []byte(rsp)
-	}
+	populateEvalJSON(&r, secondary, reasons, degSvcs, t0, t1, t2, rsp)
 	return &r, nil
 }
 
@@ -675,19 +699,7 @@ func scanEvalRows(rows *sql.Rows) (*EvaluationResult, error) {
 		&r.EvaluatedAt, &r.CreatedAt); err != nil {
 		return nil, err
 	}
-	r.Secondary, r.ReasonCodes, r.DegradedServices = []string(secondary), []string(reasons), []string(degSvcs)
-	if t0 != "" {
-		r.Tier0OutcomeJSON = []byte(t0)
-	}
-	if t1 != "" {
-		r.Tier1OutcomeJSON = []byte(t1)
-	}
-	if t2 != "" {
-		r.Tier2OutcomeJSON = []byte(t2)
-	}
-	if rsp != "" {
-		r.RspamdOutcomeJSON = []byte(rsp)
-	}
+	populateEvalJSON(&r, secondary, reasons, degSvcs, t0, t1, t2, rsp)
 	return &r, nil
 }
 
@@ -734,16 +746,20 @@ ON CONFLICT (tenant_id, sender_hash, recipient_hash) DO UPDATE SET
 	return err
 }
 
-// ListByTenant returns every CommunicationHistory row for `tenantID`
-// whose last_seen_at is at or after `since`, ordered by last_seen_at
-// descending so the relationship worker re-processes the freshest
-// rows first. A non-positive `limit` is treated as "no cap" by way
-// of `LIMIT NULLIF($3,0)` — Postgres interprets `LIMIT NULL` as
-// unlimited, which matches the established pattern used by every
-// other LIMIT-driven query in this file (e.g. tenants.List at
-// `LIMIT NULLIF($1,0)`, users.List at `LIMIT NULLIF($2,0)`,
-// evaluation_results.ListRecent at `LIMIT NULLIF($2,0)`).
+// ListByTenant returns CommunicationHistory rows for `tenantID`
+// whose last_seen_at is at or after `since`, ordered by
+// last_seen_at descending so the relationship worker re-processes
+// the freshest rows first.
+//
+// The result is always bounded. A non-positive `limit`, or a value
+// above commHistoryListByTenantMaxLimit, is clamped to
+// commHistoryListByTenantMaxLimit so callers cannot accidentally
+// stream an entire multi-million-row tenant scan through the bus.
+// Callers that legitimately need every row should page through them
+// with an explicit cursor (e.g. the relationship worker's
+// maxPerTenant knob).
 func (p *pgCommHistory) ListByTenant(ctx context.Context, tenantID string, since time.Time, limit int) ([]CommunicationHistory, error) {
+	limit = clampCommHistoryLimit(limit)
 	rows, err := p.db.QueryContext(ctx, `
 SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(sender_domain, ''),
        count_7d, count_30d, first_seen_at, last_seen_at, relationship,
@@ -751,7 +767,7 @@ SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(
   FROM communication_histories
  WHERE tenant_id=$1 AND last_seen_at >= $2
  ORDER BY last_seen_at DESC
- LIMIT NULLIF($3,0)`,
+ LIMIT $3`,
 		tenantID, since, limit)
 	if err != nil {
 		return nil, err

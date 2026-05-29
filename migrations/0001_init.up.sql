@@ -226,6 +226,21 @@ CREATE INDEX IF NOT EXISTS idx_comm_hist_tenant_recipient
     ON communication_histories (tenant_id, recipient_hash);
 CREATE INDEX IF NOT EXISTS idx_comm_hist_relationship
     ON communication_histories (tenant_id, relationship);
+-- Supports ListByTenant: `WHERE tenant_id=$1 AND last_seen_at >= $2
+-- ORDER BY last_seen_at DESC`. The DESC on the index column lets
+-- the planner return rows already-sorted, avoiding a per-tenant
+-- sort step on top of the bitmap scan.
+--
+-- An identical CREATE INDEX IF NOT EXISTS also ships as a separate
+-- numbered migration (0016_comm_history_last_seen_index) so
+-- environments that already applied 0001 at an earlier revision
+-- pick the index up via `migrate up`. IF NOT EXISTS makes both
+-- paths idempotent: a fresh deployment creates the index here at
+-- init time; 0016 becomes a no-op. An existing deployment skipped
+-- this line when it ran 0001 at the older revision and creates the
+-- index when it later applies 0016.
+CREATE INDEX IF NOT EXISTS idx_comm_hist_tenant_last_seen
+    ON communication_histories (tenant_id, last_seen_at DESC);
 
 -- ----------------------------------------------------------------------
 -- 10. Campaigns (phishing-simulation lifecycle)

@@ -1039,3 +1039,57 @@ func makeCommRows(domain string, total, distinct int, now time.Time) []repositor
 	}
 	return rows
 }
+
+// TestNewRelationshipJob_ClampsMaxPerTenantAboveRepoCap pins the
+// internal-state clamp: when the operator configures MaxPerTenant
+// above repository.CommHistoryListByTenantMaxLimit, the constructor
+// must (1) emit a startup warning and (2) clamp the stored
+// j.maxPerTenant down to the repository cap so any future code
+// path that reads the field sees the effective value rather than
+// the operator's over-large request. Without this clamp,
+// j.maxPerTenant would drift out of sync with what ListByTenant
+// actually returns and any later progress reporting / pagination
+// decision keyed off j.maxPerTenant would be silently wrong.
+func TestNewRelationshipJob_ClampsMaxPerTenantAboveRepoCap(t *testing.T) {
+	job, err := NewRelationshipJob(RelationshipJobConfig{
+		Interval:       time.Hour,
+		Tenants:        &fakeTenantLister{},
+		Communications: &fakeCommunicationStore{},
+		Upserter:       &fakeCommUpserter{},
+		MaxPerTenant:   repository.CommHistoryListByTenantMaxLimit + 5000,
+		Logger:         discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("NewRelationshipJob: %v", err)
+	}
+	if got, want := job.maxPerTenant, repository.CommHistoryListByTenantMaxLimit; got != want {
+		t.Errorf("maxPerTenant = %d, want clamped to %d", got, want)
+	}
+}
+
+// TestNewRelationshipJob_PreservesMaxPerTenantBelowRepoCap pins the
+// complementary positive path: configured values at or below the
+// repository cap must be preserved verbatim, including the default
+// fallback when MaxPerTenant is unset.
+func TestNewRelationshipJob_PreservesMaxPerTenantBelowRepoCap(t *testing.T) {
+	for _, configured := range []int{0, 1, 500, 1000, 9999, repository.CommHistoryListByTenantMaxLimit} {
+		job, err := NewRelationshipJob(RelationshipJobConfig{
+			Interval:       time.Hour,
+			Tenants:        &fakeTenantLister{},
+			Communications: &fakeCommunicationStore{},
+			Upserter:       &fakeCommUpserter{},
+			MaxPerTenant:   configured,
+			Logger:         discardLogger(),
+		})
+		if err != nil {
+			t.Fatalf("NewRelationshipJob(MaxPerTenant=%d): %v", configured, err)
+		}
+		want := configured
+		if want <= 0 {
+			want = 1000
+		}
+		if job.maxPerTenant != want {
+			t.Errorf("MaxPerTenant=%d → stored %d, want %d", configured, job.maxPerTenant, want)
+		}
+	}
+}
