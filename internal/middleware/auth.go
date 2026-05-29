@@ -54,7 +54,6 @@ func ContextWithTenantID(ctx context.Context, tenantID string) context.Context {
 	return context.WithValue(ctx, ctxKeyTenantID, tenantID)
 }
 
-
 // ClaimsFromContext returns the full JWT claims if the request was
 // authenticated, or nil otherwise.
 func ClaimsFromContext(ctx context.Context) *privacy.ActionClaims {

@@ -34,7 +34,6 @@ func withTenant(req *http.Request, tenantID string) *http.Request {
 	return req.WithContext(middleware.ContextWithTenantID(req.Context(), tenantID))
 }
 
-
 type stubEscalationPublisher struct{}
 
 func (stubEscalationPublisher) Publish(_ context.Context, _ string, _ []byte, _ ...events.PublishOption) error {
@@ -274,7 +273,6 @@ func TestEscalationHandler_AuthChecksBeforeBodyParsing(t *testing.T) {
 		})
 	}
 }
-
 
 func TestEscalationHandler_ServeGet_OK(t *testing.T) {
 	svc := newTestEscalationService(t)

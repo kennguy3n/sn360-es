@@ -199,4 +199,3 @@ func TestEscalation_ResolveRequiresTenantID(t *testing.T) {
 		t.Fatal("expected error for empty tenant_id")
 	}
 }
-
