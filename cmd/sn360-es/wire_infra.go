@@ -143,9 +143,13 @@ func buildURLEncryptor(cfg *config.Config, logger *slog.Logger) (action.URLEncry
 	// a Redis dump or rogue replica would leak every rewritten URL. Fail
 	// fast at boot rather than ship a quiet downgrade.
 	if cfg.Environment.IsProduction() {
-		return nil, errors.New("sn360-es: url encryptor has no KMS configured; passthrough encryptor is not allowed in production environments (UAT/prod) — set AWS_KMS_MASTER_KEY_ID or KMS_USE_MOCK=true with a mock key")
+		// KMS_USE_MOCK=true is itself refused in UAT/prod by
+		// Config.validate(); the only valid remediation in
+		// production is a real KMS key ARN, so we do not point
+		// the operator at the mock as a workaround.
+		return nil, errors.New("sn360-es: url encryptor has no KMS configured; passthrough encryptor is not allowed in production environments (UAT/prod) — set AWS_KMS_MASTER_KEY_ID to a real KMS key ARN")
 	}
-	logger.Warn("sn360-es: url rewriter falling back to passthrough encryptor — URL pre-images will be stored UNENCRYPTED in Redis. Set AWS_KMS_USE_MOCK=true or AWS_KMS_MASTER_KEY_ID to fix.")
+	logger.Warn("sn360-es: url rewriter falling back to passthrough encryptor — URL pre-images will be stored UNENCRYPTED in Redis. Set KMS_USE_MOCK=true or AWS_KMS_MASTER_KEY_ID to fix.")
 	return passthroughEncryptor{}, nil
 }
 

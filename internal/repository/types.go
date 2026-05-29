@@ -384,9 +384,14 @@ func clampCommHistoryLimit(limit int) int {
 //
 // `limit <= 0` is treated as "use the max cap", NOT as "no cap";
 // every implementation clamps via clampCommHistoryLimit so that an
-// inadvertent caller cannot stream a multi-million-row scan. Callers
-// that legitimately need to iterate the entire tenant should page
-// explicitly (e.g. the relationship worker's maxPerTenant knob).
+// inadvertent caller cannot stream a multi-million-row scan.
+// CommHistoryListByTenantMaxLimit is a hard ceiling: callers that
+// pass a larger value (e.g. the relationship worker's
+// MaxPerTenant knob configured above the cap) are silently
+// truncated to the cap. Callers that legitimately need to iterate
+// the entire tenant must page across multiple ListByTenant calls
+// using the LastSeenAt of the final returned row as the next
+// `since` argument.
 type CommunicationHistoryRepository interface {
 	// Upsert writes the ingestion-time view of a (sender,
 	// recipient) pair. Implementations MUST NOT propagate
