@@ -164,6 +164,19 @@ func (s *EscalationService) Escalate(ctx context.Context, tenantID string, incid
 // log only.
 var ErrTicketTenantMismatch = errors.New("escalation: ticket tenant mismatch")
 
+// ErrTicketNotFound is returned by the TicketStore implementations
+// (Memory + Postgres) when a Load/Update targets a ticket ID that
+// doesn't exist. The handler layer maps this to HTTP 404 with the
+// SAME response body as ErrTicketTenantMismatch — returning a
+// distinguishable code (400 vs 404, or different bodies) would let an
+// authenticated caller from tenant B fingerprint which ticket IDs
+// belong to tenant A by probing the resolve endpoint.
+//
+// This sentinel is the architectural counterpart to ErrTicketTenantMismatch:
+// the two together fully define the “ticket invisibly absent” response
+// surface so the handler doesn't have to string-match store errors.
+var ErrTicketNotFound = errors.New("escalation: ticket not found")
+
 // ResolveEscalation records the SecOps outcome and feeds it into the
 // training pipeline. tenantID is the authenticated caller's tenant
 // and must match the ticket's TenantID — the store filters on it so a
@@ -319,7 +332,7 @@ func (m *MemoryTicketStore) Update(_ context.Context, tenantID, ticketID string,
 	key := memoryTicketKey{tenantID: tenantID, ticketID: ticketID}
 	t, ok := m.tickets[key]
 	if !ok {
-		return dto.EscalationTicket{}, errors.New("escalation: ticket not found")
+		return dto.EscalationTicket{}, ErrTicketNotFound
 	}
 	if err := mutate(&t); err != nil {
 		return dto.EscalationTicket{}, err

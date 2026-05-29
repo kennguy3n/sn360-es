@@ -195,7 +195,7 @@ func (s *PostgresTicketStore) Update(ctx context.Context, tenantID, ticketID str
 		&createdAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return dto.EscalationTicket{}, errors.New("escalation: ticket not found")
+			return dto.EscalationTicket{}, ErrTicketNotFound
 		}
 		return dto.EscalationTicket{}, fmt.Errorf("escalation: postgres update select: %w", err)
 	}

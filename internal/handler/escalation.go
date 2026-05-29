@@ -95,13 +95,20 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 	}
 	ticket, err := h.svc.ResolveEscalation(r.Context(), tenantID, req.TicketID, req.ResolverHash, req.Outcome, req.Notes)
 	if err != nil {
-		// Cross-tenant attempts return 404 (NOT 403) so the response
-		// is indistinguishable from a non-existent ticket. Returning
-		// 403 would leak the existence of a ticket owned by another
-		// tenant. The slog.WarnContext inside the service already
-		// captured the caller_tenant / ticket_tenant pair for the
-		// operator audit trail.
-		if errors.Is(err, agent.ErrTicketTenantMismatch) {
+		// Cross-tenant attempts AND ticket-not-found both return 404
+		// with the SAME response body. The two cases must be
+		// indistinguishable to the caller — otherwise an authenticated
+		// caller from tenant B could fingerprint which ticket IDs
+		// exist in tenant A by probing the endpoint:
+		//   - 404 "ticket not found"  -> doesn't exist OR belongs to another tenant
+		//   - 400 "resolve failed"    -> exists, belongs to me, but blocked by a business rule
+		// Returning 403 (or a distinct 404 body) for the tenant-mismatch
+		// case would leak ticket-existence to cross-tenant attackers,
+		// which is the very invariant the service-layer tenant check
+		// was added to enforce. The slog.WarnContext inside the service
+		// already captured the caller_tenant / ticket_tenant pair for
+		// the operator audit trail.
+		if errors.Is(err, agent.ErrTicketTenantMismatch) || errors.Is(err, agent.ErrTicketNotFound) {
 			writeError(w, http.StatusNotFound, "ticket not found")
 			return
 		}
@@ -113,6 +120,9 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 		// logger above keeps the diagnostic detail, and the public
 		// response stays generic to avoid leaking implementation
 		// hints (db rows, table names, internal IDs, ...).
+		// Note: 400 here is for genuine input-validation failures
+		// (invalid outcome, already-resolved business rule) — NOT
+		// for ticket-not-found, which is gated to 404 above.
 		writeError(w, http.StatusBadRequest, "resolve failed")
 		return
 	}

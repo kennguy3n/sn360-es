@@ -169,6 +169,54 @@ func TestEscalationHandler_RejectsCrossTenant(t *testing.T) {
 	}
 }
 
+// TestEscalationHandler_ServeResolve_NotFoundAndCrossTenantIndistinguishable
+// pins the architectural invariant that ticket-not-found and
+// cross-tenant-resolve must return the SAME status code and the SAME
+// response body. A regression that maps not-found to 400 and
+// tenant-mismatch to 404 (or vice versa) re-introduces the existence
+// fingerprinting vulnerability that the tenant-scoped store lookup
+// was built to close: an authenticated caller from tenant B could
+// otherwise probe a ticket ID and learn from the status code whether
+// it belongs to tenant A.
+func TestEscalationHandler_ServeResolve_NotFoundAndCrossTenantIndistinguishable(t *testing.T) {
+	svc := newTestEscalationService(t)
+	tk := seedTicket(t, svc) // owned by "acme"
+	h := NewEscalationHandler(nil, svc)
+
+	// Case 1: non-existent ticket ID (caller's own tenant).
+	body1, _ := json.Marshal(map[string]any{
+		"ticket_id":     "esc_doesnotexist000000000000000000000000",
+		"resolver_hash": "secops-1",
+		"outcome":       string(dto.OutcomeConfirmedPhishing),
+	})
+	req1 := withTenant(httptest.NewRequest(http.MethodPost, "/v1/escalation/resolve", strings.NewReader(string(body1))), tk.TenantID)
+	rec1 := httptest.NewRecorder()
+	h.ServeResolve(rec1, req1)
+
+	// Case 2: real ticket, cross-tenant attacker.
+	body2, _ := json.Marshal(map[string]any{
+		"ticket_id":     tk.TicketID,
+		"resolver_hash": "secops-1",
+		"outcome":       string(dto.OutcomeConfirmedPhishing),
+	})
+	req2 := withTenant(httptest.NewRequest(http.MethodPost, "/v1/escalation/resolve", strings.NewReader(string(body2))), "different-tenant")
+	rec2 := httptest.NewRecorder()
+	h.ServeResolve(rec2, req2)
+
+	if rec1.Code != http.StatusNotFound {
+		t.Fatalf("not-found case: expected 404, got %d (body=%s)", rec1.Code, rec1.Body.String())
+	}
+	if rec2.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant case: expected 404, got %d (body=%s)", rec2.Code, rec2.Body.String())
+	}
+	if rec1.Code != rec2.Code {
+		t.Fatalf("status code MUST be identical (existence leak): not-found=%d cross-tenant=%d", rec1.Code, rec2.Code)
+	}
+	if rec1.Body.String() != rec2.Body.String() {
+		t.Fatalf("response body MUST be byte-identical (existence leak):\n  not-found=%q\n  cross-tenant=%q", rec1.Body.String(), rec2.Body.String())
+	}
+}
+
 // TestEscalationHandler_RejectsUnauthenticated covers the
 // no-JWT-claim path. The handler must refuse the request with 401 so
 // missing auth cannot be papered over by a default tenant.
