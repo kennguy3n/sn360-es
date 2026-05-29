@@ -152,6 +152,18 @@ func (s *EscalationService) Escalate(ctx context.Context, tenantID string, incid
 	return ticket, nil
 }
 
+// ErrTicketTenantMismatch is returned by ResolveEscalation when the
+// caller-supplied tenantID does not match the ticket's TenantID. The
+// handler layer maps this to HTTP 404 (NOT 403) so the response is
+// indistinguishable from a non-existent ticket — returning 403 would
+// leak the existence of a ticket owned by a different tenant.
+//
+// Callers MUST use errors.Is(err, ErrTicketTenantMismatch) rather than
+// string-matching the error message, because the wrapped form includes
+// diagnostic context (caller-tenant, ticket-tenant) for the operator
+// log only.
+var ErrTicketTenantMismatch = errors.New("escalation: ticket tenant mismatch")
+
 // ResolveEscalation records the SecOps outcome and feeds it into the
 // training pipeline. tenantID is the authenticated caller's tenant
 // and must match the ticket's TenantID — the store filters on it so a

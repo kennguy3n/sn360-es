@@ -164,3 +164,39 @@ func TestMemoryTicketStore_RequiresTenantID(t *testing.T) {
 		t.Fatalf("Load(acme, esc_y) = (%+v, %v, %v); want ok=true", got, ok, err)
 	}
 }
+
+// TestEscalation_ResolveRejectsCrossTenant complements the store-level
+// check above with a service-level regression test: a caller from a
+// foreign tenant must not be able to resolve someone else's ticket.
+// The store filters by tenantID so the service Update returns
+// not-found, which the handler maps to HTTP 404 (indistinguishable
+// from a non-existent ticket — see PR #47 round 9).
+func TestEscalation_ResolveRejectsCrossTenant(t *testing.T) {
+	svc, _ := NewEscalationService(EscalationServiceConfig{Publisher: &fakeEscPub{}})
+	tk, err := svc.Escalate(context.Background(), "acme", dto.EscalationIncident{Reason: dto.EscalationReasonUserRequested})
+	if err != nil {
+		t.Fatalf("Escalate: %v", err)
+	}
+	// Caller tenant="globex" attempts to resolve acme's ticket.
+	if _, err := svc.ResolveEscalation(context.Background(), "globex", tk.TicketID, "soc-1", dto.OutcomeConfirmedPhishing, ""); err == nil {
+		t.Fatal("expected cross-tenant resolve to fail, got nil")
+	}
+	// Ticket must still be Pending — cross-tenant attempt must not
+	// have mutated state.
+	loaded, ok, err := svc.Load(context.Background(), "acme", tk.TicketID)
+	if err != nil || !ok {
+		t.Fatalf("Load after rejected resolve: ok=%v err=%v", ok, err)
+	}
+	if loaded.Outcome != dto.OutcomePending {
+		t.Fatalf("outcome must remain Pending, got %q", loaded.Outcome)
+	}
+}
+
+func TestEscalation_ResolveRequiresTenantID(t *testing.T) {
+	svc, _ := NewEscalationService(EscalationServiceConfig{Publisher: &fakeEscPub{}})
+	tk, _ := svc.Escalate(context.Background(), "acme", dto.EscalationIncident{Reason: dto.EscalationReasonUserRequested})
+	if _, err := svc.ResolveEscalation(context.Background(), "", tk.TicketID, "a", dto.OutcomeFalsePositive, ""); err == nil {
+		t.Fatal("expected error for empty tenant_id")
+	}
+}
+

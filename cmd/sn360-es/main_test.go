@@ -246,9 +246,13 @@ func TestBuildMux_RegistersAllRoutes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("seed ticket: %v", err)
 		}
-		// Pass the tenant through the test middleware (the JWT
-		// middleware is not wired in this test fixture; see the
-		// authedMux comment in TestBuildMux_RegistersAllRoutes).
+		// Round-trip with the tenant header set — the test middleware
+		// (authedMux above) seeds the request context with the same
+		// tenant key the JWT middleware would, so the handler's auth
+		// gate passes and the handler returns the seeded ticket. 200
+		// proves the route is wired AND the handler can reach its
+		// store; the explicit unauthenticated path (no header → 401)
+		// is exercised by internal/handler/escalation_test.go.
 		getReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/escalation/"+ticket.TicketID, nil)
 		getReq.Header.Set("X-Test-Tenant", "t-1")
 		resp, err := client.Do(getReq)
@@ -256,8 +260,8 @@ func TestBuildMux_RegistersAllRoutes(t *testing.T) {
 			t.Fatalf("get: %v", err)
 		}
 		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Errorf("status: got %d, want 401 (route wired, auth gate hit)", resp.StatusCode)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("status: got %d, want 200 (route wired, auth gate passed, ticket returned)", resp.StatusCode)
 		}
 	})
 }

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -66,6 +67,20 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusServiceUnavailable, "escalation service not configured")
 		return
 	}
+	// Auth gate before body parsing: an unauthenticated caller must
+	// not be able to fingerprint the request schema by observing
+	// 400-on-bad-JSON vs 200-on-success differences. Mirrors the
+	// ServeGet auth gate; the auth boundary is the handler's
+	// outermost ring, defense-in-depth above the service layer's
+	// mandatory tenantID parameter.
+	callerTenant := middleware.TenantIDFromContext(r.Context())
+	if callerTenant == "" {
+		h.logger.WarnContext(r.Context(), "escalation: unauthenticated POST /v1/escalation/resolve",
+			slog.String("remote", r.RemoteAddr),
+		)
+		writeError(w, http.StatusUnauthorized, "unauthorised")
+		return
+	}
 	var req resolveRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024))
 	dec.DisallowUnknownFields()
@@ -80,6 +95,16 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 	}
 	ticket, err := h.svc.ResolveEscalation(r.Context(), tenantID, req.TicketID, req.ResolverHash, req.Outcome, req.Notes)
 	if err != nil {
+		// Cross-tenant attempts return 404 (NOT 403) so the response
+		// is indistinguishable from a non-existent ticket. Returning
+		// 403 would leak the existence of a ticket owned by another
+		// tenant. The slog.WarnContext inside the service already
+		// captured the caller_tenant / ticket_tenant pair for the
+		// operator audit trail.
+		if errors.Is(err, agent.ErrTicketTenantMismatch) {
+			writeError(w, http.StatusNotFound, "ticket not found")
+			return
+		}
 		h.logger.WarnContext(r.Context(), "escalation: resolve failed",
 			slog.String("ticket_id", req.TicketID),
 			slog.Any("error", err),

@@ -288,6 +288,19 @@ func (r *AlertRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// Bound the request body so a malicious or misconfigured peer
+	// cannot exhaust router memory by streaming an unbounded payload.
+	// Alertmanager v4 webhook bodies are well under 1 MiB in practice
+	// (a 100-alert group is ~200 KiB); the 1 MiB limit gives several
+	// orders of magnitude of headroom for grouped flaps while keeping
+	// a hard ceiling. The bound mirrors the defensive pattern used by
+	// internal/handler/escalation.go (16 KiB there is tight because
+	// the resolve envelope is tiny; here we accept a larger window
+	// for grouped alerts). On overflow, json.Decode surfaces
+	// "http: request body too large" which the existing 400-on-decode
+	// branch logs + returns to the operator.
+	const maxAlertmanagerBody = 1 << 20 // 1 MiB
+	req.Body = http.MaxBytesReader(w, req.Body, maxAlertmanagerBody)
 	var payload AlertmanagerPayload
 	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
 		r.logger.Warn("ops.alert_router: decode failed",

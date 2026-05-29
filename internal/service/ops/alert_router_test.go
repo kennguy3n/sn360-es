@@ -254,6 +254,33 @@ func TestServeHTTP_MalformedBodyReturns400(t *testing.T) {
 	}
 }
 
+// TestServeHTTP_OversizedBodyReturns400 pins the http.MaxBytesReader
+// bound added to defend the router against an adversary streaming an
+// unbounded body. Anything beyond the 1 MiB limit must be rejected
+// at decode time with a 400 (the limit is well above realistic
+// grouped-alert payloads, so a real Alertmanager will never hit it).
+func TestServeHTTP_OversizedBodyReturns400(t *testing.T) {
+	r := newTestRouter(t, &fakeRemediator{}, &fakeEscalator{})
+	// Construct a body that decodes as a v4 payload prefix but
+	// trails with a long string. We feed > 1 MiB so MaxBytesReader
+	// trips during Decode.
+	var big strings.Builder
+	big.WriteString(`{"version":"4","status":"firing","alerts":[{"labels":{"x":"`)
+	// 1.5 MiB of 'A' inside a string field — well over the 1 MiB cap.
+	for i := 0; i < (1<<20)+(1<<19); i++ {
+		big.WriteByte('A')
+	}
+	big.WriteString(`"}}]}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(big.String()))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("oversized body status=%d; want %d (body should trip MaxBytesReader)", w.Code, http.StatusBadRequest)
+	}
+}
+
 func TestServeHTTP_UnsupportedVersionReturns400(t *testing.T) {
 	r := newTestRouter(t, &fakeRemediator{}, &fakeEscalator{})
 	body, _ := json.Marshal(AlertmanagerPayload{Version: "5", Status: "firing"})

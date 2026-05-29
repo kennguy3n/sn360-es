@@ -72,7 +72,7 @@ func seedTicket(t *testing.T, svc *agent.EscalationService) dto.EscalationTicket
 
 func TestEscalationHandler_ServeResolve_OK(t *testing.T) {
 	svc := newTestEscalationService(t)
-	tk := seedTicket(t, svc)
+	tk := seedTicket(t, svc) // owned by "acme"
 	h := NewEscalationHandler(nil, svc)
 
 	body, _ := json.Marshal(map[string]any{
@@ -107,6 +107,8 @@ func TestEscalationHandler_ServeResolve_Rejections(t *testing.T) {
 		body   string
 		want   int
 	}{
+		// method check runs before the auth gate (405 is a protocol
+		// signal that doesn't leak resource state).
 		{name: "wrong method", method: http.MethodGet, body: "", want: http.StatusMethodNotAllowed},
 		{name: "invalid JSON", method: http.MethodPost, body: "garbage", want: http.StatusBadRequest},
 		{name: "missing ticket_id", method: http.MethodPost, body: `{"outcome":"confirmed_phishing"}`, want: http.StatusBadRequest},
@@ -224,6 +226,7 @@ func TestEscalationHandler_AuthChecksBeforeBodyParsing(t *testing.T) {
 		})
 	}
 }
+
 
 func TestEscalationHandler_ServeGet_OK(t *testing.T) {
 	svc := newTestEscalationService(t)
