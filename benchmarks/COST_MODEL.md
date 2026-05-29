@@ -81,6 +81,31 @@ components, in order of contribution to the high-cohort total:
 7. **compute** — Container vCPU + memory. Role split + KEDA on
    NATS lag together drop consumer-role replica-seconds by ~15%
    at steady state versus CPU-target HPA.
+
+   **Caveat — role-split alone increases compute on a small
+   deployment.** Three separate Deployments (api / consumers /
+   workers) each carry their own `minReplicas` floor, so a
+   stand-alone role split adds at minimum 2 extra replicas of
+   baseline runtime versus the previous monolith Deployment.
+   The ~15% net saving comes from KEDA scaling the `consumers`
+   Deployment _down_ to its floor (1 replica) when NATS lag is
+   zero — the monolithic Deployment couldn't do that because
+   API liveness traffic kept the whole pod set above CPU-target.
+   Role-split and KEDA-on-lag are therefore claimed as a single
+   *combined* lever; the baseline-off snapshot in
+   `scripts/cost_model/project.py` toggles them together.
+
+   At the per-tenant unit-economics level the levers-on profile
+   is still strictly cheaper than baseline-off — the regression
+   suite pins this invariant via
+   `test_levers_on_strictly_cheaper` in
+   `scripts/cost_model/test_project.py`. The reason is that
+   savings from Tier 0 bypass (tenant-scoped cache hit-rate),
+   Tier 1 batch amortisation, native PG partitioning, and
+   PgBouncer connection multiplexing outweigh the extra replica
+   floor at the 1000-tenant density the chart is designed for.
+   See "Tenant density" further down for how the breakeven moves
+   with `tenants_per_deployment`.
 8. **egress** — NAT GW egress + hourly NAT GW shape. The hourly
    shape is shared across tenants; egress scales with outbound
    webhook + Bedrock invocation volume.

@@ -116,3 +116,76 @@ func TestDiff_ExactAllowDoesNotShadowDescendant(t *testing.T) {
 		t.Errorf("diff=%v; want %v (exact / must NOT mask /v1/secret)", got, want)
 	}
 }
+
+// TestLoadGoRoutes_StripsGo122MethodPrefix locks in the Go 1.22+
+// method-pattern support. The stdlib ServeMux accepts patterns like
+// `GET /v1/foo`; the gate must strip the method+space prefix so the
+// remaining path matches the OpenAPI form. Without this, every
+// method-pattern route would falsely appear "missing from spec".
+func TestLoadGoRoutes_StripsGo122MethodPrefix(t *testing.T) {
+	body := `package main
+import "net/http"
+func wire(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/users", nil)
+	mux.HandleFunc("POST /v1/users", nil)
+	mux.HandleFunc("DELETE /v1/users/{id}", nil)
+	mux.HandleFunc("PATCH /v1/users/{id}", nil)
+	mux.Handle("OPTIONS /v1/users", nil)
+}
+`
+	got, err := loadGoRoutes(writeTemp(t, "r.go", body))
+	if err != nil {
+		t.Fatalf("loadGoRoutes: %v", err)
+	}
+	// Methods are stripped; multiple methods on the same path
+	// produce duplicate entries — that is fine because loadGoRoutes
+	// is the raw extractor and normalizeSet de-duplicates downstream.
+	want := []string{
+		"/v1/users", "/v1/users", "/v1/users",
+		"/v1/users/{id}", "/v1/users/{id}",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got=%v want=%v", got, want)
+	}
+}
+
+// TestStripMethodPrefix exhaustively pins the method-prefix
+// stripping behaviour: every recognised stdlib HTTP method is
+// stripped, an unrecognised pseudo-method is left alone, and a path
+// that happens to contain a space without a method prefix is also
+// left alone.
+func TestStripMethodPrefix(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"GET /v1/foo", "/v1/foo"},
+		{"HEAD /v1/foo", "/v1/foo"},
+		{"POST /v1/foo", "/v1/foo"},
+		{"PUT /v1/foo", "/v1/foo"},
+		{"PATCH /v1/foo", "/v1/foo"},
+		{"DELETE /v1/foo", "/v1/foo"},
+		{"OPTIONS /v1/foo", "/v1/foo"},
+		{"CONNECT /v1/foo", "/v1/foo"},
+		{"TRACE /v1/foo", "/v1/foo"},
+		{"/v1/foo", "/v1/foo"},             // no prefix; unchanged
+		{"PURGE /v1/foo", "PURGE /v1/foo"}, // non-stdlib method; unchanged
+		{"/v1/foo bar", "/v1/foo bar"},     // path contains space; unchanged
+	}
+	for _, c := range cases {
+		if got := stripMethodPrefix(c.in); got != c.want {
+			t.Errorf("stripMethodPrefix(%q)=%q; want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestDiff_AllowOnlyInSpecExactMatch locks in the exact-match
+// semantics of allowOnlyInSpec (the parameter passed as `allowExact`
+// when checking the spec->go direction). Adding `/v1/foo` must NOT
+// allow-list `/v1/foobar`.
+func TestDiff_AllowOnlyInSpecExactMatch(t *testing.T) {
+	a := map[string]struct{}{"/v1/foo": {}, "/v1/foobar": {}}
+	b := map[string]struct{}{}
+	got := diff(a, b, nil, map[string]struct{}{"/v1/foo": {}})
+	want := []string{"/v1/foobar"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("diff=%v; want %v (allowOnlyInSpec must be exact-match, not prefix)", got, want)
+	}
+}

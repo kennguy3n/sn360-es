@@ -44,11 +44,11 @@
 //
 // Allow-list mechanism:
 //
-//   The internal endpoints (/healthz, /readyz, /metrics, /docs,
-//   /openapi.yaml, /l/, internal/ops/...) are NOT in the OpenAPI
-//   spec by design — they're operational endpoints, not customer
-//   API surface. The allow-list keeps them out of the "go has but
-//   spec lacks" failure mode.
+//	The internal endpoints (/healthz, /readyz, /metrics, /docs,
+//	/openapi.yaml, /l/, internal/ops/...) are NOT in the OpenAPI
+//	spec by design — they're operational endpoints, not customer
+//	API surface. The allow-list keeps them out of the "go has but
+//	spec lacks" failure mode.
 package main
 
 import (
@@ -95,7 +95,15 @@ var allowOnlyInGoExact = map[string]struct{}{
 // Empty by default — populate this only with a comment citing the
 // PR that will wire the route. The CI gate fails if the list grows
 // unbounded.
-var allowOnlyInSpec = []string{}
+//
+// Uses EXACT matching, not prefix matching, so adding `/v1/foo`
+// allow-lists only `/v1/foo` itself and not e.g. `/v1/foobar`.
+// The Go→Spec direction has both allowOnlyInGoPrefixes (for
+// subtree-style operational endpoints like `/healthz`) and
+// allowOnlyInGoExact (for true catch-alls like `/`); the Spec→Go
+// direction does not need a prefix variant because spec paths are
+// already fully-qualified.
+var allowOnlyInSpec = map[string]struct{}{}
 
 func main() {
 	openapiPath := flag.String("openapi", "api/openapi.yaml", "path to OpenAPI YAML")
@@ -116,7 +124,7 @@ func main() {
 	specNorm := normalizeSet(specPaths)
 	goNorm := normalizeSet(goPaths)
 
-	missingFromGo := diff(specNorm, goNorm, allowOnlyInSpec, nil)
+	missingFromGo := diff(specNorm, goNorm, nil, allowOnlyInSpec)
 	missingFromSpec := diff(goNorm, specNorm, allowOnlyInGoPrefixes, allowOnlyInGoExact)
 
 	if len(missingFromGo) == 0 && len(missingFromSpec) == 0 {
@@ -201,11 +209,46 @@ func loadGoRoutes(path string) ([]string, error) {
 		if len(s) >= 2 && (s[0] == '"' || s[0] == '`') {
 			s = s[1 : len(s)-1]
 		}
-		out = append(out, s)
+		out = append(out, stripMethodPrefix(s))
 		return true
 	})
 	sort.Strings(out)
 	return out, nil
+}
+
+// httpMethodPrefixes is the set of method tokens Go 1.22+'s
+// `http.ServeMux` recognises as a prefix to a route pattern, per the
+// stdlib net/http docs (`https://pkg.go.dev/net/http#ServeMux`). The
+// route pattern syntax is `[METHOD ][HOST]/[PATH]`; this gate is
+// concerned with the PATH component only, so we strip the
+// method+space prefix when present.
+var httpMethodPrefixes = []string{
+	"GET ",
+	"HEAD ",
+	"POST ",
+	"PUT ",
+	"PATCH ",
+	"DELETE ",
+	"OPTIONS ",
+	"CONNECT ",
+	"TRACE ",
+}
+
+// stripMethodPrefix removes a leading `METHOD ` token from a route
+// pattern (Go 1.22+ syntax) so the path matches the OpenAPI form.
+// Returns the input unchanged when no method prefix is present.
+//
+// Examples:
+//
+//	`GET /v1/foo`  -> `/v1/foo`
+//	`/v1/foo`      -> `/v1/foo`
+func stripMethodPrefix(p string) string {
+	for _, m := range httpMethodPrefixes {
+		if strings.HasPrefix(p, m) {
+			return p[len(m):]
+		}
+	}
+	return p
 }
 
 // normalizeSet maps each path through normalize() and returns the

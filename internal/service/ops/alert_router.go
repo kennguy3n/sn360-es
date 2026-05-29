@@ -16,14 +16,14 @@
 //
 // Architecture:
 //
-//	    Alertmanager ──webhook──▶ AlertRouter.ServeHTTP
-//	                                  │
-//	                                  ▼
-//	                          classify(alert) ──▶ (action, remediator, reason)
-//	                                  │
-//	                                  ├── action=runbook       ──▶ no-op (link in annotations)
-//	                                  ├── action=remediate     ──▶ remediator.Remediate(ctx, alert)
-//	                                  └── action=escalate      ──▶ escalation.Escalate(ctx, ...)
+//	Alertmanager ──webhook──▶ AlertRouter.ServeHTTP
+//	                              │
+//	                              ▼
+//	                      classify(alert) ──▶ (action, remediator, reason)
+//	                              │
+//	                              ├── action=runbook       ──▶ no-op (link in annotations)
+//	                              ├── action=remediate     ──▶ remediator.Remediate(ctx, alert)
+//	                              └── action=escalate      ──▶ escalation.Escalate(ctx, ...)
 //
 // The Remediator interface is pluggable so the production wiring
 // hooks the Kubernetes API client (rollout-restart, scale-up) and the
@@ -320,6 +320,26 @@ func (r *AlertRouter) dispatch(ctx context.Context, d Decision) {
 			r.logger.Error("ops.alert_router: remediation failed",
 				slog.String("alert", d.Alert.Labels["alertname"]),
 				slog.Any("error", err))
+			// Defense-in-depth: a failing remediator on a
+			// critical alert must NOT silently drop the incident.
+			// The nil-remediator branch of Classify already routes
+			// critical alerts to ActionEscalate; we want the same
+			// observable outcome when a wired remediator returns an
+			// error. Without this fallback, adding an alert to the
+			// remediation allow-list actually degrades error
+			// handling relative to leaving it off — the inverse of
+			// the intent.
+			//
+			// Lower severities deliberately do NOT fall back: a
+			// warning-level remediation failure is logged and left
+			// for the operator to triage from the alert-history
+			// dashboard. Escalating every warning would page humans
+			// for transient remediator hiccups (network blips,
+			// RBAC re-auth), defeating the autonomic point of the
+			// remediator.
+			if strings.EqualFold(d.Alert.Labels["severity"], "critical") {
+				r.escalateAfterRemediationFailure(ctx, d.Alert, err)
+			}
 			return
 		}
 		r.logger.Info("ops.alert_router: remediated",
@@ -338,6 +358,41 @@ func (r *AlertRouter) dispatch(ctx context.Context, d Decision) {
 			slog.String("alert", d.Alert.Labels["alertname"]),
 			slog.String("ticket_id", ticket.TicketID))
 	}
+}
+
+// escalateAfterRemediationFailure builds an escalation incident
+// derived from `a` but enriched with the remediation-failure
+// context (the wrapped err on Indicators, a `remediation_failed`
+// marker on AISummary) so the human SecOps engineer who picks up
+// the ticket immediately sees the autonomous remediator already
+// tried-and-failed. Used only by the critical-severity fallback
+// path inside dispatch(); not exported.
+func (r *AlertRouter) escalateAfterRemediationFailure(ctx context.Context, a Alert, remedErr error) {
+	incident := buildIncidentFromAlert(a, r.now())
+	// Prepend the remediation-failure marker so the operator sees
+	// it at the top of the ticket summary. The original summary
+	// follows so the alert's own context is preserved.
+	incident.AISummary = fmt.Sprintf(
+		"remediation_failed: %v | %s",
+		remedErr,
+		incident.AISummary,
+	)
+	// Add the remediator error as an indicator so it survives
+	// downstream JSON-marshal without being lost in a free-form
+	// summary string.
+	incident.Indicators = append(incident.Indicators, fmt.Sprintf("remediation_error:%v", remedErr))
+	ticket, escErr := r.escalator.Escalate(ctx, r.tenantID, incident)
+	if escErr != nil {
+		r.logger.Error("ops.alert_router: escalation after remediation failure also failed",
+			slog.String("alert", a.Labels["alertname"]),
+			slog.Any("remediation_error", remedErr),
+			slog.Any("escalation_error", escErr))
+		return
+	}
+	r.logger.Warn("ops.alert_router: escalated after remediation failure (critical-severity fallback)",
+		slog.String("alert", a.Labels["alertname"]),
+		slog.String("ticket_id", ticket.TicketID),
+		slog.Any("remediation_error", remedErr))
 }
 
 // buildIncidentFromAlert maps an Alertmanager alert onto the

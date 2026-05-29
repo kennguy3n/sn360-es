@@ -126,11 +126,47 @@ spec:
       interval: 1m
       rules:
         - alert: SN360ESWorkerCycleStalled
-          # worker_cycle_completed_total flatlines when a worker's
-          # Run() loop is stuck. Each worker should complete at
-          # least one cycle per interval; alert when none in 30m.
+          # Each worker should complete >=1 cycle per its configured
+          # interval; alert when none in 30m. Two failure modes need
+          # detecting separately because PromQL rate==0 and absent()
+          # have different semantics:
+          #
+          #   1. Worker ran once, then stalled. The counter exists,
+          #      so rate() returns 0 within the 5-minute staleness
+          #      window; `rate(...) == 0` catches this.
+          #
+          #   2. Worker never started. The counter never got
+          #      registered, so rate() returns no data. `absent_over_time`
+          #      on the per-worker counter detects this; we 'or' the
+          #      two so either failure mode fires the alert.
+          #
+          # Per-worker absence detection requires enumerating the
+          # worker names — we use the static set the application's
+          # `internal/service/worker/` package registers on boot via
+          # the Job.Name() interface. Adding a new worker requires
+          # adding its name here. Keep this list in sync with the
+          # *Job.Name() values; the worker_test.go suites lock the
+          # canonical strings.
           expr: |
-            sum by (worker) (rate(sn360_es_worker_cycle_completed_total[30m])) == 0
+            (
+              sum by (worker) (rate(sn360_es_worker_cycle_completed_total[30m])) == 0
+            )
+            or
+            (
+              label_replace(absent_over_time(sn360_es_worker_cycle_completed_total{worker="cleanup"}[30m]),                  "worker", "cleanup",                  "", "") == 1
+            )
+            or
+            (
+              label_replace(absent_over_time(sn360_es_worker_cycle_completed_total{worker="directory-sync"}[30m]),           "worker", "directory-sync",           "", "") == 1
+            )
+            or
+            (
+              label_replace(absent_over_time(sn360_es_worker_cycle_completed_total{worker="relationship-aggregation"}[30m]), "worker", "relationship-aggregation", "", "") == 1
+            )
+            or
+            (
+              label_replace(absent_over_time(sn360_es_worker_cycle_completed_total{worker="vendor-discovery"}[30m]),         "worker", "vendor-discovery",         "", "") == 1
+            )
           for: 30m
           labels:
             severity: critical
@@ -138,11 +174,12 @@ spec:
           annotations:
             summary: "Worker {{`{{ $labels.worker }}`}} has not completed a cycle in 30m"
             description: |
-              The cleanup / partition / relationship / vendor /
-              directory-sync workers each emit a counter on cycle
-              completion. A flatline indicates the Run() loop is
-              blocked or panicking — check pod logs and consider
-              a rollout-restart.
+              The cleanup, directory-sync, relationship-aggregation,
+              and vendor-discovery workers each emit a counter on
+              cycle completion. A flatline (rate==0) indicates the
+              Run() loop is stuck; an absent metric indicates the
+              worker never started. Either case warrants a pod
+              inspection and a rollout-restart.
 
     - name: ingestion
       interval: 30s
@@ -151,32 +188,40 @@ spec:
           # event_lag_seconds is the gauge KEDA scales on. If it
           # exceeds the SLO budget for 5 min, the consumers role
           # autoscaler hasn't caught up and we need human attention.
+          # The metric carries (bus, stream) labels — see
+          # pkg/telemetry/metrics.go EventLagSeconds registration.
           expr: |
-            max by (subject) (sn360_es_event_lag_seconds) > 60
+            max by (bus, stream) (sn360_es_event_lag_seconds) > 60
           for: 5m
           labels:
             severity: warning
             component: ingestion
           annotations:
-            summary: "Consumer lag on {{`{{ $labels.subject }}`}} above 60s"
+            summary: "Consumer lag on {{`{{ $labels.bus }}`}}:{{`{{ $labels.stream }}`}} above 60s"
             description: |
               KEDA should have scaled consumers up by now. Check
               consumer pod count vs KEDA ScaledObject maxReplicas;
               the autoscaler may be at its replica ceiling.
 
         - alert: SN360ESEventErrorsRising
+          # event_errors_total carries (bus, stream, stage) labels —
+          # see pkg/telemetry/metrics.go EventErrors registration.
+          # Group by (bus, stream) so the operator gets per-stream
+          # granularity; `stage` is summed over because a poison-pill
+          # typically affects one logical stream regardless of which
+          # stage in the handler chain rejects it.
           expr: |
-            sum by (subject) (rate(sn360_es_event_errors_total[5m])) > 0.5
+            sum by (bus, stream) (rate(sn360_es_event_errors_total[5m])) > 0.5
           for: 5m
           labels:
             severity: warning
             component: ingestion
           annotations:
-            summary: "Event errors on {{`{{ $labels.subject }}`}} above 0.5/s"
+            summary: "Event errors on {{`{{ $labels.bus }}`}}:{{`{{ $labels.stream }}`}} above 0.5/s"
             description: |
-              Consumer handler is erroring out. Check pod logs for
-              the subject; persistent errors indicate a poison-pill
-              message or a downstream dependency outage.
+              Consumer handler is erroring out on this stream.
+              Persistent errors indicate a poison-pill message or
+              a downstream dependency outage.
 
     - name: http-edge
       interval: 30s

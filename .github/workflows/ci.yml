@@ -174,7 +174,25 @@ jobs:
   build:
     name: Build & Publish
     runs-on: ubuntu-latest
-    needs: [lint, test, test-integration, security-scan]
+    # The build job gates the published image on every upstream
+    # quality check that has a deterministic verdict for the merge
+    # commit. In particular:
+    #
+    #   - migrate-check-online: a broken `down()` migration or a
+    #     non-idempotent `up()` migration must NOT reach the
+    #     image registry, because the operator runbook trusts
+    #     down-then-up as a recovery primitive. Gating here is the
+    #     last opportunity to catch it before tag.
+    #
+    #   - cost-model: the cost-model regression suite pins
+    #     contracts that benchmarks/COST_MODEL.md depends on (Tier 1
+    #     batch-efficiency multiplier, levers-on strictly cheaper
+    #     than baseline-off). Shipping an image whose lever-effect
+    #     constants drift from the docs is a documentation-bug, but
+    #     more importantly it would silently invalidate the
+    #     unit-economics dashboard. Treat it as a build-gating
+    #     contract.
+    needs: [lint, test, test-integration, migrate-check-online, cost-model, security-scan]
     steps:
       - uses: actions/checkout@v4
 

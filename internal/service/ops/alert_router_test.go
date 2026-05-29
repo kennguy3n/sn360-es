@@ -354,7 +354,10 @@ func TestServeHTTP_FailedRemediationStillReturns200(t *testing.T) {
 	// Alertmanager retries on non-200, which would multiply the
 	// remediation failure. The router swallows side-effect errors and
 	// surfaces them via logs + metrics, returning 200 so Alertmanager
-	// does not retry.
+	// does not retry. For a CRITICAL-severity alert, the router must
+	// also fall back to escalation so the incident does not silently
+	// vanish — see the defense-in-depth comment in
+	// alert_router.go's dispatch() ActionRemediate branch.
 	remed := &fakeRemediator{failOn: "SN360ESWorkerCycleStalled"}
 	esc := &fakeEscalator{}
 	r := newTestRouter(t, remed, esc)
@@ -365,7 +368,13 @@ func TestServeHTTP_FailedRemediationStillReturns200(t *testing.T) {
 			Labels: map[string]string{
 				"alertname": "SN360ESWorkerCycleStalled",
 				"severity":  "critical",
+				"component": "workers",
 			},
+			Annotations: map[string]string{
+				"summary":     "Worker stalled",
+				"runbook_url": "https://example.com/runbook",
+			},
+			Fingerprint: "fp-failed-remed-critical",
 		}},
 	}
 	body, _ := json.Marshal(payload)
@@ -374,6 +383,66 @@ func TestServeHTTP_FailedRemediationStillReturns200(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d (router must absorb side-effect errors)", w.Code)
+	}
+	// Remediator was invoked AND failed.
+	if got := remed.snapshot(); len(got) != 1 {
+		t.Fatalf("remediator calls=%d; want 1", len(got))
+	}
+	// Critical-severity fallback: the failure must produce an
+	// escalation ticket annotated with the remediation-failure
+	// context so the human operator sees the autonomous attempt
+	// already happened.
+	got := esc.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("escalator calls=%d; want 1 (critical-severity remediation-failure fallback)", len(got))
+	}
+	if !strings.Contains(got[0].AISummary, "remediation_failed:") {
+		t.Errorf("incident.AISummary=%q; want remediation_failed prefix", got[0].AISummary)
+	}
+	var sawRemedErrIndicator bool
+	for _, ind := range got[0].Indicators {
+		if strings.HasPrefix(ind, "remediation_error:") {
+			sawRemedErrIndicator = true
+			break
+		}
+	}
+	if !sawRemedErrIndicator {
+		t.Errorf("incident.Indicators=%v; want a remediation_error: entry", got[0].Indicators)
+	}
+}
+
+// TestServeHTTP_FailedRemediationOnWarningDoesNotEscalate locks in
+// the asymmetry between critical and warning severities for failed
+// remediation. Warnings stay logged-only; escalating them would page
+// humans for transient remediator hiccups, defeating the autonomic
+// point of the remediator allow-list.
+func TestServeHTTP_FailedRemediationOnWarningDoesNotEscalate(t *testing.T) {
+	remed := &fakeRemediator{failOn: "SN360ESWorkerCycleStalled"}
+	esc := &fakeEscalator{}
+	r := newTestRouter(t, remed, esc)
+	payload := AlertmanagerPayload{
+		Version: "4",
+		Alerts: []Alert{{
+			Status: "firing",
+			Labels: map[string]string{
+				"alertname": "SN360ESWorkerCycleStalled",
+				"severity":  "warning",
+				"component": "workers",
+			},
+		}},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+	if got := remed.snapshot(); len(got) != 1 {
+		t.Fatalf("remediator calls=%d; want 1", len(got))
+	}
+	if got := esc.count(); got != 0 {
+		t.Errorf("escalator calls=%d; want 0 (warning-severity failures stay logged)", got)
 	}
 }
 
