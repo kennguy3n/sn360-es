@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kennguy3n/sn360-es/internal/service/worker"
 )
 
 // TestPartitionTemplates_UseSinglePercentSpecifiers is the structural
@@ -152,4 +154,108 @@ func TestParsePartitionBound_RejectsUnknownShape(t *testing.T) {
 			t.Errorf("parsePartitionBound(%q) accepted unknown shape, want error", expr)
 		}
 	}
+}
+
+// TestPlanCleanupPruners covers the partition-worker / cleanup-worker
+// mutex decision tree the cleanup runner uses to pick which parent
+// tables to register row-level pruners for. The gate is the live
+// partition-runner reference (NOT cfg.Worker.PartitionInterval > 0)
+// so an init-failure on the partition runner falls back to row-level
+// retention instead of silently dropping all retention for the
+// partitioned tables. Devin Review flagged this on PR #46.
+//
+// Three states the function handles:
+//   1. partitionRunner != nil  →  partitioned-table pruners SKIPPED
+//      (partition worker is the live retention path). Only
+//      communication_histories is registered. PartitionFallback=false.
+//   2. partitionRunner == nil AND interval > 0 → init-failure path.
+//      All partitioned-table pruners registered as fallback;
+//      FallbackReason cites init failure.
+//   3. partitionRunner == nil AND interval == 0 → explicit opt-out.
+//      All partitioned-table pruners registered; FallbackReason
+//      cites operator disable.
+func TestPlanCleanupPruners(t *testing.T) {
+	parents := partitionedAppendOnlyTables()
+	if len(parents) == 0 {
+		t.Fatalf("partitionedAppendOnlyTables() returned no parents; the test would be vacuous")
+	}
+
+	t.Run("partition runner active skips partitioned pruners", func(t *testing.T) {
+		// Use a non-nil zero-value Runner — planCleanupPruners only
+		// reads identity (nil vs non-nil), it never calls methods
+		// on the runner. Constructing an empty struct is the
+		// stable way to express "wired" without pulling NewRunner's
+		// dependency chain into a unit test.
+		stub := &worker.Runner{}
+		plan := planCleanupPruners(stub, 24*time.Hour)
+		if plan.PartitionFallback {
+			t.Fatalf("PartitionFallback=true when runner is non-nil; want false")
+		}
+		if plan.FallbackReason != "" {
+			t.Errorf("FallbackReason=%q when runner is non-nil; want empty", plan.FallbackReason)
+		}
+		want := []string{"communication_histories"}
+		if !equalStringSlice(plan.Parents, want) {
+			t.Errorf("Parents=%v; want %v", plan.Parents, want)
+		}
+	})
+
+	t.Run("partition runner nil with interval>0 registers fallback pruners", func(t *testing.T) {
+		plan := planCleanupPruners(nil, 24*time.Hour)
+		if !plan.PartitionFallback {
+			t.Fatalf("PartitionFallback=false when runner is nil; want true")
+		}
+		if !strings.Contains(plan.FallbackReason, "init failed") {
+			t.Errorf("FallbackReason=%q; want one citing init failure", plan.FallbackReason)
+		}
+		// Every partitioned parent must be present in the plan,
+		// followed by communication_histories.
+		wantParents := make(map[string]struct{}, len(parents))
+		for _, p := range parents {
+			wantParents[p.Parent] = struct{}{}
+		}
+		gotPartitioned := plan.Parents[:len(plan.Parents)-1]
+		for _, got := range gotPartitioned {
+			if _, ok := wantParents[got]; !ok {
+				t.Errorf("Parents includes unexpected %q", got)
+			}
+			delete(wantParents, got)
+		}
+		if len(wantParents) > 0 {
+			t.Errorf("Parents missing partitioned parents: %v", wantParents)
+		}
+		if got := plan.Parents[len(plan.Parents)-1]; got != "communication_histories" {
+			t.Errorf("last parent=%q; want %q", got, "communication_histories")
+		}
+	})
+
+	t.Run("partition runner nil with interval==0 cites operator disable", func(t *testing.T) {
+		plan := planCleanupPruners(nil, 0)
+		if !plan.PartitionFallback {
+			t.Fatalf("PartitionFallback=false when interval is 0; want true")
+		}
+		if !strings.Contains(plan.FallbackReason, "disabled") {
+			t.Errorf("FallbackReason=%q; want one citing operator disable", plan.FallbackReason)
+		}
+		// Same parent set as the init-failure path.
+		if len(plan.Parents) != len(parents)+1 {
+			t.Errorf("Parents len=%d; want %d", len(plan.Parents), len(parents)+1)
+		}
+	})
+}
+
+// equalStringSlice is a tiny helper to keep the test body terse. We
+// use slices.Equal where available, but the project pins Go 1.25.0
+// and the helper makes the test resilient to a downgrade of the
+// minimum supported version.
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
