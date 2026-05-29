@@ -58,6 +58,12 @@ type Metrics struct {
 	HTTPRequests       *prometheus.CounterVec
 	HTTPRequestLatency *prometheus.HistogramVec
 	RateLimitedTotal   *prometheus.CounterVec
+	// RateLimitStoreErrorsTotal counts every rate-limit bucket-store
+	// failure, partitioned by backend ("memory", "redis"). An
+	// uptick on the redis label is the operator-visible signal that
+	// a Redis outage just kicked in and the limiter is either
+	// failing open or falling back to per-replica counting.
+	RateLimitStoreErrorsTotal *prometheus.CounterVec
 
 	// --- Ingestion polling ----------------------------------------
 	IngestionPolled      *prometheus.CounterVec
@@ -195,6 +201,9 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		RateLimitedTotal: b.counterVec("http_rate_limited_total",
 			"HTTP requests rejected by the per-IP rate limiter, partitioned by path.",
 			[]string{"path"}),
+		RateLimitStoreErrorsTotal: b.counterVec("http_rate_limit_store_errors_total",
+			"Rate-limit bucket store failures, partitioned by backend (memory|redis).",
+			[]string{"backend"}),
 		HTTPRequestLatency: b.histogramVec("http_request_latency_seconds",
 			"HTTP request latency in seconds, partitioned by method/route.",
 			latencyBuckets(),
