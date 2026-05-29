@@ -185,7 +185,10 @@ func withEnv(t *testing.T, m map[string]string) {
 }
 
 // validProdConfig returns a Config that passes validation in a
-// production-like environment.
+// production-like environment. KMSMasterKeyID is populated because
+// validate() refuses to load a prod config with KMS_USE_MOCK=false
+// and an empty key ARN — otherwise the URL rewriter would silently
+// fall back to the passthrough encryptor.
 func validProdConfig() Config {
 	return Config{
 		Environment: EnvironmentProd,
@@ -193,6 +196,7 @@ func validProdConfig() Config {
 		EventBus:    EventBusNATS,
 		HTTP:        HTTP{Port: 8080},
 		Score:       ScoreThresholds{Blocked: 90, HighRisk: 70, Warning: 50, Caution: 30, Info: 10},
+		AWS:         AWS{KMSMasterKeyID: "arn:aws:kms:us-east-1:000000000000:key/test"},
 	}
 }
 
@@ -888,5 +892,45 @@ func TestValidate_CORSWildcardAllowedInDev(t *testing.T) {
 	cfg.CORS.AllowedOrigins = []string{"*"}
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("CORS wildcard should be allowed in dev: %v", err)
+	}
+}
+
+// TestValidate_KMSMasterKeyIDRequiredInProd pins the boot-time guard
+// that refuses a production config with KMS_USE_MOCK=false and an
+// empty AWS_KMS_MASTER_KEY_ID. Without this guard the URL rewriter's
+// buildURLEncryptor would return an error, the caller in app.go
+// would log it as a warning, and the service would silently keep
+// running with URL rewriting and quarantine disabled — exactly the
+// "quiet downgrade" these production guards exist to prevent.
+func TestValidate_KMSMasterKeyIDRequiredInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.AWS.KMSMasterKeyID = ""
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for empty AWS_KMS_MASTER_KEY_ID in prod with KMS_USE_MOCK=false")
+	}
+}
+
+// TestValidate_KMSMasterKeyIDRequiredInProdWhitespace verifies the
+// guard is trim-aware: an operator who typed AWS_KMS_MASTER_KEY_ID=" "
+// (just whitespace) trips the same fail-closed path as an empty
+// value, not a "set-but-malformed" code path further downstream.
+func TestValidate_KMSMasterKeyIDRequiredInProdWhitespace(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.AWS.KMSMasterKeyID = "   "
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for whitespace-only AWS_KMS_MASTER_KEY_ID in prod")
+	}
+}
+
+// TestValidate_KMSMasterKeyIDEmptyAllowedInDev verifies the prod-only
+// gate does not leak into local dev: the URL rewriter falls back to
+// the passthrough encryptor with a warning in dev, which is the
+// supported local workflow.
+func TestValidate_KMSMasterKeyIDEmptyAllowedInDev(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Environment = EnvironmentDev
+	cfg.AWS.KMSMasterKeyID = ""
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("empty AWS_KMS_MASTER_KEY_ID should be allowed in dev: %v", err)
 	}
 }

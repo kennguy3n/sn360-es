@@ -1074,6 +1074,20 @@ func (c Config) validate() error {
 		if c.AWS.KMSUseMock {
 			return errors.New("KMS_USE_MOCK=true is not allowed in production environments (UAT/prod); current: " + string(c.Environment))
 		}
+		// With KMS_USE_MOCK=false a real KMS key ARN is the only
+		// thing standing between the URL rewriter and a passthrough
+		// encryptor that would store URL pre-images in Redis in
+		// plaintext. buildURLEncryptor refuses to construct the
+		// passthrough in prod, but the caller in app.go logs that
+		// error as a warning and continues — disabling URL
+		// rewriting and quarantine instead of crashing the
+		// process. That is a quiet downgrade, exactly what these
+		// production guards exist to prevent. Promote the check
+		// here so boot fails fast at config-load with a clear
+		// error before any wiring decides to run on without it.
+		if strings.TrimSpace(c.AWS.KMSMasterKeyID) == "" {
+			return errors.New("AWS_KMS_MASTER_KEY_ID is required in production environments (UAT/prod) when KMS_USE_MOCK=false; passthrough encryptor would store URL pre-images in Redis as plaintext")
+		}
 		// Transport-security skips never belong in prod. Refusing
 		// here at config-load gives operators a hard, immediate
 		// signal at boot rather than a silent compromise of the

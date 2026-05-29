@@ -140,8 +140,19 @@ func buildURLEncryptor(cfg *config.Config, logger *slog.Logger) (action.URLEncry
 	}
 	// Passthrough encryptor stores URL pre-images in Redis as plaintext.
 	// That is acceptable for local dev and CI but never in production —
-	// a Redis dump or rogue replica would leak every rewritten URL. Fail
-	// fast at boot rather than ship a quiet downgrade.
+	// a Redis dump or rogue replica would leak every rewritten URL.
+	//
+	// In a healthy UAT/prod boot this branch is unreachable because
+	// Config.validate() already refuses to load a production config
+	// with KMS_USE_MOCK=false and an empty AWS_KMS_MASTER_KEY_ID. The
+	// guard below is defense-in-depth so the passthrough encryptor
+	// cannot reach a production process even if some future call site
+	// bypasses validate() or constructs a Config in-memory without
+	// going through Load(). The caller in app.go logs this error as a
+	// warning and continues with URL rewriting disabled, which is the
+	// right behaviour in dev (where the validate() guard does not
+	// fire) but would be a silent downgrade in prod — hence the
+	// upstream validate() check.
 	if cfg.Environment.IsProduction() {
 		// KMS_USE_MOCK=true is itself refused in UAT/prod by
 		// Config.validate(); the only valid remediation in
