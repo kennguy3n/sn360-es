@@ -51,6 +51,13 @@ type BucketStore interface {
 // deny the request in this state.
 var ErrBucketStoreUnavailable = errors.New("rate-limit: bucket store unavailable")
 
+// ErrFallbackStore wraps errors from the FailureModeFallback store
+// so an OnStoreError callback (which fires for BOTH primary and
+// fallback failures) can distinguish them with errors.Is. The
+// wrap is opt-in for metric labels — callers can ignore it and
+// still see the underlying error via errors.Unwrap.
+var ErrFallbackStore = errors.New("rate-limit: fallback store error")
+
 // RateLimitConfig configures per-IP token-bucket rate limiting.
 //
 // The middleware maintains one bucket per remote IP. Each bucket
@@ -299,6 +306,14 @@ func (rl *RateLimiter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // callers that wired Redis as the primary store: a Redis outage
 // degrades correctness (back to per-replica buckets) but not
 // availability.
+//
+// OnStoreError fires for the primary store error AND for any
+// fallback-store error — the fallback path is also load-bearing
+// (a dead Redis with a misconfigured / dead memory fallback is a
+// real failure mode worth alerting on) and operators monitoring
+// the RateLimitStoreErrorsTotal metric need both signals to
+// distinguish "primary degraded, fallback healthy" from "both
+// dead, requests are failing open".
 func (rl *RateLimiter) take(ctx context.Context, ip string) (bool, time.Duration, error) {
 	allowed, retry, err := rl.store.Take(ctx, ip, rl.cfg.Rate, rl.cfg.Burst)
 	if err == nil {
@@ -311,7 +326,16 @@ func (rl *RateLimiter) take(ctx context.Context, ip string) (bool, time.Duration
 		rl.logger.WarnContext(ctx, "rate-limit: primary store unavailable, using fallback",
 			slog.String("client_key", ip),
 			slog.Any("error", err))
-		return rl.cfg.FailureModeFallback.Take(ctx, ip, rl.cfg.Rate, rl.cfg.Burst)
+		fbAllowed, fbRetry, fbErr := rl.cfg.FailureModeFallback.Take(ctx, ip, rl.cfg.Rate, rl.cfg.Burst)
+		if fbErr != nil && rl.cfg.OnStoreError != nil {
+			// Wrap so the metric callback can distinguish primary
+			// vs fallback by errors.Is(err, ErrFallbackStore) if
+			// it wants to. The wrap doesn't change the
+			// availability semantics — the request still fails
+			// through to handleStoreError below.
+			rl.cfg.OnStoreError(fmt.Errorf("%w: %v", ErrFallbackStore, fbErr), ip)
+		}
+		return fbAllowed, fbRetry, fbErr
 	}
 	return false, 0, err
 }
