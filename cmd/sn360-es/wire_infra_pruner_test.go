@@ -150,3 +150,31 @@ func TestRunBatchedPrune_BailsOnRowsAffectedUnknown(t *testing.T) {
 		t.Fatalf("calls: got %d, want 1", calls)
 	}
 }
+
+// TestRunBatchedPrune_NonPositiveBatchSizeReturnsZero pins the
+// defensive guard against a non-positive batchSize. Without it, the
+// short-read termination condition (`n < int64(batchSize)`) would
+// be unreachable for any non-negative RowsAffected, spinning the
+// pruner loop indefinitely. The only production caller passes the
+// const pgPruneBatchSize = 5000, so this guard is hardening for
+// any future caller that builds batchSize from configuration.
+func TestRunBatchedPrune_NonPositiveBatchSizeReturnsZero(t *testing.T) {
+	for _, bad := range []int{0, -1, -5000} {
+		called := false
+		batch := func(_ context.Context) (int64, bool, error) {
+			called = true
+			t.Fatalf("batch should not be invoked when batchSize=%d", bad)
+			return 0, false, nil
+		}
+		total, err := runBatchedPrune(context.Background(), bad, batch)
+		if err != nil {
+			t.Errorf("runBatchedPrune(batchSize=%d): %v", bad, err)
+		}
+		if total != 0 {
+			t.Errorf("runBatchedPrune(batchSize=%d): total=%d, want 0", bad, total)
+		}
+		if called {
+			t.Errorf("runBatchedPrune(batchSize=%d) invoked the batch closure", bad)
+		}
+	}
+}

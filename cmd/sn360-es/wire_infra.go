@@ -962,6 +962,16 @@ type pruneBatchFn func(ctx context.Context) (rows int64, rowsAffectedUnknown boo
 // (see wire_infra_pruner_test.go) without spinning up a real
 // Postgres connection.
 func runBatchedPrune(ctx context.Context, batchSize int, batch pruneBatchFn) (int64, error) {
+	// Defensive guard: a non-positive batchSize would make the
+	// short-read termination condition (`n < int64(batchSize)`)
+	// unreachable for any non-negative RowsAffected, spinning the
+	// loop indefinitely. The only production caller passes the
+	// const pgPruneBatchSize = 5000, so this is hardening for
+	// any future caller that builds batchSize from configuration
+	// or test inputs.
+	if batchSize <= 0 {
+		return 0, nil
+	}
 	var total int64
 	for {
 		if err := ctx.Err(); err != nil {

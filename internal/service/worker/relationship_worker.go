@@ -811,7 +811,7 @@ func (j *VendorJob) Run(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		rows, err := j.cfg.Communications.ListByTenant(ctx, t.ID, since, 10000)
+		rows, err := j.cfg.Communications.ListByTenant(ctx, t.ID, since, repository.CommHistoryListByTenantMaxLimit)
 		if err != nil {
 			j.logger.Warn("worker.vendor: list communication histories failed",
 				slog.String("tenant_id", t.ID), slog.Any("error", err))
