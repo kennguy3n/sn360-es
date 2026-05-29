@@ -33,15 +33,24 @@ type Metrics struct {
 	BannerRenderLatency *prometheus.HistogramVec
 
 	// --- Detection pipeline (PROPOSAL §8) --------------------------
-	Tier0Bypass      *prometheus.CounterVec
-	Tier1Inferences  *prometheus.CounterVec
-	Tier1Latency     *prometheus.HistogramVec
-	Tier2Escalations *prometheus.CounterVec
-	Tier2Latency     *prometheus.HistogramVec
-	RspamdLatency    *prometheus.HistogramVec
-	EvaluateLatency  *prometheus.HistogramVec
-	EvaluateOutcome  *prometheus.CounterVec
-	EvaluateDegraded *prometheus.CounterVec
+	Tier0Bypass     *prometheus.CounterVec
+	Tier1Inferences *prometheus.CounterVec
+	Tier1Latency    *prometheus.HistogramVec
+	// Tier1BatchLegacyPayloadTotal counts every es.evaluate.request
+	// message that arrived on the batch consumer in the legacy flat
+	// dto.EvaluateRequest shape (instead of the canonical
+	// BatchMessage{Request, Signals} wrapper). The orchestrator
+	// processes both, but a non-zero rate here means at least one
+	// upstream publisher has not migrated and the legacy decoder
+	// branch cannot be removed yet. Partitioned by tenant so the
+	// operator can pinpoint which publisher fleet still needs to roll.
+	Tier1BatchLegacyPayloadTotal *prometheus.CounterVec
+	Tier2Escalations             *prometheus.CounterVec
+	Tier2Latency                 *prometheus.HistogramVec
+	RspamdLatency                *prometheus.HistogramVec
+	EvaluateLatency              *prometheus.HistogramVec
+	EvaluateOutcome              *prometheus.CounterVec
+	EvaluateDegraded             *prometheus.CounterVec
 
 	// --- Education service ----------------------------------------
 	SimulationSent  *prometheus.CounterVec
@@ -145,6 +154,9 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		Tier1Inferences: b.counterVec("tier1_inferences_total",
 			"Tier 1 encoder inferences, partitioned by verdict.",
 			[]string{"verdict"}),
+		Tier1BatchLegacyPayloadTotal: b.counterVec("tier1_batch_legacy_payload_total",
+			"Tier 1 batch orchestrator received a legacy flat dto.EvaluateRequest payload (publisher has not migrated to BatchMessage), partitioned by tenant.",
+			[]string{"tenant"}),
 		Tier1Latency: b.histogramVec("tier1_inference_latency_seconds",
 			"Tier 1 encoder inference latency.",
 			latencyBuckets(),

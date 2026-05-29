@@ -819,7 +819,7 @@ func Load() (Config, error) {
 			// tier1 package. Whenever the platform default changes,
 			// update both locations.
 			SuppressPartner: getInt("TIER1_SUPPRESS_PARTNER", -10),
-			BatchEnabled:    getBool("TIER1_BATCH_ENABLED", false),
+			BatchEnabled:    getBool("TIER1_BATCH_ENABLED", true),
 		},
 		SensitivityBonsaiURL:     getStr("SENSITIVITY_BONSAI_URL", ""),
 		SensitivityBonsaiTimeout: getDuration("SENSITIVITY_BONSAI_TIMEOUT", 30*time.Second),

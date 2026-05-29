@@ -142,6 +142,17 @@ type BatchOrchestratorConfig struct {
 
 	// Logger is the structured logger (default slog.Default()).
 	Logger *slog.Logger
+
+	// OnLegacyPayload is invoked once per message that arrives on
+	// the request subject in the legacy flat dto.EvaluateRequest
+	// wire-format (instead of the canonical BatchMessage wrapper).
+	// The orchestrator decodes both shapes transparently so flipping
+	// TIER1_BATCH_ENABLED on is safe even when upstream publishers
+	// haven't migrated yet; this callback lets the composition root
+	// surface a metric (e.g. tier1_batch_legacy_payload_total) so
+	// operators can observe whether their fleet still has unmigrated
+	// publishers. Nil disables the callback.
+	OnLegacyPayload func(req dto.EvaluateRequest)
 }
 
 // BatchMessage is the canonical event payload consumed by the batch
@@ -305,13 +316,27 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 	}
 	pendings := make([]pending, 0, len(msgs))
 	for _, m := range msgs {
-		var bm BatchMessage
-		if err := json.Unmarshal(m.Data(), &bm); err != nil {
+		bm, legacy, derr := decodeEvaluatePayload(m.Data())
+		if derr != nil {
 			o.log.Warn("evaluate: decode failed; nak",
 				slog.String("subject", m.Subject()),
-				slog.String("err", err.Error()))
+				slog.String("err", derr.Error()))
 			_ = m.Nak(5 * time.Second)
 			continue
+		}
+		if legacy && o.cfg.OnLegacyPayload != nil {
+			// Surface the legacy-shape arrival to the
+			// composition root. Wrapped in a small guard so a
+			// callback panic never breaks the inner loop.
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						o.log.Warn("evaluate: OnLegacyPayload panicked",
+							slog.Any("recover", r))
+					}
+				}()
+				o.cfg.OnLegacyPayload(bm.Request)
+			}()
 		}
 		// Enrich the producer-supplied signals with per-relationship
 		// state (TypicalSendHour, CommunicationFrequency,
@@ -597,4 +622,56 @@ func tier0BypassResult(req dto.EvaluateRequest, outcome dto.Tier0Outcome) dto.Ev
 		res.ReasonCodes = append(res.ReasonCodes, outcome.Reason)
 	}
 	return res
+}
+
+// decodeEvaluatePayload accepts both the canonical [BatchMessage]
+// wrapper shape and the legacy flat [dto.EvaluateRequest] shape on the
+// `es.evaluate.request` subject. It returns the BatchMessage form the
+// rest of the orchestrator expects, a `legacy` flag indicating which
+// wire-format was on the wire, and a decode error.
+//
+// Why both shapes are accepted. Historically the per-message
+// `handleEvaluateRequest` consumer expected a flat
+// `dto.EvaluateRequest` on `es.evaluate.request` while the batch
+// orchestrator expected a `BatchMessage{Request, Signals}` wrapper. A
+// deployment that flipped `TIER1_BATCH_ENABLED=true` without rolling
+// every upstream publisher in lockstep would NAK every message and
+// land them in the DLQ — see `internal/docs/ARCHITECTURE.md`
+// "TIER1_BATCH_ENABLED wire-format dependency". This decoder removes
+// the lockstep requirement: the orchestrator tolerates either shape so
+// a phased rollout (batch consumer first, publishers later) is safe.
+//
+// Detection. Both shapes share a top-level `signals` key (
+// dto.EvaluateRequest carries Signals at the same JSON path that
+// BatchMessage publishes them), but they differ on `request`. The
+// BatchMessage wrapper is detected by the presence of a non-empty
+// `Request.MessageID` after the first decode; if MessageID is empty
+// we fall back to decoding into a flat `dto.EvaluateRequest`.
+//
+// `legacy` is true when the flat shape was used. The orchestrator
+// invokes `OnLegacyPayload` once per legacy message so operators can
+// surface the misconfiguration via Prometheus and gate the eventual
+// removal of the tolerance.
+func decodeEvaluatePayload(data []byte) (BatchMessage, bool, error) {
+	var bm BatchMessage
+	if err := json.Unmarshal(data, &bm); err != nil {
+		return BatchMessage{}, false, err
+	}
+	if bm.Request.MessageID != "" {
+		return bm, false, nil
+	}
+	// Wrapped-shape failed to populate Request.MessageID; try flat.
+	var flat dto.EvaluateRequest
+	if err := json.Unmarshal(data, &flat); err != nil {
+		// The first unmarshal succeeded structurally so this branch
+		// is unlikely, but guard anyway — a deeply-nested type
+		// mismatch could fail the second decode and we'd rather nak
+		// than process an empty request.
+		return BatchMessage{}, false, err
+	}
+	if flat.MessageID == "" {
+		// Genuinely malformed — caller will NAK.
+		return BatchMessage{}, false, errors.New("evaluate: payload missing message_id (neither BatchMessage.Request nor flat dto.EvaluateRequest)")
+	}
+	return BatchMessage{Request: flat, Signals: flat.Signals}, true, nil
 }
