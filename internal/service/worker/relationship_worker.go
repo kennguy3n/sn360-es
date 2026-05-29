@@ -485,8 +485,30 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 	// tenant's ID in the set (the per-row error path above does
 	// `continue`, not skip the set insert), so the prune does NOT
 	// drop tenants whose data plane is briefly unreachable.
+	//
+	// CRITICAL: skip the prune entirely when iterErr is non-nil.
+	// A partial IterateActive failure (e.g. ctx cancellation
+	// between batches, DB timeout on batch N of M) leaves
+	// activeTenantIDs containing ONLY the tenants from completed
+	// batches; tenants in the unreached batches are missing from
+	// the set even though they exist. Pruning against that
+	// incomplete set would delete watermarks for valid tenants
+	// and force every in-window row to be re-sampled into the
+	// behavioral baseline histogram on the next cycle — defeating
+	// the double-counting protection the watermark provides and
+	// corrupting the timing-anomaly baseline the Tier 0 ATO
+	// heuristic depends on. The old List-based path had this
+	// invariant for free (List either returned the full set or
+	// returned an error before prune); the IterateActive port
+	// must re-establish it explicitly.
+	//
+	// On iterErr == nil the iteration walked every batch, so
+	// activeTenantIDs is the authoritative set of live tenants
+	// and the prune is safe. On the next successful cycle the
+	// stale watermarks (if any persisted from cycles that
+	// errored) will be cleaned up.
 	pruned := 0
-	if len(j.lastCycleStartedAt) > 0 {
+	if iterErr == nil && len(j.lastCycleStartedAt) > 0 {
 		for tenantID := range j.lastCycleStartedAt {
 			if _, ok := activeTenantIDs[tenantID]; !ok {
 				delete(j.lastCycleStartedAt, tenantID)
