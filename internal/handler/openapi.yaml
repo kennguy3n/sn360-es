@@ -205,6 +205,37 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
 
+  /v1/escalation/{ticket_id}:
+    get:
+      tags: [escalation]
+      summary: Fetch an escalation ticket by ID
+      description: |
+        Returns the structured ticket payload (incident, timeline,
+        outcome) for the supplied ticket_id. The caller's tenant is
+        verified against the ticket's TenantID — cross-tenant
+        accesses return 404, not the ticket, to avoid leaking the
+        existence of a ticket from a different tenant.
+      parameters:
+        - in: path
+          name: ticket_id
+          required: true
+          schema:
+            type: string
+          description: Ticket identifier returned by the escalation publisher.
+      responses:
+        "200":
+          description: Ticket found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EscalationTicket"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+
   /v1/dashboard/summary:
     get:
       tags: [dashboard]
@@ -684,6 +715,57 @@ components:
           type: string
         ticket_id:
           type: string
+
+    EscalationTicket:
+      type: object
+      description: |
+        Structured incident record returned by GET
+        /v1/escalation/{ticket_id}. Pseudonymised — never carries
+        raw subject / sender / body content.
+      properties:
+        ticket_id:
+          type: string
+        tenant_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        reason:
+          type: string
+          enum: [confirmed_breach, account_compromise, zero_day_attachment, ai_low_confidence, user_requested]
+        incident:
+          type: object
+          properties:
+            pseudo_message_id: { type: string }
+            tier: { type: string }
+            category: { type: string }
+            reason: { type: string }
+            score: { type: number }
+            affected_user_count: { type: integer }
+            ai_summary: { type: string }
+            indicators:
+              type: array
+              items: { type: string }
+            detected_at: { type: string, format: date-time }
+        timeline:
+          type: array
+          items:
+            type: object
+            properties:
+              occurred_at: { type: string, format: date-time }
+              step: { type: string }
+              detail: { type: string }
+        outcome:
+          type: string
+          enum: ["", confirmed_phishing, false_positive, requires_hunting, closed_no_action]
+        resolved_at:
+          type: string
+          format: date-time
+        resolver_hash:
+          type: string
+        resolution_notes:
+          type: string
+      required: [ticket_id, tenant_id, created_at, reason]
 
     DashboardSummary:
       type: object

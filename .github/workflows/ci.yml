@@ -89,6 +89,56 @@ jobs:
       - name: make test-integration
         run: make test-integration
 
+  migrate-check-online:
+    name: Migration Round-Trip (online)
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Verify Docker is available
+        run: |
+          docker version
+          docker info
+
+      - name: make migrate-check-online
+        # Boots a transient Postgres, applies all migrations up,
+        # rolls them all back, then re-applies — catches broken
+        # down() migrations and non-idempotent up() at PR time.
+        # See Makefile for the rationale.
+        run: make migrate-check-online
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v --remove-orphans
+
+  cost-model:
+    name: Cost Model Regression Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run cost-model regression tests
+        # The cost-model script in scripts/cost_model/project.py
+        # underpins benchmarks/COST_MODEL.md. The tests pin the
+        # batch-efficiency multiplier and the levers-on-strictly-
+        # cheaper-than-baseline-off invariant. A failure here means
+        # someone changed the cost levers in a way that violates
+        # the documented assumptions — those changes need a doc
+        # update in the same PR.
+        run: python -m unittest scripts/cost_model/test_project.py
+
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
