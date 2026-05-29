@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -203,6 +204,60 @@ func TestRateLimiter_PrimaryUnavailable_FallsBackToSecondaryStore(t *testing.T) 
 	}
 	if primary.calls.Load() != 1 {
 		t.Fatalf("primary.calls=%d want=1", primary.calls.Load())
+	}
+}
+
+// TestRateLimiter_FallbackError_FiresOnStoreError verifies that
+// when BOTH primary and fallback stores fail, OnStoreError fires
+// for each — operators monitoring
+// `RateLimitStoreErrorsTotal{role="fallback"}` need a separate
+// signal from `role="primary"` to distinguish "primary down,
+// fallback healthy" (degraded but available) from "both down,
+// requests failing open" (real outage).
+func TestRateLimiter_FallbackError_FiresOnStoreError(t *testing.T) {
+	t.Parallel()
+	primary := &stubBucketStore{
+		err: fmt.Errorf("%w: redis dial: connection refused", middleware.ErrBucketStoreUnavailable),
+	}
+	fallback := &stubBucketStore{
+		err: errors.New("memory store: pool exhausted"),
+	}
+	backend := &countedHandler{}
+	var (
+		mu        sync.Mutex
+		callbacks []error
+	)
+	rl := middleware.NewRateLimiter(backend, middleware.RateLimitConfig{
+		Rate:                10,
+		Burst:               5,
+		Store:               primary,
+		FailureModeFallback: fallback,
+		FailureMode:         middleware.FailureModeClosed,
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		OnStoreError: func(err error, _ string) {
+			mu.Lock()
+			callbacks = append(callbacks, err)
+			mu.Unlock()
+		},
+	})
+	defer rl.Stop()
+
+	rec := httptest.NewRecorder()
+	rl.ServeHTTP(rec, newRequest(t, "10.0.0.1", "/v1/things"))
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(callbacks) != 2 {
+		t.Fatalf("OnStoreError fired %d time(s), want 2 (primary + fallback)", len(callbacks))
+	}
+	// First call should be the primary error.
+	if !errors.Is(callbacks[0], middleware.ErrBucketStoreUnavailable) {
+		t.Errorf("callback[0] = %v, want wrap of ErrBucketStoreUnavailable", callbacks[0])
+	}
+	// Second call should carry the ErrFallbackStore sentinel so
+	// metric labellers can split primary from fallback.
+	if !errors.Is(callbacks[1], middleware.ErrFallbackStore) {
+		t.Errorf("callback[1] = %v, want wrap of ErrFallbackStore", callbacks[1])
 	}
 }
 
