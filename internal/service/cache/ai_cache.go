@@ -17,14 +17,21 @@ import (
 	redisclient "github.com/kennguy3n/sn360-es/pkg/storage/redis"
 )
 
-// ErrMissingTenantID is returned when a cache operation is called without
-// a tenant ID. Every AI cache entry is tenant-scoped: a Tier 2 verdict
-// depends on per-tenant context (vendor list, org graph, sensitivity
-// tier), so sharing a verdict across tenants is both a correctness bug
-// (wrong verdict for the second tenant) and a cost side-channel (tenant
-// A subsidises tenant B's inference). Tenant ID is therefore mandatory
-// and validated at the entry of every public method.
-var ErrMissingTenantID = errors.New("ai_cache: tenant id is required")
+// ErrMissingTenantID is returned when any tenant-scoped cache operation
+// is called without a tenant ID. Every cache entry in this package is
+// tenant-scoped: an AICache verdict depends on per-tenant Tier 2
+// context (vendor list, org graph, sensitivity tier) and an RspamdCache
+// entry is keyed by the raw-mail content addressed to a specific
+// tenant. Sharing either across tenants is both a correctness bug
+// (wrong verdict for the second tenant) and a cost / timing side-channel
+// (tenant A could observe whether tenant B has already cached a
+// particular mail). Tenant ID is therefore mandatory and validated at
+// the entry of every public method on both caches.
+//
+// The error string uses the neutral `cache:` prefix because this
+// sentinel is shared by AICache and RspamdCache — an `ai_cache:` prefix
+// would mislead operators reading Rspamd-path logs.
+var ErrMissingTenantID = errors.New("cache: tenant id is required")
 
 // AIResult is the cached AI verdict. It is intentionally minimal so the
 // cache stays small and the schema is stable.

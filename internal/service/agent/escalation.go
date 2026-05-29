@@ -15,6 +15,21 @@ import (
 	"github.com/kennguy3n/sn360-es/pkg/events"
 )
 
+// ErrTicketTenantIDRequired is returned whenever a TicketStore method
+// is invoked with an empty tenant ID. Every ticket is hard-scoped to a
+// tenant — see the TicketStore interface comment for rationale — so a
+// missing tenantID is an unrecoverable contract violation. Exported as
+// a sentinel so callers (and tests) can `errors.Is(err, …)` instead of
+// matching the message string.
+//
+// Validation is duplicated at both the service layer (Escalate /
+// ResolveEscalation / Load) and the store layer (Save / Load / Update)
+// as defense in depth: a future caller that bypasses the service and
+// calls the store directly cannot accidentally write a ticket under a
+// blank-tenant key — which would otherwise be readable by any caller
+// passing a blank tenantID.
+var ErrTicketTenantIDRequired = errors.New("escalation: tenant_id is required")
+
 // EscalationPublisher is the minimal contract the escalation service
 // needs from the event bus.
 type EscalationPublisher interface {
@@ -90,7 +105,7 @@ func NewEscalationService(cfg EscalationServiceConfig) (*EscalationService, erro
 // and publishes `es.action.escalation.created` on the bus.
 func (s *EscalationService) Escalate(ctx context.Context, tenantID string, incident dto.EscalationIncident) (dto.EscalationTicket, error) {
 	if tenantID == "" {
-		return dto.EscalationTicket{}, errors.New("escalation: tenant_id is required")
+		return dto.EscalationTicket{}, ErrTicketTenantIDRequired
 	}
 	if !incident.Reason.Valid() {
 		return dto.EscalationTicket{}, fmt.Errorf("escalation: invalid reason %q", incident.Reason)
@@ -144,7 +159,7 @@ func (s *EscalationService) Escalate(ctx context.Context, tenantID string, incid
 // resolving someone else's ticket.
 func (s *EscalationService) ResolveEscalation(ctx context.Context, tenantID, ticketID string, resolverHash string, outcome dto.EscalationOutcome, notes string) (dto.EscalationTicket, error) {
 	if tenantID == "" {
-		return dto.EscalationTicket{}, errors.New("escalation: tenant_id is required")
+		return dto.EscalationTicket{}, ErrTicketTenantIDRequired
 	}
 	if ticketID == "" {
 		return dto.EscalationTicket{}, errors.New("escalation: ticket_id is required")
@@ -199,7 +214,7 @@ func (s *EscalationService) ResolveEscalation(ctx context.Context, tenantID, tic
 // another tenant" (avoids the timing / response-shape oracle).
 func (s *EscalationService) Load(ctx context.Context, tenantID, ticketID string) (dto.EscalationTicket, bool, error) {
 	if tenantID == "" {
-		return dto.EscalationTicket{}, false, errors.New("escalation: tenant_id is required")
+		return dto.EscalationTicket{}, false, ErrTicketTenantIDRequired
 	}
 	return s.store.Load(ctx, tenantID, ticketID)
 }
@@ -253,24 +268,40 @@ type memoryTicketKey struct {
 	ticketID string
 }
 
-// Save implements TicketStore.
+// Save implements TicketStore. Refuses to persist a ticket with an
+// empty TenantID — otherwise the entry would land under a
+// no-tenant key that any caller passing a blank tenantID could read.
+// The service layer already validates Escalate's tenantID before
+// constructing the ticket, but the store enforces the same invariant
+// so a direct caller cannot bypass it.
 func (m *MemoryTicketStore) Save(_ context.Context, t dto.EscalationTicket) error {
+	if t.TenantID == "" {
+		return ErrTicketTenantIDRequired
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.tickets[memoryTicketKey{tenantID: t.TenantID, ticketID: t.TicketID}] = t
 	return nil
 }
 
-// Load implements TicketStore.
+// Load implements TicketStore. Refuses an empty tenantID for the
+// same defense-in-depth reason as Save.
 func (m *MemoryTicketStore) Load(_ context.Context, tenantID, ticketID string) (dto.EscalationTicket, bool, error) {
+	if tenantID == "" {
+		return dto.EscalationTicket{}, false, ErrTicketTenantIDRequired
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	t, ok := m.tickets[memoryTicketKey{tenantID: tenantID, ticketID: ticketID}]
 	return t, ok, nil
 }
 
-// Update implements TicketStore.
+// Update implements TicketStore. Refuses an empty tenantID for the
+// same defense-in-depth reason as Save.
 func (m *MemoryTicketStore) Update(_ context.Context, tenantID, ticketID string, mutate func(*dto.EscalationTicket) error) (dto.EscalationTicket, error) {
+	if tenantID == "" {
+		return dto.EscalationTicket{}, ErrTicketTenantIDRequired
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := memoryTicketKey{tenantID: tenantID, ticketID: ticketID}

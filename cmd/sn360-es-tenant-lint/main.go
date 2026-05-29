@@ -122,15 +122,23 @@ var tableREs = func() map[string]*regexp.Regexp {
 	return out
 }()
 
-// excludedFiles is paths the linter never inspects. Migrations
-// (`migrations/`) are SQL files (not Go) so they are excluded
-// automatically by the .go filter, but Go files that legitimately
-// store SQL test fixtures or schema-introspection code can be added
-// here.
-var excludedFiles = []string{
+// excludedDirs is the set of repo-relative directory prefixes the
+// linter never inspects. Migrations (`migrations/`) are SQL files
+// (not Go) so they are excluded automatically by the .go filter, but
+// Go files that legitimately store SQL test fixtures or schema-
+// introspection code can be added here.
+var excludedDirs = []string{
 	"cmd/sn360-es-tenant-lint/", // the linter itself contains table names in strings
 	"cmd/sn360-es-migrate/",     // migration tool inspects schema by design
-	"_test.go",                  // tests legitimately exercise edge cases
+}
+
+// excludedSuffixes is the set of filename suffixes the linter never
+// inspects. Kept separate from excludedDirs so the check is a precise
+// HasSuffix — a `strings.Contains` would mis-match any path that
+// happens to embed `_test.go` as a substring (e.g. a directory named
+// `foo_test.go_helper/`).
+var excludedSuffixes = []string{
+	"_test.go", // tests legitimately exercise edge cases
 }
 
 // statementRE matches the first SQL keyword in a candidate string.
@@ -215,8 +223,16 @@ func main() {
 			return nil
 		}
 		rel, _ := filepath.Rel(absRoot, path)
-		for _, ex := range excludedFiles {
-			if strings.Contains(rel, ex) {
+		// Normalize separators so the excluded-dir prefixes (which use
+		// `/`) match on Windows hosts that walk with `\`.
+		relSlash := filepath.ToSlash(rel)
+		for _, ex := range excludedDirs {
+			if strings.HasPrefix(relSlash, ex) {
+				return nil
+			}
+		}
+		for _, ex := range excludedSuffixes {
+			if strings.HasSuffix(relSlash, ex) {
 				return nil
 			}
 		}

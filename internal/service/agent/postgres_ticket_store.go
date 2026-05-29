@@ -44,8 +44,15 @@ type ticketContext struct {
 	Timeline []dto.EscalationStep   `json:"timeline,omitempty"`
 }
 
-// Save implements TicketStore.
+// Save implements TicketStore. Refuses to persist a ticket with an
+// empty TenantID — the schema's tenant_id column is NOT NULL and the
+// INSERT would fail at the database, but failing fast in Go gives a
+// clearer error and skips the round-trip. Same defense-in-depth
+// rationale as MemoryTicketStore.Save.
 func (s *PostgresTicketStore) Save(ctx context.Context, t dto.EscalationTicket) error {
+	if t.TenantID == "" {
+		return ErrTicketTenantIDRequired
+	}
 	payload, err := json.Marshal(ticketContext{Incident: t.Incident, Timeline: t.Timeline})
 	if err != nil {
 		return fmt.Errorf("escalation: marshal context: %w", err)
@@ -102,6 +109,9 @@ func (s *PostgresTicketStore) Save(ctx context.Context, t dto.EscalationTicket) 
 // tenant_id so a caller cannot fetch another tenant's ticket by
 // guessing or by being passed a ticket_number from logs.
 func (s *PostgresTicketStore) Load(ctx context.Context, tenantID, ticketID string) (dto.EscalationTicket, bool, error) {
+	if tenantID == "" {
+		return dto.EscalationTicket{}, false, ErrTicketTenantIDRequired
+	}
 	const q = `
         SELECT tenant_id, ticket_number, trigger_reason, context,
                assigned_to, resolved_at, resolution, resolution_code,
@@ -155,6 +165,9 @@ func (s *PostgresTicketStore) Load(ctx context.Context, tenantID, ticketID strin
 // not race on the same ticket. Like Load, the (tenant_id, ticket_number)
 // pair is required to scope the SELECT FOR UPDATE.
 func (s *PostgresTicketStore) Update(ctx context.Context, tenantID, ticketID string, mutate func(*dto.EscalationTicket) error) (dto.EscalationTicket, error) {
+	if tenantID == "" {
+		return dto.EscalationTicket{}, ErrTicketTenantIDRequired
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return dto.EscalationTicket{}, fmt.Errorf("escalation: postgres update: begin: %w", err)
