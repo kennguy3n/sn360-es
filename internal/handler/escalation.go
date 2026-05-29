@@ -67,20 +67,6 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusServiceUnavailable, "escalation service not configured")
 		return
 	}
-	// Auth gate before body parsing: an unauthenticated caller must
-	// not be able to fingerprint the request schema by observing
-	// 400-on-bad-JSON vs 200-on-success differences. Mirrors the
-	// ServeGet auth gate; the auth boundary is the handler's
-	// outermost ring, defense-in-depth above the service layer's
-	// mandatory tenantID parameter.
-	callerTenant := middleware.TenantIDFromContext(r.Context())
-	if callerTenant == "" {
-		h.logger.WarnContext(r.Context(), "escalation: unauthenticated POST /v1/escalation/resolve",
-			slog.String("remote", r.RemoteAddr),
-		)
-		writeError(w, http.StatusUnauthorized, "unauthorised")
-		return
-	}
 	var req resolveRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024))
 	dec.DisallowUnknownFields()
@@ -102,13 +88,14 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 		// exist in tenant A by probing the endpoint:
 		//   - 404 "ticket not found"  -> doesn't exist OR belongs to another tenant
 		//   - 400 "resolve failed"    -> exists, belongs to me, but blocked by a business rule
-		// Returning 403 (or a distinct 404 body) for the tenant-mismatch
+		// Returning 403 (or a distinct 404 body) for the cross-tenant
 		// case would leak ticket-existence to cross-tenant attackers,
-		// which is the very invariant the service-layer tenant check
-		// was added to enforce. The slog.WarnContext inside the service
-		// already captured the caller_tenant / ticket_tenant pair for
-		// the operator audit trail.
-		if errors.Is(err, agent.ErrTicketTenantMismatch) || errors.Is(err, agent.ErrTicketNotFound) {
+		// which is the very invariant the store-level (tenant_id,
+		// ticket_id) compound lookup was added to enforce. The store
+		// collapses "wrong tenant" and "not present" into the same
+		// ErrTicketNotFound sentinel; the handler reflects that into
+		// the wire surface as an indistinguishable 404.
+		if errors.Is(err, agent.ErrTicketNotFound) {
 			writeError(w, http.StatusNotFound, "ticket not found")
 			return
 		}

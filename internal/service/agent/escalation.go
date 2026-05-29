@@ -152,29 +152,19 @@ func (s *EscalationService) Escalate(ctx context.Context, tenantID string, incid
 	return ticket, nil
 }
 
-// ErrTicketTenantMismatch is returned by ResolveEscalation when the
-// caller-supplied tenantID does not match the ticket's TenantID. The
-// handler layer maps this to HTTP 404 (NOT 403) so the response is
-// indistinguishable from a non-existent ticket — returning 403 would
-// leak the existence of a ticket owned by a different tenant.
-//
-// Callers MUST use errors.Is(err, ErrTicketTenantMismatch) rather than
-// string-matching the error message, because the wrapped form includes
-// diagnostic context (caller-tenant, ticket-tenant) for the operator
-// log only.
-var ErrTicketTenantMismatch = errors.New("escalation: ticket tenant mismatch")
-
 // ErrTicketNotFound is returned by the TicketStore implementations
 // (Memory + Postgres) when a Load/Update targets a ticket ID that
-// doesn't exist. The handler layer maps this to HTTP 404 with the
-// SAME response body as ErrTicketTenantMismatch — returning a
-// distinguishable code (400 vs 404, or different bodies) would let an
-// authenticated caller from tenant B fingerprint which ticket IDs
-// belong to tenant A by probing the resolve endpoint.
+// either does not exist OR belongs to a different tenant — both
+// failure modes collapse to the same sentinel because the store's
+// (tenant_id, ticket_id) compound lookup cannot distinguish them.
+// That collapse is the security contract: the handler MUST map this
+// to HTTP 404 with a generic body so an authenticated caller from
+// tenant B cannot fingerprint which ticket IDs belong to tenant A by
+// probing the resolve / get endpoints (a distinguishable 403 vs 404
+// would leak the existence of a cross-tenant ticket).
 //
-// This sentinel is the architectural counterpart to ErrTicketTenantMismatch:
-// the two together fully define the “ticket invisibly absent” response
-// surface so the handler doesn't have to string-match store errors.
+// Callers should use errors.Is(err, ErrTicketNotFound) rather than
+// string-matching the error message.
 var ErrTicketNotFound = errors.New("escalation: ticket not found")
 
 // ResolveEscalation records the SecOps outcome and feeds it into the
