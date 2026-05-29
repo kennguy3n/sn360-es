@@ -41,6 +41,19 @@ import (
 //   - rate and burst may change between calls (e.g. per-tenant
 //     limits) — Take must validate every call rather than assuming
 //     they were checked at construction.
+//   - Eviction is the implementation's responsibility — the
+//     RateLimiter does NOT track per-client state outside the
+//     store. Implementations MUST either evict idle entries
+//     themselves (e.g. Redis via PEXPIRE) OR implement
+//     [IdleSweeper] so the RateLimiter's janitor can call them.
+//     A custom in-process store that does neither will leak
+//     memory on every unique clientKey it ever sees; the
+//     RateLimiter logs a warning at construction time when a
+//     custom store is wired as [RateLimitConfig.FailureModeFallback]
+//     without implementing IdleSweeper, but cannot detect the
+//     same gap on the primary [RateLimitConfig.Store] (Redis
+//     stores are the typical primary and do not need
+//     IdleSweeper).
 type BucketStore interface {
 	Take(ctx context.Context, clientKey string, rate float64, burst int) (allowed bool, retryAfter time.Duration, err error)
 }
@@ -67,6 +80,21 @@ var ErrFallbackStore = errors.New("rate-limit: fallback store error")
 //
 // Redis-backed stores intentionally do NOT implement this — Redis
 // handles its own eviction via PEXPIRE on the per-bucket key.
+//
+// CONTRACT FOR CUSTOM BUCKET STORES: any in-process BucketStore
+// implementation that accumulates per-client state and is wired
+// as [RateLimitConfig.FailureModeFallback] MUST implement this
+// interface. The RateLimiter's janitor uses an interface probe
+// (cfg.FailureModeFallback.(IdleSweeper)) to decide whether to
+// run; a fallback that does not satisfy IdleSweeper will silently
+// accumulate entries during every Redis outage until the process
+// restarts. A warning is logged at NewRateLimiter time when this
+// gap is detected so misconfiguration surfaces operationally
+// instead of as an OOMKill weeks later.
+//
+// Returns the number of entries evicted in this sweep, used by
+// the RateLimiter for janitor metrics. May return 0 (no idle
+// entries) without error.
 type IdleSweeper interface {
 	SweepIdle(now time.Time, idleTTL time.Duration) int
 }
@@ -273,7 +301,29 @@ func NewRateLimiter(next http.Handler, cfg RateLimitConfig) *RateLimiter {
 		// during a Redis outage. We detect that case by probing
 		// for the IdleSweeper interface.
 		rl.store = cfg.Store
-		if _, ok := cfg.FailureModeFallback.(IdleSweeper); ok && cfg.CleanupInterval > 0 {
+		_, fallbackSweeps := cfg.FailureModeFallback.(IdleSweeper)
+		// Warn loudly when a non-IdleSweeper fallback is wired.
+		// The probe above will silently skip the janitor for
+		// that store, which means an operator who plugged in a
+		// custom BucketStore without reading the interface
+		// contract will only see the memory leak as an OOMKill
+		// weeks into a Redis outage. Logging at construction
+		// time gives them a chance to fix the misconfiguration
+		// before it bites. Stays at WARN (not FATAL) because
+		// some custom stores genuinely self-evict (e.g. a
+		// stateless adapter that proxies to another Redis); the
+		// contract documents that case as the implementer's
+		// responsibility to assert.
+		if cfg.FailureModeFallback != nil && !fallbackSweeps {
+			logger.Warn(
+				"rate-limit: FailureModeFallback does not implement IdleSweeper; "+
+					"per-client entries may leak during primary-store outages. "+
+					"Custom BucketStore implementations wired as fallback must implement "+
+					"IdleSweeper or guarantee self-eviction (see BucketStore docstring).",
+				slog.String("fallback_type", fmt.Sprintf("%T", cfg.FailureModeFallback)),
+			)
+		}
+		if fallbackSweeps && cfg.CleanupInterval > 0 {
 			go rl.runJanitor()
 		} else {
 			close(rl.stopped)

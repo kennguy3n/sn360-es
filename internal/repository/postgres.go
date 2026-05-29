@@ -135,16 +135,28 @@ func (p *pgTenants) IterateActive(ctx context.Context, batchSize int, yield func
 	if batchSize <= 0 {
 		batchSize = defaultIterateBatchSize
 	}
-	// Cursor: (lastName, lastID). The (>, >) tuple comparison
-	// expressed as (name > $1) OR (name = $1 AND id > $2) gives
-	// strict ordering after the previous batch's last row.
+	// Cursor: (lastName, lastID), tracked alongside `hasCursor`
+	// so the first batch can run without ANY name/id predicate.
+	//
+	// Devin Review caught a defence-in-depth gap on the prior
+	// implementation: it always issued `name > $1 OR ...` with
+	// $1 = "" for the first batch and relied on the implicit
+	// `tenants(name)` UNIQUE-constraint invariant that no row
+	// has an empty name. That invariant holds today through
+	// Tenants.Create validation, but encoding it as a load-
+	// bearing assumption inside a generic keyset helper means a
+	// future bypass (a backdoor admin insert, a future seed
+	// fixture, a schema change relaxing NOT NULL) would silently
+	// skip the first row on every iteration. Using a separate
+	// flag for the first batch removes that coupling.
 	var lastName string
 	var lastID string
+	hasCursor := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		batch, err := p.fetchTenantBatch(ctx, lastName, lastID, batchSize)
+		batch, err := p.fetchTenantBatch(ctx, hasCursor, lastName, lastID, batchSize)
 		if err != nil {
 			return err
 		}
@@ -157,6 +169,7 @@ func (p *pgTenants) IterateActive(ctx context.Context, batchSize int, yield func
 		last := batch[len(batch)-1]
 		lastName = last.Name
 		lastID = last.ID
+		hasCursor = true
 		if len(batch) < batchSize {
 			return nil
 		}
@@ -167,16 +180,35 @@ func (p *pgTenants) IterateActive(ctx context.Context, batchSize int, yield func
 // rows. Pulled out so `defer rows.Close()` handles cleanup (including
 // the gosec/errcheck unhandled-error concern) regardless of which
 // branch returns first.
-func (p *pgTenants) fetchTenantBatch(ctx context.Context, lastName, lastID string, batchSize int) ([]Tenant, error) {
+//
+// `hasCursor` toggles the WHERE clause between two regimes:
+//
+//   - false (first batch): the cursor predicate is short-circuited
+//     to TRUE so every active row is eligible. Postgres folds the
+//     `TRUE OR ...` branch out of the plan; the practical query is
+//     `WHERE deleted_at IS NULL ORDER BY name, id LIMIT N`.
+//
+//   - true (subsequent batches): the cursor predicate enforces
+//     strict ordering after the previous batch's last (name, id)
+//     row via the tuple comparison
+//     `(name > $2) OR (name = $2 AND id::text > $3)`.
+//
+// This avoids the empty-string sentinel that the prior implementation
+// relied on (cursor=`("", "")` for the first batch). The empty-
+// string approach worked only because every tenant has a non-empty
+// name today, an implicit invariant from Tenants.Create validation;
+// the flagged regime decouples first-batch correctness from that
+// invariant entirely.
+func (p *pgTenants) fetchTenantBatch(ctx context.Context, hasCursor bool, lastName, lastID string, batchSize int) ([]Tenant, error) {
 	rows, err := p.db.QueryContext(ctx, `
 SELECT id,name,display_name,provider,primary_domain,region,kms_key_arn,score_base,retention_days,
        locale,status,metadata,created_at,updated_at
   FROM tenants
  WHERE deleted_at IS NULL
-   AND (name > $1 OR (name = $1 AND id::text > $2))
+   AND (NOT $1::boolean OR name > $2 OR (name = $2 AND id::text > $3))
  ORDER BY name, id
- LIMIT $3
-`, lastName, lastID, batchSize)
+ LIMIT $4
+`, hasCursor, lastName, lastID, batchSize)
 	if err != nil {
 		return nil, err
 	}
