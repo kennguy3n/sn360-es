@@ -1,0 +1,62 @@
+{{- /*
+  KEDA ScaledObject for the consumers role.
+
+  When enabled, KEDA owns the HPA lifecycle for the consumers
+  Deployment (KEDA creates and manages a HorizontalPodAutoscaler
+  underneath) and scales by the Prometheus `event_lag_seconds`
+  metric instead of CPU.
+
+  Why this matters: a NATS consumer can be CPU-idle while the
+  Tier-2 SLM upstream is slow, which lets backlog (lag) grow
+  unboundedly. CPU-based HPA misses that mode entirely. KEDA on
+  lag closes the gap and gives operators a tunable lag SLO via
+  `lagThresholdSeconds` (the per-replica lag the cluster is
+  willing to tolerate).
+
+  Requirements:
+    - KEDA operator installed (kedacore/keda chart, namespace `keda`).
+    - Prometheus reachable at `prometheusServerAddress`.
+    - The `event_lag_seconds{component="consumer"}` metric
+      exported by the binary. The metric is registered in
+      internal/telemetry and incremented by the consumer loop's
+      lag-reporting tick; it is present on the monolith today
+      and continues to work on the role-split topology because
+      the consumers role still imports the telemetry package.
+
+  Mutual exclusivity with the per-role HPA: when keda.enabled is
+  true, the per-role HPA template (`hpa-role.yaml`) skips emission
+  for ALL roles to avoid duplicate ownership warnings. If you
+  want CPU-based HPA on api + workers with KEDA on consumers,
+  you can either (a) extend this template to scope KEDA-only to
+  consumers and keep HPA for the others (preferred) or (b)
+  manage api/workers manually. Going with (a) here.
+*/}}
+{{- if and .Values.roleSplit.enabled .Values.keda.enabled }}
+{{- if hasKey .Values.roleSplit.roles "consumers" }}
+{{- $ctx := . }}
+{{- $cfg := .Values.keda.consumers }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "sn360-es.roleFullname" (dict "ctx" $ctx "role" "consumers") }}
+  labels:
+    {{- include "sn360-es.roleLabels" (dict "ctx" $ctx "role" "consumers") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "sn360-es.roleFullname" (dict "ctx" $ctx "role" "consumers") }}
+  pollingInterval: {{ $cfg.pollingInterval }}
+  cooldownPeriod: {{ $cfg.cooldownPeriod }}
+  minReplicaCount: {{ $cfg.minReplicaCount }}
+  maxReplicaCount: {{ $cfg.maxReplicaCount }}
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: {{ $cfg.prometheusServerAddress | quote }}
+        metricName: event_lag_seconds
+        threshold: {{ $cfg.lagThresholdSeconds | quote }}
+        query: |-
+          {{- $cfg.query | nindent 10 }}
+{{- end }}
+{{- end }}

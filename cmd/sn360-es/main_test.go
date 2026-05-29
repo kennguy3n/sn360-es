@@ -74,7 +74,10 @@ func newTestApp(t *testing.T) *application {
 	cfg := &config.Config{
 		AppName:     "sn360-es-test",
 		Environment: config.EnvironmentLocal,
-		EventBus:    config.EventBusNATS,
+		// Default to RoleAll so existing tests get the full mux.
+		// Role-specific tests override this on the returned app.
+		Role:     config.RoleAll,
+		EventBus: config.EventBusNATS,
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -249,6 +252,72 @@ func TestBuildMux_RegistersAllRoutes(t *testing.T) {
 			t.Errorf("status: got %d, want 200", resp.StatusCode)
 		}
 	})
+}
+
+// TestBuildMux_RoleGating confirms that the role enum collapses
+// the mux to /healthz, /readyz, /metrics, /docs* for non-API
+// roles. Consumer and worker pods still need probes + scrapes,
+// but they MUST refuse /v1/* — otherwise a slow Tier-2 SLM call
+// on a consumer pod can stall HTTP request handling, which is
+// exactly the noisy-neighbour failure the role split exists to
+// fix.
+func TestBuildMux_RoleGating(t *testing.T) {
+	roleCases := []struct {
+		role        config.Role
+		businessOK  bool
+		probesOK    bool
+		description string
+	}{
+		{config.RoleAll, true, true, "all"},
+		{config.RoleAPI, true, true, "api"},
+		{config.RoleConsumers, false, true, "consumers"},
+		{config.RoleWorkers, false, true, "workers"},
+	}
+	for _, tc := range roleCases {
+		t.Run(tc.description, func(t *testing.T) {
+			app := newTestApp(t)
+			app.cfg.Role = tc.role
+			mux, err := buildMux(app)
+			if err != nil {
+				t.Fatalf("buildMux: %v", err)
+			}
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+
+			// Probes + metrics — always mounted.
+			for _, p := range []string{"/healthz", "/readyz", "/metrics"} {
+				resp, err := srv.Client().Get(srv.URL + p)
+				if err != nil {
+					t.Fatalf("get %s: %v", p, err)
+				}
+				_ = resp.Body.Close()
+				gotOK := resp.StatusCode == http.StatusOK
+				if gotOK != tc.probesOK {
+					t.Errorf("%s: status %d, want OK=%v", p, resp.StatusCode, tc.probesOK)
+				}
+			}
+
+			// Business route probe — banner action. Under
+			// non-API roles the mux must return 404 (route not
+			// mounted); under API-capable roles it must return
+			// something other than 404 (mounted, handler runs).
+			req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/banner/action",
+				strings.NewReader(`{}`))
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatalf("post banner action: %v", err)
+			}
+			_ = resp.Body.Close()
+			is404 := resp.StatusCode == http.StatusNotFound
+			if tc.businessOK && is404 {
+				t.Errorf("/v1/banner/action returned 404 under role %s, but business routes should be mounted", tc.role)
+			}
+			if !tc.businessOK && !is404 {
+				t.Errorf("/v1/banner/action returned %d under role %s, want 404 (business routes must be suppressed)", resp.StatusCode, tc.role)
+			}
+		})
+	}
 }
 
 // TestBuildMux_RequiresApp guards against a buildMux refactor that

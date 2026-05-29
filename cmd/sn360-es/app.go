@@ -925,65 +925,93 @@ func (a *application) Close(logger *slog.Logger) {
 
 // StartBackground starts the poller + worker goroutines.
 func (a *application) StartBackground(ctx context.Context) {
-	a.spawn(ctx, "ingestion poller", func(ctx context.Context) error {
-		if a.poller == nil {
+	role := a.cfg.Role
+
+	// Role gating. Each background goroutine belongs to exactly
+	// one role bucket:
+	//
+	//   consumers — ingestion poller, push subscription setup /
+	//               renewal. These pull mail or maintain the
+	//               provider-side webhook registration, both of
+	//               which are part of the consumer role's mandate.
+	//   workers   — periodic jobs (relationship, vendor, cleanup,
+	//               directory sync).
+	//   all roles — in-process cache janitors. These keep memory
+	//               bounded for any role that touches the cache;
+	//               the cost is a single goroutine per cache so
+	//               the gating cost is zero.
+	if role.RunsConsumers() {
+		a.spawn(ctx, "ingestion poller", func(ctx context.Context) error {
+			if a.poller == nil {
+				return nil
+			}
+			return a.poller.Run(ctx)
+		})
+		a.spawn(ctx, "push subscription setup", func(ctx context.Context) error {
+			if a.pushManager == nil {
+				return nil
+			}
+			// SetupSubscriptions performs IO against each provider's
+			// subscription API and may take seconds per tenant. Run it
+			// as a one-shot background goroutine so it doesn't block
+			// the HTTP listener boot — the renewal loop below covers
+			// recovery if a subscription failed to register on this
+			// pass (renew falls through to Subscribe on missing IDs).
+			if err := a.pushManager.SetupSubscriptions(ctx); err != nil {
+				a.logger.Warn("sn360-es: push subscription setup completed with errors",
+					slog.Any("error", err))
+			}
 			return nil
-		}
-		return a.poller.Run(ctx)
-	})
-	a.spawn(ctx, "push subscription setup", func(ctx context.Context) error {
-		if a.pushManager == nil {
+		})
+		a.spawn(ctx, "push subscription renewal", func(ctx context.Context) error {
+			if a.pushManager == nil {
+				return nil
+			}
+			a.pushManager.RenewLoop(ctx)
 			return nil
-		}
-		// SetupSubscriptions performs IO against each provider's
-		// subscription API and may take seconds per tenant. Run it
-		// as a one-shot background goroutine so it doesn't block
-		// the HTTP listener boot — the renewal loop below covers
-		// recovery if a subscription failed to register on this
-		// pass (renew falls through to Subscribe on missing IDs).
-		if err := a.pushManager.SetupSubscriptions(ctx); err != nil {
-			a.logger.Warn("sn360-es: push subscription setup completed with errors",
-				slog.Any("error", err))
-		}
-		return nil
-	})
-	a.spawn(ctx, "push subscription renewal", func(ctx context.Context) error {
-		if a.pushManager == nil {
-			return nil
-		}
-		a.pushManager.RenewLoop(ctx)
-		return nil
-	})
-	a.spawn(ctx, "relationship worker", func(ctx context.Context) error {
-		if a.relationshipRunner == nil {
-			return nil
-		}
-		return a.relationshipRunner.Run(ctx)
-	})
-	a.spawn(ctx, "vendor worker", func(ctx context.Context) error {
-		if a.vendorRunner == nil {
-			return nil
-		}
-		return a.vendorRunner.Run(ctx)
-	})
-	a.spawn(ctx, "cleanup worker", func(ctx context.Context) error {
-		if a.cleanupRunner == nil {
-			return nil
-		}
-		return a.cleanupRunner.Run(ctx)
-	})
-	a.spawn(ctx, "directory sync worker", func(ctx context.Context) error {
-		if a.directorySyncRunner == nil {
-			return nil
-		}
-		return a.directorySyncRunner.Run(ctx)
-	})
-	a.spawn(ctx, "partition worker", func(ctx context.Context) error {
-		if a.partitionRunner == nil {
-			return nil
-		}
-		return a.partitionRunner.Run(ctx)
-	})
+		})
+	}
+
+	if role.RunsWorkers() {
+		a.spawn(ctx, "relationship worker", func(ctx context.Context) error {
+			if a.relationshipRunner == nil {
+				return nil
+			}
+			return a.relationshipRunner.Run(ctx)
+		})
+		a.spawn(ctx, "vendor worker", func(ctx context.Context) error {
+			if a.vendorRunner == nil {
+				return nil
+			}
+			return a.vendorRunner.Run(ctx)
+		})
+		a.spawn(ctx, "cleanup worker", func(ctx context.Context) error {
+			if a.cleanupRunner == nil {
+				return nil
+			}
+			return a.cleanupRunner.Run(ctx)
+		})
+		a.spawn(ctx, "directory sync worker", func(ctx context.Context) error {
+			if a.directorySyncRunner == nil {
+				return nil
+			}
+			return a.directorySyncRunner.Run(ctx)
+		})
+		// Partition maintenance is a workers-role concern: it
+		// creates forward monthly partitions and drops retention-
+		// expired ones for the append-only tables (introduced in
+		// PR #45's 0017 migration). Running it on the workers
+		// role means a single replica owns the DDL stream, which
+		// dovetails with the singleton + Redis-lock model the
+		// rest of the workers role uses.
+		a.spawn(ctx, "partition worker", func(ctx context.Context) error {
+			if a.partitionRunner == nil {
+				return nil
+			}
+			return a.partitionRunner.Run(ctx)
+		})
+	}
+
 	a.spawn(ctx, "memoryLabelCache janitor", func(ctx context.Context) error {
 		if a.memLabelCache == nil {
 			return nil

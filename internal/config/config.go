@@ -44,6 +44,65 @@ func (e Environment) IsProduction() bool {
 // String implements fmt.Stringer.
 func (e Environment) String() string { return string(e) }
 
+// Role selects which subset of the binary's responsibilities the
+// process runs. Splitting the monolith by role lets a deployment
+// scale each subsystem independently (e.g. API on CPU, consumers on
+// NATS lag) and prevents a slow Tier-2 SLM call from stalling
+// HTTP request handling — the classic noisy-neighbour problem the
+// review identified.
+//
+//   - RoleAll: the current behaviour. HTTP API + NATS consumers +
+//     periodic workers all run in one process. Default for
+//     single-replica / dev / local installs.
+//   - RoleAPI: HTTP listener and request-time handlers only. No
+//     NATS consumers, no periodic workers. Behind an HPA on
+//     request CPU.
+//   - RoleConsumers: NATS consumer loops only. No HTTP routes
+//     beyond health + metrics. Scales on
+//     `event_lag_seconds` via KEDA.
+//   - RoleWorkers: periodic workers (relationship, vendor,
+//     cleanup, directory-sync, partition-maintenance). Singleton
+//     or low-replica; relies on the Redis distributed lock for
+//     leader election when replicaCount > 1.
+//
+// Selected via SN360_ROLE env var or the --role command-line flag
+// (flag wins). Unknown roles fail boot fast.
+type Role string
+
+const (
+	RoleAll       Role = "all"
+	RoleAPI       Role = "api"
+	RoleConsumers Role = "consumers"
+	RoleWorkers   Role = "workers"
+)
+
+// Valid reports whether the value is a recognised role.
+func (r Role) Valid() bool {
+	switch r {
+	case RoleAll, RoleAPI, RoleConsumers, RoleWorkers:
+		return true
+	default:
+		return false
+	}
+}
+
+// ServesAPI reports whether this process should mount business
+// HTTP routes (/v1/...). All roles still mount /healthz, /readyz,
+// /metrics — those are infrastructural rather than business routes.
+func (r Role) ServesAPI() bool { return r == RoleAll || r == RoleAPI }
+
+// RunsConsumers reports whether this process should subscribe to
+// NATS / Redis consumer subjects.
+func (r Role) RunsConsumers() bool { return r == RoleAll || r == RoleConsumers }
+
+// RunsWorkers reports whether this process should run the periodic
+// background workers (relationship, vendor, cleanup, directory
+// sync, partition maintenance).
+func (r Role) RunsWorkers() bool { return r == RoleAll || r == RoleWorkers }
+
+// String implements fmt.Stringer.
+func (r Role) String() string { return string(r) }
+
 // EventBusType selects the event-bus implementation (`pkg/events`).
 type EventBusType string
 
@@ -69,6 +128,11 @@ func (t EventBusType) Valid() bool {
 type Config struct {
 	Environment Environment
 	AppName     string
+	// Role selects which subsystem this process runs. See the
+	// Role doc-comment for the four values and their semantics.
+	// Loaded from SN360_ROLE; defaults to RoleAll for backward
+	// compatibility with the single-binary deployment.
+	Role Role
 
 	Log                      Log
 	HTTP                     HTTP
@@ -745,6 +809,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		Environment: Environment(getStr("ENVIRONMENT", string(EnvironmentLocal))),
 		AppName:     getStr("APP_NAME", "sn360-es"),
+		Role:        Role(getStr("SN360_ROLE", string(RoleAll))),
 
 		Log: Log{
 			Level:  getStr("LOG_LEVEL", "info"),
@@ -1080,6 +1145,9 @@ func (c Config) validate() error {
 	}
 	if !c.EventBus.Valid() {
 		return fmt.Errorf("EVENT_BUS_TYPE: invalid value %q (expected nats or redis)", c.EventBus)
+	}
+	if !c.Role.Valid() {
+		return fmt.Errorf("SN360_ROLE: invalid value %q (expected one of: all, api, consumers, workers)", c.Role)
 	}
 	if c.HTTP.Port <= 0 || c.HTTP.Port > 65535 {
 		return fmt.Errorf("HTTP_PORT out of range: %d", c.HTTP.Port)

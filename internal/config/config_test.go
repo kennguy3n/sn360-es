@@ -193,10 +193,87 @@ func validProdConfig() Config {
 	return Config{
 		Environment: EnvironmentProd,
 		AppName:     "sn360-es",
+		Role:        RoleAll,
 		EventBus:    EventBusNATS,
 		HTTP:        HTTP{Port: 8080},
 		Score:       ScoreThresholds{Blocked: 90, HighRisk: 70, Warning: 50, Caution: 30, Info: 10},
 		AWS:         AWS{KMSMasterKeyID: "arn:aws:kms:us-east-1:000000000000:key/test"},
+	}
+}
+
+// TestRole_Predicates pins the role-bucket semantics used by the
+// run() / StartBackground() / buildMux() gates. Adding a new role
+// to the Role enum must also update these predicates and this
+// test — otherwise a binary running under the new role might
+// silently fall into the "everything off" bucket and look healthy
+// while doing nothing.
+func TestRole_Predicates(t *testing.T) {
+	cases := []struct {
+		role         Role
+		servesAPI    bool
+		runsConsumer bool
+		runsWorker   bool
+	}{
+		{RoleAll, true, true, true},
+		{RoleAPI, true, false, false},
+		{RoleConsumers, false, true, false},
+		{RoleWorkers, false, false, true},
+	}
+	for _, tc := range cases {
+		if got := tc.role.ServesAPI(); got != tc.servesAPI {
+			t.Errorf("%s.ServesAPI() = %v, want %v", tc.role, got, tc.servesAPI)
+		}
+		if got := tc.role.RunsConsumers(); got != tc.runsConsumer {
+			t.Errorf("%s.RunsConsumers() = %v, want %v", tc.role, got, tc.runsConsumer)
+		}
+		if got := tc.role.RunsWorkers(); got != tc.runsWorker {
+			t.Errorf("%s.RunsWorkers() = %v, want %v", tc.role, got, tc.runsWorker)
+		}
+		if !tc.role.Valid() {
+			t.Errorf("%s.Valid() = false, want true", tc.role)
+		}
+	}
+}
+
+// TestRole_Valid_RejectsUnknown closes the door on silent typos in
+// SN360_ROLE that would otherwise default any of the three role
+// predicates to false (i.e. a typo'd role pod would boot, expose
+// /healthz, and do nothing else — exactly the kind of invisible
+// failure ENV_VAR validation is for).
+func TestRole_Valid_RejectsUnknown(t *testing.T) {
+	for _, bad := range []string{"", "API", "Workers", "x", "all "} {
+		if Role(bad).Valid() {
+			t.Errorf("Role(%q).Valid() = true, want false", bad)
+		}
+	}
+}
+
+// TestValidate_Role_RejectsUnknown asserts the boot-time validator
+// catches typos. We can't piggy-back this on the same loop as
+// TestRole_Valid_RejectsUnknown because validate() also checks
+// Environment / EventBus / Port, and an empty Role would let those
+// other checks pass.
+func TestValidate_Role_RejectsUnknown(t *testing.T) {
+	for _, bad := range []string{"API", "Workers", "x", "all "} {
+		cfg := validProdConfig()
+		cfg.Role = Role(bad)
+		if err := cfg.validate(); err == nil {
+			t.Errorf("validate() accepted bogus SN360_ROLE=%q", bad)
+		}
+	}
+}
+
+// TestValidate_Role_AcceptsDocumentedValues mirrors the
+// IngestionMode pattern: pin the supported enum so refactors
+// can't accidentally tighten validation past the documented
+// contract.
+func TestValidate_Role_AcceptsDocumentedValues(t *testing.T) {
+	for _, good := range []Role{RoleAll, RoleAPI, RoleConsumers, RoleWorkers} {
+		cfg := validProdConfig()
+		cfg.Role = good
+		if err := cfg.validate(); err != nil {
+			t.Errorf("validate() rejected documented SN360_ROLE=%q: %v", good, err)
+		}
 	}
 }
 

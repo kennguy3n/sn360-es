@@ -38,6 +38,24 @@ func buildMux(app *application) (http.Handler, error) {
 	mux.HandleFunc("/docs/", docs.ServeSwaggerUI)
 	mux.HandleFunc("/openapi.yaml", docs.ServeOpenAPI)
 
+	// Business routes are mounted only for roles that should
+	// serve HTTP traffic. Consumer / worker pods still expose
+	// /healthz, /readyz, /metrics, /docs (mounted above) so
+	// kubelet probes, Prometheus scrapes, and operators reading
+	// the spec all work — but they refuse the request-time
+	// /v1/* surface. This is what fixes the noisy-neighbour
+	// failure mode the review identified: a slow Tier-2 SLM
+	// call on a consumer pod can no longer stall HTTP request
+	// handling on the same process.
+	if !app.cfg.Role.ServesAPI() {
+		logger.Info("sn360-es: HTTP business routes disabled by role",
+			slog.String("role", string(app.cfg.Role)))
+		mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		})
+		return mux, nil
+	}
+
 	// Banner-action / feedback.
 	bannerAction := handler.NewBannerActionHandler(logger, app.feedbackSvc)
 	mux.Handle("/v1/banner/action", bannerAction)
