@@ -236,6 +236,57 @@ class TestCostModel(unittest.TestCase):
                 )
                 self.assertLessEqual(t["tier2_msgs"], t["tier1_msgs"])
 
+    def test_tier0_bypass_bounded_by_structural_ceiling(self) -> None:
+        # The Tier 0 bypass rate represents AI cache + heuristic
+        # efficacy on the eligible cohort (intra-org + known-partner
+        # mail). The model must NEVER bypass more mail than is
+        # structurally eligible. A misconfigured lever above 1.0 must
+        # also clamp at the ceiling rather than fabricating bypassed
+        # mail. This pins the architectural invariant against a future
+        # refactor that re-treats the lever as an absolute bypass %.
+        for name, profile in project.PROFILES.items():
+            ceiling_msgs = int(
+                round(
+                    profile.messages_per_tenant_per_month
+                    * profile.tier0_eligible_pct
+                )
+            )
+            for lever_rate, label in [(0.10, "low"), (0.68, "levers_on"), (1.50, "overshoot")]:
+                levers = project.CostLevers(
+                    label=label,
+                    tier0_bypass_hit_rate=lever_rate,
+                    tier1_batch_efficiency=1.0,
+                    partitioning_active=False,
+                    role_split_active=False,
+                    keda_on_lag=False,
+                    pgbouncer_active=False,
+                    rate_limiter_backend="memory",
+                )
+                inf = project.cost_inference(profile, levers)
+                with self.subTest(profile=name, lever=label):
+                    self.assertLessEqual(
+                        inf["bypassed_msgs"],
+                        ceiling_msgs,
+                        "effective bypass exceeded structural eligibility ceiling",
+                    )
+
+    def test_tier0_eligible_pct_monotone_with_traffic(self) -> None:
+        # Structural Tier 0 eligibility (intra-org + known-partner
+        # cohort) is expected to decline with traffic — higher-volume
+        # tenants get proportionally more cold-call external mail.
+        # The profile literals encode this; lock it in so a future
+        # tweak that inverts the relationship (e.g. equalising the
+        # percentages) doesn't silently invalidate the cost narrative
+        # in COST_MODEL.md §"Headline numbers".
+        self.assertGreater(
+            project.PROFILES["low"].tier0_eligible_pct,
+            project.PROFILES["medium"].tier0_eligible_pct,
+        )
+        self.assertGreater(
+            project.PROFILES["medium"].tier0_eligible_pct,
+            project.PROFILES["high"].tier0_eligible_pct,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

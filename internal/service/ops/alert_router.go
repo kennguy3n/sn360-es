@@ -86,8 +86,15 @@ const (
 
 	// ActionRemediate means a safe automated remediation exists for
 	// this alert and is enabled via config. The remediator is invoked
-	// asynchronously of the HTTP response so a slow K8s API call
-	// doesn't block the Alertmanager retry loop.
+	// synchronously inside handlePayload (NOT in a detached goroutine)
+	// so the router has visibility over remediator success/failure for
+	// logs + metrics + the critical-severity escalation fallback in
+	// dispatch(). A slow K8s API call therefore extends the HTTP
+	// response time for this webhook — Remediator implementations
+	// MUST honour the ctx deadline (which inherits the HTTP request
+	// deadline) and cap their own work so a stuck call cannot pin the
+	// Alertmanager retry loop. See the Remediator interface doc for
+	// the contract.
 	ActionRemediate AlertAction = "remediate"
 
 	// ActionEscalate means create a structured escalation ticket so a
@@ -116,9 +123,17 @@ type Decision struct {
 // pod whose name matches the `component` label. Tests use the
 // FakeRemediator in alert_router_test.go.
 //
-// Remediate runs in its own goroutine; the returned error is only
-// used for the router's own logging + metrics. Alertmanager only
-// cares about the HTTP 200 from the webhook.
+// Remediate is called SYNCHRONOUSLY by dispatch() (NOT in a
+// detached goroutine) so the router can observe the error and apply
+// the critical-severity escalation fallback. Implementations
+// therefore directly extend the Alertmanager webhook response time —
+// they MUST honour the ctx deadline and bound their own work so a
+// blocked K8s API call cannot pin the webhook beyond Alertmanager's
+// configured response timeout (default 10s on the `webhook_config`
+// receiver; see Helm chart `alertmanagerconfig.yaml` if/when wired).
+// The returned error is consumed by the router for logs + metrics
+// + escalation-fallback only; Alertmanager itself only sees the
+// router's HTTP 200.
 type Remediator interface {
 	Remediate(ctx context.Context, alert Alert) error
 }

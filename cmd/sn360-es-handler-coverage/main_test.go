@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -187,5 +188,59 @@ func TestDiff_AllowOnlyInSpecExactMatch(t *testing.T) {
 	want := []string{"/v1/foobar"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("diff=%v; want %v (allowOnlyInSpec must be exact-match, not prefix)", got, want)
+	}
+}
+
+// TestAllowOnlyInGoPrefixes_SubtreeEntriesEndInSlash locks in the
+// rule that subtree allow-list entries MUST end in `/` so a bare
+// prefix like `/v1/push` cannot accidentally allow-list an
+// unrelated future route like `/v1/pushback`. Exact-route entries
+// (`/healthz`, `/metrics`, `/openapi.yaml`) are exempt because
+// they're registered as exact routes in routes.go, not as
+// subtrees.
+func TestAllowOnlyInGoPrefixes_SubtreeEntriesEndInSlash(t *testing.T) {
+	// Entries that legitimately match exact routes (file-style
+	// endpoints). Any other entry MUST end in `/`.
+	exactExempt := map[string]struct{}{
+		"/healthz":      {},
+		"/readyz":       {},
+		"/metrics":      {},
+		"/docs":         {}, // routes.go registers both /docs and /docs/
+		"/openapi.yaml": {},
+	}
+	for _, p := range allowOnlyInGoPrefixes {
+		if _, ok := exactExempt[p]; ok {
+			continue
+		}
+		if !strings.HasSuffix(p, "/") {
+			t.Errorf("allowOnlyInGoPrefixes contains bare prefix %q; subtree entries must end in `/` to avoid over-matching (see ANALYSIS_0002, round 2)", p)
+		}
+	}
+}
+
+// TestLoadGoRoutes_UnquoteHandlesBacktickStrings verifies the
+// switch to strconv.Unquote correctly handles both quoted-string
+// forms (double-quoted and back-ticked) for route literals, where
+// the previous manual-stripping implementation had no escape-
+// sequence support. Routes in this codebase don't currently use
+// escapes, but the test pins the contract for future maintainers.
+func TestLoadGoRoutes_UnquoteHandlesBacktickStrings(t *testing.T) {
+	tmp := t.TempDir() + "/routes.go"
+	src := "package main\n" +
+		"import \"net/http\"\n" +
+		"func wire(mux *http.ServeMux) {\n" +
+		"\tmux.Handle(\"/v1/double\", nil)\n" +
+		"\tmux.Handle(`/v1/backtick`, nil)\n" +
+		"}\n"
+	if err := os.WriteFile(tmp, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadGoRoutes(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/v1/backtick", "/v1/double"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("loadGoRoutes=%v; want %v", got, want)
 	}
 }

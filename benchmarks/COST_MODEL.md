@@ -33,16 +33,26 @@ baseline.
 
 | Profile | Messages / tenant / day | Baseline (pre-PR #44) | All levers on (post-PR #46) | $/tenant/mo saving | % saving |
 | --- | --: | --: | --: | --: | --: |
-| low    |   200 | $0.635  | $0.391  | $0.244  | 38.4% |
-| medium | 1 200 | $3.706  | $2.144  | $1.562  | 42.1% |
-| high   | 8 500 | $44.610 | $28.559 | $16.051 | 36.0% |
+| low    |   200 | $0.641  | $0.425  | $0.216  | 33.7% |
+| medium | 1 200 | $3.774  | $2.545  | $1.230  | 32.6% |
+| high   | 8 500 | $45.509 | $34.065 | $11.445 | 25.1% |
 
-The savings inflect at the **medium** cohort, which is where most
-SN360 production tenants land. The high cohort gains the largest
-*absolute* dollars but a slightly lower percentage because the
-Bedrock Tier 2 token cost (proportional to escalated messages,
-not affected by any of the compute / storage levers) dominates
-at that scale.
+Percentage savings descend with traffic because the Bedrock Tier 2
+token cost — proportional to escalated messages and not affected
+by any compute / storage lever — dominates the high cohort's
+total. The high cohort still gains the largest *absolute* dollar
+saving per tenant, but levers like Tier 1 batching and PG
+partitioning amortise less aggressively against the Tier 2 token
+line at that scale.
+
+Both columns use the architecturally-bounded Tier 0 bypass model
+(post-2026-05 PR #47 refinement): the lever's hit rate is capped
+by the profile's structural eligibility ceiling
+(`pct_internal + pct_known_partner`) so cold-call external mail
+can never be bypassed regardless of cache health. High-traffic
+tenants therefore get a smaller absolute bypass benefit than low-
+traffic tenants — they have proportionally more cold-call mail to
+begin with.
 
 ## How to read each component
 

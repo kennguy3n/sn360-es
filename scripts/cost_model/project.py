@@ -68,8 +68,17 @@ class TrafficProfile:
     name: str
     messages_per_tenant_per_day: int
     avg_message_kb: float
-    pct_internal: float        # Tier 0 bypass: known-vendor / intra-org
-    pct_known_partner: float   # Tier 0 bypass: established external
+    # pct_internal + pct_known_partner together form the STRUCTURAL
+    # ceiling on Tier 0 bypass: only mail from intra-org / known-vendor
+    # senders is eligible for the cache-hit path. The CostLevers
+    # `tier0_bypass_hit_rate` lever describes the cache+heuristic
+    # efficacy on this eligible cohort; effective bypass is the
+    # PRODUCT of the two (see cost_inference). High-traffic tenants
+    # have a lower structural ceiling because more of their inbound
+    # mail is cold-call external (sales, partners not yet warmed up),
+    # which is what the descending values across profiles capture.
+    pct_internal: float        # Tier 0 bypass eligibility: intra-org
+    pct_known_partner: float   # Tier 0 bypass eligibility: established external
     tier1_inference_cost_per_1k: float  # GPU/CPU encoder cost
     tier2_pct_after_tier1: float        # fraction of Tier 1 escalations
     avg_tier2_tokens_in: int
@@ -79,6 +88,17 @@ class TrafficProfile:
     @property
     def messages_per_tenant_per_month(self) -> int:
         return self.messages_per_tenant_per_day * 30
+
+    @property
+    def tier0_eligible_pct(self) -> float:
+        """Fraction of messages structurally eligible for Tier 0 bypass.
+
+        Tier 0 bypass kicks in only for senders the AI cache has seen
+        before (intra-org + established external partners). Cold-call
+        external mail is never bypassed regardless of cache health.
+        This property is the upper bound on the effective bypass rate.
+        """
+        return self.pct_internal + self.pct_known_partner
 
 
 PROFILES: Dict[str, TrafficProfile] = {
@@ -133,7 +153,15 @@ class CostLevers:
     """
 
     label: str
-    tier0_bypass_hit_rate: float  # AI cache hit on internal / partner mail
+    # tier0_bypass_hit_rate is the AI-cache + heuristic hit rate
+    # MEASURED ON THE ELIGIBLE COHORT (intra-org + known-partner
+    # mail). The effective fraction of total mail that bypasses
+    # Tier 1 is the product of this rate and the profile's
+    # `tier0_eligible_pct`. Set it as a probability in [0, 1];
+    # cost_inference clamps the effective bypass to the structural
+    # ceiling, so a hit-rate above 1.0 is a configuration bug, not a
+    # safety hatch.
+    tier0_bypass_hit_rate: float
     tier1_batch_efficiency: float  # cost multiplier (1.0 = no batching)
     partitioning_active: bool      # native PG partitioning + DROP retention
     role_split_active: bool        # API / consumers / workers separated
@@ -193,7 +221,16 @@ def cost_inference(profile: TrafficProfile, levers: CostLevers) -> Dict[str, flo
     # Tier 1 + Tier 2 cost on those messages entirely. The AI cache
     # is tenant-scoped (post-PR #44), so cache hit doesn't leak
     # cross-tenant verdicts.
-    bypassed = int(round(msgs * levers.tier0_bypass_hit_rate))
+    #
+    # Effective bypass rate is bounded above by the profile's
+    # structural eligibility ceiling: cold-call external mail is
+    # never bypassed regardless of cache health. The `min(...)` cap
+    # surfaces a configuration bug where the lever exceeds the
+    # structural cohort (e.g. claiming 70% bypass on a profile with
+    # only 58% intra-org+partner mail).
+    eligible_pct = profile.tier0_eligible_pct
+    effective_bypass_rate = min(levers.tier0_bypass_hit_rate, 1.0) * eligible_pct
+    bypassed = int(round(msgs * effective_bypass_rate))
     tier1_msgs = msgs - bypassed
 
     tier1_cost_per_msg = profile.tier1_inference_cost_per_1k / 1000.0

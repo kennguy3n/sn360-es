@@ -59,6 +59,7 @@ import (
 	"go/token"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -68,17 +69,25 @@ import (
 // to serve without an OpenAPI entry. Each entry is a prefix that Go
 // routes must START WITH to be accepted. Operational endpoints by
 // design.
+//
+// Subtree entries MUST keep their trailing `/` (e.g. `/v1/push/`),
+// matching the net/http stdlib's subtree-pattern syntax. Bare
+// prefixes without a trailing slash would over-match: `/v1/push`
+// would also allow-list a hypothetical `/v1/pushback` route. Exact
+// endpoint files (`/healthz`, `/metrics`, `/openapi.yaml`) stay as-is
+// because they're registered as exact routes in routes.go, not as
+// subtrees — they have no descendants to worry about.
 var allowOnlyInGoPrefixes = []string{
 	"/healthz",
 	"/readyz",
 	"/metrics",
-	"/docs",
+	"/docs", // exact + subtree both registered in routes.go
 	"/openapi.yaml",
-	"/l/",          // URL-rewrite interstitial — internal-only
-	"/v1/push",     // SaaS push webhooks — separate from REST API
-	"/v1/feedback", // feedback events — separate from REST API
-	"/v1/agent",    // AI agent control surface — separate from REST API
-	"/internal/",   // ops surface (alert router) — separate from REST API
+	"/l/",           // URL-rewrite interstitial — internal-only
+	"/v1/push/",     // SaaS push webhooks — separate from REST API
+	"/v1/feedback/", // feedback events — separate from REST API
+	"/v1/agent/",    // AI agent control surface — separate from REST API
+	"/internal/",    // ops surface (alert router) — separate from REST API
 }
 
 // allowOnlyInGoExact is the set of EXACT routes Go is allowed to
@@ -204,10 +213,18 @@ func loadGoRoutes(path string) ([]string, error) {
 			// can document a workaround if it ever bites us.
 			return true
 		}
-		// strconv.Unquote works for both `"foo"` and "`foo`" forms.
-		s := lit.Value
-		if len(s) >= 2 && (s[0] == '"' || s[0] == '`') {
-			s = s[1 : len(s)-1]
+		// strconv.Unquote handles both `"foo"` and "`foo`" forms
+		// AND decodes any escape sequences inside double-quoted
+		// literals (e.g. `"\u00e9"` -> `é`). Route paths in this
+		// codebase don't currently use escapes, but Unquote is the
+		// stdlib-blessed way to recover the runtime string from a
+		// `token.STRING` BasicLit — use it rather than reinventing
+		// quote-stripping by hand.
+		s, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			// Malformed literal would have failed `parser.ParseFile`
+			// earlier, but guard defensively rather than panic.
+			return true
 		}
 		out = append(out, stripMethodPrefix(s))
 		return true

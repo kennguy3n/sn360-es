@@ -147,6 +147,20 @@ spec:
           # adding its name here. Keep this list in sync with the
           # *Job.Name() values; the worker_test.go suites lock the
           # canonical strings.
+          #
+          # Detection-latency budget (operational expectation):
+          # worst case ≈ 60 minutes from stall to page. The
+          # `rate(...[30m])==0` leg has to wait for the last
+          # successful cycle's counter increment to age out of the
+          # 30-minute window before rate goes to 0; the
+          # `for: 30m` clause then waits another 30 minutes before
+          # firing. The `absent_over_time(...[30m])` legs have the
+          # same 30+30 budget for the boot-failure case. This is
+          # deliberately conservative — workers legitimately pause
+          # while idle (no work to do), and a tighter window would
+          # produce false pages. If a faster signal is needed for a
+          # specific worker, add a per-worker alert with its own
+          # SLO budget rather than tightening this catch-all.
           expr: |
             (
               sum by (worker) (rate(sn360_es_worker_cycle_completed_total[30m])) == 0
