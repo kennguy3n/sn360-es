@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/config"
@@ -151,7 +152,7 @@ func (m *pgPartitionManager) ListPartitions(ctx context.Context, parent string) 
 		//      migration never creates this shape, but a future
 		//      manual partitioning operation could, and the
 		//      reviewer flagged the gap explicitly.
-		legacy := hasSuffix(name, "_legacy") || bound.LowerUnbounded || bound.UpperUnbounded
+		legacy := strings.HasSuffix(name, "_legacy") || bound.LowerUnbounded || bound.UpperUnbounded
 		out = append(out, worker.Partition{
 			Name:   name,
 			Lower:  bound.Lower,
@@ -288,11 +289,11 @@ func parsePartitionBound(expr string) (partitionBound, error) {
 	const prefix = "FOR VALUES FROM ("
 	const sep = ") TO ("
 	const suffix = ")"
-	if !hasPrefix(expr, prefix) || !hasSuffix(expr, suffix) {
+	if !strings.HasPrefix(expr, prefix) || !strings.HasSuffix(expr, suffix) {
 		return partitionBound{}, fmt.Errorf("unrecognised partition bound shape: %q", expr)
 	}
 	inner := expr[len(prefix) : len(expr)-len(suffix)]
-	idx := indexOf(inner, sep)
+	idx := strings.Index(inner, sep)
 	if idx < 0 {
 		return partitionBound{}, fmt.Errorf("missing FROM/TO separator: %q", expr)
 	}
@@ -362,28 +363,6 @@ func unquoteSQLLiteral(s string) string {
 		out = append(out, s[i])
 	}
 	return string(out)
-}
-
-// Small substring helpers — using stdlib `strings` would force
-// another import line through this file; keep it self-contained.
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
-}
-
-func hasSuffix(s, suffix string) bool {
-	return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
-}
-
-func indexOf(s, sub string) int {
-	if len(sub) == 0 {
-		return 0
-	}
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }
 
 // buildPartitionRunner wires the PartitionMaintenanceJob into the

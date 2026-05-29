@@ -121,10 +121,15 @@ SELECT id,name,display_name,provider,primary_domain,region,kms_key_arn,score_bas
 const defaultIterateBatchSize = 100
 
 // IterateActive yields non-deleted tenants in keyset-paginated batches
-// ordered by (name, id). The (name, id) compound cursor is necessary
-// because `name` is NOT unique \u2014 two tenants can share a display name
-// during onboarding \u2014 so name alone could skip or duplicate a row
-// across batches. id (UUID) is the tiebreaker.
+// ordered by (name, id). The (name, id) compound cursor is the keyset
+// key: it MUST be a total ordering across the candidate set so a batch
+// boundary cannot skip or duplicate a row. The schema currently enforces
+// `name` UNIQUE NOT NULL (migrations/0001_init.up.sql), so name alone
+// would in fact be sufficient today; we keep `id` as the tiebreaker as
+// defence-in-depth against a future schema relaxation (soft-deleted
+// duplicates, onboarding drafts, or a multi-region merge that allows
+// transiently duplicate display names) so this iterator stays correct
+// without a coordinated schema-plus-code rev.
 //
 // The query plan is index-friendly: `tenants(name)` has an implicit
 // btree from the UNIQUE constraint check, and keyset on (name, id)
