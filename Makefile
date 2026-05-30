@@ -185,12 +185,20 @@ migrate-check-online: migrate-bin
 	@command -v docker >/dev/null 2>&1 || { echo "migrate-check-online requires docker; not found in PATH"; exit 2; }
 	$(DOCKER_COMPOSE) up -d postgres
 	@echo "Waiting for postgres to accept connections..."
-	@for i in $$(seq 1 30); do \
-		if $(DOCKER_COMPOSE) exec -T postgres pg_isready -U sn360es -d sn360es > /dev/null 2>&1; then \
+	@# pg_isready alone is insufficient: the postgres:16-alpine image
+	@# returns "ready" from the bootstrap postmaster before initdb has
+	@# created the POSTGRES_USER / POSTGRES_DB requested via the
+	@# entrypoint script. Hitting it from the host side in that window
+	@# yields "connection reset by peer" because the daemon restarts to
+	@# load the freshly-provisioned roles. Probe with a real round-trip
+	@# query against the target user+database — only succeeds once the
+	@# entrypoint has finished, eliminating the race.
+	@for i in $$(seq 1 60); do \
+		if $(DOCKER_COMPOSE) exec -T postgres psql -U sn360es -d sn360es -tAc "SELECT 1" > /dev/null 2>&1; then \
 			echo "postgres ready"; break; \
 		fi; \
 		sleep 1; \
-		if [ $$i -eq 30 ]; then echo "postgres never became ready"; exit 2; fi; \
+		if [ $$i -eq 60 ]; then echo "postgres never became ready"; $(DOCKER_COMPOSE) logs postgres; exit 2; fi; \
 	done
 	@echo "==> Applying all migrations up..."
 	$(MIGRATE_BIN) --path $(MIGRATIONS_DIR) --dsn "$(MIGRATE_CHECK_DSN)" up
