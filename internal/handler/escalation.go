@@ -135,6 +135,17 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 		//                              today but kept here so a future
 		//                              refactor that loosens the gate
 		//                              still returns a client error
+		//   - ErrTicketIDRequired    -> 400: defence-in-depth; the
+		//                              handler validates the path
+		//                              parameter at the top of
+		//                              ServeResolve before reaching
+		//                              the service, so this branch is
+		//                              structurally unreachable from
+		//                              the HTTP layer today. Kept so
+		//                              non-HTTP callers (event-bus,
+		//                              future gRPC/CLI) classify the
+		//                              same shape of failure the same
+		//                              way the HTTP path does
 		//   - anything else (db connection errors from the postgres
 		//     ticket store, JSON marshal failures, NATS publish
 		//     failures) -> 500: server-fault, the caller did nothing
@@ -142,7 +153,8 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 		//     into believing their payload was malformed.
 		switch {
 		case errors.Is(err, agent.ErrInvalidOutcome),
-			errors.Is(err, agent.ErrTicketTenantIDRequired):
+			errors.Is(err, agent.ErrTicketTenantIDRequired),
+			errors.Is(err, agent.ErrTicketIDRequired):
 			writeError(w, http.StatusBadRequest, "resolve failed")
 		case errors.Is(err, agent.ErrAlreadyResolved):
 			writeError(w, http.StatusConflict, "already resolved")
