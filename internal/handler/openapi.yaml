@@ -189,6 +189,13 @@ paths:
     post:
       tags: [escalation]
       summary: Resolve a SOC escalation ticket
+      description: |
+        Records the SecOps outcome on an existing escalation ticket.
+        The caller's tenant is verified against the ticket's TenantID;
+        a cross-tenant resolve attempt is indistinguishable from a
+        ticket-not-found result — both return 404 with the same
+        response body so the endpoint cannot be used to fingerprint
+        which ticket IDs belong to another tenant.
       requestBody:
         required: true
         content:
@@ -203,6 +210,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/EscalationResolveResponse"
         "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
 
   /v1/escalation/{ticket_id}:
