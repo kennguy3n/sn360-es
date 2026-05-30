@@ -167,6 +167,15 @@ func (s *EscalationService) Escalate(ctx context.Context, tenantID string, incid
 // string-matching the error message.
 var ErrTicketNotFound = errors.New("escalation: ticket not found")
 
+// ErrInvalidOutcome is returned when the caller supplies an outcome
+// value that is not in the recognised enum.
+var ErrInvalidOutcome = errors.New("escalation: invalid outcome")
+
+// ErrAlreadyResolved is returned when the ticket has already been
+// resolved — a second resolution is a business-rule violation, not a
+// server error.
+var ErrAlreadyResolved = errors.New("escalation: already resolved")
+
 // ResolveEscalation records the SecOps outcome and feeds it into the
 // training pipeline. tenantID is the authenticated caller's tenant
 // and must match the ticket's TenantID — the store filters on it so a
@@ -180,11 +189,11 @@ func (s *EscalationService) ResolveEscalation(ctx context.Context, tenantID, tic
 		return dto.EscalationTicket{}, errors.New("escalation: ticket_id is required")
 	}
 	if !outcome.Valid() {
-		return dto.EscalationTicket{}, fmt.Errorf("escalation: invalid outcome %q", outcome)
+		return dto.EscalationTicket{}, fmt.Errorf("%w: %q", ErrInvalidOutcome, outcome)
 	}
 	updated, err := s.store.Update(ctx, tenantID, ticketID, func(t *dto.EscalationTicket) error {
 		if t.Outcome != dto.OutcomePending {
-			return fmt.Errorf("escalation: already resolved as %q", t.Outcome)
+			return fmt.Errorf("%w as %q", ErrAlreadyResolved, t.Outcome)
 		}
 		t.Outcome = outcome
 		t.ResolvedAt = s.now()

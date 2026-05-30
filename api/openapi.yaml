@@ -210,11 +210,56 @@ paths:
               schema:
                 $ref: "#/components/schemas/EscalationResolveResponse"
         "400":
-          $ref: "#/components/responses/Error"
+          description: |
+            Client-side input fault. Returned for malformed JSON,
+            an unknown outcome value, an oversized request body, or
+            a missing ticket_id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "401":
-          $ref: "#/components/responses/Error"
+          description: |
+            Missing or invalid authentication. Returned before any
+            body parsing so an unauthenticated caller cannot probe
+            the request schema by observing 400 vs 401 differentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "404":
-          $ref: "#/components/responses/Error"
+          description: |
+            Ticket not found OR the ticket belongs to a different
+            tenant. The two cases return the same status code and
+            response body so cross-tenant callers cannot fingerprint
+            which ticket IDs exist in another tenant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: |
+            The ticket has already been resolved. Re-resolving a
+            non-pending ticket is a business-rule conflict, not an
+            input fault — the response is 409 (canonical "request
+            conflicts with current resource state") so clients can
+            distinguish a malformed-payload retry from a state-
+            conflict requiring a fresh fetch + re-decision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: |
+            Server-side fault. Returned when a downstream dependency
+            fails (Postgres ticket store unreachable, NATS publish
+            failure, JSON marshal error). The error body is
+            intentionally generic — the diagnostic detail lives in
+            the server logs, not on the wire.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /v1/escalation/{ticket_id}:
     get:

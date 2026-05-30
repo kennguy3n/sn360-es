@@ -370,6 +370,17 @@ func TestServeHTTP_EscalatesCriticalAlert(t *testing.T) {
 	if got.AISummary != wantSummary {
 		t.Errorf("escalation AISummary=%q; want %q", got.AISummary, wantSummary)
 	}
+	// Pin the Reason to EscalationReasonOpsAlert: infrastructure
+	// alerts must NOT be filed under EscalationReasonLowConfidence,
+	// because that conflates them with genuine AI-confidence
+	// escalations on the email pipeline and corrupts downstream
+	// FeedbackSink + SOC-dashboard filtering by reason. This is the
+	// regression test for the bot finding that the
+	// EscalationReasonLowConfidence fallback was semantically wrong.
+	if got.Reason != dto.EscalationReasonOpsAlert {
+		t.Errorf("escalation Reason=%q; want %q (ops_alert, not ai_low_confidence)",
+			got.Reason, dto.EscalationReasonOpsAlert)
+	}
 	foundRunbook := false
 	for _, ind := range got.Indicators {
 		if strings.HasPrefix(ind, "runbook:") {

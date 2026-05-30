@@ -327,6 +327,185 @@ func TestEscalationHandler_ServeGet_CrossTenantReturns404(t *testing.T) {
 	}
 }
 
+// TestEscalationHandler_ServeResolve_AlreadyResolvedReturns409 locks
+// in the business-rule-conflict mapping: re-resolving a ticket that
+// is already in a non-pending state must return 409 (the canonical
+// "request conflicts with current resource state" status), NOT 400.
+// Returning 400 historically misled clients into thinking their
+// payload was malformed when the underlying issue was that another
+// SOC operator had already closed the incident. The bot-flagged
+// edited finding called this out specifically — 400 for non-input
+// errors mis-classifies the failure to the caller.
+func TestEscalationHandler_ServeResolve_AlreadyResolvedReturns409(t *testing.T) {
+	svc := newTestEscalationService(t)
+	tk := seedTicket(t, svc)
+	h := NewEscalationHandler(nil, svc)
+
+	body, _ := json.Marshal(map[string]any{
+		"ticket_id":     tk.TicketID,
+		"resolver_hash": "secops-1",
+		"outcome":       string(dto.OutcomeConfirmedPhishing),
+	})
+
+	// First resolve succeeds (200).
+	first := authReq(http.MethodPost, "/v1/escalation/resolve", string(body), tk.TenantID)
+	firstRec := httptest.NewRecorder()
+	h.ServeResolve(firstRec, first)
+	if firstRec.Code != http.StatusOK {
+		t.Fatalf("first resolve must succeed: status=%d body=%s", firstRec.Code, firstRec.Body.String())
+	}
+
+	// Second resolve must conflict (409), not 400.
+	second := authReq(http.MethodPost, "/v1/escalation/resolve", string(body), tk.TenantID)
+	secondRec := httptest.NewRecorder()
+	h.ServeResolve(secondRec, second)
+	if secondRec.Code != http.StatusConflict {
+		t.Fatalf("second resolve: status=%d want=409 body=%s",
+			secondRec.Code, secondRec.Body.String())
+	}
+	if !strings.Contains(secondRec.Body.String(), "already resolved") {
+		t.Fatalf("body should signal already-resolved: %q", secondRec.Body.String())
+	}
+}
+
+// failingTicketStore is an in-memory TicketStore that wraps the real
+// MemoryTicketStore and returns a synthetic db-style error from Update
+// — exercising the handler's 500 branch for store / db failures.
+type failingTicketStore struct {
+	inner    agent.TicketStore
+	updateOK bool
+}
+
+func (f *failingTicketStore) Save(ctx context.Context, t dto.EscalationTicket) error {
+	return f.inner.Save(ctx, t)
+}
+func (f *failingTicketStore) Load(ctx context.Context, tenantID, ticketID string) (dto.EscalationTicket, bool, error) {
+	return f.inner.Load(ctx, tenantID, ticketID)
+}
+func (f *failingTicketStore) Update(ctx context.Context, tenantID, ticketID string, mutate func(*dto.EscalationTicket) error) (dto.EscalationTicket, error) {
+	if f.updateOK {
+		return f.inner.Update(ctx, tenantID, ticketID, mutate)
+	}
+	// Synthetic db-down error: NOT one of the sentinels the handler
+	// recognises (ErrTicketNotFound, ErrInvalidOutcome,
+	// ErrAlreadyResolved, ErrTicketTenantIDRequired). The handler must
+	// classify this as 500, not 400 — that's the regression the bot
+	// flagged when it escalated the Info finding to a 🚩 bug.
+	return dto.EscalationTicket{}, io.ErrUnexpectedEOF
+}
+
+// TestEscalationHandler_ServeResolve_StoreErrorReturns500 locks in
+// the server-fault mapping: a database / store error from
+// ResolveEscalation must surface as 500, NOT 400. Without this
+// regression test, a future refactor could silently re-collapse all
+// non-NotFound errors back into 400 (which is what the bot edited the
+// Info comment to a 🚩 bug about).
+func TestEscalationHandler_ServeResolve_StoreErrorReturns500(t *testing.T) {
+	store := &failingTicketStore{inner: agent.NewMemoryTicketStore()}
+	// Seed a ticket through the un-failing inner store directly so
+	// the resolve path reaches the failing Update branch (rather than
+	// erroring at the seeding step).
+	store.updateOK = true
+	helperSvc, err := agent.NewEscalationService(agent.EscalationServiceConfig{
+		Publisher: stubEscalationPublisher{},
+		Store:     store,
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:     func() time.Time { return time.Date(2026, 5, 17, 0, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("helper svc: %v", err)
+	}
+	tk := seedTicket(t, helperSvc)
+	// Flip the store to failing-mode for the actual handler call.
+	store.updateOK = false
+
+	h := NewEscalationHandler(nil, helperSvc)
+
+	body, _ := json.Marshal(map[string]any{
+		"ticket_id":     tk.TicketID,
+		"resolver_hash": "secops-1",
+		"outcome":       string(dto.OutcomeConfirmedPhishing),
+	})
+	req := authReq(http.MethodPost, "/v1/escalation/resolve", string(body), tk.TenantID)
+	rec := httptest.NewRecorder()
+	h.ServeResolve(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("store-error case: status=%d want=500 body=%s",
+			rec.Code, rec.Body.String())
+	}
+	// 500 body must NOT echo the wrapped store error to the caller —
+	// the public response is generic on purpose. The diagnostic
+	// detail lives in the slog warn line, not on the wire.
+	if strings.Contains(rec.Body.String(), "EOF") || strings.Contains(rec.Body.String(), "unexpected") {
+		t.Fatalf("500 body leaked wrapped store error: %q", rec.Body.String())
+	}
+}
+
+// failingPublisher is a stub EscalationPublisher that always errors —
+// exercising the handler's 500 branch for publish failures.
+type failingPublisher struct{}
+
+func (failingPublisher) Publish(_ context.Context, _ string, _ []byte, _ ...events.PublishOption) error {
+	return io.ErrClosedPipe
+}
+
+// TestEscalationHandler_ServeResolve_PublishErrorReturns500 covers
+// the NATS-publish-failure branch: even though the ticket update
+// succeeded in the store, a downstream publish failure is a
+// server-side problem, not a client-input problem. 500 is the right
+// signal so the caller (or the surrounding retry / circuit-breaker
+// layer) knows the request itself wasn't malformed.
+//
+// Setup quirk: the EscalationService publishes on BOTH the Escalate
+// and Resolve paths, so a publisher that fails unconditionally would
+// also break seedTicket(). We seed via a working publisher first,
+// then construct a second service pointing at the SAME store but
+// with the failing publisher so only the Resolve path hits the
+// failure branch.
+func TestEscalationHandler_ServeResolve_PublishErrorReturns500(t *testing.T) {
+	store := agent.NewMemoryTicketStore()
+	clock := func() time.Time { return time.Date(2026, 5, 17, 0, 0, 0, 0, time.UTC) }
+
+	// Step 1: working publisher used for the Escalate seed step.
+	seedSvc, err := agent.NewEscalationService(agent.EscalationServiceConfig{
+		Publisher: stubEscalationPublisher{},
+		Store:     store,
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:     clock,
+	})
+	if err != nil {
+		t.Fatalf("seed svc: %v", err)
+	}
+	tk := seedTicket(t, seedSvc)
+
+	// Step 2: failing publisher used for the Resolve under test.
+	svc, err := agent.NewEscalationService(agent.EscalationServiceConfig{
+		Publisher: failingPublisher{},
+		Store:     store,
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:     clock,
+	})
+	if err != nil {
+		t.Fatalf("svc: %v", err)
+	}
+	h := NewEscalationHandler(nil, svc)
+
+	body, _ := json.Marshal(map[string]any{
+		"ticket_id":     tk.TicketID,
+		"resolver_hash": "secops-1",
+		"outcome":       string(dto.OutcomeConfirmedPhishing),
+	})
+	req := authReq(http.MethodPost, "/v1/escalation/resolve", string(body), tk.TenantID)
+	rec := httptest.NewRecorder()
+	h.ServeResolve(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("publish-error case: status=%d want=500 body=%s",
+			rec.Code, rec.Body.String())
+	}
+}
+
 // TestEscalationHandler_ServeGet_UnauthenticatedReturns401 pins the
 // pre-Load auth gate: a request that reaches the handler without a
 // verified tenant (i.e. the route was wired without the auth

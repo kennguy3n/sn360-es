@@ -480,11 +480,16 @@ func buildIncidentFromAlert(a Alert, now time.Time) dto.EscalationIncident {
 		PseudoMessageID: a.Fingerprint,
 		Tier:            a.Labels["component"],
 		Category:        a.Labels["alertname"],
-		// AlertManager doesn't map to one of the EscalationReason
-		// constants cleanly — the closest match is "ai_low_confidence"
-		// since alerts are typically a heuristic signal that needs
-		// human verification. The annotations carry the real shape.
-		Reason:            dto.EscalationReasonLowConfidence,
+		// EscalationReasonOpsAlert is the dedicated reason for
+		// alert-router-driven escalations (infrastructure / autonomic
+		// incidents from Alertmanager). Keeping these off the
+		// EscalationReasonLowConfidence keyspace prevents downstream
+		// consumers — the FeedbackSink training pipeline + SOC
+		// dashboards filtering by reason — from conflating infra
+		// incidents with genuine AI-confidence escalations on the
+		// email pipeline. The annotations + labels carry the
+		// alert-specific shape (alertname, severity, runbook_url).
+		Reason:            dto.EscalationReasonOpsAlert,
 		Score:             0,
 		AffectedUserCount: 0,
 		AISummary:         a.Annotations["summary"],

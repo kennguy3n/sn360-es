@@ -107,10 +107,34 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 		// logger above keeps the diagnostic detail, and the public
 		// response stays generic to avoid leaking implementation
 		// hints (db rows, table names, internal IDs, ...).
-		// Note: 400 here is for genuine input-validation failures
-		// (invalid outcome, already-resolved business rule) — NOT
-		// for ticket-not-found, which is gated to 404 above.
-		writeError(w, http.StatusBadRequest, "resolve failed")
+		//
+		// Classify the remaining errors into client- vs server-fault
+		// buckets so the wire response matches the underlying cause:
+		//
+		//   - ErrInvalidOutcome      -> 400: caller sent a bogus outcome
+		//   - ErrAlreadyResolved     -> 409: business-rule conflict on
+		//                              the ticket's current state
+		//   - ErrTicketTenantIDRequired -> 400: defence-in-depth; the
+		//                              auth gate above already rejects
+		//                              empty tenants with 401, so this
+		//                              branch is structurally unreachable
+		//                              today but kept here so a future
+		//                              refactor that loosens the gate
+		//                              still returns a client error
+		//   - anything else (db connection errors from the postgres
+		//     ticket store, JSON marshal failures, NATS publish
+		//     failures) -> 500: server-fault, the caller did nothing
+		//     wrong. Returning 400 for these would mislead clients
+		//     into believing their payload was malformed.
+		switch {
+		case errors.Is(err, agent.ErrInvalidOutcome),
+			errors.Is(err, agent.ErrTicketTenantIDRequired):
+			writeError(w, http.StatusBadRequest, "resolve failed")
+		case errors.Is(err, agent.ErrAlreadyResolved):
+			writeError(w, http.StatusConflict, "already resolved")
+		default:
+			writeError(w, http.StatusInternalServerError, "resolve failed")
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, ticket)
