@@ -143,10 +143,16 @@ func TestEscalationHandler_RejectsCrossTenant(t *testing.T) {
 		t.Fatalf("cross-tenant GET: status=%d want=404 body=%s", getRec.Code, getRec.Body.String())
 	}
 
-	// POST resolve as a different tenant must fail (the service
-	// returns ticket-not-found which the handler maps to 400 by
-	// design — the contract is that a successful cross-tenant
-	// resolution is impossible).
+	// POST resolve as a different tenant must fail. The store collapses
+	// the cross-tenant case into ErrTicketNotFound (the compound
+	// (tenant_id, ticket_id) lookup returns "not found" for both
+	// "doesn't exist" and "belongs to another tenant"), and the
+	// handler maps ErrTicketNotFound to 404 with the same response
+	// body as a genuine miss — see
+	// TestEscalationHandler_ServeResolve_NotFoundAndCrossTenantIndistinguishable
+	// for the regression test that pins the indistinguishability.
+	// This assertion only checks status != 200 because the more
+	// specific 404 contract is locked in by the dedicated test.
 	body, _ := json.Marshal(map[string]any{
 		"ticket_id":     tk.TicketID,
 		"resolver_hash": "attacker",
