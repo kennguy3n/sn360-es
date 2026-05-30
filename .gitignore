@@ -48,3 +48,9 @@ tests/e2e/.artifacts/
 # repo tree.
 __pycache__/
 *.pyc
+
+# Binary built by `go run ./cmd/sn360-es-handler-coverage/` when
+# invoked without `-o`. Matches at repo root only so the
+# `cmd/sn360-es-handler-coverage/` source directory is still
+# tracked.
+/sn360-es-handler-coverage

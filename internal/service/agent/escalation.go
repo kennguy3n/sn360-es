@@ -152,6 +152,43 @@ func (s *EscalationService) Escalate(ctx context.Context, tenantID string, incid
 	return ticket, nil
 }
 
+// ErrTicketNotFound is returned by the TicketStore implementations
+// (Memory + Postgres) when a Load/Update targets a ticket ID that
+// either does not exist OR belongs to a different tenant — both
+// failure modes collapse to the same sentinel because the store's
+// (tenant_id, ticket_id) compound lookup cannot distinguish them.
+// That collapse is the security contract: the handler MUST map this
+// to HTTP 404 with a generic body so an authenticated caller from
+// tenant B cannot fingerprint which ticket IDs belong to tenant A by
+// probing the resolve / get endpoints (a distinguishable 403 vs 404
+// would leak the existence of a cross-tenant ticket).
+//
+// Callers should use errors.Is(err, ErrTicketNotFound) rather than
+// string-matching the error message.
+var ErrTicketNotFound = errors.New("escalation: ticket not found")
+
+// ErrInvalidOutcome is returned when the caller supplies an outcome
+// value that is not in the recognised enum.
+var ErrInvalidOutcome = errors.New("escalation: invalid outcome")
+
+// ErrTicketIDRequired is returned when a service method is invoked
+// with an empty ticket ID. Exported as a sentinel so callers (and
+// the HTTP error classifier in internal/handler/escalation.go) can
+// distinguish a client-fault empty-id from a generic store-side
+// failure via errors.Is. The HTTP handler at
+// internal/handler/escalation.go already 400s on empty ticket_id
+// before reaching the service, so this branch is currently
+// structurally unreachable from the HTTP layer; the sentinel
+// exists so non-HTTP callers (event-bus consumers, future
+// gRPC/CLI surfaces) classify the same shape of failure the same
+// way the HTTP path does.
+var ErrTicketIDRequired = errors.New("escalation: ticket_id is required")
+
+// ErrAlreadyResolved is returned when the ticket has already been
+// resolved — a second resolution is a business-rule violation, not a
+// server error.
+var ErrAlreadyResolved = errors.New("escalation: already resolved")
+
 // ResolveEscalation records the SecOps outcome and feeds it into the
 // training pipeline. tenantID is the authenticated caller's tenant
 // and must match the ticket's TenantID — the store filters on it so a
@@ -162,14 +199,14 @@ func (s *EscalationService) ResolveEscalation(ctx context.Context, tenantID, tic
 		return dto.EscalationTicket{}, ErrTicketTenantIDRequired
 	}
 	if ticketID == "" {
-		return dto.EscalationTicket{}, errors.New("escalation: ticket_id is required")
+		return dto.EscalationTicket{}, ErrTicketIDRequired
 	}
 	if !outcome.Valid() {
-		return dto.EscalationTicket{}, fmt.Errorf("escalation: invalid outcome %q", outcome)
+		return dto.EscalationTicket{}, fmt.Errorf("%w: %q", ErrInvalidOutcome, outcome)
 	}
 	updated, err := s.store.Update(ctx, tenantID, ticketID, func(t *dto.EscalationTicket) error {
 		if t.Outcome != dto.OutcomePending {
-			return fmt.Errorf("escalation: already resolved as %q", t.Outcome)
+			return fmt.Errorf("%w as %q", ErrAlreadyResolved, t.Outcome)
 		}
 		t.Outcome = outcome
 		t.ResolvedAt = s.now()
@@ -307,7 +344,7 @@ func (m *MemoryTicketStore) Update(_ context.Context, tenantID, ticketID string,
 	key := memoryTicketKey{tenantID: tenantID, ticketID: ticketID}
 	t, ok := m.tickets[key]
 	if !ok {
-		return dto.EscalationTicket{}, errors.New("escalation: ticket not found")
+		return dto.EscalationTicket{}, ErrTicketNotFound
 	}
 	if err := mutate(&t); err != nil {
 		return dto.EscalationTicket{}, err

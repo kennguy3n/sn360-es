@@ -361,3 +361,22 @@ pgbouncer:
     serverIdleTimeout: 600
     serverLifetime: 3600
   labels: {}
+
+# PrometheusRule for autonomous-ops alerting. Emits a PrometheusRule
+# resource grouping the alerts the AI agent in
+# `internal/service/agent/alerts/` routes off of. The rules reference
+# real metric names emitted by `pkg/telemetry/metrics.go` so a
+# production deployment gets a working alert surface out of the box.
+#
+# Default-on so chart consumers don't silently ship without alerts.
+# Disable explicitly if alerts are managed elsewhere (e.g. a central
+# org-wide PrometheusRule CRD set).
+prometheusRule:
+  enabled: true
+  # Extra labels merged onto the PrometheusRule's metadata.labels so
+  # the rule matches the cluster's Prometheus instance ruleSelector.
+  labels: {}
+
+# Used by PrometheusRule annotations to build runbook URLs. Override
+# when forking the repo so runbook links resolve correctly.
+gitOwnerRepo: "kennguy3n/sn360-es"

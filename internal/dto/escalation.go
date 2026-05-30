@@ -11,6 +11,15 @@ const (
 	EscalationReasonZeroDayAttachment EscalationReason = "zero_day_attachment"
 	EscalationReasonLowConfidence     EscalationReason = "ai_low_confidence"
 	EscalationReasonUserRequested     EscalationReason = "user_requested"
+	// EscalationReasonOpsAlert is used by the autonomous-ops alert
+	// router when an Alertmanager webhook reaches the
+	// ActionEscalate branch (i.e. an infrastructure incident with
+	// no automated remediation). Keeping infra incidents under their
+	// own reason keeps downstream consumers — the FeedbackSink
+	// training pipeline + SOC dashboards filtering by reason —
+	// from conflating infrastructure incidents with genuine
+	// AI-confidence escalations on the email pipeline.
+	EscalationReasonOpsAlert EscalationReason = "ops_alert"
 )
 
 // Valid reports whether r is a known escalation reason.
@@ -20,7 +29,8 @@ func (r EscalationReason) Valid() bool {
 		EscalationReasonAccountCompromise,
 		EscalationReasonZeroDayAttachment,
 		EscalationReasonLowConfidence,
-		EscalationReasonUserRequested:
+		EscalationReasonUserRequested,
+		EscalationReasonOpsAlert:
 		return true
 	}
 	return false

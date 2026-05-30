@@ -42,6 +42,11 @@ func TenantIDFromContext(ctx context.Context) string {
 //     available to downstream handler-style code that reads from
 //     context.
 //
+// Production callers MUST treat the tenantID as already-verified —
+// e.g. consumers extract it from a signed message header, not from
+// the message body. See cmd/sn360-es/consumers.go's verifiedTenantID
+// helper for the producer-side pattern.
+//
 // Outside those two cases, the JWT middleware is the only thing that
 // should set this key. Setting it from a request handler that
 // otherwise reads it would be a bypass of the auth check.

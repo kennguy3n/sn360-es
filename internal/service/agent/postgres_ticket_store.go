@@ -195,7 +195,7 @@ func (s *PostgresTicketStore) Update(ctx context.Context, tenantID, ticketID str
 		&createdAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return dto.EscalationTicket{}, errors.New("escalation: ticket not found")
+			return dto.EscalationTicket{}, ErrTicketNotFound
 		}
 		return dto.EscalationTicket{}, fmt.Errorf("escalation: postgres update select: %w", err)
 	}
@@ -298,14 +298,33 @@ func codeToOutcome(code string) dto.EscalationOutcome {
 
 // derivePriorityAndStatus projects the DTO onto the legacy v1
 // priority/status columns. The escalation service does not track
-// priority explicitly, so we surface it via the trigger reason: the
-// confirmed_breach / account_compromise reasons map to 'critical',
-// everything else stays at the schema default 'normal'. Status is a
-// straight function of whether a resolved_at timestamp is present.
+// priority explicitly, so we surface it via the trigger reason:
+//
+//   - confirmed_breach / account_compromise: 'critical' — an
+//     actual breach signal on the email pipeline.
+//   - ops_alert: 'critical' — every ops_alert ticket is created
+//     exclusively from a `severity=critical` Alertmanager alert.
+//     The AlertRouter only routes to ActionEscalate when severity
+//     is critical (see alert_router.go:263 for the no-remediator
+//     branch and alert_router.go:401 for the remediation-failure
+//     fallback), so this mapping is a hard invariant of the
+//     ops_alert reason itself, not a heuristic. Without this
+//     entry the ticket would fall through to 'normal', which
+//     under-prioritises infrastructure incidents the moment any
+//     downstream SOC dashboard sorts/filters on the legacy
+//     priority column.
+//   - zero_day_attachment: 'high' — strong signal but not
+//     confirmed-compromise.
+//   - everything else: 'normal' (schema default).
+//
+// Status is a straight function of whether a resolved_at
+// timestamp is present.
 func derivePriorityAndStatus(t dto.EscalationTicket) (priority string, status string) {
 	priority = "normal"
 	switch t.Reason {
-	case dto.EscalationReasonConfirmedBreach, dto.EscalationReasonAccountCompromise:
+	case dto.EscalationReasonConfirmedBreach,
+		dto.EscalationReasonAccountCompromise,
+		dto.EscalationReasonOpsAlert:
 		priority = "critical"
 	case dto.EscalationReasonZeroDayAttachment:
 		priority = "high"

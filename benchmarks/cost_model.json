@@ -1,0 +1,142 @@
+{
+  "records": [
+    {
+      "breakdown": {
+        "compute": 0.0027,
+        "egress": 0.0336,
+        "kms": 0.018,
+        "postgres": 0.1888,
+        "redis": 0.1234,
+        "s3": 0.0418,
+        "tier1": 0.0666,
+        "tier2": 0.1665
+      },
+      "levers": "baseline (pre-PR #44)",
+      "profile": "low",
+      "telemetry": {
+        "pg_storage_gb": 0.515,
+        "s3_gb": 0.515,
+        "tier0_bypass_msgs": 450,
+        "tier1_msgs": 5550,
+        "tier2_msgs": 444,
+        "vcpu_hours": 0.0462
+      },
+      "total_per_tenant_month_usd": 0.6414
+    },
+    {
+      "breakdown": {
+        "compute": 0.0035,
+        "egress": 0.0336,
+        "kms": 0.018,
+        "postgres": 0.1061,
+        "redis": 0.1234,
+        "s3": 0.0418,
+        "tier1": 0.0106,
+        "tier2": 0.0881
+      },
+      "levers": "all levers on (post-PR #46)",
+      "profile": "low",
+      "telemetry": {
+        "pg_storage_gb": 0.4377,
+        "s3_gb": 0.515,
+        "tier0_bypass_msgs": 3060,
+        "tier1_msgs": 2940,
+        "tier2_msgs": 235,
+        "vcpu_hours": 0.0606
+      },
+      "total_per_tenant_month_usd": 0.4251
+    },
+    {
+      "breakdown": {
+        "compute": 0.012,
+        "egress": 0.039,
+        "kms": 0.108,
+        "postgres": 1.1263,
+        "redis": 0.1234,
+        "s3": 0.3695,
+        "tier1": 0.4026,
+        "tier2": 1.5936
+      },
+      "levers": "baseline (pre-PR #44)",
+      "profile": "medium",
+      "telemetry": {
+        "pg_storage_gb": 8.2397,
+        "s3_gb": 8.2397,
+        "tier0_bypass_msgs": 2448,
+        "tier1_msgs": 33552,
+        "tier2_msgs": 3355,
+        "vcpu_hours": 0.2072
+      },
+      "total_per_tenant_month_usd": 3.7744
+    },
+    {
+      "breakdown": {
+        "compute": 0.0153,
+        "egress": 0.039,
+        "kms": 0.108,
+        "postgres": 0.9006,
+        "redis": 0.1234,
+        "s3": 0.3695,
+        "tier1": 0.0697,
+        "tier2": 0.9191
+      },
+      "levers": "all levers on (post-PR #46)",
+      "profile": "medium",
+      "telemetry": {
+        "pg_storage_gb": 7.0038,
+        "s3_gb": 8.2397,
+        "tier0_bypass_msgs": 16646,
+        "tier1_msgs": 19354,
+        "tier2_msgs": 1935,
+        "vcpu_hours": 0.2636
+      },
+      "total_per_tenant_month_usd": 2.5446
+    },
+    {
+      "breakdown": {
+        "compute": 0.0802,
+        "egress": 0.093,
+        "kms": 0.765,
+        "postgres": 19.2522,
+        "redis": 0.1234,
+        "s3": 5.0178,
+        "tier1": 2.8825,
+        "tier2": 17.295
+      },
+      "levers": "baseline (pre-PR #44)",
+      "profile": "high",
+      "telemetry": {
+        "pg_storage_gb": 162.7326,
+        "s3_gb": 162.7326,
+        "tier0_bypass_msgs": 14790,
+        "tier1_msgs": 240210,
+        "tier2_msgs": 28825,
+        "vcpu_hours": 1.3825
+      },
+      "total_per_tenant_month_usd": 45.5091
+    },
+    {
+      "breakdown": {
+        "compute": 0.1012,
+        "egress": 0.093,
+        "kms": 0.765,
+        "postgres": 16.2896,
+        "redis": 0.1234,
+        "s3": 5.0178,
+        "tier1": 0.5559,
+        "tier2": 11.1186
+      },
+      "levers": "all levers on (post-PR #46)",
+      "profile": "high",
+      "telemetry": {
+        "pg_storage_gb": 138.3227,
+        "s3_gb": 162.7326,
+        "tier0_bypass_msgs": 100572,
+        "tier1_msgs": 154428,
+        "tier2_msgs": 18531,
+        "vcpu_hours": 1.7455
+      },
+      "total_per_tenant_month_usd": 34.0645
+    }
+  ]
+}

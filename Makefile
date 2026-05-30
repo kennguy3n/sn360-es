@@ -35,7 +35,7 @@ cover:
 	$(GO) tool cover -func=coverage.out
 
 .PHONY: lint
-lint: openapi-check tenant-lint
+lint: openapi-check tenant-lint handler-coverage
 	golangci-lint run ./...
 
 # --- Tenant isolation analyser ------------------------------------------
@@ -53,6 +53,18 @@ lint: openapi-check tenant-lint
 .PHONY: tenant-lint
 tenant-lint:
 	$(GO) run ./cmd/sn360-es-tenant-lint .
+
+# `handler-coverage` is a CI gate that verifies every route registered
+# in cmd/sn360-es/routes.go has a corresponding entry in
+# api/openapi.yaml (and vice versa, mod the operational allow-list
+# defined in cmd/sn360-es-handler-coverage/main.go). Catches drift
+# between the OpenAPI contract and the actual mux at PR time, not in
+# prod when a client gets an unexpected 404.
+.PHONY: handler-coverage
+handler-coverage:
+	$(GO) run ./cmd/sn360-es-handler-coverage/ \
+		--openapi api/openapi.yaml \
+		--routes cmd/sn360-es/routes.go
 
 .PHONY: test-e2e
 test-e2e:
@@ -126,6 +138,51 @@ migrate-status: migrate-bin
 .PHONY: migrate-check
 migrate-check: migrate-bin
 	$(MIGRATE_BIN) --path $(MIGRATIONS_DIR) check
+
+# migrate-check-online is the heavier counterpart of migrate-check.
+# It boots a transient Postgres via docker compose, runs every up
+# migration, rolls them all back down, then re-applies them up.
+# Two failures get caught:
+#
+#   1. A down migration that does not actually reverse its up
+#      (the most common cause of failed prod rollbacks — easy to
+#      miss in code review because static SQL inspection cannot
+#      detect "missing DROP TYPE" or "missing DROP INDEX").
+#
+#   2. An up migration that is not idempotent under retry. We
+#      apply twice; if the second application fails, the
+#      migration is doing something destructive on a non-fresh
+#      schema, which breaks Kubernetes rolling restarts where
+#      multiple pods race to apply.
+#
+# The target is intentionally docker-compose driven so the same
+# command runs in CI and locally. It depends on `docker compose
+# up -d postgres` succeeding — fail-fast if Docker is not
+# available rather than printing an opaque migration error.
+MIGRATE_CHECK_DSN ?= postgres://sn360es:sn360es@127.0.0.1:5432/sn360es?sslmode=disable
+
+.PHONY: migrate-check-online
+migrate-check-online: migrate-bin
+	@command -v docker >/dev/null 2>&1 || { echo "migrate-check-online requires docker; not found in PATH"; exit 2; }
+	$(DOCKER_COMPOSE) up -d postgres
+	@echo "Waiting for postgres to accept connections..."
+	@for i in $$(seq 1 30); do \
+		if $(DOCKER_COMPOSE) exec -T postgres pg_isready -U sn360es -d sn360es > /dev/null 2>&1; then \
+			echo "postgres ready"; break; \
+		fi; \
+		sleep 1; \
+		if [ $$i -eq 30 ]; then echo "postgres never became ready"; exit 2; fi; \
+	done
+	@echo "==> Applying all migrations up..."
+	$(MIGRATE_BIN) --path $(MIGRATIONS_DIR) --dsn "$(MIGRATE_CHECK_DSN)" up
+	@echo "==> Rolling back ALL migrations down..."
+	@count=$$(ls $(MIGRATIONS_DIR)/*.up.sql 2>/dev/null | wc -l); \
+		for _ in $$(seq 1 $$count); do \
+			$(MIGRATE_BIN) --path $(MIGRATIONS_DIR) --dsn "$(MIGRATE_CHECK_DSN)" down 1 || exit 1; \
+		done
+	@echo "==> Re-applying all migrations up (idempotence on a wiped schema)..."
+	$(MIGRATE_BIN) --path $(MIGRATIONS_DIR) --dsn "$(MIGRATE_CHECK_DSN)" up
+	@echo "migrate-check-online OK"
 
 .PHONY: migrate-force
 migrate-force: migrate-bin

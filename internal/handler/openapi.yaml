@@ -189,6 +189,13 @@ paths:
     post:
       tags: [escalation]
       summary: Resolve a SOC escalation ticket
+      description: |
+        Records the SecOps outcome on an existing escalation ticket.
+        The caller's tenant is verified against the ticket's TenantID;
+        a cross-tenant resolve attempt is indistinguishable from a
+        ticket-not-found result — both return 404 with the same
+        response body so the endpoint cannot be used to fingerprint
+        which ticket IDs belong to another tenant.
       requestBody:
         required: true
         content:
@@ -197,12 +204,100 @@ paths:
               $ref: "#/components/schemas/EscalationResolveRequest"
       responses:
         "200":
-          description: Resolved
+          description: |
+            Resolved. Returns the full updated EscalationTicket so
+            clients can render the post-resolve state (outcome,
+            resolution notes, resolved_at timestamp, complete
+            timeline) without a follow-up GET. The legacy
+            EscalationResolveResponse wrapper ({status, ticket_id})
+            is retained in this spec for documentation only; the
+            handler has always returned a full ticket, so
+            generated clients should consume EscalationTicket.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/EscalationResolveResponse"
+                $ref: "#/components/schemas/EscalationTicket"
         "400":
+          description: |
+            Client-side input fault. Returned for malformed JSON,
+            an unknown outcome value, an oversized request body, or
+            a missing ticket_id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: |
+            Missing or invalid authentication. Returned before any
+            body parsing so an unauthenticated caller cannot probe
+            the request schema by observing 400 vs 401 differentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: |
+            Ticket not found OR the ticket belongs to a different
+            tenant. The two cases return the same status code and
+            response body so cross-tenant callers cannot fingerprint
+            which ticket IDs exist in another tenant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: |
+            The ticket has already been resolved. Re-resolving a
+            non-pending ticket is a business-rule conflict, not an
+            input fault — the response is 409 (canonical "request
+            conflicts with current resource state") so clients can
+            distinguish a malformed-payload retry from a state-
+            conflict requiring a fresh fetch + re-decision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: |
+            Server-side fault. Returned when a downstream dependency
+            fails (Postgres ticket store unreachable, NATS publish
+            failure, JSON marshal error). The error body is
+            intentionally generic — the diagnostic detail lives in
+            the server logs, not on the wire.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/escalation/{ticket_id}:
+    get:
+      tags: [escalation]
+      summary: Fetch an escalation ticket by ID
+      description: |
+        Returns the structured ticket payload (incident, timeline,
+        outcome) for the supplied ticket_id. The caller's tenant is
+        verified against the ticket's TenantID — cross-tenant
+        accesses return 404, not the ticket, to avoid leaking the
+        existence of a ticket from a different tenant.
+      parameters:
+        - in: path
+          name: ticket_id
+          required: true
+          schema:
+            type: string
+          description: Ticket identifier returned by the escalation publisher.
+      responses:
+        "200":
+          description: Ticket found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EscalationTicket"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
 
   /v1/dashboard/summary:
@@ -666,24 +761,100 @@ components:
           type: string
 
     EscalationResolveRequest:
+      description: |
+        Payload for POST /v1/escalation/resolve. Field names + enum
+        values are the canonical SOC-outcome vocabulary used by
+        `internal/dto.EscalationOutcome`; the handler decodes with
+        `DisallowUnknownFields()` so this schema must stay in lock-
+        step with the Go struct tags at internal/handler/escalation.go.
       type: object
-      required: [ticket_id, resolution]
+      required: [ticket_id, outcome]
       properties:
         ticket_id:
           type: string
-        resolution:
+        resolver_hash:
           type: string
-          enum: [confirmed_threat, false_positive, ignored]
+          description: |
+            Privacy-hash identifying the SecOps engineer who resolved
+            the ticket. Optional in the request; populated by the
+            handler from request context if not supplied.
+        outcome:
+          type: string
+          description: |
+            SOC verdict on the escalated incident. Drives the feedback
+            sink + training pipeline at internal/service/agent/escalation.go.
+          enum:
+            - confirmed_phishing
+            - false_positive
+            - requires_hunting
+            - closed_no_action
         notes:
           type: string
 
     EscalationResolveResponse:
+      description: |
+        Successful resolve responses return the full updated
+        EscalationTicket (including timeline, outcome, resolution
+        notes). This schema documents the response wrapper kept for
+        backward compatibility with first-generation clients; new
+        clients should consume EscalationTicket directly.
       type: object
       properties:
         status:
           type: string
         ticket_id:
           type: string
+
+    EscalationTicket:
+      type: object
+      description: |
+        Structured incident record returned by GET
+        /v1/escalation/{ticket_id}. Pseudonymised — never carries
+        raw subject / sender / body content.
+      properties:
+        ticket_id:
+          type: string
+        tenant_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        reason:
+          type: string
+          enum: [confirmed_breach, account_compromise, zero_day_attachment, ai_low_confidence, user_requested, ops_alert]
+        incident:
+          type: object
+          properties:
+            pseudo_message_id: { type: string }
+            tier: { type: string }
+            category: { type: string }
+            reason: { type: string }
+            score: { type: number }
+            affected_user_count: { type: integer }
+            ai_summary: { type: string }
+            indicators:
+              type: array
+              items: { type: string }
+            detected_at: { type: string, format: date-time }
+        timeline:
+          type: array
+          items:
+            type: object
+            properties:
+              occurred_at: { type: string, format: date-time }
+              step: { type: string }
+              detail: { type: string }
+        outcome:
+          type: string
+          enum: ["", confirmed_phishing, false_positive, requires_hunting, closed_no_action]
+        resolved_at:
+          type: string
+          format: date-time
+        resolver_hash:
+          type: string
+        resolution_notes:
+          type: string
+      required: [ticket_id, tenant_id, created_at, reason]
 
     DashboardSummary:
       type: object

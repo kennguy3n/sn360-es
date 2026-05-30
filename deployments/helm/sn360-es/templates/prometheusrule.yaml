@@ -1,0 +1,328 @@
+{{- /*
+PrometheusRule manifest for sn360-es.
+
+Emits a single PrometheusRule resource grouping the autonomous-ops
+alerts the AI agent in `internal/service/agent/alerts/` routes off
+of. The rules reference real metric names emitted by the application
+(see `pkg/telemetry/metrics.go`) so an operator running the chart
+gets a working alert surface out of the box.
+
+Disable by setting `prometheusRule.enabled=false`. The default is
+true so production deployments don't silently ship without alerts.
+
+Groups and their intent:
+
+  evaluation-pipeline
+    Tier 0/1/2 latency + degraded-fallback rate. Pages on customer-
+    visible evaluation slowdowns and on AI tier failures that
+    silently degrade the pipeline.
+
+  retention
+    Partition worker / cleanup worker health. Pages when the
+    partition runner failed to wire AND the cleanup fallback didn't
+    pick it up (the silent-failure mode PR #46 closed).
+
+  ingestion
+    Event bus consumer lag + ingestion poll error rate. Pages on
+    backpressure that would skew evaluation timeliness.
+
+  http-edge
+    HTTP server error rate + p99 latency + rate-limit pressure.
+
+  data-plane
+    Postgres query error spikes (proxied via HTTP 5xx on database-
+    backed endpoints since we don't ship a PG exporter in the chart).
+*/}}
+{{- if .Values.prometheusRule.enabled -}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "sn360-es.fullname" . }}
+  labels:
+    {{- include "sn360-es.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: evaluation-pipeline
+      interval: 30s
+      rules:
+        - alert: SN360ESTier1LatencyHigh
+          # Tier 1 p99 over a 5-minute window above the SLO budget.
+          # The SLO is 250 ms (see `internal/docs/ARCHITECTURE.md` §6.3);
+          # we fire at 500 ms to give a 2x burn allowance.
+          expr: |
+            histogram_quantile(0.99,
+              sum by (le) (rate(sn360_es_tier1_inference_latency_seconds_bucket[5m]))
+            ) > 0.5
+          for: 10m
+          labels:
+            severity: warning
+            component: tier1
+          annotations:
+            summary: "Tier 1 inference p99 latency above 500ms"
+            description: |
+              Tier 1 encoder inference is slower than expected.
+              Check pod CPU saturation; if {{`{{ $value }}`}}s sustained,
+              consider scaling the consumers role replicas.
+            runbook_url: "https://github.com/{{ .Values.gitOwnerRepo | default "kennguy3n/sn360-es" }}/blob/main/internal/docs/RUNBOOKS.md#tier1-latency"
+
+        - alert: SN360ESTier2LatencyHigh
+          # Tier 2 SLM call is inherently slower; SLO is 5s, alert at 10s.
+          expr: |
+            histogram_quantile(0.99,
+              sum by (le) (rate(sn360_es_tier2_inference_latency_seconds_bucket[5m]))
+            ) > 10
+          for: 10m
+          labels:
+            severity: warning
+            component: tier2
+          annotations:
+            summary: "Tier 2 inference p99 latency above 10s"
+            description: |
+              Tier 2 SLM (Bedrock Haiku) is slow. Verify Bedrock
+              endpoint health and Tier 2 escalation volume — a flood
+              of escalations can saturate the SLM concurrency budget.
+
+        - alert: SN360ESPipelineDegraded
+          # evaluate_degraded_total fires when a tier short-circuits to
+          # a safe fallback (e.g. Tier 2 timeout → assume escalate).
+          # A persistent non-zero rate means we're under-detecting.
+          expr: |
+            sum by (service) (rate(sn360_es_evaluate_degraded_total[5m])) > 0.01
+          for: 5m
+          labels:
+            severity: warning
+            component: pipeline
+          annotations:
+            summary: "Evaluation pipeline degraded ({{`{{ $labels.service }}`}})"
+            description: |
+              Service {{`{{ $labels.service }}`}} is short-circuiting to a
+              safe fallback at {{`{{ $value }}`}} events/sec. Pipeline is
+              functional but accuracy degraded.
+
+        - alert: SN360ESTier0BypassRateLow
+          # If Tier 0 bypass rate falls below 30% the cost model
+          # assumptions break down. Page so operators can investigate
+          # AI cache health.
+          expr: |
+            (
+              sum(rate(sn360_es_tier0_bypass_total[1h]))
+              /
+              clamp_min(sum(rate(sn360_es_evaluate_outcome_total[1h])), 1e-9)
+            ) < 0.30
+          for: 30m
+          labels:
+            severity: info
+            component: tier0
+          annotations:
+            summary: "Tier 0 bypass rate below 30% sustained 30m"
+            description: |
+              Cost model expects 60-70% Tier 0 bypass. Investigate AI
+              cache hit rate and tenant-scoped key distribution.
+
+    - name: retention
+      interval: 1m
+      rules:
+        - alert: SN360ESWorkerCycleStalled
+          # Each worker should complete >=1 cycle per its configured
+          # interval; alert when none in 30m. Two failure modes need
+          # detecting separately because PromQL rate==0 and absent()
+          # have different semantics:
+          #
+          #   1. Worker ran once, then stalled. The counter exists,
+          #      so rate() returns 0 within the 5-minute staleness
+          #      window; `rate(...) == 0` catches this.
+          #
+          #   2. Worker never started. The counter never got
+          #      registered, so rate() returns no data. `absent_over_time`
+          #      on the per-worker counter detects this; we 'or' the
+          #      two so either failure mode fires the alert.
+          #
+          # Per-worker absence detection requires enumerating the
+          # worker names — we use the static set the application's
+          # `internal/service/worker/` package registers on boot via
+          # the Job.Name() interface. Adding a new worker requires
+          # adding its name here. Keep this list in sync with the
+          # *Job.Name() values; the worker_test.go suites lock the
+          # canonical strings.
+          #
+          # Detection-latency budget (operational expectation):
+          # worst case ≈ 60 minutes from stall to page. The
+          # `rate(...[30m])==0` leg has to wait for the last
+          # successful cycle's counter increment to age out of the
+          # 30-minute window before rate goes to 0; the
+          # `for: 30m` clause then waits another 30 minutes before
+          # firing. The `absent_over_time(...[30m])` legs have the
+          # same 30+30 budget for the boot-failure case. This is
+          # deliberately conservative — workers legitimately pause
+          # while idle (no work to do), and a tighter window would
+          # produce false pages. If a faster signal is needed for a
+          # specific worker, add a per-worker alert with its own
+          # SLO budget rather than tightening this catch-all.
+          expr: |
+            (
+              sum by (worker) (rate(sn360_es_worker_cycle_completed_total[30m])) == 0
+            )
+            or
+            (
+              label_replace(absent_over_time(sn360_es_worker_cycle_completed_total{worker="cleanup"}[30m]),                  "worker", "cleanup",                  "", "") == 1
+            )
+            or
+            (
+              label_replace(absent_over_time(sn360_es_worker_cycle_completed_total{worker="directory-sync"}[30m]),           "worker", "directory-sync",           "", "") == 1
+            )
+            or
+            (
+              label_replace(absent_over_time(sn360_es_worker_cycle_completed_total{worker="partition_maintenance"}[30m]),    "worker", "partition_maintenance",    "", "") == 1
+            )
+            or
+            (
+              label_replace(absent_over_time(sn360_es_worker_cycle_completed_total{worker="relationship-aggregation"}[30m]), "worker", "relationship-aggregation", "", "") == 1
+            )
+            or
+            (
+              label_replace(absent_over_time(sn360_es_worker_cycle_completed_total{worker="vendor-discovery"}[30m]),         "worker", "vendor-discovery",         "", "") == 1
+            )
+          for: 30m
+          labels:
+            severity: critical
+            component: workers
+          annotations:
+            summary: "Worker {{`{{ $labels.worker }}`}} has not completed a cycle in 30m"
+            description: |
+              The cleanup, directory-sync, partition_maintenance,
+              relationship-aggregation, and vendor-discovery workers
+              each emit a counter on
+              cycle completion. A flatline (rate==0) indicates the
+              Run() loop is stuck; an absent metric indicates the
+              worker never started. Either case warrants a pod
+              inspection and a rollout-restart.
+
+    - name: ingestion
+      interval: 30s
+      rules:
+        - alert: SN360ESConsumerLagHigh
+          # event_lag_seconds is the gauge KEDA scales on. If it
+          # exceeds the SLO budget for 5 min, the consumers role
+          # autoscaler hasn't caught up and we need human attention.
+          # The metric carries (bus, stream) labels — see
+          # pkg/telemetry/metrics.go EventLagSeconds registration.
+          expr: |
+            max by (bus, stream) (sn360_es_event_lag_seconds) > 60
+          for: 5m
+          labels:
+            severity: warning
+            component: ingestion
+          annotations:
+            summary: "Consumer lag on {{`{{ $labels.bus }}`}}:{{`{{ $labels.stream }}`}} above 60s"
+            description: |
+              KEDA should have scaled consumers up by now. Check
+              consumer pod count vs KEDA ScaledObject maxReplicas;
+              the autoscaler may be at its replica ceiling.
+
+        - alert: SN360ESEventErrorsRising
+          # event_errors_total carries (bus, stream, stage) labels —
+          # see pkg/telemetry/metrics.go EventErrors registration.
+          # Group by (bus, stream) so the operator gets per-stream
+          # granularity; `stage` is summed over because a poison-pill
+          # typically affects one logical stream regardless of which
+          # stage in the handler chain rejects it.
+          expr: |
+            sum by (bus, stream) (rate(sn360_es_event_errors_total[5m])) > 0.5
+          for: 5m
+          labels:
+            severity: warning
+            component: ingestion
+          annotations:
+            summary: "Event errors on {{`{{ $labels.bus }}`}}:{{`{{ $labels.stream }}`}} above 0.5/s"
+            description: |
+              Consumer handler is erroring out on this stream.
+              Persistent errors indicate a poison-pill message or
+              a downstream dependency outage.
+
+    - name: http-edge
+      interval: 30s
+      rules:
+        - alert: SN360ESHTTP5xxRising
+          expr: |
+            (
+              sum(rate(sn360_es_http_requests_total{status=~"5.."}[5m]))
+              /
+              clamp_min(sum(rate(sn360_es_http_requests_total[5m])), 1e-9)
+            ) > 0.01
+          for: 5m
+          labels:
+            severity: critical
+            component: http
+          annotations:
+            summary: "HTTP 5xx error rate above 1%"
+            description: |
+              {{`{{ $value | humanizePercentage }}`}} of requests are
+              returning 5xx. Likely upstream (PG / Redis / NATS)
+              outage or a panic in a handler.
+
+        - alert: SN360ESHTTPLatencyHigh
+          expr: |
+            histogram_quantile(0.99,
+              sum by (le, route) (rate(sn360_es_http_request_latency_seconds_bucket[5m]))
+            ) > 1
+          for: 10m
+          labels:
+            severity: warning
+            component: http
+          annotations:
+            summary: "HTTP p99 latency above 1s on {{`{{ $labels.route }}`}}"
+            description: |
+              The role-split fix (PR #46) should have prevented Tier-2
+              SLM calls from stalling API handlers. If this fires on
+              the api role, check whether the workload is hitting a
+              consumers/workers pod by mistake (route to api role only).
+
+        - alert: SN360ESRateLimitingPressureHigh
+          # http_rate_limited_total above 5% of requests means clients
+          # are hitting the limiter wall consistently. Either raise the
+          # bucket, or the caller is misbehaving and should be
+          # investigated.
+          expr: |
+            (
+              sum(rate(sn360_es_http_rate_limited_total[5m]))
+              /
+              clamp_min(sum(rate(sn360_es_http_requests_total[5m])), 1e-9)
+            ) > 0.05
+          for: 15m
+          labels:
+            severity: info
+            component: http
+          annotations:
+            summary: "Rate-limited requests above 5% sustained"
+            description: |
+              Clients are being throttled at {{`{{ $value | humanizePercentage }}`}}.
+              Identify the noisiest tenant from the rate_limited
+              labels and decide whether to raise the bucket or
+              investigate misbehaviour.
+
+    - name: data-plane
+      interval: 1m
+      rules:
+        - alert: SN360ESEvaluateLatencyP99High
+          # End-to-end /v1/evaluate p99 is the customer-visible SLO.
+          # SLO is 500 ms; alert at 1s with a 2x burn budget.
+          expr: |
+            histogram_quantile(0.99,
+              sum by (le) (rate(sn360_es_evaluate_latency_seconds_bucket[5m]))
+            ) > 1
+          for: 10m
+          labels:
+            severity: critical
+            component: pipeline
+            slo: evaluate-p99
+          annotations:
+            summary: "End-to-end evaluate p99 latency above 1s"
+            description: |
+              The pipeline composes Tier 0 + 1 + 2 + Rspamd; a slow
+              upstream bleeds through here even if its own latency
+              alert hasn't fired yet. Check the by-tier histograms
+              above to identify which stage is the dominator.
+{{- end }}

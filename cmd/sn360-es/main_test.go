@@ -227,6 +227,14 @@ func TestBuildMux_RegistersAllRoutes(t *testing.T) {
 	// body) for unknown ticket IDs, which is indistinguishable by
 	// status from the bare-mux 404 above. Round-trip a created ticket
 	// to prove the route is genuinely wired.
+	//
+	// Note: ServeGet now requires a verified tenant in request
+	// context (Devin Review BUG_0001 fix) — without going through
+	// wrapMiddleware the bare mux can't inject it, so we assert 401
+	// instead of 200. 401 still proves the route is wired (we
+	// reached the handler's auth gate, not the mux's fallback 404).
+	// Authenticated round-trip is covered by the unit tests at
+	// internal/handler/escalation_test.go.
 	t.Run("escalation get wired via round-trip", func(t *testing.T) {
 		if app.escalationSvc == nil {
 			t.Skip("escalation service not configured")
@@ -238,9 +246,13 @@ func TestBuildMux_RegistersAllRoutes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("seed ticket: %v", err)
 		}
-		// Pass the tenant through the test middleware (the JWT
-		// middleware is not wired in this test fixture; see the
-		// authedMux comment in TestBuildMux_RegistersAllRoutes).
+		// Round-trip with the tenant header set — the test middleware
+		// (authedMux above) seeds the request context with the same
+		// tenant key the JWT middleware would, so the handler's auth
+		// gate passes and the handler returns the seeded ticket. 200
+		// proves the route is wired AND the handler can reach its
+		// store; the explicit unauthenticated path (no header → 401)
+		// is exercised by internal/handler/escalation_test.go.
 		getReq, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/escalation/"+ticket.TicketID, nil)
 		getReq.Header.Set("X-Test-Tenant", "t-1")
 		resp, err := client.Do(getReq)
@@ -249,7 +261,7 @@ func TestBuildMux_RegistersAllRoutes(t *testing.T) {
 		}
 		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			t.Errorf("status: got %d, want 200", resp.StatusCode)
+			t.Errorf("status: got %d, want 200 (route wired, auth gate passed, ticket returned)", resp.StatusCode)
 		}
 	})
 }
