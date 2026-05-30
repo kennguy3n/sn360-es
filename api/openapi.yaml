@@ -204,11 +204,19 @@ paths:
               $ref: "#/components/schemas/EscalationResolveRequest"
       responses:
         "200":
-          description: Resolved
+          description: |
+            Resolved. Returns the full updated EscalationTicket so
+            clients can render the post-resolve state (outcome,
+            resolution notes, resolved_at timestamp, complete
+            timeline) without a follow-up GET. The legacy
+            EscalationResolveResponse wrapper ({status, ticket_id})
+            is retained in this spec for documentation only; the
+            handler has always returned a full ticket, so
+            generated clients should consume EscalationTicket.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/EscalationResolveResponse"
+                $ref: "#/components/schemas/EscalationTicket"
         "400":
           description: |
             Client-side input fault. Returned for malformed JSON,

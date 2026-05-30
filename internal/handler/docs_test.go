@@ -114,3 +114,42 @@ func TestOpenAPI_EscalationTicketReasonEnumMatchesDTO(t *testing.T) {
 		t.Fatalf("EscalationTicket.reason enum drift between OpenAPI spec and internal/dto:\n  spec: %v\n  dto:  %v", specEnum, dtoEnum)
 	}
 }
+
+// TestOpenAPI_EscalationResolveReturnsTicketSchema pins the
+// invariant that the POST /v1/escalation/resolve 200 response
+// schema references EscalationTicket (not the legacy
+// EscalationResolveResponse wrapper). The handler at
+// internal/handler/escalation.go:154 calls
+// `writeJSON(w, http.StatusOK, ticket)` with a full
+// dto.EscalationTicket value (timeline, outcome, resolved_at,
+// resolver_hash, resolution_notes, ...). If the OpenAPI 200
+// response points at EscalationResolveResponse (only {status,
+// ticket_id}), clients doing schema-driven codegen end up with
+// stub types that throw away every field beyond status/ticket_id
+// — the exact mismatch Devin Review caught in round 16. This
+// test pins the spec-side $ref so any future drift fails locally.
+func TestOpenAPI_EscalationResolveReturnsTicketSchema(t *testing.T) {
+	h, err := NewDocsHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := string(h.Spec())
+
+	// Locate the POST /v1/escalation/resolve 200-response block.
+	// The regex scopes to the resolve path's responses by anchoring
+	// on the unique-in-the-spec literal `/v1/escalation/resolve:`
+	// then walking forward to the first `"200":` block. The (?s)
+	// flag lets `.` match newlines so the lazy capture spans the
+	// intervening request body + parameters sections.
+	re := regexp.MustCompile(`(?s)/v1/escalation/resolve:.*?responses:\s*\n\s*"200":.*?\$ref:\s*"#/components/schemas/([A-Za-z0-9_]+)"`)
+	m := re.FindStringSubmatch(spec)
+	if m == nil {
+		t.Fatalf("could not locate POST /v1/escalation/resolve 200 response schema in OpenAPI spec")
+	}
+	const want = "EscalationTicket"
+	if m[1] != want {
+		t.Fatalf("POST /v1/escalation/resolve 200 response schema = %q, want %q.\n"+
+			"The handler returns a full dto.EscalationTicket; the spec MUST advertise the same shape so generated clients can deserialise every field.",
+			m[1], want)
+	}
+}
