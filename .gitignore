@@ -42,3 +42,9 @@ scripts/corpus/loadtest/*.json
 # about the current code's behaviour and grows the repo with
 # transient debug output.
 tests/e2e/.artifacts/
+
+# Python bytecode for the cost-model scripts in scripts/cost_model/.
+# Generated locally by `python3 -m unittest`; never useful in the
+# repo tree.
+__pycache__/
+*.pyc

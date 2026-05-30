@@ -21,8 +21,14 @@ type CommunicationStore interface {
 
 // TenantLister enumerates the tenants the worker should iterate
 // over. The Postgres TenantRepository satisfies this.
+//
+// IterateActive is the supported iteration path — it yields tenants
+// in keyset-paginated batches so memory stays O(batchSize) regardless
+// of tenant count. List is retained for test fixtures and admin
+// queries that operate on a small bounded set.
 type TenantLister interface {
 	List(ctx context.Context, limit int) ([]repository.Tenant, error)
+	IterateActive(ctx context.Context, batchSize int, yield func([]repository.Tenant) error) error
 }
 
 // CommunicationUpserter is the small write surface the relationship
@@ -240,10 +246,6 @@ func (j *RelationshipJob) Interval() time.Duration { return j.interval }
 
 // Run implements Job.
 func (j *RelationshipJob) Run(ctx context.Context) error {
-	tenants, err := j.cfg.Tenants.List(ctx, 0)
-	if err != nil {
-		return err
-	}
 	now := time.Now().UTC()
 	since := now.Add(-j.window)
 	recentCutoff := now.Add(-7 * 24 * time.Hour)
@@ -253,225 +255,260 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 	reclassified := 0
 	raceSkipped := 0
 	corruptSkipped := 0
-	for _, t := range tenants {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		rows, err := j.cfg.Communications.ListByTenant(ctx, t.ID, since, j.maxPerTenant)
-		if err != nil {
-			j.logger.Warn("worker.relationship: list communication histories failed",
-				slog.String("tenant_id", t.ID), slog.Any("error", err))
-			if firstErr == nil {
-				firstErr = err
+	totalTenants := 0
+	// activeTenantIDs is accumulated across batches so the prune
+	// step below can drop watermarks for tenants that no longer
+	// exist. UUID set memory is O(tenants) (~36 B each) which is
+	// fine at 10k+; the row loop's per-tenant state stays scoped
+	// to the batch iteration so working-set memory stays O(batch).
+	activeTenantIDs := make(map[string]struct{})
+	iterErr := j.cfg.Tenants.IterateActive(ctx, 0, func(batch []repository.Tenant) error {
+		for _, t := range batch {
+			if err := ctx.Err(); err != nil {
+				return err
 			}
-			// Watermark NOT advanced: this tenant's lastCycleStartedAt
-			// keeps its previous value so the next cycle re-evaluates
-			// rows from the last point we successfully sampled. A
-			// partial outage of one tenant must not cost histogram
-			// samples on the recovery cycle.
-			continue
-		}
-		// Snapshot this tenant's previous-cycle watermark before
-		// the row loop. The row loop uses it as the "genuinely new
-		// activity since last cycle" gate; we advance the stored
-		// watermark to `now` only AFTER the row loop completes so
-		// a ctx cancellation mid-loop (handled inside the loop)
-		// leaves the watermark untouched and the next cycle picks
-		// up where this one left off. The zero value on the very
-		// first per-tenant cycle (map miss) lets every in-window
-		// row seed the histogram with one bootstrap sample.
-		prevCycleStartedAt := j.lastCycleStartedAt[t.ID]
-		// Per-tenant, per-cycle baseline cache: many communication
-		// history rows share the same (recipient, sender_domain)
-		// baseline. The cache collapses N rows-per-baseline into a
-		// single Baselines.Get for the whole cycle; subsequent
-		// rows pick up the running-aggregate state that
-		// persistBaselineUpdate writes back into the cache. The
-		// cache is created fresh per tenant so cross-tenant state
-		// can never leak.
-		cache := make(baselineCache)
-		for i := range rows {
-			h := rows[i]
-
-			// Decay Count7d to zero when LastSeenAt has aged past
-			// the rolling 7-day window. The ingestion-time upsert
-			// is monotonic, so without a periodic reset the counter
-			// inflates forever; this worker is the reset authority.
-			if h.Count7d > 0 && h.LastSeenAt.Before(recentCutoff) {
-				h.Count7d = 0
-				decayed7d++
-			}
-
-			// Re-classify the relationship label using the
-			// (possibly decayed) counts plus the plaintext
-			// SenderDomain so downstream Tier-0 routing always
-			// sees an up-to-date taxonomy. Rows with non-positive
-			// Count30d are skipped because the Classifier treats
-			// zero-count summaries as FirstTimeExternal — a value
-			// that would be wrong for a row that necessarily had
-			// historical activity to exist.
-			domain := strings.ToLower(strings.TrimSpace(h.SenderDomain))
-			if domain != "" && h.Count30d > 0 {
-				// UniqueRecipients is 1 by construction: each
-				// CommunicationHistory row represents a single
-				// (sender, recipient) pair (the table's primary key
-				// is the (tenant, sender_hash, recipient_hash)
-				// triple), so a single row is one unique recipient
-				// by definition. The Classifier only consumes this
-				// field to gate Partner promotion, which is a
-				// per-domain-aggregate concern handled separately by
-				// VendorJob.buildSenderObservations below; passing 1
-				// here keeps Relationship reclassification a
-				// per-pair operation and avoids cross-row coupling.
-				sum := relationship.CommunicationSummary{
-					SenderDomain:     domain,
-					InboundCount:     h.Count30d,
-					FirstSeen:        h.FirstSeenAt,
-					LastSeen:         h.LastSeenAt,
-					UniqueRecipients: 1,
-				}
-				cat, cerr := j.classifier.Classify(ctx, "", sum)
-				if cerr == nil && string(cat) != h.Relationship {
-					h.Relationship = string(cat)
-					reclassified++
-				}
-			}
-
-			// Behavioral baseline accumulation: append the current
-			// LastSeenAt hour to the existing per-(user,
-			// sender_domain) send-hour distribution rather than
-			// overwriting it with a single-element slice. The
-			// accumulated histogram is what
-			// relationship.BaselineAnomalyCheck consumes (see
-			// internal/service/relationship/timing.go) — feeding it
-			// a length-1 slice every cycle would collapse the
-			// distribution and make the histogram useless.
-			//
-			// The modal (most-frequent) hour computed from the
-			// updated distribution is then mirrored onto
-			// h.TypicalHour so the worker's CAS write below
-			// propagates it to communication_histories.typical_hour
-			// for the Tier 0 ATO heuristic to read on the hot path.
-			//
-			// Important: the baseline preparation is split from its
-			// persistence. prepareBaselineUpdate is read-only — it
-			// fetches the prior baseline, appends sendHour to the
-			// in-memory slice, and returns the prepared struct
-			// without writing it back. The actual Upsert happens
-			// only AFTER the canonical communication-history CAS
-			// succeeds (see persistBaselineUpdate below), so a CAS
-			// race rejection cannot leave a phantom sample in the
-			// histogram that a subsequent cycle would observe and
-			// double-count.
-			modalHour := -1
-			var preparedBaseline *repository.UserBehavioralBaseline
-			// Only feed the baseline when this row genuinely had
-			// new activity since the previous cycle. If LastSeenAt
-			// has not advanced past prevCycleStartedAt the row was
-			// already sampled in an earlier cycle and re-appending
-			// the same hour would double-count the same underlying
-			// message — which, with Window≫Interval, would saturate
-			// the 168-sample FIFO cap with a single pair's timestamp
-			// and destroy the histogram's representativeness.
-			//
-			// On the very first Run after process start
-			// prevCycleStartedAt is the zero value, so every
-			// in-window row passes this gate and seeds the
-			// histogram with one bootstrap sample. The modal-hour
-			// mirror to h.TypicalHour and the CAS write below still
-			// run on every row regardless — only the histogram
-			// append is gated.
-			if j.cfg.Baselines != nil && j.cfg.Hasher != nil &&
-				len(h.RecipientHash) > 0 && len(h.SenderDomainHash) > 0 &&
-				h.LastSeenAt.After(prevCycleStartedAt) {
-				sendHour := h.LastSeenAt.UTC().Hour()
-				accumulated, bl := j.prepareBaselineUpdate(ctx, t.ID, h, sendHour, cache)
-				if len(accumulated) > 0 {
-					modalHour = modalHourOf(accumulated)
-				}
-				preparedBaseline = bl
-			}
-			if modalHour >= 0 && modalHour < 24 {
-				h.TypicalHour = modalHour
-			} else if h.TypicalHour < 0 || h.TypicalHour >= 24 {
-				// Carry forward an existing valid value; otherwise
-				// fall back to the sentinel so the repository's
-				// CASE guard leaves the column untouched.
-				h.TypicalHour = repository.TypicalHourUnset
-			}
-
-			// Capture the snapshot's UpdatedAt as the CAS guard so
-			// the write only lands if ingestion has not produced a
-			// fresher version of this row between ListByTenant
-			// (above) and now. A zero UpdatedAt means the row never
-			// went through the canonical Postgres Upsert path, so
-			// the CAS would either match every zero-updated_at row
-			// (Postgres) or hit an error (the validation guard in
-			// UpdateCountsIfFresh) — either way the safe action is
-			// to skip rather than overwrite arbitrary state.
-			readAt := h.UpdatedAt
-			if readAt.IsZero() {
-				j.logger.Warn("worker.relationship: skipped row with zero updated_at",
-					slog.String("tenant_id", t.ID),
-					slog.String("row_id", h.ID))
-				corruptSkipped++
-				continue
-			}
-			updated, err := j.cfg.Upserter.UpdateCountsIfFresh(ctx, &h, readAt)
+			activeTenantIDs[t.ID] = struct{}{}
+			totalTenants++
+			rows, err := j.cfg.Communications.ListByTenant(ctx, t.ID, since, j.maxPerTenant)
 			if err != nil {
-				j.logger.Warn("worker.relationship: update-if-fresh failed",
+				j.logger.Warn("worker.relationship: list communication histories failed",
 					slog.String("tenant_id", t.ID), slog.Any("error", err))
 				if firstErr == nil {
 					firstErr = err
 				}
+				// Watermark NOT advanced: this tenant's lastCycleStartedAt
+				// keeps its previous value so the next cycle re-evaluates
+				// rows from the last point we successfully sampled. A
+				// partial outage of one tenant must not cost histogram
+				// samples on the recovery cycle.
 				continue
 			}
-			if !updated {
-				raceSkipped++
-				// Drop preparedBaseline on the floor — its append
-				// was drawn from a stale snapshot, so persisting it
-				// would pollute the histogram with a phantom
-				// sample. The next cycle will re-read the row and
-				// re-prepare against the fresher LastSeenAt.
-				continue
+			// Snapshot this tenant's previous-cycle watermark before
+			// the row loop. The row loop uses it as the "genuinely new
+			// activity since last cycle" gate; we advance the stored
+			// watermark to `now` only AFTER the row loop completes so
+			// a ctx cancellation mid-loop (handled inside the loop)
+			// leaves the watermark untouched and the next cycle picks
+			// up where this one left off. The zero value on the very
+			// first per-tenant cycle (map miss) lets every in-window
+			// row seed the histogram with one bootstrap sample.
+			prevCycleStartedAt := j.lastCycleStartedAt[t.ID]
+			// Per-tenant, per-cycle baseline cache: many communication
+			// history rows share the same (recipient, sender_domain)
+			// baseline. The cache collapses N rows-per-baseline into a
+			// single Baselines.Get for the whole cycle; subsequent
+			// rows pick up the running-aggregate state that
+			// persistBaselineUpdate writes back into the cache. The
+			// cache is created fresh per tenant so cross-tenant state
+			// can never leak.
+			cache := make(baselineCache)
+			for i := range rows {
+				h := rows[i]
+
+				// Decay Count7d to zero when LastSeenAt has aged past
+				// the rolling 7-day window. The ingestion-time upsert
+				// is monotonic, so without a periodic reset the counter
+				// inflates forever; this worker is the reset authority.
+				if h.Count7d > 0 && h.LastSeenAt.Before(recentCutoff) {
+					h.Count7d = 0
+					decayed7d++
+				}
+
+				// Re-classify the relationship label using the
+				// (possibly decayed) counts plus the plaintext
+				// SenderDomain so downstream Tier-0 routing always
+				// sees an up-to-date taxonomy. Rows with non-positive
+				// Count30d are skipped because the Classifier treats
+				// zero-count summaries as FirstTimeExternal — a value
+				// that would be wrong for a row that necessarily had
+				// historical activity to exist.
+				domain := strings.ToLower(strings.TrimSpace(h.SenderDomain))
+				if domain != "" && h.Count30d > 0 {
+					// UniqueRecipients is 1 by construction: each
+					// CommunicationHistory row represents a single
+					// (sender, recipient) pair (the table's primary key
+					// is the (tenant, sender_hash, recipient_hash)
+					// triple), so a single row is one unique recipient
+					// by definition. The Classifier only consumes this
+					// field to gate Partner promotion, which is a
+					// per-domain-aggregate concern handled separately by
+					// VendorJob.buildSenderObservations below; passing 1
+					// here keeps Relationship reclassification a
+					// per-pair operation and avoids cross-row coupling.
+					sum := relationship.CommunicationSummary{
+						SenderDomain:     domain,
+						InboundCount:     h.Count30d,
+						FirstSeen:        h.FirstSeenAt,
+						LastSeen:         h.LastSeenAt,
+						UniqueRecipients: 1,
+					}
+					cat, cerr := j.classifier.Classify(ctx, "", sum)
+					if cerr == nil && string(cat) != h.Relationship {
+						h.Relationship = string(cat)
+						reclassified++
+					}
+				}
+
+				// Behavioral baseline accumulation: append the current
+				// LastSeenAt hour to the existing per-(user,
+				// sender_domain) send-hour distribution rather than
+				// overwriting it with a single-element slice. The
+				// accumulated histogram is what
+				// relationship.BaselineAnomalyCheck consumes (see
+				// internal/service/relationship/timing.go) — feeding it
+				// a length-1 slice every cycle would collapse the
+				// distribution and make the histogram useless.
+				//
+				// The modal (most-frequent) hour computed from the
+				// updated distribution is then mirrored onto
+				// h.TypicalHour so the worker's CAS write below
+				// propagates it to communication_histories.typical_hour
+				// for the Tier 0 ATO heuristic to read on the hot path.
+				//
+				// Important: the baseline preparation is split from its
+				// persistence. prepareBaselineUpdate is read-only — it
+				// fetches the prior baseline, appends sendHour to the
+				// in-memory slice, and returns the prepared struct
+				// without writing it back. The actual Upsert happens
+				// only AFTER the canonical communication-history CAS
+				// succeeds (see persistBaselineUpdate below), so a CAS
+				// race rejection cannot leave a phantom sample in the
+				// histogram that a subsequent cycle would observe and
+				// double-count.
+				modalHour := -1
+				var preparedBaseline *repository.UserBehavioralBaseline
+				// Only feed the baseline when this row genuinely had
+				// new activity since the previous cycle. If LastSeenAt
+				// has not advanced past prevCycleStartedAt the row was
+				// already sampled in an earlier cycle and re-appending
+				// the same hour would double-count the same underlying
+				// message — which, with Window≫Interval, would saturate
+				// the 168-sample FIFO cap with a single pair's timestamp
+				// and destroy the histogram's representativeness.
+				//
+				// On the very first Run after process start
+				// prevCycleStartedAt is the zero value, so every
+				// in-window row passes this gate and seeds the
+				// histogram with one bootstrap sample. The modal-hour
+				// mirror to h.TypicalHour and the CAS write below still
+				// run on every row regardless — only the histogram
+				// append is gated.
+				if j.cfg.Baselines != nil && j.cfg.Hasher != nil &&
+					len(h.RecipientHash) > 0 && len(h.SenderDomainHash) > 0 &&
+					h.LastSeenAt.After(prevCycleStartedAt) {
+					sendHour := h.LastSeenAt.UTC().Hour()
+					accumulated, bl := j.prepareBaselineUpdate(ctx, t.ID, h, sendHour, cache)
+					if len(accumulated) > 0 {
+						modalHour = modalHourOf(accumulated)
+					}
+					preparedBaseline = bl
+				}
+				if modalHour >= 0 && modalHour < 24 {
+					h.TypicalHour = modalHour
+				} else if h.TypicalHour < 0 || h.TypicalHour >= 24 {
+					// Carry forward an existing valid value; otherwise
+					// fall back to the sentinel so the repository's
+					// CASE guard leaves the column untouched.
+					h.TypicalHour = repository.TypicalHourUnset
+				}
+
+				// Capture the snapshot's UpdatedAt as the CAS guard so
+				// the write only lands if ingestion has not produced a
+				// fresher version of this row between ListByTenant
+				// (above) and now. A zero UpdatedAt means the row never
+				// went through the canonical Postgres Upsert path, so
+				// the CAS would either match every zero-updated_at row
+				// (Postgres) or hit an error (the validation guard in
+				// UpdateCountsIfFresh) — either way the safe action is
+				// to skip rather than overwrite arbitrary state.
+				readAt := h.UpdatedAt
+				if readAt.IsZero() {
+					j.logger.Warn("worker.relationship: skipped row with zero updated_at",
+						slog.String("tenant_id", t.ID),
+						slog.String("row_id", h.ID))
+					corruptSkipped++
+					continue
+				}
+				updated, err := j.cfg.Upserter.UpdateCountsIfFresh(ctx, &h, readAt)
+				if err != nil {
+					j.logger.Warn("worker.relationship: update-if-fresh failed",
+						slog.String("tenant_id", t.ID), slog.Any("error", err))
+					if firstErr == nil {
+						firstErr = err
+					}
+					continue
+				}
+				if !updated {
+					raceSkipped++
+					// Drop preparedBaseline on the floor — its append
+					// was drawn from a stale snapshot, so persisting it
+					// would pollute the histogram with a phantom
+					// sample. The next cycle will re-read the row and
+					// re-prepare against the fresher LastSeenAt.
+					continue
+				}
+				// CAS landed — now safe to persist the prepared
+				// baseline. A best-effort Upsert: persistence failure is
+				// logged and the cycle still counts as processed, since
+				// the canonical communication-history write succeeded.
+				// The per-cycle cache is updated through persistBaselineUpdate
+				// so subsequent rows for the same (recipient, sender_domain)
+				// pair see the running aggregate.
+				j.persistBaselineUpdate(ctx, t.ID, preparedBaseline, cache)
+				processed++
 			}
-			// CAS landed — now safe to persist the prepared
-			// baseline. A best-effort Upsert: persistence failure is
-			// logged and the cycle still counts as processed, since
-			// the canonical communication-history write succeeded.
-			// The per-cycle cache is updated through persistBaselineUpdate
-			// so subsequent rows for the same (recipient, sender_domain)
-			// pair see the running aggregate.
-			j.persistBaselineUpdate(ctx, t.ID, preparedBaseline, cache)
-			processed++
+			// Tenant row loop reached its natural end (i.e.
+			// did not bail out via ListByTenant failure
+			// above). Advance this tenant's baseline-sampling
+			// watermark to `now` so the next cycle's gate
+			// treats only rows whose LastSeenAt has moved past
+			// `now` as genuinely new activity. Per-row failures
+			// inside the loop (CAS race, hasher error,
+			// persistBaselineUpdate error) are not tenant-level
+			// failures — they are individually logged and
+			// counted but do not invalidate the cycle's
+			// watermark advance.
+			j.lastCycleStartedAt[t.ID] = now
 		}
-		// Tenant row loop reached its natural end (i.e. did not bail
-		// out via ListByTenant failure above). Advance this tenant's
-		// baseline-sampling watermark to `now` so the next cycle's
-		// gate treats only rows whose LastSeenAt has moved past `now`
-		// as genuinely new activity. Per-row failures inside the loop
-		// (CAS race, hasher error, persistBaselineUpdate error) are
-		// not tenant-level failures — they are individually logged
-		// and counted but do not invalidate the cycle's watermark
-		// advance.
-		j.lastCycleStartedAt[t.ID] = now
+		return nil
+	})
+	if iterErr != nil && firstErr == nil {
+		firstErr = iterErr
 	}
 	// Prune watermark entries for tenants that no longer appear in
-	// the canonical Tenants.List output. Deleted/deactivated
-	// tenants would otherwise leave their entries in
-	// lastCycleStartedAt indefinitely; in a long-running worker
-	// processing tenant churn over years that map would grow
-	// without bound. We use the same `tenants` slice the row loop
-	// iterated above — a transient ListByTenant failure on a peer
-	// tenant kept that tenant in the slice (the per-row error path
-	// above does `continue`, not `delete`), so the prune does NOT
+	// the canonical Tenants iteration. Deleted/deactivated tenants
+	// would otherwise leave their entries in lastCycleStartedAt
+	// indefinitely; in a long-running worker processing tenant
+	// churn over years that map would grow without bound. We use
+	// the same activeTenantIDs set the row loop populated above —
+	// a transient ListByTenant failure on a peer tenant kept that
+	// tenant's ID in the set (the per-row error path above does
+	// `continue`, not skip the set insert), so the prune does NOT
 	// drop tenants whose data plane is briefly unreachable.
+	//
+	// CRITICAL: skip the prune entirely when iterErr is non-nil.
+	// A partial IterateActive failure (e.g. ctx cancellation
+	// between batches, DB timeout on batch N of M) leaves
+	// activeTenantIDs containing ONLY the tenants from completed
+	// batches; tenants in the unreached batches are missing from
+	// the set even though they exist. Pruning against that
+	// incomplete set would delete watermarks for valid tenants
+	// and force every in-window row to be re-sampled into the
+	// behavioral baseline histogram on the next cycle — defeating
+	// the double-counting protection the watermark provides and
+	// corrupting the timing-anomaly baseline the Tier 0 ATO
+	// heuristic depends on. The old List-based path had this
+	// invariant for free (List either returned the full set or
+	// returned an error before prune); the IterateActive port
+	// must re-establish it explicitly.
+	//
+	// On iterErr == nil the iteration walked every batch, so
+	// activeTenantIDs is the authoritative set of live tenants
+	// and the prune is safe. On the next successful cycle the
+	// stale watermarks (if any persisted from cycles that
+	// errored) will be cleaned up.
 	pruned := 0
-	if len(j.lastCycleStartedAt) > 0 {
-		activeTenantIDs := make(map[string]struct{}, len(tenants))
-		for _, t := range tenants {
-			activeTenantIDs[t.ID] = struct{}{}
-		}
+	if iterErr == nil && len(j.lastCycleStartedAt) > 0 {
 		for tenantID := range j.lastCycleStartedAt {
 			if _, ok := activeTenantIDs[tenantID]; !ok {
 				delete(j.lastCycleStartedAt, tenantID)
@@ -480,7 +517,7 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 		}
 	}
 	j.logger.Info("worker.relationship: cycle complete",
-		slog.Int("tenants", len(tenants)),
+		slog.Int("tenants", totalTenants),
 		slog.Int("rows", processed),
 		slog.Int("decayed_count_7d", decayed7d),
 		slog.Int("reclassified", reclassified),
@@ -800,62 +837,66 @@ func (j *VendorJob) Interval() time.Duration { return j.interval }
 
 // Run implements Job.
 func (j *VendorJob) Run(ctx context.Context) error {
-	tenants, err := j.cfg.Tenants.List(ctx, 0)
-	if err != nil {
-		return err
-	}
 	since := time.Now().UTC().Add(-j.window)
 	var firstErr error
 	totalProposed := 0
-	for _, t := range tenants {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		rows, err := j.cfg.Communications.ListByTenant(ctx, t.ID, since, repository.CommHistoryListByTenantMaxLimit)
-		if err != nil {
-			j.logger.Warn("worker.vendor: list communication histories failed",
-				slog.String("tenant_id", t.ID), slog.Any("error", err))
-			if firstErr == nil {
-				firstErr = err
+	totalTenants := 0
+	iterErr := j.cfg.Tenants.IterateActive(ctx, 0, func(batch []repository.Tenant) error {
+		for _, t := range batch {
+			if err := ctx.Err(); err != nil {
+				return err
 			}
-			continue
-		}
-		obs := buildSenderObservations(rows)
-		props, err := j.cfg.Discovery.Propose(ctx, t.ID, obs)
-		if err != nil {
-			j.logger.Warn("worker.vendor: propose failed",
-				slog.String("tenant_id", t.ID), slog.Any("error", err))
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		totalProposed += len(props)
-		if j.cfg.VendorRepository == nil {
-			continue
-		}
-		for _, p := range props {
-			v := &repository.Vendor{
-				TenantID:       t.ID,
-				Domain:         p.Domain,
-				AutoDiscovered: true,
-				Approved:       p.AutoApprove,
-				Confidence:     p.Confidence,
-				LastSeenAt:     time.Now().UTC(),
-			}
-			if err := j.cfg.VendorRepository.Upsert(ctx, v); err != nil {
-				j.logger.Warn("worker.vendor: upsert vendor failed",
-					slog.String("tenant_id", t.ID),
-					slog.String("domain", p.Domain),
-					slog.Any("error", err))
+			totalTenants++
+			rows, err := j.cfg.Communications.ListByTenant(ctx, t.ID, since, repository.CommHistoryListByTenantMaxLimit)
+			if err != nil {
+				j.logger.Warn("worker.vendor: list communication histories failed",
+					slog.String("tenant_id", t.ID), slog.Any("error", err))
 				if firstErr == nil {
 					firstErr = err
 				}
+				continue
+			}
+			obs := buildSenderObservations(rows)
+			props, err := j.cfg.Discovery.Propose(ctx, t.ID, obs)
+			if err != nil {
+				j.logger.Warn("worker.vendor: propose failed",
+					slog.String("tenant_id", t.ID), slog.Any("error", err))
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			totalProposed += len(props)
+			if j.cfg.VendorRepository == nil {
+				continue
+			}
+			for _, p := range props {
+				v := &repository.Vendor{
+					TenantID:       t.ID,
+					Domain:         p.Domain,
+					AutoDiscovered: true,
+					Approved:       p.AutoApprove,
+					Confidence:     p.Confidence,
+					LastSeenAt:     time.Now().UTC(),
+				}
+				if err := j.cfg.VendorRepository.Upsert(ctx, v); err != nil {
+					j.logger.Warn("worker.vendor: upsert vendor failed",
+						slog.String("tenant_id", t.ID),
+						slog.String("domain", p.Domain),
+						slog.Any("error", err))
+					if firstErr == nil {
+						firstErr = err
+					}
+				}
 			}
 		}
+		return nil
+	})
+	if iterErr != nil && firstErr == nil {
+		firstErr = iterErr
 	}
 	j.logger.Info("worker.vendor: cycle complete",
-		slog.Int("tenants", len(tenants)),
+		slog.Int("tenants", totalTenants),
 		slog.Int("proposed", totalProposed))
 	return firstErr
 }

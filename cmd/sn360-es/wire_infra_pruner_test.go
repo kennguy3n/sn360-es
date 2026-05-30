@@ -151,6 +151,46 @@ func TestRunBatchedPrune_BailsOnRowsAffectedUnknown(t *testing.T) {
 	}
 }
 
+// TestPrunableTables_CoversAllPartitionedParents pins two invariants
+// on the prunableTables allow-list:
+//
+//  1. Every parent returned by partitionedAppendOnlyTables() has an
+//     entry. Without this, the cleanup-worker fallback path
+//     (partitionRunner == nil) panics when it tries to register a
+//     row-level pruner for a partitioned table that the allow-list
+//     doesn't know about. This is the regression test for the
+//     audit_logs panic Devin Review caught in round 15.
+//
+//  2. For every partitioned parent, the prunableTables column equals
+//     that parent's declared PartitionKey. The fallback DELETE runs
+//     as `DELETE FROM <parent> WHERE <col> < $1` and only matches
+//     the partition-drop's retention semantics — and only benefits
+//     from partition-pruning at the query planner — when the column
+//     is the partition key. A drift here silently diverges the two
+//     retention paths on rows where created_at != partition_key.
+//     This is the regression test for the round-16 finding on
+//     evaluation_results / feedback_events partition-key mismatch.
+func TestPrunableTables_CoversAllPartitionedParents(t *testing.T) {
+	for _, pt := range partitionedAppendOnlyTables() {
+		col, ok := prunableTables[pt.Parent]
+		if !ok {
+			t.Errorf("partitioned parent %q has no entry in prunableTables; "+
+				"the cleanup-worker fallback will panic on newPgPruner", pt.Parent)
+			continue
+		}
+		if col == "" {
+			t.Errorf("prunableTables[%q] has an empty column name", pt.Parent)
+			continue
+		}
+		if pt.PartitionKey != "" && col != pt.PartitionKey {
+			t.Errorf("prunableTables[%q]=%q drifts from PartitionKey=%q; "+
+				"the row-level fallback would apply different retention semantics "+
+				"than partition-drop on back-filled rows",
+				pt.Parent, col, pt.PartitionKey)
+		}
+	}
+}
+
 // TestRunBatchedPrune_NonPositiveBatchSizeReturnsZero pins the
 // defensive guard against a non-positive batchSize. Without it, the
 // short-read termination condition (`n < int64(batchSize)`) would

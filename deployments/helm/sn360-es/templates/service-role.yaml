@@ -1,0 +1,41 @@
+{{- /*
+  Per-role Service for the role-split topology.
+
+  Only the api role gets a Service — it is the only role that
+  serves business HTTP. The consumers and workers roles ARE
+  reachable via cluster DNS on their pod IPs for in-cluster
+  health probes (the kubelet hits them directly), but they
+  intentionally do NOT expose a routable Service: any external
+  / sibling-pod traffic to /v1/* on those roles would 404 by
+  design (see routes.go buildMux), and emitting a Service for
+  them would invite operators to point traffic at them and be
+  surprised.
+
+  An explicit ServiceMonitor selector aligns to the api role
+  here; servicemonitor.yaml already targets the chart's main
+  selector labels and works without a change because the api
+  Service inherits them via `app.kubernetes.io/component`.
+*/}}
+{{- if .Values.roleSplit.enabled }}
+{{- if hasKey .Values.roleSplit.roles "api" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sn360-es.roleFullname" (dict "ctx" . "role" "api") }}
+  labels:
+    {{- include "sn360-es.roleLabels" (dict "ctx" . "role" "api") | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "sn360-es.roleSelectorLabels" (dict "ctx" . "role" "api") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP
+{{- end }}
+{{- end }}

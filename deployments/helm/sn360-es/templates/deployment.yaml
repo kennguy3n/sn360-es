@@ -1,3 +1,18 @@
+{{- /*
+  Monolith Deployment. Emitted only when the role-split topology
+  is DISABLED — in that mode the chart instead renders one
+  Deployment per role from templates/deployment-role.yaml (so the
+  cluster has `sn360-es-api`, `sn360-es-consumers`,
+  `sn360-es-workers` instead of a single `sn360-es`).
+
+  Operators upgrading from the monolith to the split topology
+  should flip `roleSplit.enabled=true` and accept the rename:
+  Helm will delete this Deployment and create the three new
+  per-role ones. Two-step migration (deploy split alongside
+  monolith with `replicaCount: 0`, then drain, then switch
+  traffic) is out-of-scope for the chart but documentable.
+*/}}
+{{- if not .Values.roleSplit.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -141,3 +156,4 @@ spec:
               {{- include "sn360-es.selectorLabels" . | nindent 14 }}
         {{- end }}
       {{- end }}
+{{- end }}

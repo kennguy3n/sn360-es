@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/kennguy3n/sn360-es/internal/handler"
 	"github.com/kennguy3n/sn360-es/internal/middleware"
+	storageredis "github.com/kennguy3n/sn360-es/pkg/storage/redis"
 )
 
 // buildMux constructs the HTTP routing tree. Handlers from
@@ -35,6 +37,24 @@ func buildMux(app *application) (http.Handler, error) {
 	mux.HandleFunc("/docs", docs.ServeSwaggerUI)
 	mux.HandleFunc("/docs/", docs.ServeSwaggerUI)
 	mux.HandleFunc("/openapi.yaml", docs.ServeOpenAPI)
+
+	// Business routes are mounted only for roles that should
+	// serve HTTP traffic. Consumer / worker pods still expose
+	// /healthz, /readyz, /metrics, /docs (mounted above) so
+	// kubelet probes, Prometheus scrapes, and operators reading
+	// the spec all work — but they refuse the request-time
+	// /v1/* surface. This is what fixes the noisy-neighbour
+	// failure mode the review identified: a slow Tier-2 SLM
+	// call on a consumer pod can no longer stall HTTP request
+	// handling on the same process.
+	if !app.cfg.Role.ServesAPI() {
+		logger.Info("sn360-es: HTTP business routes disabled by role",
+			slog.String("role", string(app.cfg.Role)))
+		mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		})
+		return mux, nil
+	}
 
 	// Banner-action / feedback.
 	bannerAction := handler.NewBannerActionHandler(logger, app.feedbackSvc)
@@ -200,9 +220,76 @@ func wrapMiddleware(mux http.Handler, app *application) (http.Handler, error) {
 		if perr != nil {
 			return nil, fmt.Errorf("rate-limit trusted proxies: %w", perr)
 		}
+		// Resolve the store backend. "memory" (default) keeps the
+		// existing per-replica behaviour; "redis" shares token
+		// state across every replica that points at the same
+		// Redis — required for the documented rate to actually
+		// hold cluster-wide.
+		var (
+			store         middleware.BucketStore
+			fallbackStore middleware.BucketStore
+		)
+		switch app.cfg.RateLimit.Backend {
+		case "redis":
+			if app.redis == nil {
+				return nil, errors.New("rate-limit: RATE_LIMIT_BACKEND=redis requires Redis to be configured")
+			}
+			bucketStore, berr := storageredis.NewRateBucketStore(
+				context.Background(), app.redis, storageredis.RateBucketConfig{
+					KeyPrefix: app.cfg.RateLimit.RedisKeyPrefix,
+					TTL:       app.cfg.RateLimit.RedisTTL,
+				})
+			if berr != nil {
+				return nil, fmt.Errorf("rate-limit: build redis bucket store: %w", berr)
+			}
+			adapter, aerr := middleware.NewRedisBucketStore(middleware.RedisBucketStoreConfig{
+				Store:   bucketStore,
+				Timeout: app.cfg.RateLimit.RedisTimeout,
+			})
+			if aerr != nil {
+				return nil, fmt.Errorf("rate-limit: wire redis bucket store: %w", aerr)
+			}
+			store = adapter
+			if app.cfg.RateLimit.FallbackToMemory {
+				// Per-replica memory store gives the
+				// limiter a soft-fall path under Redis
+				// hard-down: counting degrades from
+				// cluster-wide to per-replica (less
+				// correct, still safe) instead of fail-
+				// open or fail-closed.
+				fallbackStore = middleware.NewMemoryBucketStore()
+			}
+		default:
+			// store stays nil; NewRateLimiter builds the
+			// default in-process memory store.
+		}
+
+		failureMode := middleware.FailureModeOpen
+		if app.cfg.RateLimit.FailureMode == "closed" {
+			failureMode = middleware.FailureModeClosed
+		}
+
 		rl := middleware.NewRateLimiter(h, middleware.RateLimitConfig{
-			Rate:            app.cfg.RateLimit.Rate,
-			Burst:           app.cfg.RateLimit.Burst,
+			Rate:                app.cfg.RateLimit.Rate,
+			Burst:               app.cfg.RateLimit.Burst,
+			Store:               store, // nil => in-process memory
+			FailureMode:         failureMode,
+			FailureModeFallback: fallbackStore,
+			Logger:              logger,
+			OnStoreError: func(err error, clientKey string) {
+				// Bucket-store error metrics are emitted
+				// here (and only here) so the Redis path
+				// can be alerted on without the limiter
+				// itself having to know about Prometheus.
+				if app.metrics != nil {
+					app.metrics.RateLimitStoreErrorsTotal.WithLabelValues(app.cfg.RateLimit.Backend).Inc()
+				}
+				logger.Warn("http: rate-limit store error",
+					slog.String("backend", app.cfg.RateLimit.Backend),
+					slog.String("client_key", clientKey),
+					slog.Any("error", err),
+				)
+			},
 			CleanupInterval: app.cfg.RateLimit.CleanupInterval,
 			IdleTTL:         app.cfg.RateLimit.IdleTTL,
 			TrustedProxies:  trusted, // boot-time-validated, may be nil

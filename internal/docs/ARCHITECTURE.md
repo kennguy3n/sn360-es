@@ -193,32 +193,41 @@ them by name so multiple replicas of `sn360-es` can share work.
 | `action-url-rewrite` | ES_ACTION | `es.action.url_rewrite` | 3 | 30s | Yes (best-effort; degrades to logging without a provider) | Body URL rewriting to interstitial tokens |
 | `action-quarantine` | ES_ACTION | `es.action.quarantine` | 3 | 30s | Yes (best-effort; degrades to logging without a provider) | Provider-side quarantine (move to hidden label/folder, store encrypted reference) |
 
-#### `TIER1_BATCH_ENABLED` wire-format dependency
+#### `TIER1_BATCH_ENABLED` wire-format tolerance
 
-The optional Tier 1 `BatchOrchestrator` (`internal/service/evaluate/batch.go`)
+The Tier 1 `BatchOrchestrator` (`internal/service/evaluate/batch.go`)
 shares the `es.evaluate.request` subject with the per-message
-`evaluate-svc` consumer, but the two consumers expect **different
-payloads on the wire**:
+`evaluate-svc` consumer. The two have **historically** expected
+different payloads on the wire — a flat `dto.EvaluateRequest` for the
+per-message path and a wrapped `BatchMessage{Request, Signals}` for
+the batch path — which made flipping `TIER1_BATCH_ENABLED` a
+publisher/consumer lockstep operation.
 
-| `TIER1_BATCH_ENABLED` | Active consumer | Expected payload on `es.evaluate.request` |
-|---|---|---|
-| `false` (default) | per-message `evaluate-svc` (`handleEvaluateRequest`) | `dto.EvaluateRequest` JSON |
-| `true` | `BatchOrchestrator` only (per-message consumer is suppressed) | `evaluate.BatchMessage` JSON: `{ "request": dto.EvaluateRequest, "signals": dto.RiskSignals }` |
+Since `TIER1_BATCH_ENABLED=true` is now the default, the orchestrator
+**decodes both shapes transparently** via `decodeEvaluatePayload` in
+`internal/service/evaluate/batch.go`. The detection logic:
 
-`sn360-es` enforces mutual exclusion via the `a.evaluator != nil &&
-a.batchOrch == nil` guard in `StartConsumers`, so both consumers will
-never be active at once in the same process. However, **upstream
-publishers (ingestion-svc, replay tooling, anything that calls
-`bus.Publish("es.evaluate.request", ...)`) must agree on which payload
-shape to emit for the configured mode**. A misconfigured deployment
-(batch enabled in `sn360-es` but ingestion still publishing flat
-`dto.EvaluateRequest` payloads, or vice versa) results in every message
-failing to unmarshal and being NAK'd up to `MaxDeliver=5` before
-landing in the DLQ.
+| Decoded `BatchMessage.Request.MessageID` | Interpretation |
+|---|---|
+| Non-empty | Canonical wrapped shape; use `BatchMessage.Signals` as-is |
+| Empty, flat `dto.EvaluateRequest.MessageID` non-empty | Legacy flat shape; wrap as `BatchMessage{Request: flat, Signals: flat.Signals}` and increment `tier1_batch_legacy_payload_total` |
+| Both empty | Malformed; NAK with delay |
 
-When flipping `TIER1_BATCH_ENABLED`, roll the publisher and the
-consumer together: both must speak the same wire format in the same
-release.
+`sn360-es` still enforces mutual exclusion between the two consumers
+via the `a.evaluator != nil && a.batchOrch == nil` guard in
+`StartConsumers`, so the per-message consumer never runs alongside
+batch in the same process. But upstream publishers may now migrate to
+the canonical `BatchMessage` wrapper at their own pace; the orchestrator
+will keep processing flat payloads correctly during the transition.
+
+**Operator workflow.** Watch `tier1_batch_legacy_payload_total`. A
+rate trending toward zero means every publisher has migrated and the
+legacy decoder branch can be removed in a future release. A non-zero
+sustained rate identifies the publisher fleet that still needs to roll.
+
+When `TIER1_BATCH_ENABLED=false`, the per-message consumer runs and
+expects the flat `dto.EvaluateRequest` shape exclusively — there is no
+tolerance shim on that path, so publishers must emit flat payloads.
 
 ## 3. Detection Pipeline
 

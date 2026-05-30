@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -25,11 +26,31 @@ func main() {
 }
 
 func run() error {
+	// --role overrides SN360_ROLE. Operators set the flag at the
+	// container entrypoint via different `args:` values per
+	// per-role Deployment (api / consumers / workers); single-binary
+	// installs leave the flag empty and inherit RoleAll from config.
+	// Defining the flagset locally (rather than using flag.CommandLine)
+	// keeps repeated test invocations idempotent — `flag.Parse()` on
+	// the global flagset panics on a second registration.
+	fs := flag.NewFlagSet("sn360-es", flag.ContinueOnError)
+	roleFlag := fs.String("role", "", "process role: all | api | consumers | workers (overrides SN360_ROLE)")
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		return fmt.Errorf("parse flags: %w", err)
+	}
+
 	cfg := config.MustLoad()
+	if *roleFlag != "" {
+		cfg.Role = config.Role(*roleFlag)
+		if !cfg.Role.Valid() {
+			return fmt.Errorf("--role: invalid value %q (expected one of: all, api, consumers, workers)", *roleFlag)
+		}
+	}
 	logger := newLogger(&cfg)
 	logger.Info("sn360-es: starting",
 		slog.String("app", cfg.AppName),
 		slog.String("env", string(cfg.Environment)),
+		slog.String("role", string(cfg.Role)),
 		slog.String("event_bus", string(cfg.EventBus)))
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -59,9 +80,13 @@ func run() error {
 		WriteTimeout:      cfg.HTTP.WriteTimeout,
 	}
 
-	if cerr := app.StartConsumers(ctx); cerr != nil {
-		app.StopConsumers(logger)
-		return fmt.Errorf("start consumers: %w", cerr)
+	if cfg.Role.RunsConsumers() {
+		if cerr := app.StartConsumers(ctx); cerr != nil {
+			app.StopConsumers(logger)
+			return fmt.Errorf("start consumers: %w", cerr)
+		}
+	} else {
+		logger.Info("sn360-es: consumers disabled by role", slog.String("role", string(cfg.Role)))
 	}
 
 	app.StartBackground(ctx)

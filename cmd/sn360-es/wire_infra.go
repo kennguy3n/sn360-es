@@ -709,10 +709,10 @@ func buildPushSignatureVerifier(cfg *config.Config, receivers []ingestion.PushRe
 // Periodic worker wiring.
 // ---------------------------------------------------------------------
 
-func buildWorkers(cfg *config.Config, logger *slog.Logger, app *application) (*worker.Runner, *worker.Runner, *worker.Runner, *worker.Runner) {
+func buildWorkers(cfg *config.Config, logger *slog.Logger, app *application) (*worker.Runner, *worker.Runner, *worker.Runner, *worker.Runner, *worker.Runner) {
 	if app.repos == nil {
 		logger.Info("sn360-es: periodic workers skipped; repository registry not wired")
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 
 	lockFactory := buildWorkerLockFactory(cfg, logger, app)
@@ -720,10 +720,22 @@ func buildWorkers(cfg *config.Config, logger *slog.Logger, app *application) (*w
 
 	relRunner := buildRelationshipRunner(cfg, logger, app, lockFactory, metricsRec)
 	vendorRunner := buildVendorRunner(cfg, logger, app, lockFactory, metricsRec)
-	cleanupRunner := buildCleanupRunner(cfg, logger, app, lockFactory, metricsRec)
+	// Build the partition runner BEFORE the cleanup runner so the
+	// cleanup runner can gate its partitioned-table pruners on the
+	// actual partition-runner outcome rather than on
+	// cfg.Worker.PartitionInterval. If the partition runner failed
+	// to wire (NewPartitionMaintenanceJob / NewRunner returned an
+	// error) while the config still says PartitionInterval > 0,
+	// neither runner would manage retention for evaluation_results /
+	// audit_logs / feedback_events — rows would accumulate forever.
+	// Passing the live partition-runner reference into
+	// buildCleanupRunner re-registers the row-level pruners as the
+	// fallback retention path in that failure mode.
+	partitionRunner := buildPartitionRunner(cfg, logger, app, lockFactory, metricsRec)
+	cleanupRunner := buildCleanupRunner(cfg, logger, app, lockFactory, metricsRec, partitionRunner)
 	dirSyncRunner := buildDirectorySyncRunner(cfg, logger, app, lockFactory, metricsRec)
 
-	return relRunner, vendorRunner, cleanupRunner, dirSyncRunner
+	return relRunner, vendorRunner, cleanupRunner, dirSyncRunner, partitionRunner
 }
 
 func buildWorkerLockFactory(cfg *config.Config, logger *slog.Logger, app *application) worker.LockFactory {
@@ -832,12 +844,71 @@ func buildVendorRunner(cfg *config.Config, logger *slog.Logger, app *application
 	return runner
 }
 
-func buildCleanupRunner(cfg *config.Config, logger *slog.Logger, app *application, locks worker.LockFactory, metrics worker.MetricsRecorder) *worker.Runner {
+// cleanupPlan is the pure decision a buildCleanupRunner makes about
+// which parent tables the row-level cleanup worker should prune. It
+// is split out so we can unit-test the partition-worker fallback
+// without needing a real Postgres handle.
+type cleanupPlan struct {
+	// Parents is the ordered list of parent table names the cleanup
+	// worker should register a pruner for.
+	Parents []string
+	// PartitionFallback is true when the partitioned-table pruners
+	// are included in Parents because the partition worker is NOT
+	// wired (either explicitly disabled or init-failure). Operators
+	// use this together with FallbackReason to disambiguate.
+	PartitionFallback bool
+	// FallbackReason is the human-readable explanation logged when
+	// PartitionFallback is true. Empty when the partition worker is
+	// wired normally.
+	FallbackReason string
+}
+
+// planCleanupPruners decides which parent tables the row-level cleanup
+// worker should prune given the live partition-runner reference and
+// the configured partition interval. Gating on the live runner (rather
+// than on cfg.Worker.PartitionInterval > 0) keeps the contention
+// mutex correct in the happy path AND fails-safe in the init-error
+// path where the operator believes partition maintenance is on but
+// the runner failed to wire.
+func planCleanupPruners(partitionRunner *worker.Runner, partitionInterval time.Duration) cleanupPlan {
+	plan := cleanupPlan{
+		Parents: make([]string, 0, 4),
+	}
+	if partitionRunner == nil {
+		plan.PartitionFallback = true
+		if partitionInterval > 0 {
+			plan.FallbackReason = "partition worker init failed; falling back to row-level pruners"
+		} else {
+			plan.FallbackReason = "partition worker disabled"
+		}
+		for _, t := range partitionedAppendOnlyTables() {
+			plan.Parents = append(plan.Parents, t.Parent)
+		}
+	}
+	// communication_histories is NOT partitioned (it's an
+	// upsert/aggregate, the wrong shape for time-range
+	// partitioning — see PR #45 migration 0017 design notes).
+	// The cleanup worker is its only retention path regardless of
+	// partition-worker state.
+	plan.Parents = append(plan.Parents, "communication_histories")
+	return plan
+}
+
+func buildCleanupRunner(cfg *config.Config, logger *slog.Logger, app *application, locks worker.LockFactory, metrics worker.MetricsRecorder, partitionRunner *worker.Runner) *worker.Runner {
 	pruners := make([]worker.Pruner, 0, 4)
 	if app.pgDB != nil {
-		pruners = append(pruners, newPgPruner(app.pgDB, "evaluation_results", logger))
-		pruners = append(pruners, newPgPruner(app.pgDB, "feedback_events", logger))
-		pruners = append(pruners, newPgPruner(app.pgDB, "communication_histories", logger))
+		plan := planCleanupPruners(partitionRunner, cfg.Worker.PartitionInterval)
+		for _, parent := range plan.Parents {
+			pruners = append(pruners, newPgPruner(app.pgDB, parent, logger))
+		}
+		if plan.PartitionFallback {
+			// Surface WHY the cleanup worker took over so an
+			// operator can tell "explicit opt-out" from "partition
+			// runner failed to start" at a glance.
+			logger.Info("sn360-es: cleanup worker handling partitioned tables",
+				slog.String("reason", plan.FallbackReason),
+				slog.Duration("partition_interval", cfg.Worker.PartitionInterval))
+		}
 	}
 	if len(pruners) == 0 {
 		logger.Info("sn360-es: cleanup worker skipped; no pruners configured")
@@ -926,9 +997,32 @@ func buildDirectorySyncRunner(cfg *config.Config, logger *slog.Logger, app *appl
 // prunableTables is the exhaustive allow-list of table names that
 // newPgPruner may interpolate into a DELETE statement plus the
 // per-table "prune by this column" choice.
+//
+// Invariant (1): every parent table returned by partitionedAppendOnlyTables()
+// MUST also appear here, because the cleanup-worker fallback path
+// (planCleanupPruners with a nil partitionRunner) registers a
+// row-level pruner for every partitioned parent. Without this entry
+// newPgPruner panics on the fallback path, taking the worker bootstrap
+// down whenever the partition runner is disabled or fails to init —
+// exactly the time the row-level fallback needs to be available.
+//
+// Invariant (2): for every partitioned parent, the column declared
+// here MUST equal that parent's PartitionKey on its
+// partitionedAppendOnlyTables() entry. The fallback DELETE runs as
+//
+//	DELETE FROM <parent> WHERE <column> < $1
+//
+// which only matches the partition-drop's retention semantics — and
+// only benefits from partition-pruning at the query planner — when
+// <column> is the same column the parent is partitioned on. Using
+// any other timestamp column (e.g. an audit `created_at` on a table
+// partitioned by `evaluated_at`) silently diverges from the
+// partition-drop behaviour for rows where the two columns differ
+// (back-fills, retroactive evaluation, replay imports, ...).
 var prunableTables = map[string]string{
-	"evaluation_results":      "created_at",
-	"feedback_events":         "created_at",
+	"evaluation_results":      "evaluated_at",
+	"audit_logs":              "created_at",
+	"feedback_events":         "occurred_at",
 	"communication_histories": "last_seen_at",
 	"quarantine_references":   "created_at",
 	"education_lesson_events": "created_at",

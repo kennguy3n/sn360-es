@@ -1,4 +1,9 @@
-{{- if .Values.autoscaling.enabled -}}
+{{- /*
+  Monolith HPA. Emitted only when role-split is OFF — in split
+  mode per-role HPAs are rendered from
+  templates/hpa-role.yaml.
+*/}}
+{{- if and (not .Values.roleSplit.enabled) .Values.autoscaling.enabled -}}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

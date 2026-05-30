@@ -137,7 +137,10 @@ func TestPushIngestion_RoutesNotificationsToEventBus(t *testing.T) {
 	cfg := &config.Config{
 		AppName:     "sn360-es-test",
 		Environment: config.EnvironmentLocal,
-		EventBus:    config.EventBusNATS,
+		// RoleAll mirrors the default monolith deployment so the
+		// /v1/* push route is mounted by buildMux.
+		Role:     config.RoleAll,
+		EventBus: config.EventBusNATS,
 		Ingestion: config.Ingestion{
 			Mode:                "push",
 			PushCallbackBaseURL: "https://es.test.example.com",

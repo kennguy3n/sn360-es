@@ -1,0 +1,260 @@
+{{- /*
+  Per-role Deployment template. Renders one Deployment per
+  enabled role declared under `.Values.roleSplit.roles` when
+  `.Values.roleSplit.enabled = true`. Each Deployment runs the
+  same image with a different `--role=<name>` flag, which the
+  Go binary's main.go parses into `cfg.Role` and uses to gate
+  HTTP route mounting, NATS consumer startup, and periodic
+  worker startup.
+
+  Three concerns that warranted a dedicated template (instead of
+  parametrising the monolith template) and are intentionally
+  diff-from-monolith:
+
+    1. Probes must adapt to the role. The monolith mounts
+       /healthz, /readyz, and /metrics on the same port whether
+       or not /v1/* is mounted (see routes.go). The api role
+       inherits the monolith's probe set verbatim. consumers
+       and workers DO mount probes (so kubelet liveness +
+       readiness still work) but they exit ServeHTTP for
+       business routes with 404, so probe paths are the same.
+
+    2. PgBouncer sidecar is injected here when
+       `.Values.pgbouncer.enabled = true`. The bouncer rewrites
+       PG_HOST -> 127.0.0.1 / PG_PORT -> 6432 via additional env
+       overrides appended after `envFrom`, so the existing
+       ConfigMap's PG_HOST value is shadowed without rewriting
+       the ConfigMap. The bouncer container shares the pod's
+       network namespace, so 127.0.0.1 hits the sidecar.
+
+    3. Replica count + autoscaling are role-specific. The api
+       role is HPA-scaled on CPU; the consumers role is
+       optionally HPA OR KEDA-scaled (mutex per the KEDA section
+       in values.yaml); the workers role defaults to a single
+       replica because every worker holds a Redis distributed
+       lock.
+
+  The shared scheduling parameters (anti-affinity, topology
+  spread, pod security context) are reproduced from the
+  monolith template to keep the security posture identical
+  across topologies. They are intentionally NOT extracted into
+  a template helper — Helm template functions inside the spec
+  section produce subtly different YAML indentation across
+  Helm versions, and copying the block here keeps the chart's
+  rendered manifests deterministic.
+*/}}
+{{- if .Values.roleSplit.enabled }}
+{{- $ctx := . }}
+{{- range $role, $rcfg := .Values.roleSplit.roles }}
+{{- if $rcfg }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sn360-es.roleFullname" (dict "ctx" $ctx "role" $role) }}
+  labels:
+    {{- include "sn360-es.roleLabels" (dict "ctx" $ctx "role" $role) | nindent 4 }}
+spec:
+  {{- if not $rcfg.autoscaling.enabled }}
+  replicas: {{ $rcfg.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "sn360-es.roleSelectorLabels" (dict "ctx" $ctx "role" $role) | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "sn360-es.roleSelectorLabels" (dict "ctx" $ctx "role" $role) | nindent 8 }}
+        {{- with $ctx.Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- /*
+          ConfigMap checksum forces a rolling restart when env
+          changes — preserves the monolith behaviour.
+        */}}
+        checksum/config: {{ include "sn360-es.configChecksum" $ctx }}
+        {{- range $k, $v := $rcfg.podAnnotations }}
+        {{ $k }}: {{ tpl ($v | toString) $ctx | quote }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "sn360-es.serviceAccountName" $ctx }}
+      {{- with $ctx.Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $ctx.Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: sn360-es
+          image: "{{ include "sn360-es.image" $ctx }}"
+          imagePullPolicy: {{ $ctx.Values.image.pullPolicy }}
+          args:
+            {{- /*
+              The --role flag is the trust boundary that gates
+              every subsystem startup path. Passing it via args
+              (not env) means a misconfigured ConfigMap can't
+              accidentally re-enable a subsystem we deliberately
+              took out of this pod.
+            */}}
+            - "--role={{ $role }}"
+          ports:
+            - name: http
+              containerPort: {{ $ctx.Values.service.targetPort }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "sn360-es.fullname" $ctx }}
+            {{- if $ctx.Values.secret.create }}
+            - secretRef:
+                name: {{ include "sn360-es.fullname" $ctx }}
+            {{- end }}
+          {{- if $ctx.Values.pgbouncer.enabled }}
+          env:
+            {{- /*
+              PgBouncer sidecar overrides. The bouncer listens on
+              the pod's loopback at 6432; the application connects
+              there instead of the real Postgres. PG_HOST_BACKEND
+              is consumed by the bouncer's INI template (see the
+              sidecar definition below) so the app config and
+              bouncer config stay in sync.
+            */}}
+            - name: PG_HOST
+              value: "127.0.0.1"
+            - name: PG_PORT
+              value: "6432"
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ $ctx.Values.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ $ctx.Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ $ctx.Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ $ctx.Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ $ctx.Values.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ $ctx.Values.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ $ctx.Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ $ctx.Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ $ctx.Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ $ctx.Values.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml $rcfg.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $ctx.Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+        {{- if $ctx.Values.pgbouncer.enabled }}
+        - name: pgbouncer
+          image: "{{ $ctx.Values.pgbouncer.image.repository }}:{{ $ctx.Values.pgbouncer.image.tag }}"
+          imagePullPolicy: {{ $ctx.Values.pgbouncer.image.pullPolicy }}
+          ports:
+            - name: pgbouncer
+              containerPort: 6432
+              protocol: TCP
+          env:
+            {{- $up := $ctx.Values.pgbouncer.upstream }}
+            {{- /*
+              DB_HOST resolves to either the bouncer's explicit
+              upstream (when set) or the chart's main PG_HOST.
+              Both values support Helm templating (e.g. the
+              default config.pgHost is `{{ .Release.Name }}-postgresql`)
+              so we pipe through `tpl` against the chart context.
+            */}}
+            {{- $rawHost := $up.host | default $ctx.Values.config.pgHost }}
+            - name: DB_HOST
+              value: {{ tpl ($rawHost | toString) $ctx | quote }}
+            - name: DB_PORT
+              value: {{ $up.port | quote }}
+            - name: POOL_MODE
+              value: {{ $up.poolMode | quote }}
+            - name: MAX_CLIENT_CONN
+              value: {{ $up.maxClientConn | quote }}
+            - name: DEFAULT_POOL_SIZE
+              value: {{ $up.defaultPoolSize | quote }}
+            - name: RESERVE_POOL_SIZE
+              value: {{ $up.reservePoolSize | quote }}
+            - name: SERVER_IDLE_TIMEOUT
+              value: {{ $up.serverIdleTimeout | quote }}
+            - name: SERVER_LIFETIME
+              value: {{ $up.serverLifetime | quote }}
+            - name: AUTH_TYPE
+              value: "scram-sha-256"
+            - name: AUTH_USER
+              value: {{ $ctx.Values.config.pgUser | quote }}
+            - name: DB_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "sn360-es.fullname" $ctx }}
+                  key: PG_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sn360-es.fullname" $ctx }}
+                  key: PG_PASSWORD
+                  optional: true
+          resources:
+            {{- toYaml $ctx.Values.pgbouncer.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $ctx.Values.securityContext | nindent 12 }}
+        {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+      {{- with $rcfg.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $rcfg.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- /*
+        Reproduce the monolith's affinity merge so role pods get
+        the same HA spread (one pod per node, etc.) as the
+        monolith. Per-role .affinity overrides are merged on top
+        of the chart's auto rule, identical semantics.
+      */}}
+      {{- $haOn := and $ctx.Values.podHA $ctx.Values.podHA.enabled -}}
+      {{- $aff := deepCopy (default (dict) $rcfg.affinity) -}}
+      {{- if $haOn -}}
+        {{- $haPref := dict "weight" (int $ctx.Values.podHA.podAntiAffinity.weight)
+              "podAffinityTerm" (dict
+                "labelSelector" (dict "matchLabels" (fromYaml (include "sn360-es.roleSelectorLabels" (dict "ctx" $ctx "role" $role))))
+                "topologyKey" $ctx.Values.podHA.podAntiAffinity.topologyKey) -}}
+        {{- $existingPA := default (dict) (get $aff "podAntiAffinity") -}}
+        {{- $existingPref := default (list) (get $existingPA "preferredDuringSchedulingIgnoredDuringExecution") -}}
+        {{- $mergedPref := append $existingPref $haPref -}}
+        {{- $_ := set $existingPA "preferredDuringSchedulingIgnoredDuringExecution" $mergedPref -}}
+        {{- $_ := set $aff "podAntiAffinity" $existingPA -}}
+      {{- end }}
+      {{- if $aff }}
+      affinity:
+        {{- toYaml $aff | nindent 8 }}
+      {{- end }}
+      {{- if or $ctx.Values.topologySpreadConstraints (and $ctx.Values.podHA $ctx.Values.podHA.enabled) }}
+      topologySpreadConstraints:
+        {{- with $ctx.Values.topologySpreadConstraints }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if and $ctx.Values.podHA $ctx.Values.podHA.enabled }}
+        - maxSkew: {{ $ctx.Values.podHA.topologySpread.maxSkew }}
+          topologyKey: {{ $ctx.Values.podHA.topologySpread.topologyKey }}
+          whenUnsatisfiable: {{ $ctx.Values.podHA.topologySpread.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              {{- include "sn360-es.roleSelectorLabels" (dict "ctx" $ctx "role" $role) | nindent 14 }}
+        {{- end }}
+      {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

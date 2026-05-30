@@ -25,6 +25,19 @@ func (f *fakeTenantLister) List(_ context.Context, _ int) ([]repository.Tenant, 
 	return f.tenants, nil
 }
 
+// IterateActive yields the fake's tenants in a single batch. Tests
+// that need batch-boundary behaviour can override this with a fake
+// that overrides IterateActive directly.
+func (f *fakeTenantLister) IterateActive(_ context.Context, _ int, yield func([]repository.Tenant) error) error {
+	if f.err != nil {
+		return f.err
+	}
+	if len(f.tenants) == 0 {
+		return nil
+	}
+	return yield(f.tenants)
+}
+
 type fakeCommunicationStore struct {
 	rowsByTenant map[string][]repository.CommunicationHistory
 	err          error
@@ -925,6 +938,160 @@ func watermarkKeys(m map[string]time.Time) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// partialIterateTenantLister is a test fake that yields the first
+// `successfulBatches` of `batches` to the caller and then returns
+// `iterErr` instead of yielding the remaining batches. Models the
+// real failure modes the worker's IterateActive port has to
+// survive: context cancellation between batches, a transient DB
+// error on batch N of M, a connection reset mid-iteration.
+type partialIterateTenantLister struct {
+	batches           [][]repository.Tenant
+	successfulBatches int
+	iterErr           error
+}
+
+func (f *partialIterateTenantLister) List(_ context.Context, _ int) ([]repository.Tenant, error) {
+	// Not used by the worker once the IterateActive port lands;
+	// kept to satisfy the TenantLister interface.
+	out := make([]repository.Tenant, 0)
+	for _, b := range f.batches {
+		out = append(out, b...)
+	}
+	return out, nil
+}
+
+func (f *partialIterateTenantLister) IterateActive(_ context.Context, _ int, yield func([]repository.Tenant) error) error {
+	for i, batch := range f.batches {
+		if i >= f.successfulBatches {
+			return f.iterErr
+		}
+		if err := yield(batch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TestRelationshipJob_Run_PartialIterateActiveDoesNotPruneUnreached
+// is the regression test for the watermark-prune-on-partial-
+// iteration bug Devin Review flagged on PR #45.
+//
+// The IterateActive port made the prune step (which drops
+// lastCycleStartedAt entries for tenants no longer in the active
+// set) reachable on the unhappy path: before the port,
+// Tenants.List either returned the full active set or returned an
+// error before the prune ran. After the port, when IterateActive
+// errored partway through, `activeTenantIDs` only contained
+// tenants from completed batches, and the prune deleted
+// watermarks for the unreached tenants — even though those
+// tenants still existed. The consequence: on the next successful
+// cycle, the pruned tenants were treated as first-run (zero
+// watermark) and every in-window row got re-sampled into the
+// behavioral baseline histogram, defeating the double-counting
+// protection the watermark provides and corrupting the timing-
+// anomaly baseline the Tier 0 ATO heuristic depends on.
+//
+// The fix: skip the prune entirely when iterErr is non-nil so the
+// prune only ever runs against a complete enumeration. This test
+// exercises the unhappy path explicitly:
+//
+//  1. Cycle 1 succeeds for tenants A, B, C with all three
+//     batches yielded. Watermarks are populated for all three.
+//  2. Cycle 2 yields only batch [A] before IterateActive returns
+//     an error. activeTenantIDs contains only A. Without the
+//     fix, B and C would be pruned; with the fix, they survive
+//     because pruning is gated on iterErr == nil.
+func TestRelationshipJob_Run_PartialIterateActiveDoesNotPruneUnreached(t *testing.T) {
+	day := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	baselines := newFakeBaselineRepo()
+
+	tenants := []repository.Tenant{{ID: "t-A"}, {ID: "t-B"}, {ID: "t-C"}}
+	// Cycle 1 lister: yields all three tenants as a single batch
+	// so cycle 1 populates watermarks for A, B, C.
+	cycle1Lister := &partialIterateTenantLister{
+		batches:           [][]repository.Tenant{tenants},
+		successfulBatches: 1,
+	}
+
+	cs := &fakeCommunicationStore{rowsByTenant: map[string][]repository.CommunicationHistory{
+		"t-A": {{ID: "rA", TenantID: "t-A", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+			SenderDomainHash: []byte("d"), SenderDomain: "d.example", Count30d: 4,
+			LastSeenAt: day.Add(9 * time.Hour), UpdatedAt: day}},
+		"t-B": {{ID: "rB", TenantID: "t-B", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+			SenderDomainHash: []byte("d"), SenderDomain: "d.example", Count30d: 4,
+			LastSeenAt: day.Add(10 * time.Hour), UpdatedAt: day}},
+		"t-C": {{ID: "rC", TenantID: "t-C", SenderHash: []byte("a"), RecipientHash: []byte("b"),
+			SenderDomainHash: []byte("d"), SenderDomain: "d.example", Count30d: 4,
+			LastSeenAt: day.Add(11 * time.Hour), UpdatedAt: day}},
+	}}
+	up := &fakeCommUpserter{accept: true}
+	hasher := func(_, _ string) ([]byte, error) { return []byte("ok"), nil }
+
+	job, err := NewRelationshipJob(RelationshipJobConfig{
+		Interval: time.Hour, Tenants: cycle1Lister, Communications: cs, Upserter: up,
+		Baselines: baselines, Hasher: hasher, Logger: discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	if err := job.Run(context.Background()); err != nil {
+		t.Fatalf("cycle 1: %v", err)
+	}
+	if len(job.lastCycleStartedAt) != 3 {
+		t.Fatalf("cycle 1 watermark map size = %d, want 3 (A, B, C all populated)",
+			len(job.lastCycleStartedAt))
+	}
+
+	// Swap in a lister that yields tenant A successfully, then
+	// errors before yielding B and C. activeTenantIDs in Run
+	// will contain only A; the prune (if it ran) would drop B
+	// and C — which the fix prevents by gating on iterErr.
+	prevWatermarks := map[string]time.Time{}
+	for k, v := range job.lastCycleStartedAt {
+		prevWatermarks[k] = v
+	}
+	job.cfg.Tenants = &partialIterateTenantLister{
+		batches: [][]repository.Tenant{
+			{{ID: "t-A"}},
+			{{ID: "t-B"}},
+			{{ID: "t-C"}},
+		},
+		successfulBatches: 1,
+		iterErr:           errors.New("transient db error on batch 2"),
+	}
+
+	// Cycle 2 surfaces the iteration error through Run's
+	// firstErr return path. The pruning step must NOT execute.
+	if err := job.Run(context.Background()); err == nil {
+		t.Fatal("cycle 2 should surface iterErr, got nil")
+	}
+
+	// Watermarks for B and C must still be present. Without the
+	// fix this assertion fails: prune deletes them based on an
+	// incomplete activeTenantIDs set.
+	for _, id := range []string{"t-A", "t-B", "t-C"} {
+		if _, ok := job.lastCycleStartedAt[id]; !ok {
+			t.Errorf("cycle 2 dropped watermark for %s even though IterateActive failed before reaching all batches; "+
+				"prune must be gated on iterErr == nil", id)
+		}
+	}
+	// And A's watermark should have ADVANCED (its row loop
+	// completed successfully in the first yielded batch); B and
+	// C's watermarks should match their cycle-1 values exactly
+	// because Run never reached them.
+	if got := job.lastCycleStartedAt["t-A"]; !got.After(prevWatermarks["t-A"]) {
+		t.Errorf("cycle 2 t-A watermark = %s, want > cycle 1 watermark %s (A was reached and processed)",
+			got, prevWatermarks["t-A"])
+	}
+	for _, id := range []string{"t-B", "t-C"} {
+		if got, want := job.lastCycleStartedAt[id], prevWatermarks[id]; !got.Equal(want) {
+			t.Errorf("cycle 2 %s watermark = %s, want %s (unchanged; tenant was not reached)",
+				id, got, want)
+		}
+	}
 }
 
 // TestBaselineCacheKey_InjectiveOverVariableWidthInputs locks in

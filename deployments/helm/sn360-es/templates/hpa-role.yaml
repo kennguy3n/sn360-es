@@ -1,0 +1,56 @@
+{{- /*
+  Per-role HPA for the role-split topology.
+
+  Emitted only when role-split is on. When `keda.enabled = true`,
+  the consumers role is skipped (KEDA's ScaledObject manages
+  scaling for it via its own underlying HorizontalPodAutoscaler,
+  and emitting both for the same Deployment causes ownership
+  conflicts). The api and workers roles continue to get their
+  own HPA — they don't have a corresponding KEDA scaler, so the
+  CPU-based HPA stays load-bearing.
+
+  Roles with `autoscaling.enabled = false` are skipped entirely
+  — the workers role uses this path because its replicaCount is
+  intentionally fixed (singleton + leader election via the Redis
+  distributed lock).
+*/}}
+{{- if .Values.roleSplit.enabled }}
+{{- $ctx := . }}
+{{- $kedaOn := .Values.keda.enabled }}
+{{- range $role, $rcfg := .Values.roleSplit.roles }}
+{{- $skipForKeda := and $kedaOn (eq $role "consumers") }}
+{{- if and $rcfg $rcfg.autoscaling $rcfg.autoscaling.enabled (not $skipForKeda) }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "sn360-es.roleFullname" (dict "ctx" $ctx "role" $role) }}
+  labels:
+    {{- include "sn360-es.roleLabels" (dict "ctx" $ctx "role" $role) | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "sn360-es.roleFullname" (dict "ctx" $ctx "role" $role) }}
+  minReplicas: {{ $rcfg.autoscaling.minReplicas }}
+  maxReplicas: {{ $rcfg.autoscaling.maxReplicas }}
+  metrics:
+    {{- if $rcfg.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $rcfg.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if $rcfg.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ $rcfg.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

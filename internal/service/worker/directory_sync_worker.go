@@ -71,20 +71,31 @@ func (j *DirectorySyncJob) Interval() time.Duration { return j.interval }
 
 // Run implements Job. Iterates active tenants, fetches current
 // directory state, diffs against persisted data, and upserts changes.
+//
+// Uses keyset-paginated iteration so peak memory is O(batchSize) ×
+// tenant-row-size, not O(tenant_count). Per-tenant syncTenant calls
+// happen inside the batch callback so a slow tenant cannot stall the
+// query connection (the batch query returns before any syncTenant
+// starts).
 func (j *DirectorySyncJob) Run(ctx context.Context) error {
-	tenants, err := j.cfg.Tenants.List(ctx, 0)
-	if err != nil {
-		return fmt.Errorf("directory sync: list tenants: %w", err)
-	}
 	var lastErr error
-	for _, t := range tenants {
-		if err := j.syncTenant(ctx, t.ID); err != nil {
-			j.cfg.Logger.Error("directory sync: tenant failed",
-				slog.String("tenant_id", t.ID),
-				slog.String("err", err.Error()))
-			lastErr = err
-			continue
+	iterErr := j.cfg.Tenants.IterateActive(ctx, 0, func(batch []repository.Tenant) error {
+		for _, t := range batch {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := j.syncTenant(ctx, t.ID); err != nil {
+				j.cfg.Logger.Error("directory sync: tenant failed",
+					slog.String("tenant_id", t.ID),
+					slog.String("err", err.Error()))
+				lastErr = err
+				continue
+			}
 		}
+		return nil
+	})
+	if iterErr != nil {
+		return fmt.Errorf("directory sync: iterate tenants: %w", iterErr)
 	}
 	return lastErr
 }
