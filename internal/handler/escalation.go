@@ -197,12 +197,24 @@ func (h *EscalationHandler) ServeGet(w http.ResponseWriter, r *http.Request) {
 	// caller cannot distinguish "ticket exists, wrong tenant" from
 	// "ticket never existed" via the response alone.
 	//
-	// This is a defense-in-depth check at the handler boundary;
-	// when PR #44's `WHERE tenant_id = $1` store-level filter lands,
-	// the store will also refuse the lookup before the row ever
-	// reaches us. Both layers are intentional — the handler check
-	// also covers in-memory and mock stores used in tests + the
-	// CommunityEdition demo deployment.
+	// This is a defense-in-depth check at the handler boundary.
+	// The store-level filter has already landed (PR #44): both
+	// MemoryTicketStore.Load (internal/service/agent/escalation.go,
+	// compound (tenantID, ticketID) key) and PostgresTicketStore.Load
+	// (internal/service/agent/postgres_ticket_store.go, WHERE
+	// tenant_id = $1 AND ticket_id = $2) refuse cross-tenant
+	// lookups before the row ever reaches us — Load returns ok=false
+	// and the `if !ok` branch above handles them as 404.
+	//
+	// The handler-side check below is still kept because:
+	//   * defence in depth — a future custom TicketStore that
+	//     forgets to filter by tenant_id would still be caught here;
+	//   * it provides the cross-tenant WarnContext audit log even
+	//     if/when a store implementation returns the row by mistake
+	//     (the store path silently returns ok=false today, which is
+	//     correct from a leak-prevention standpoint but loses the
+	//     "someone tried to peek at another tenant's ticket" signal
+	//     that the WarnContext below preserves).
 	if ticket.TenantID != tenantID {
 		h.logger.WarnContext(r.Context(), "escalation: cross-tenant GET attempt",
 			slog.String("ticket_id", ticketID),
