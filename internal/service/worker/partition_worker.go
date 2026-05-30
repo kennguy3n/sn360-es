@@ -65,6 +65,20 @@ type PartitionedTable struct {
 	// `<prefix>_<YYYY_MM>` to match the migration's naming
 	// convention.
 	NamePrefix string
+	// PartitionKey is the column name used in the parent table's
+	// PARTITION BY RANGE (...) declaration. The maintenance job
+	// itself does not consume this — it routes retention via
+	// DropPartition on the parsed bound — but downstream code that
+	// builds a row-level retention fallback (the cleanup worker on
+	// the `partitionRunner == nil` path) MUST issue DELETEs against
+	// this same column so the two retention mechanisms apply
+	// identical semantics. A row-level DELETE against any other
+	// timestamp column (e.g. an audit `created_at` on a table
+	// partitioned by `evaluated_at`) would diverge from the
+	// partition-drop behaviour on rows where the two columns are
+	// not equal (back-filled imports, retroactive evaluation, etc.)
+	// and would lose partition-pruning at the query planner.
+	PartitionKey string
 	// RetentionMonths is the number of monthly partitions to keep.
 	// Partitions whose upper bound is older than
 	// `now - RetentionMonths` are eligible for drop. Must be > 0

@@ -998,17 +998,31 @@ func buildDirectorySyncRunner(cfg *config.Config, logger *slog.Logger, app *appl
 // newPgPruner may interpolate into a DELETE statement plus the
 // per-table "prune by this column" choice.
 //
-// Invariant: every parent table returned by partitionedAppendOnlyTables()
+// Invariant (1): every parent table returned by partitionedAppendOnlyTables()
 // MUST also appear here, because the cleanup-worker fallback path
 // (planCleanupPruners with a nil partitionRunner) registers a
 // row-level pruner for every partitioned parent. Without this entry
 // newPgPruner panics on the fallback path, taking the worker bootstrap
 // down whenever the partition runner is disabled or fails to init —
 // exactly the time the row-level fallback needs to be available.
+//
+// Invariant (2): for every partitioned parent, the column declared
+// here MUST equal that parent's PartitionKey on its
+// partitionedAppendOnlyTables() entry. The fallback DELETE runs as
+//
+//	DELETE FROM <parent> WHERE <column> < $1
+//
+// which only matches the partition-drop's retention semantics — and
+// only benefits from partition-pruning at the query planner — when
+// <column> is the same column the parent is partitioned on. Using
+// any other timestamp column (e.g. an audit `created_at` on a table
+// partitioned by `evaluated_at`) silently diverges from the
+// partition-drop behaviour for rows where the two columns differ
+// (back-fills, retroactive evaluation, replay imports, ...).
 var prunableTables = map[string]string{
-	"evaluation_results":      "created_at",
+	"evaluation_results":      "evaluated_at",
 	"audit_logs":              "created_at",
-	"feedback_events":         "created_at",
+	"feedback_events":         "occurred_at",
 	"communication_histories": "last_seen_at",
 	"quarantine_references":   "created_at",
 	"education_lesson_events": "created_at",

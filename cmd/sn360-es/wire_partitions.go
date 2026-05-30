@@ -23,11 +23,19 @@ import (
 //   - NamePrefix: the literal prefix every monthly partition name
 //     uses ("<prefix>_<YYYY_MM>"). Matches the migration's
 //     `to_char(part_start, 'YYYY_MM')` naming exactly.
+//   - PartitionKey: the column the parent uses in its
+//     PARTITION BY RANGE (...) declaration. Mirrored verbatim from
+//     the migration so the cleanup-worker fallback (which uses this
+//     to build row-level DELETEs) applies the same retention
+//     semantics as the partition-drop path. evaluation_results is
+//     partitioned by evaluated_at, audit_logs by created_at, and
+//     feedback_events by occurred_at — see migration 0017 lines
+//     149, 203 and 243.
 func partitionedAppendOnlyTables() []worker.PartitionedTable {
 	return []worker.PartitionedTable{
-		{Parent: "evaluation_results", NamePrefix: "evaluation_results"},
-		{Parent: "audit_logs", NamePrefix: "audit_logs"},
-		{Parent: "feedback_events", NamePrefix: "feedback_events"},
+		{Parent: "evaluation_results", NamePrefix: "evaluation_results", PartitionKey: "evaluated_at"},
+		{Parent: "audit_logs", NamePrefix: "audit_logs", PartitionKey: "created_at"},
+		{Parent: "feedback_events", NamePrefix: "feedback_events", PartitionKey: "occurred_at"},
 	}
 }
 
