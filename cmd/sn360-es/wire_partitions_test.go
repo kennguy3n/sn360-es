@@ -165,15 +165,15 @@ func TestParsePartitionBound_RejectsUnknownShape(t *testing.T) {
 // partitioned tables. Devin Review flagged this on PR #46.
 //
 // Three states the function handles:
-//   1. partitionRunner != nil  →  partitioned-table pruners SKIPPED
-//      (partition worker is the live retention path). Only
-//      communication_histories is registered. PartitionFallback=false.
-//   2. partitionRunner == nil AND interval > 0 → init-failure path.
-//      All partitioned-table pruners registered as fallback;
-//      FallbackReason cites init failure.
-//   3. partitionRunner == nil AND interval == 0 → explicit opt-out.
-//      All partitioned-table pruners registered; FallbackReason
-//      cites operator disable.
+//  1. partitionRunner != nil  →  partitioned-table pruners SKIPPED
+//     (partition worker is the live retention path). Only
+//     communication_histories is registered. PartitionFallback=false.
+//  2. partitionRunner == nil AND interval > 0 → init-failure path.
+//     All partitioned-table pruners registered as fallback;
+//     FallbackReason cites init failure.
+//  3. partitionRunner == nil AND interval == 0 → explicit opt-out.
+//     All partitioned-table pruners registered; FallbackReason
+//     cites operator disable.
 func TestPlanCleanupPruners(t *testing.T) {
 	parents := partitionedAppendOnlyTables()
 	if len(parents) == 0 {
