@@ -111,6 +111,131 @@ SELECT id,name,display_name,provider,primary_domain,region,kms_key_arn,score_bas
 	return out, rows.Err()
 }
 
+// defaultIterateBatchSize is the per-batch ceiling for IterateActive
+// when the caller passes batchSize <= 0. 100 tenants per round-trip is
+// the sweet spot for the worker workloads: small enough to keep peak
+// memory negligible (≤ ~50 KiB per batch at the current Tenant row
+// size) and large enough that the per-batch query cost (network +
+// planner) is amortised across enough tenants. Workers that want a
+// different trade-off pass their own batchSize.
+const defaultIterateBatchSize = 100
+
+// IterateActive yields non-deleted tenants in keyset-paginated batches
+// ordered by (name, id). The (name, id) compound cursor is the keyset
+// key: it MUST be a total ordering across the candidate set so a batch
+// boundary cannot skip or duplicate a row. The schema currently enforces
+// `name` UNIQUE NOT NULL (migrations/0001_init.up.sql), so name alone
+// would in fact be sufficient today; we keep `id` as the tiebreaker as
+// defence-in-depth against a future schema relaxation (soft-deleted
+// duplicates, onboarding drafts, or a multi-region merge that allows
+// transiently duplicate display names) so this iterator stays correct
+// without a coordinated schema-plus-code rev.
+//
+// The query plan is index-friendly: `tenants(name)` has an implicit
+// btree from the UNIQUE constraint check, and keyset on (name, id)
+// translates to a range scan on that index. No OFFSET is used, so
+// iteration cost is O(batchSize) per batch regardless of how far
+// into the table we are.
+func (p *pgTenants) IterateActive(ctx context.Context, batchSize int, yield func([]Tenant) error) error {
+	if batchSize <= 0 {
+		batchSize = defaultIterateBatchSize
+	}
+	// Cursor: (lastName, lastID), tracked alongside `hasCursor`
+	// so the first batch can run without ANY name/id predicate.
+	//
+	// Devin Review caught a defence-in-depth gap on the prior
+	// implementation: it always issued `name > $1 OR ...` with
+	// $1 = "" for the first batch and relied on the implicit
+	// `tenants(name)` UNIQUE-constraint invariant that no row
+	// has an empty name. That invariant holds today through
+	// Tenants.Create validation, but encoding it as a load-
+	// bearing assumption inside a generic keyset helper means a
+	// future bypass (a backdoor admin insert, a future seed
+	// fixture, a schema change relaxing NOT NULL) would silently
+	// skip the first row on every iteration. Using a separate
+	// flag for the first batch removes that coupling.
+	var lastName string
+	var lastID string
+	hasCursor := false
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		batch, err := p.fetchTenantBatch(ctx, hasCursor, lastName, lastID, batchSize)
+		if err != nil {
+			return err
+		}
+		if len(batch) == 0 {
+			return nil
+		}
+		if err := yield(batch); err != nil {
+			return err
+		}
+		last := batch[len(batch)-1]
+		lastName = last.Name
+		lastID = last.ID
+		hasCursor = true
+		if len(batch) < batchSize {
+			return nil
+		}
+	}
+}
+
+// fetchTenantBatch runs one page of the keyset query and returns the
+// rows. Pulled out so `defer rows.Close()` handles cleanup (including
+// the gosec/errcheck unhandled-error concern) regardless of which
+// branch returns first.
+//
+// `hasCursor` toggles the WHERE clause between two regimes:
+//
+//   - false (first batch): the cursor predicate is short-circuited
+//     to TRUE so every active row is eligible. Postgres folds the
+//     `TRUE OR ...` branch out of the plan; the practical query is
+//     `WHERE deleted_at IS NULL ORDER BY name, id LIMIT N`.
+//
+//   - true (subsequent batches): the cursor predicate enforces
+//     strict ordering after the previous batch's last (name, id)
+//     row via the tuple comparison
+//     `(name > $2) OR (name = $2 AND id::text > $3)`.
+//
+// This avoids the empty-string sentinel that the prior implementation
+// relied on (cursor=`("", "")` for the first batch). The empty-
+// string approach worked only because every tenant has a non-empty
+// name today, an implicit invariant from Tenants.Create validation;
+// the flagged regime decouples first-batch correctness from that
+// invariant entirely.
+func (p *pgTenants) fetchTenantBatch(ctx context.Context, hasCursor bool, lastName, lastID string, batchSize int) ([]Tenant, error) {
+	rows, err := p.db.QueryContext(ctx, `
+SELECT id,name,display_name,provider,primary_domain,region,kms_key_arn,score_base,retention_days,
+       locale,status,metadata,created_at,updated_at
+  FROM tenants
+ WHERE deleted_at IS NULL
+   AND (NOT $1::boolean OR name > $2 OR (name = $2 AND id::text > $3))
+ ORDER BY name, id
+ LIMIT $4
+`, hasCursor, lastName, lastID, batchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	batch := make([]Tenant, 0, batchSize)
+	for rows.Next() {
+		var t Tenant
+		var meta []byte
+		if err := rows.Scan(&t.ID, &t.Name, &t.DisplayName, &t.Provider, &t.PrimaryDomain, &t.Region,
+			&t.KMSKeyARN, &t.ScoreBase, &t.RetentionDays, &t.Locale, &t.Status, &meta,
+			&t.CreatedAt, &t.UpdatedAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(meta, &t.Metadata)
+		batch = append(batch, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return batch, nil
+}
+
 // scanOne executes a single-row tenant query and projects the row
 // into a *Tenant.
 //

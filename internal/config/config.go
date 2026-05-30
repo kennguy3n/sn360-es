@@ -625,6 +625,26 @@ type Worker struct {
 	// DirectorySyncInterval is the gap between directory sync cycles.
 	// Default 6h.
 	DirectorySyncInterval time.Duration
+	// PartitionInterval is the gap between
+	// partition-maintenance cycles for the partitioned append-only
+	// tables (see migrations/0017_partition_append_only_tables.up.sql).
+	// Default 24h — monthly partition cadence is generous enough
+	// that running daily still leaves a wide forward-creation
+	// window even if several cycles are missed.
+	PartitionInterval time.Duration
+	// PartitionLookaheadMonths controls how far ahead the
+	// maintenance worker pre-creates monthly partitions. Default 3:
+	// even if the worker is offline for a couple of months, the
+	// parent table still has somewhere to route inserts.
+	PartitionLookaheadMonths int
+	// PartitionRetentionMonths bounds how many calendar months of
+	// historical data each partitioned table keeps. Default 12. The
+	// maintenance worker DROPS partitions whose upper bound is at-
+	// or-before `now - PartitionRetentionMonths`; the legacy
+	// (pre-cutover) partition is always preserved and operators
+	// archive + drop it manually. Set to 0 to disable partition-
+	// drop entirely (forward-creation still runs).
+	PartitionRetentionMonths int
 }
 
 // Onboarding holds the OAuth onboarding flow configuration.
@@ -675,6 +695,40 @@ type RateLimit struct {
 	// RATE_LIMIT_TRUSTED_PROXIES=10.0.0.0/8 so the limiter picks the
 	// real client IP from the ALB-appended XFF.
 	TrustedProxies string
+	// Backend selects the bucket store. "memory" (default) keeps
+	// the existing per-replica behaviour. "redis" shares token
+	// state across every replica that points at the same Redis,
+	// which is the configuration required for the documented
+	// rate to actually hold cluster-wide. Set via
+	// RATE_LIMIT_BACKEND.
+	Backend string
+	// RedisKeyPrefix is prepended to every bucket key in Redis. A
+	// stable, deployment-scoped string prevents two services on
+	// the same Redis from colliding on the same client identifier
+	// (e.g. two services both bucketing on "1.2.3.4"). Defaults
+	// to "sn360-es:rl"; set via RATE_LIMIT_REDIS_KEY_PREFIX.
+	RedisKeyPrefix string
+	// RedisTTL is the auto-expiry on every bucket hash in Redis.
+	// Defaults to 10 minutes (the effective TTL on each write is
+	// max(RedisTTL, refill-from-empty)). Set via
+	// RATE_LIMIT_REDIS_TTL.
+	RedisTTL time.Duration
+	// RedisTimeout caps every Redis Take call. A slow Redis
+	// otherwise extends every request's tail latency. Defaults to
+	// 200 ms; negative disables. Set via RATE_LIMIT_REDIS_TIMEOUT.
+	RedisTimeout time.Duration
+	// FailureMode controls the limiter's behaviour when the
+	// configured store (typically Redis) is hard-down: "open"
+	// (default) lets requests through, "closed" returns 503. Set
+	// via RATE_LIMIT_FAILURE_MODE.
+	FailureMode string
+	// FallbackToMemory, when true, has the limiter consult a
+	// per-replica memory store whenever the primary store returns
+	// an availability error. The fallback is less correct (per-
+	// replica counting) but still safer than fail-open in most
+	// production setups. Defaults to true; set via
+	// RATE_LIMIT_FALLBACK_TO_MEMORY.
+	FallbackToMemory bool
 }
 
 // Load reads configuration from the environment.
@@ -785,7 +839,7 @@ func Load() (Config, error) {
 			// tier1 package. Whenever the platform default changes,
 			// update both locations.
 			SuppressPartner: getInt("TIER1_SUPPRESS_PARTNER", -10),
-			BatchEnabled:    getBool("TIER1_BATCH_ENABLED", false),
+			BatchEnabled:    getBool("TIER1_BATCH_ENABLED", true),
 		},
 		SensitivityBonsaiURL:     getStr("SENSITIVITY_BONSAI_URL", ""),
 		SensitivityBonsaiTimeout: getDuration("SENSITIVITY_BONSAI_TIMEOUT", 30*time.Second),
@@ -822,12 +876,18 @@ func Load() (Config, error) {
 			AllowedOrigins: parseCSV(getStr("CORS_ALLOWED_ORIGINS", "")),
 		},
 		RateLimit: RateLimit{
-			Enabled:         getBool("RATE_LIMIT_ENABLED", true),
-			Rate:            getFloat("RATE_LIMIT_RATE", 30),
-			Burst:           getInt("RATE_LIMIT_BURST", 60),
-			CleanupInterval: getDuration("RATE_LIMIT_CLEANUP_INTERVAL", time.Minute),
-			IdleTTL:         getDuration("RATE_LIMIT_IDLE_TTL", 5*time.Minute),
-			TrustedProxies:  getStr("RATE_LIMIT_TRUSTED_PROXIES", ""),
+			Enabled:          getBool("RATE_LIMIT_ENABLED", true),
+			Rate:             getFloat("RATE_LIMIT_RATE", 30),
+			Burst:            getInt("RATE_LIMIT_BURST", 60),
+			CleanupInterval:  getDuration("RATE_LIMIT_CLEANUP_INTERVAL", time.Minute),
+			IdleTTL:          getDuration("RATE_LIMIT_IDLE_TTL", 5*time.Minute),
+			TrustedProxies:   getStr("RATE_LIMIT_TRUSTED_PROXIES", ""),
+			Backend:          strings.ToLower(getStr("RATE_LIMIT_BACKEND", "memory")),
+			RedisKeyPrefix:   getStr("RATE_LIMIT_REDIS_KEY_PREFIX", "sn360-es:rl"),
+			RedisTTL:         getDuration("RATE_LIMIT_REDIS_TTL", 10*time.Minute),
+			RedisTimeout:     getDuration("RATE_LIMIT_REDIS_TIMEOUT", 200*time.Millisecond),
+			FailureMode:      strings.ToLower(getStr("RATE_LIMIT_FAILURE_MODE", "open")),
+			FallbackToMemory: getBool("RATE_LIMIT_FALLBACK_TO_MEMORY", true),
 		},
 		SMTP: SMTP{
 			Host:       getStr("SMTP_HOST", ""),
@@ -921,12 +981,15 @@ func Load() (Config, error) {
 			PushMicrosoftClientStateSecret: getStr("INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET", ""),
 		},
 		Worker: Worker{
-			RelationshipInterval:    getDuration("WORKER_RELATIONSHIP_INTERVAL", 4*time.Hour),
-			VendorDiscoveryInterval: getDuration("WORKER_VENDOR_DISCOVERY_INTERVAL", 7*24*time.Hour),
-			CleanupInterval:         getDuration("WORKER_CLEANUP_INTERVAL", 24*time.Hour),
-			RetentionDays:           getInt("WORKER_RETENTION_DAYS", 90),
-			LockTTL:                 getDuration("WORKER_LOCK_TTL", 5*time.Minute),
-			DirectorySyncInterval:   getDuration("WORKER_DIRECTORY_SYNC_INTERVAL", 6*time.Hour),
+			RelationshipInterval:     getDuration("WORKER_RELATIONSHIP_INTERVAL", 4*time.Hour),
+			VendorDiscoveryInterval:  getDuration("WORKER_VENDOR_DISCOVERY_INTERVAL", 7*24*time.Hour),
+			CleanupInterval:          getDuration("WORKER_CLEANUP_INTERVAL", 24*time.Hour),
+			RetentionDays:            getInt("WORKER_RETENTION_DAYS", 90),
+			LockTTL:                  getDuration("WORKER_LOCK_TTL", 5*time.Minute),
+			DirectorySyncInterval:    getDuration("WORKER_DIRECTORY_SYNC_INTERVAL", 6*time.Hour),
+			PartitionInterval:        getDuration("WORKER_PARTITION_INTERVAL", 24*time.Hour),
+			PartitionLookaheadMonths: getInt("WORKER_PARTITION_LOOKAHEAD_MONTHS", 3),
+			PartitionRetentionMonths: getInt("WORKER_PARTITION_RETENTION_MONTHS", 12),
 		},
 		Onboarding: Onboarding{
 			StateSecret: getStr("ONBOARDING_STATE_SECRET", ""),
@@ -1150,6 +1213,27 @@ func (c Config) validate() error {
 				return errors.New("INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET has low entropy (all-same character, sequential bytes, or repeated short pattern); generate one with: openssl rand -base64 48")
 			}
 		}
+	}
+	// RATE_LIMIT_BACKEND / RATE_LIMIT_FAILURE_MODE accept a closed
+	// set of values. A typo (e.g. "memry", "Closd") would silently
+	// fall through to the default code path and produce
+	// counter-intuitive behaviour at runtime — fail fast at boot
+	// instead. Empty values are permitted because Load() injects
+	// the documented defaults.
+	switch c.RateLimit.Backend {
+	case "", "memory", "redis":
+		// ok
+	default:
+		return fmt.Errorf("RATE_LIMIT_BACKEND: invalid value %q (expected one of: memory, redis)", c.RateLimit.Backend)
+	}
+	switch c.RateLimit.FailureMode {
+	case "", "open", "closed":
+		// ok
+	default:
+		return fmt.Errorf("RATE_LIMIT_FAILURE_MODE: invalid value %q (expected one of: open, closed)", c.RateLimit.FailureMode)
+	}
+	if c.RateLimit.Backend == "redis" && c.RateLimit.RedisKeyPrefix == "" {
+		return errors.New("RATE_LIMIT_REDIS_KEY_PREFIX must not be empty when RATE_LIMIT_BACKEND=redis (a stable, deployment-scoped prefix prevents two services on the same Redis from colliding on the same client key)")
 	}
 	return nil
 }

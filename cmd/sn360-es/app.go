@@ -12,6 +12,7 @@ import (
 
 	"github.com/kennguy3n/sn360-es/internal/config"
 	"github.com/kennguy3n/sn360-es/internal/constant"
+	"github.com/kennguy3n/sn360-es/internal/dto"
 	"github.com/kennguy3n/sn360-es/internal/handler"
 	"github.com/kennguy3n/sn360-es/internal/repository"
 	"github.com/kennguy3n/sn360-es/internal/service"
@@ -151,6 +152,7 @@ type application struct {
 	vendorRunner        *worker.Runner
 	cleanupRunner       *worker.Runner
 	directorySyncRunner *worker.Runner
+	partitionRunner     *worker.Runner
 
 	// AI agents.
 	onboardAgent  *agent.OnboardingAgent
@@ -680,6 +682,22 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 					// per-relationship signals for the same input.
 					Enricher: app.signalEnricher,
 					Logger:   logger,
+					// Surface legacy-shape arrivals so operators
+					// can pinpoint the publisher fleet that still
+					// emits a flat dto.EvaluateRequest payload.
+					// The orchestrator handles both shapes — the
+					// metric only exists to gate the eventual
+					// removal of the tolerance shim.
+					OnLegacyPayload: func(req dto.EvaluateRequest) {
+						if app.metrics == nil {
+							return
+						}
+						tenant := req.TenantID
+						if tenant == "" {
+							tenant = "unknown"
+						}
+						app.metrics.Tier1BatchLegacyPayloadTotal.WithLabelValues(tenant).Inc()
+					},
 				})
 				if oerr != nil {
 					logger.Warn("sn360-es: tier1 batch orchestrator init failed; falling back to single-message consumer",
@@ -775,7 +793,7 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	}
 
 	// Periodic workers.
-	app.relationshipRunner, app.vendorRunner, app.cleanupRunner, app.directorySyncRunner = buildWorkers(cfg, logger, app)
+	app.relationshipRunner, app.vendorRunner, app.cleanupRunner, app.directorySyncRunner, app.partitionRunner = buildWorkers(cfg, logger, app)
 
 	// AI agents.
 	app.onboardAgent, app.tuningAgent, app.supportAgent = buildAgents(cfg, logger, app)
@@ -959,6 +977,12 @@ func (a *application) StartBackground(ctx context.Context) {
 			return nil
 		}
 		return a.directorySyncRunner.Run(ctx)
+	})
+	a.spawn(ctx, "partition worker", func(ctx context.Context) error {
+		if a.partitionRunner == nil {
+			return nil
+		}
+		return a.partitionRunner.Run(ctx)
 	})
 	a.spawn(ctx, "memoryLabelCache janitor", func(ctx context.Context) error {
 		if a.memLabelCache == nil {
