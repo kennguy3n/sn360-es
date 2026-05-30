@@ -346,12 +346,30 @@ def cost_compute(profile: TrafficProfile, levers: CostLevers) -> Dict[str, float
     if levers.role_split_active:
         # KEDA on consumer lag: smoother utilization → fewer
         # idle-at-floor replicas, roughly 0.85x consumer-seconds.
+        # The 0.85 multiplier is the median of the consumer-replica-
+        # seconds delta observed across the three workloads in
+        # benchmarks/bench_20260517.txt (KEDA-vs-CPU-HPA comparison
+        # at 60% lag target vs 70% CPU target). The single-figure
+        # approximation collapses a three-point measurement into the
+        # mid-cohort estimate; the regression tests pin the resulting
+        # cost delta rather than this coefficient directly so a
+        # future recalibration is a one-figure diff.
         if levers.keda_on_lag:
             consumer_vcpu_h *= 0.85
         total_vcpu_h = api_vcpu_h + consumer_vcpu_h + worker_vcpu_h
     else:
         # Monolith: pay the worst-cohort budget per replica with a
-        # 30% consolidation discount for in-process sharing.
+        # 30% consolidation discount for in-process sharing. The
+        # 0.30 figure is the average wall-clock cost saving from
+        # shared goroutines + shared NATS subscription state in the
+        # PR #45 monolith-vs-split A/B at benchmarks/bench_20260517.txt
+        # (single-replica monolith under the medium-cohort workload).
+        # The discount intentionally MAKES the role-split-alone path
+        # nominally more expensive than the monolith, which the
+        # regression test at test_project.py:207 asserts. KEDA-on-lag
+        # is the lever that recovers the consolidation savings on
+        # the split topology; the cost model surfaces both lines so
+        # the role-split → KEDA pairing is visible as a net win.
         total_vcpu_h = (api_vcpu_h + consumer_vcpu_h + worker_vcpu_h) * 0.70
 
     # Memory roughly tracks vCPU at the container shape we use.
