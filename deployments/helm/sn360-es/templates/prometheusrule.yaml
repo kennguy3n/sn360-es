@@ -175,6 +175,10 @@ spec:
             )
             or
             (
+              label_replace(absent_over_time(sn360_es_worker_cycle_completed_total{worker="partition_maintenance"}[30m]),    "worker", "partition_maintenance",    "", "") == 1
+            )
+            or
+            (
               label_replace(absent_over_time(sn360_es_worker_cycle_completed_total{worker="relationship-aggregation"}[30m]), "worker", "relationship-aggregation", "", "") == 1
             )
             or
@@ -188,8 +192,9 @@ spec:
           annotations:
             summary: "Worker {{`{{ $labels.worker }}`}} has not completed a cycle in 30m"
             description: |
-              The cleanup, directory-sync, relationship-aggregation,
-              and vendor-discovery workers each emit a counter on
+              The cleanup, directory-sync, partition_maintenance,
+              relationship-aggregation, and vendor-discovery workers
+              each emit a counter on
               cycle completion. A flatline (rate==0) indicates the
               Run() loop is stuck; an absent metric indicates the
               worker never started. Either case warrants a pod
