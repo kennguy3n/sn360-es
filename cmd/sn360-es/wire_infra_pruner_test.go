@@ -151,6 +151,27 @@ func TestRunBatchedPrune_BailsOnRowsAffectedUnknown(t *testing.T) {
 	}
 }
 
+// TestPrunableTables_CoversAllPartitionedParents pins the invariant
+// that every parent in partitionedAppendOnlyTables() has an entry in
+// prunableTables. Without this, the cleanup-worker fallback path
+// (partitionRunner == nil) panics when it tries to register a
+// row-level pruner for a partitioned table that the allow-list
+// doesn't know about. This is the regression test for the audit_logs
+// panic the bot caught in round 15.
+func TestPrunableTables_CoversAllPartitionedParents(t *testing.T) {
+	for _, pt := range partitionedAppendOnlyTables() {
+		col, ok := prunableTables[pt.Parent]
+		if !ok {
+			t.Errorf("partitioned parent %q has no entry in prunableTables; "+
+				"the cleanup-worker fallback will panic on newPgPruner", pt.Parent)
+			continue
+		}
+		if col == "" {
+			t.Errorf("prunableTables[%q] has an empty column name", pt.Parent)
+		}
+	}
+}
+
 // TestRunBatchedPrune_NonPositiveBatchSizeReturnsZero pins the
 // defensive guard against a non-positive batchSize. Without it, the
 // short-read termination condition (`n < int64(batchSize)`) would

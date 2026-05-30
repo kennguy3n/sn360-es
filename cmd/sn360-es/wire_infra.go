@@ -997,8 +997,17 @@ func buildDirectorySyncRunner(cfg *config.Config, logger *slog.Logger, app *appl
 // prunableTables is the exhaustive allow-list of table names that
 // newPgPruner may interpolate into a DELETE statement plus the
 // per-table "prune by this column" choice.
+//
+// Invariant: every parent table returned by partitionedAppendOnlyTables()
+// MUST also appear here, because the cleanup-worker fallback path
+// (planCleanupPruners with a nil partitionRunner) registers a
+// row-level pruner for every partitioned parent. Without this entry
+// newPgPruner panics on the fallback path, taking the worker bootstrap
+// down whenever the partition runner is disabled or fails to init —
+// exactly the time the row-level fallback needs to be available.
 var prunableTables = map[string]string{
 	"evaluation_results":      "created_at",
+	"audit_logs":              "created_at",
 	"feedback_events":         "created_at",
 	"communication_histories": "last_seen_at",
 	"quarantine_references":   "created_at",
