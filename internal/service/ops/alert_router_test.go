@@ -598,6 +598,83 @@ func TestDispatch_NilRemediatorOnWarningDoesNotEscalate(t *testing.T) {
 	}
 }
 
+// TestDispatch_UnknownActionEscalatesCritical pins the
+// defense-in-depth default branch in dispatch(): if a future
+// refactor adds a new AlertAction constant that Classify
+// produces but dispatch does not handle, a critical-severity
+// unhandled action must still reach a human via the escalation
+// fallback rather than vanish into a no-op. The synthetic
+// "AlertAction" used here is not in the package's exported
+// enum, so it exercises the default branch directly without
+// requiring a real enum-addition.
+func TestDispatch_UnknownActionEscalatesCritical(t *testing.T) {
+	esc := &fakeEscalator{}
+	r, err := NewAlertRouter(RouterConfig{
+		Escalator: esc,
+		TenantID:  "platform-owner",
+		Clock:     func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("NewAlertRouter: %v", err)
+	}
+	forced := Decision{
+		Alert: Alert{
+			Status: "firing",
+			Labels: map[string]string{
+				"alertname": "SN360ESWorkerCycleStalled",
+				"severity":  "critical",
+				"component": "workers",
+			},
+			Annotations: map[string]string{"summary": "stalled"},
+		},
+		Action: AlertAction("synthetic-unknown-action"),
+		Reason: "synthetic test forcing unknown-action default branch",
+	}
+	r.dispatch(t.Context(), forced)
+	if got := esc.count(); got != 1 {
+		t.Errorf("escalator calls=%d; want 1 (critical-severity unknown-action must fall through to escalation)", got)
+	}
+	got := esc.snapshot()
+	if len(got) == 0 || !strings.Contains(got[0].AISummary, "remediation_failed") {
+		t.Errorf("escalation incident=%+v; want AISummary to record remediation_failed prefix (escalateAfterRemediationFailure reused)", got)
+	}
+	if len(got) == 0 || !strings.Contains(got[0].Indicators[len(got[0].Indicators)-1], "unknown alert action") {
+		t.Errorf("escalation incident=%+v; want last Indicator to record the unknown-action sentinel", got)
+	}
+}
+
+// TestDispatch_UnknownActionOnWarningDoesNotEscalate mirrors
+// the nil-remediator/failed-remediation pattern: warning-level
+// unhandled actions stay logged-only, only critical severities
+// fall through to escalation.
+func TestDispatch_UnknownActionOnWarningDoesNotEscalate(t *testing.T) {
+	esc := &fakeEscalator{}
+	r, err := NewAlertRouter(RouterConfig{
+		Escalator: esc,
+		TenantID:  "platform-owner",
+		Clock:     func() time.Time { return time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("NewAlertRouter: %v", err)
+	}
+	forced := Decision{
+		Alert: Alert{
+			Status: "firing",
+			Labels: map[string]string{
+				"alertname": "SN360ESTier1LatencyHigh",
+				"severity":  "warning",
+				"component": "tier1",
+			},
+		},
+		Action: AlertAction("synthetic-unknown-action"),
+		Reason: "synthetic test forcing unknown-action default branch on warning severity",
+	}
+	r.dispatch(t.Context(), forced)
+	if got := esc.count(); got != 0 {
+		t.Errorf("escalator calls=%d; want 0 (warning-severity unknown-action stays logged-only)", got)
+	}
+}
+
 func TestBuildIncidentFromAlert_StartsAtPreserved(t *testing.T) {
 	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
 	start := time.Date(2026, 1, 15, 11, 55, 0, 0, time.UTC)

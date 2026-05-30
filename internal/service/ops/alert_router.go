@@ -418,6 +418,29 @@ func (r *AlertRouter) dispatch(ctx context.Context, d Decision) {
 		r.logger.Info("ops.alert_router: escalated",
 			slog.String("alert", d.Alert.Labels["alertname"]),
 			slog.String("ticket_id", ticket.TicketID))
+	default:
+		// Defense in depth: AlertAction is an exported type and
+		// Classify is the only producer in the current codebase, so
+		// the four cases above are exhaustive on HEAD. But if a
+		// future refactor adds a new ActionFoo constant to the enum
+		// and forgets to add a corresponding dispatch handler, the
+		// alert would silently produce no side effect — the
+		// inverse of what the router exists for. Surface the
+		// contract violation through the same critical-severity
+		// escalation fallback the nil-remediator branch uses, so an
+		// unhandled critical alert still reaches a human rather than
+		// vanishing into the log noise. Lower severities are
+		// logged-only by symmetry with the ActionRemediate failure
+		// branch: a warning-level unhandled action is a developer
+		// bug to be triaged from the alert-history dashboard, not a
+		// page-the-on-call event.
+		r.logger.Error("ops.alert_router: unknown action (Classify produced an action dispatch does not handle)",
+			slog.String("alert", d.Alert.Labels["alertname"]),
+			slog.String("action", string(d.Action)),
+			slog.String("reason", d.Reason))
+		if strings.EqualFold(d.Alert.Labels["severity"], "critical") {
+			r.escalateAfterRemediationFailure(ctx, d.Alert, fmt.Errorf("unknown alert action %q", d.Action))
+		}
 	}
 }
 
