@@ -813,7 +813,7 @@ components:
           format: date-time
         reason:
           type: string
-          enum: [confirmed_breach, account_compromise, zero_day_attachment, ai_low_confidence, user_requested]
+          enum: [confirmed_breach, account_compromise, zero_day_attachment, ai_low_confidence, user_requested, ops_alert]
         incident:
           type: object
           properties:

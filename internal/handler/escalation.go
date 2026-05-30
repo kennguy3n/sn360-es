@@ -96,6 +96,20 @@ func (h *EscalationHandler) ServeResolve(w http.ResponseWriter, r *http.Request)
 		// ErrTicketNotFound sentinel; the handler reflects that into
 		// the wire surface as an indistinguishable 404.
 		if errors.Is(err, agent.ErrTicketNotFound) {
+			// Log every ErrTicketNotFound at warn level so operators
+			// have visibility into potential cross-tenant probing
+			// attempts. The store collapses "wrong tenant" and "not
+			// present" into the same sentinel, so the log line here
+			// cannot distinguish the two cases — but a sustained
+			// burst of these for unrelated ticket IDs from the same
+			// caller is the signal we want operators to see. This
+			// mirrors the cross-tenant log line on ServeGet so both
+			// endpoints emit symmetric observability for the same
+			// class of attack surface.
+			h.logger.WarnContext(r.Context(), "escalation: resolve target not found",
+				slog.String("ticket_id", req.TicketID),
+				slog.String("caller_tenant", tenantID),
+			)
 			writeError(w, http.StatusNotFound, "ticket not found")
 			return
 		}
