@@ -139,6 +139,12 @@ jobs:
         # update in the same PR.
         run: python -m unittest scripts/cost_model/test_project.py
 
+  # NOTE: license-check used to live in a dedicated job here, but that
+  # duplicated work the `lint` job already does — `make lint` depends
+  # on `make license-check` via the Makefile prereq. One CI surface
+  # (matching what contributors run locally) is the correct shape.
+  # See cmd/sn360-es-license-check/ for the classifier + .license-waivers.txt.
+
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
@@ -192,6 +198,13 @@ jobs:
     #     more importantly it would silently invalidate the
     #     unit-economics dashboard. Treat it as a build-gating
     #     contract.
+    #
+    # license-check is intentionally NOT a separate `needs` here:
+    # it runs inside the `lint` job via `make lint`'s Makefile
+    # prereq, so `needs: [lint, ...]` already gates the build on a
+    # green license verdict. One CI surface for static-analysis
+    # gates (matching what contributors run locally) is the
+    # correct shape.
     needs: [lint, test, test-integration, migrate-check-online, cost-model, security-scan]
     steps:
       - uses: actions/checkout@v4

@@ -50,9 +50,19 @@ ALTER TABLE evaluation_results DETACH PARTITION evaluation_results_legacy;
 -- Drop the partitioned parent.
 DROP TABLE evaluation_results;
 
--- Rename legacy back to the canonical name.
+-- Rename legacy back to the canonical name. The legacy partition
+-- inherited the parent's composite PK/UNIQUE at ATTACH time — PG
+-- renamed the inherited constraints with the partition's table-name
+-- prefix (e.g. `evaluation_results_legacy_pkey`,
+-- `evaluation_results_legacy_tenant_id_message_id_hash_evaluat_key`)
+-- so they survive DETACH on the now-detached table. Drop them
+-- before re-adding the original 0001-shape PRIMARY KEY (id) and
+-- UNIQUE (tenant_id, message_id_hash), otherwise the ADD PRIMARY KEY
+-- fails with `multiple primary keys for table ... are not allowed`.
 ALTER TABLE evaluation_results_legacy RENAME TO evaluation_results;
 ALTER TABLE evaluation_results DROP CONSTRAINT IF EXISTS evaluation_results_legacy_range;
+ALTER TABLE evaluation_results DROP CONSTRAINT IF EXISTS evaluation_results_legacy_pkey;
+ALTER TABLE evaluation_results DROP CONSTRAINT IF EXISTS evaluation_results_legacy_tenant_id_message_id_hash_evaluat_key;
 ALTER TABLE evaluation_results ADD PRIMARY KEY (id);
 ALTER TABLE evaluation_results ADD CONSTRAINT evaluation_results_tenant_id_message_id_hash_key
     UNIQUE (tenant_id, message_id_hash);
@@ -75,6 +85,9 @@ ALTER TABLE audit_logs DETACH PARTITION audit_logs_legacy;
 DROP TABLE audit_logs;
 ALTER TABLE audit_logs_legacy RENAME TO audit_logs;
 ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS audit_logs_legacy_range;
+-- Drop the inherited composite PK (see evaluation_results above for
+-- the rationale).
+ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS audit_logs_legacy_pkey;
 ALTER TABLE audit_logs ADD PRIMARY KEY (id);
 
 ------------------------------------------------------------------
@@ -95,6 +108,9 @@ ALTER TABLE feedback_events DETACH PARTITION feedback_events_legacy;
 DROP TABLE feedback_events;
 ALTER TABLE feedback_events_legacy RENAME TO feedback_events;
 ALTER TABLE feedback_events DROP CONSTRAINT IF EXISTS feedback_events_legacy_range;
+-- Drop the inherited composite PK (see evaluation_results above for
+-- the rationale).
+ALTER TABLE feedback_events DROP CONSTRAINT IF EXISTS feedback_events_legacy_pkey;
 ALTER TABLE feedback_events ADD PRIMARY KEY (id);
 
 END $rollback$;

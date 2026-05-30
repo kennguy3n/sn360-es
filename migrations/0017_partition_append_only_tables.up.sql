@@ -126,12 +126,28 @@ ALTER TABLE evaluation_results_legacy DROP CONSTRAINT IF EXISTS evaluation_resul
 -- Step 4 — create the partitioned parent. Note the composite
 -- PRIMARY KEY (id, evaluated_at) — the partition key MUST be in
 -- every unique / primary key on a partitioned table.
+--
+-- Constraints are EXPLICITLY NAMED to match the legacy table's
+-- auto-generated names from migration 0001. PostgreSQL's
+-- ATTACH PARTITION (see MergeConstraintsIntoExisting in
+-- src/backend/commands/tablecmds.c) matches parent and partition
+-- constraints by NAME, not by definition. Letting PG auto-name the
+-- parent's CHECK / FK would yield `evaluation_results_score_check1`
+-- and `evaluation_results_tenant_id_fkey1` (suffixed because the
+-- legacy table still holds the un-suffixed names from 0001), and
+-- ATTACH would then fail with `child table is missing constraint`.
+-- Explicitly naming keeps both sides identical so ATTACH succeeds.
+-- Same-named constraints on sibling tables in one schema are
+-- permitted — pg_constraint.conname is unique per relation, not per
+-- namespace.
 CREATE TABLE evaluation_results (
     id                       UUID        NOT NULL DEFAULT gen_random_uuid(),
-    tenant_id                UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    tenant_id                UUID        NOT NULL,
     message_id_hash          BYTEA       NOT NULL,
     correlation_id           TEXT,
-    score                    INT         NOT NULL CHECK (score BETWEEN 0 AND 100),
+    score                    INT         NOT NULL
+                             CONSTRAINT evaluation_results_score_check
+                             CHECK (score BETWEEN 0 AND 100),
     tier                     TEXT        NOT NULL,
     primary_category         TEXT,
     secondary_categories     TEXT[]      NOT NULL DEFAULT '{}'::TEXT[],
@@ -145,7 +161,9 @@ CREATE TABLE evaluation_results (
     evaluated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (id, evaluated_at),
-    UNIQUE (tenant_id, message_id_hash, evaluated_at)
+    UNIQUE (tenant_id, message_id_hash, evaluated_at),
+    CONSTRAINT evaluation_results_tenant_id_fkey
+        FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
 ) PARTITION BY RANGE (evaluated_at);
 
 -- Step 5 — bound the legacy table and attach it as the historical
@@ -154,13 +172,23 @@ CREATE TABLE evaluation_results (
 -- (fresh deployment) table and slow on a populated one. We re-state
 -- the constraint as IMMUTABLE so PG can use it for partition
 -- elimination at planning time even before ATTACH commits.
-ALTER TABLE evaluation_results_legacy
-    ADD CONSTRAINT evaluation_results_legacy_range
-    CHECK (evaluated_at < cutover) NOT VALID;
+--
+-- These three statements are issued via EXECUTE format(...) because
+-- PL/pgSQL only substitutes variable references inside DML
+-- expressions (SELECT/INSERT/UPDATE/DELETE) — utility commands
+-- (ALTER TABLE ADD CONSTRAINT, ATTACH PARTITION) are passed to the
+-- SQL parser verbatim, so a bare `cutover` identifier would be
+-- resolved as a column reference and fail with `column "cutover"
+-- does not exist`. Using format('%L', cutover) injects the
+-- timestamptz literal in a parser-safe form.
+EXECUTE format(
+    'ALTER TABLE evaluation_results_legacy ADD CONSTRAINT evaluation_results_legacy_range CHECK (evaluated_at < %L) NOT VALID',
+    cutover);
 ALTER TABLE evaluation_results_legacy VALIDATE CONSTRAINT evaluation_results_legacy_range;
 
-ALTER TABLE evaluation_results ATTACH PARTITION evaluation_results_legacy
-    FOR VALUES FROM ('1970-01-01'::timestamptz) TO (cutover);
+EXECUTE format(
+    'ALTER TABLE evaluation_results ATTACH PARTITION evaluation_results_legacy FOR VALUES FROM (%L) TO (%L)',
+    '1970-01-01'::timestamptz, cutover);
 
 -- Step 6 — pre-create the current month and three forward months
 -- so the parent has a target partition for any new write. The
@@ -189,9 +217,13 @@ CREATE INDEX IF NOT EXISTS idx_eval_results_tier
 ALTER TABLE audit_logs RENAME TO audit_logs_legacy;
 ALTER TABLE audit_logs_legacy DROP CONSTRAINT IF EXISTS audit_logs_pkey;
 
+-- See evaluation_results Step 4 for why the FK is explicitly named
+-- here — PG's ATTACH PARTITION matches constraints by name, and the
+-- legacy table still holds the auto-generated `audit_logs_tenant_id_fkey`
+-- from migration 0001.
 CREATE TABLE audit_logs (
     id              UUID        NOT NULL DEFAULT gen_random_uuid(),
-    tenant_id       UUID        REFERENCES tenants(id) ON DELETE SET NULL,
+    tenant_id       UUID,
     actor           TEXT        NOT NULL,
     action          TEXT        NOT NULL,
     target_type     TEXT        NOT NULL,
@@ -199,16 +231,19 @@ CREATE TABLE audit_logs (
     correlation_id  TEXT,
     metadata        JSONB       NOT NULL DEFAULT '{}'::JSONB,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (id, created_at)
+    PRIMARY KEY (id, created_at),
+    CONSTRAINT audit_logs_tenant_id_fkey
+        FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE SET NULL
 ) PARTITION BY RANGE (created_at);
 
-ALTER TABLE audit_logs_legacy
-    ADD CONSTRAINT audit_logs_legacy_range
-    CHECK (created_at < cutover) NOT VALID;
+EXECUTE format(
+    'ALTER TABLE audit_logs_legacy ADD CONSTRAINT audit_logs_legacy_range CHECK (created_at < %L) NOT VALID',
+    cutover);
 ALTER TABLE audit_logs_legacy VALIDATE CONSTRAINT audit_logs_legacy_range;
 
-ALTER TABLE audit_logs ATTACH PARTITION audit_logs_legacy
-    FOR VALUES FROM ('1970-01-01'::timestamptz) TO (cutover);
+EXECUTE format(
+    'ALTER TABLE audit_logs ATTACH PARTITION audit_logs_legacy FOR VALUES FROM (%L) TO (%L)',
+    '1970-01-01'::timestamptz, cutover);
 
 FOR month_idx IN 0..3 LOOP
     part_start := cutover + (month_idx * INTERVAL '1 month');
@@ -229,26 +264,35 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_action
 ALTER TABLE feedback_events RENAME TO feedback_events_legacy;
 ALTER TABLE feedback_events_legacy DROP CONSTRAINT IF EXISTS feedback_events_pkey;
 
+-- See evaluation_results Step 4 for why the CHECK + FK are
+-- explicitly named here — PG's ATTACH PARTITION matches
+-- constraints by name, and the legacy table still holds the
+-- auto-generated `feedback_events_action_check` and
+-- `feedback_events_tenant_id_fkey` from migration 0002.
 CREATE TABLE feedback_events (
     id                       UUID        NOT NULL DEFAULT gen_random_uuid(),
-    tenant_id                UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    tenant_id                UUID        NOT NULL,
     pseudo_message_id        TEXT        NOT NULL,
     action                   TEXT        NOT NULL
+                             CONSTRAINT feedback_events_action_check
                              CHECK (action IN ('report_phishing', 'mark_safe', 'trust_sender')),
     tier                     TEXT        NOT NULL DEFAULT '',
     correlation_id           TEXT,
     occurred_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (id, occurred_at)
+    PRIMARY KEY (id, occurred_at),
+    CONSTRAINT feedback_events_tenant_id_fkey
+        FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
 ) PARTITION BY RANGE (occurred_at);
 
-ALTER TABLE feedback_events_legacy
-    ADD CONSTRAINT feedback_events_legacy_range
-    CHECK (occurred_at < cutover) NOT VALID;
+EXECUTE format(
+    'ALTER TABLE feedback_events_legacy ADD CONSTRAINT feedback_events_legacy_range CHECK (occurred_at < %L) NOT VALID',
+    cutover);
 ALTER TABLE feedback_events_legacy VALIDATE CONSTRAINT feedback_events_legacy_range;
 
-ALTER TABLE feedback_events ATTACH PARTITION feedback_events_legacy
-    FOR VALUES FROM ('1970-01-01'::timestamptz) TO (cutover);
+EXECUTE format(
+    'ALTER TABLE feedback_events ATTACH PARTITION feedback_events_legacy FOR VALUES FROM (%L) TO (%L)',
+    '1970-01-01'::timestamptz, cutover);
 
 FOR month_idx IN 0..3 LOOP
     part_start := cutover + (month_idx * INTERVAL '1 month');

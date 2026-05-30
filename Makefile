@@ -35,7 +35,7 @@ cover:
 	$(GO) tool cover -func=coverage.out
 
 .PHONY: lint
-lint: openapi-check tenant-lint handler-coverage
+lint: openapi-check tenant-lint handler-coverage license-check
 	golangci-lint run ./...
 
 # --- Tenant isolation analyser ------------------------------------------
@@ -65,6 +65,25 @@ handler-coverage:
 	$(GO) run ./cmd/sn360-es-handler-coverage/ \
 		--openapi api/openapi.yaml \
 		--routes cmd/sn360-es/routes.go
+
+# --- License audit -------------------------------------------------------
+#
+# `make license-check` runs the in-tree license classifier against every
+# third-party module in go.sum. The classifier replaces google/go-licenses
+# for the CI gate because go-licenses 1.x and 2.x both regress on Go 1.21+
+# toolchain layouts (issue #128: stdlib packages are misreported as
+# "missing module info", which causes a fatal exit before any third-party
+# verdict can be rendered).
+#
+# Allow-list: MIT, Apache-2.0, BSD-2/3-Clause, ISC, MPL-1.1/2.0, Zlib,
+# Unlicense, CC0-1.0, BSL-1.0.
+# Deny-list: GPL/LGPL/AGPL (all versions), SSPL, BUSL-1.1, Commons-Clause.
+# UNKNOWN: fails the build unless waivered in .license-waivers.txt with
+# a justification comment.
+
+.PHONY: license-check
+license-check:
+	$(GO) run ./cmd/sn360-es-license-check
 
 .PHONY: test-e2e
 test-e2e:
@@ -166,12 +185,20 @@ migrate-check-online: migrate-bin
 	@command -v docker >/dev/null 2>&1 || { echo "migrate-check-online requires docker; not found in PATH"; exit 2; }
 	$(DOCKER_COMPOSE) up -d postgres
 	@echo "Waiting for postgres to accept connections..."
-	@for i in $$(seq 1 30); do \
-		if $(DOCKER_COMPOSE) exec -T postgres pg_isready -U sn360es -d sn360es > /dev/null 2>&1; then \
+	@# pg_isready alone is insufficient: the postgres:16-alpine image
+	@# returns "ready" from the bootstrap postmaster before initdb has
+	@# created the POSTGRES_USER / POSTGRES_DB requested via the
+	@# entrypoint script. Hitting it from the host side in that window
+	@# yields "connection reset by peer" because the daemon restarts to
+	@# load the freshly-provisioned roles. Probe with a real round-trip
+	@# query against the target user+database — only succeeds once the
+	@# entrypoint has finished, eliminating the race.
+	@for i in $$(seq 1 60); do \
+		if $(DOCKER_COMPOSE) exec -T postgres psql -U sn360es -d sn360es -tAc "SELECT 1" > /dev/null 2>&1; then \
 			echo "postgres ready"; break; \
 		fi; \
 		sleep 1; \
-		if [ $$i -eq 30 ]; then echo "postgres never became ready"; exit 2; fi; \
+		if [ $$i -eq 60 ]; then echo "postgres never became ready"; $(DOCKER_COMPOSE) logs postgres; exit 2; fi; \
 	done
 	@echo "==> Applying all migrations up..."
 	$(MIGRATE_BIN) --path $(MIGRATIONS_DIR) --dsn "$(MIGRATE_CHECK_DSN)" up
