@@ -156,23 +156,50 @@ func (d *DB) PingContext(ctx context.Context) error {
 	return d.sqlDB.PingContext(ctx)
 }
 
-// ExecContext forwards to the underlying *sql.DB.
+// ExecContext forwards to a pinned tenant-bound *sql.Conn if one is
+// attached to ctx (see tenant_context.go::WithBoundConn). Otherwise it
+// forwards to the underlying *sql.DB pool. Routing through the pinned
+// conn is what makes the Postgres RLS policy installed in
+// `migrations/0018_row_level_security.up.sql` actually scope the
+// query — the session GUC `sn360.tenant_id` was SET on that conn at
+// bind time and would not be visible to a fresh pool conn.
 func (d *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if conn := boundConnFromContext(ctx); conn != nil {
+		return conn.ExecContext(ctx, query, args...)
+	}
 	return d.sqlDB.ExecContext(ctx, query, args...)
 }
 
-// QueryContext forwards to the underlying *sql.DB.
+// QueryContext forwards to a pinned tenant-bound *sql.Conn if one is
+// attached to ctx, otherwise to the underlying pool. The returned
+// *sql.Rows holds a reference to the pinned conn for the lifetime of
+// iteration; the caller MUST close the rows before the bound-conn
+// scope (e.g. the WithTenant cleanup) releases the connection.
 func (d *DB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if conn := boundConnFromContext(ctx); conn != nil {
+		return conn.QueryContext(ctx, query, args...)
+	}
 	return d.sqlDB.QueryContext(ctx, query, args...)
 }
 
-// QueryRowContext forwards to the underlying *sql.DB.
+// QueryRowContext forwards to a pinned tenant-bound *sql.Conn if one
+// is attached to ctx, otherwise to the underlying pool.
 func (d *DB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if conn := boundConnFromContext(ctx); conn != nil {
+		return conn.QueryRowContext(ctx, query, args...)
+	}
 	return d.sqlDB.QueryRowContext(ctx, query, args...)
 }
 
-// BeginTx starts a transaction.
+// BeginTx starts a transaction on the pinned tenant-bound *sql.Conn
+// if one is attached to ctx, otherwise on the underlying pool. The
+// transaction inherits the conn's session GUCs (sn360.tenant_id /
+// sn360.cross_tenant) so RLS continues to scope the queries inside
+// the txn.
 func (d *DB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+	if conn := boundConnFromContext(ctx); conn != nil {
+		return conn.BeginTx(ctx, opts)
+	}
 	return d.sqlDB.BeginTx(ctx, opts)
 }
 

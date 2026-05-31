@@ -758,6 +758,37 @@ func buildWorkerLockFactory(cfg *config.Config, logger *slog.Logger, app *applic
 	}
 }
 
+// pgWorkerBinder adapts *postgres.DB to worker.TenantBinder. The
+// adapter exists because *postgres.DB.WithTenant returns the named
+// type `postgres.ReleaseFunc`, and Go's method-set matching does
+// not equate two named `func() error` types from different
+// packages — so *postgres.DB does not satisfy worker.TenantBinder
+// directly even though both releases are zero-arg, error-returning
+// closures. Conversion via `worker.TenantConnReleaseFunc(r)` keeps
+// the worker package free of any concrete-storage import.
+type pgWorkerBinder struct{ db *postgres.DB }
+
+func (b pgWorkerBinder) WithTenant(ctx context.Context, tenantID string) (context.Context, worker.TenantConnReleaseFunc, error) {
+	c, r, e := b.db.WithTenant(ctx, tenantID)
+	return c, worker.TenantConnReleaseFunc(r), e
+}
+
+func (b pgWorkerBinder) WithCrossTenant(ctx context.Context) (context.Context, worker.TenantConnReleaseFunc, error) {
+	c, r, e := b.db.WithCrossTenant(ctx)
+	return c, worker.TenantConnReleaseFunc(r), e
+}
+
+// workerTenantBinder returns a worker.TenantBinder when the app has a
+// Postgres handle; nil otherwise (in-memory mode). The worker
+// configs treat a nil binder as a valid no-op so unit tests with
+// in-memory repositories continue to pass unchanged.
+func workerTenantBinder(app *application) worker.TenantBinder {
+	if app == nil || app.pgDB == nil {
+		return nil
+	}
+	return pgWorkerBinder{db: app.pgDB}
+}
+
 func buildRelationshipRunner(cfg *config.Config, logger *slog.Logger, app *application, locks worker.LockFactory, metrics worker.MetricsRecorder) *worker.Runner {
 	if app.repos.Tenants == nil || app.repos.CommunicationHistories == nil {
 		return nil
@@ -788,6 +819,7 @@ func buildRelationshipRunner(cfg *config.Config, logger *slog.Logger, app *appli
 		Baselines:      app.repos.BehavioralBaselines,
 		Hasher:         hasherFn,
 		Logger:         logger,
+		Binder:         workerTenantBinder(app),
 	})
 	if err != nil {
 		logger.Warn("sn360-es: relationship worker init failed",
@@ -822,6 +854,7 @@ func buildVendorRunner(cfg *config.Config, logger *slog.Logger, app *application
 		Discovery:        discovery,
 		VendorRepository: app.repos.Vendors,
 		Logger:           logger,
+		Binder:           workerTenantBinder(app),
 	})
 	if err != nil {
 		logger.Warn("sn360-es: vendor worker init failed",
@@ -919,6 +952,7 @@ func buildCleanupRunner(cfg *config.Config, logger *slog.Logger, app *applicatio
 		RetentionDays: cfg.Worker.RetentionDays,
 		Pruners:       pruners,
 		Logger:        logger,
+		Binder:        workerTenantBinder(app),
 	})
 	if err != nil {
 		logger.Warn("sn360-es: cleanup worker init failed",
@@ -972,6 +1006,7 @@ func buildDirectorySyncRunner(cfg *config.Config, logger *slog.Logger, app *appl
 		Logger:          logger,
 		SyncCheckpoints: app.repos.SyncCheckpoints,
 		OrgGraphs:       app.repos.OrgGraphs,
+		Binder:          workerTenantBinder(app),
 	})
 	if err != nil {
 		logger.Warn("sn360-es: directory sync worker init failed",

@@ -104,11 +104,29 @@ DELETE FROM oauth_tokens WHERE tenant_id=$1 AND provider=$2`,
 // always echoes tenant_id back to the caller so the provider registry
 // can re-key by tenant; one tenant's rows are never surfaced under
 // another tenant's identity.
+//
+// This is one of the small handful of genuinely cross-tenant queries
+// in the codebase (boot-time provider registry rebuild). The
+// `tenant-lint:cross-tenant` annotation below opts the static
+// analyser out of its per-call tenant_id check, and the runtime
+// `WithCrossTenant` scope opts the query out of the RLS policy
+// installed by `migrations/0018_row_level_security.up.sql`. Both
+// opt-outs are deliberate and audited together — without the
+// runtime scope the policy would silently return zero rows after
+// migration 0018 lands.
 func (s *PgTokenStore) ListAll(ctx context.Context) ([]StoredTokenRef, error) {
+	crossCtx, release, err := s.db.WithCrossTenant(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("onboarding: list tokens: cross-tenant scope: %w", err)
+	}
+	defer func() { _ = release() }()
 	// tenant-lint:cross-tenant — boot-time provider registry rebuild;
 	// returns (tenant_id, provider) tuples that the registry re-keys
-	// per tenant downstream.
-	rows, err := s.db.QueryContext(ctx, `
+	// per tenant downstream. The runtime WithCrossTenant scope above
+	// opts the query out of the RLS policy installed by
+	// migrations/0018_row_level_security.up.sql so the unscoped
+	// SELECT below is the intentional, audited form of the query.
+	rows, err := s.db.QueryContext(crossCtx, `
 SELECT tenant_id, provider FROM oauth_tokens ORDER BY created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("onboarding: list tokens: %w", err)

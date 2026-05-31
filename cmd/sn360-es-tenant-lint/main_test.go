@@ -3,6 +3,8 @@ package main
 import (
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -407,5 +409,38 @@ func TestCollectExemptionLines_RequiresJustification(t *testing.T) {
 	}
 	if !crossTenantAnnotation.MatchString("// tenant-lint:cross-tenant: colon justification") {
 		t.Fatal("annotation with colon justification must match")
+	}
+}
+
+// TestTenantScopedTables_CoveredByRLSMigration is a drift guard. The
+// tenantScopedTables map and migrations/0018_row_level_security.up.sql
+// MUST stay in sync — every RLS-protected table is exactly the set
+// of tables this lint refuses to query without a tenant_id predicate.
+// If someone adds a new tenant-scoped table they must update both
+// places, and this test fails loudly if they only update one.
+func TestTenantScopedTables_CoveredByRLSMigration(t *testing.T) {
+	mig, err := os.ReadFile(filepath.Join("..", "..", "migrations", "0018_row_level_security.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	migText := string(mig)
+	for tbl := range tenantScopedTables {
+		// Every table must have both an ENABLE RLS line and a
+		// FORCE RLS line; FORCE is the load-bearing one because
+		// the application historically connects as schema owner
+		// and without FORCE the policy would be silently
+		// disabled for owners.
+		enable := "ALTER TABLE " + tbl
+		if !strings.Contains(migText, enable+" ") && !strings.Contains(migText, enable+"\t") && !strings.Contains(migText, enable+"\n") {
+			t.Errorf("migration 0018 missing ENABLE/FORCE RLS for tenant-scoped table %q", tbl)
+			continue
+		}
+		// The policy block is also per-table; check for the
+		// CREATE POLICY line so a half-applied edit (ALTER but
+		// no policy) is caught.
+		policyMarker := "CREATE POLICY tenant_isolation ON " + tbl
+		if !strings.Contains(migText, policyMarker) {
+			t.Errorf("migration 0018 missing CREATE POLICY tenant_isolation for tenant-scoped table %q", tbl)
+		}
 	}
 }
