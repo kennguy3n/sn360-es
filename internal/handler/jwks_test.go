@@ -148,5 +148,15 @@ func TestJWKSHandler_RejectsOtherMethods(t *testing.T) {
 		if got := rr.Header().Get("Allow"); got != "GET, HEAD" {
 			t.Errorf("%s Allow header = %q, want GET, HEAD", verb, got)
 		}
+		// 405 body should be JSON, matching the package-wide
+		// writeError envelope (banner_action.go). Pins
+		// against any future regression that re-introduces
+		// http.Error's text/plain default for this handler.
+		if got := rr.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+			t.Errorf("%s Content-Type = %q, want application/json; charset=utf-8", verb, got)
+		}
+		if got := rr.Body.String(); got != "{\"error\":\"method not allowed\"}\n" {
+			t.Errorf("%s body = %q, want {\"error\":\"method not allowed\"}", verb, got)
+		}
 	}
 }

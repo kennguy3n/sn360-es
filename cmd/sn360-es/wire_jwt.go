@@ -122,12 +122,18 @@ func buildJWTIssuer(cfg *config.Config, logger *slog.Logger) *privacy.JWTIssuer 
 			return nil
 		}
 		jcfg.PrivateKey = priv
-		// Default the public half to the one embedded in the
-		// private key so a JWKS publisher always has SOMETHING
-		// to publish even if the operator-provided public-key file
-		// fails to load below. This is overridden by the explicit
-		// public-key file on success.
-		jcfg.PublicKey = &priv.PublicKey
+		// The public half is loaded from the operator-provided
+		// JWT_PUBLIC_KEY_PATH and is REQUIRED in ES256 mode — we
+		// deliberately do NOT fall back to the public point
+		// embedded in the private key. Requiring an explicit
+		// public-key file is what makes independent rotation of
+		// the public-half possible during key roll (an operator
+		// can publish the new public key on JWKS for one TTL
+		// window before swapping the private key), and it
+		// prevents a class of misconfiguration where a stale or
+		// bogus JWT_PUBLIC_KEY_PATH would silently degrade to the
+		// embedded key and mask the operator's intent. Load
+		// failure here is fatal.
 		pub, err := privacy.LoadECDSAPublicKeyFromFile(cfg.JWT.PublicKeyPath)
 		if err != nil {
 			logger.Warn("sn360-es: jwt public key load failed; signed-action flows disabled",
@@ -136,10 +142,6 @@ func buildJWTIssuer(cfg *config.Config, logger *slog.Logger) *privacy.JWTIssuer 
 			)
 			return nil
 		}
-		// Operator-provided public key takes precedence over the
-		// one embedded in the private key file — this is what
-		// makes independent rotation of the public-half possible
-		// during ES256 key roll.
 		jcfg.PublicKey = pub
 	default:
 		logger.Warn("sn360-es: unknown JWT_SIGNING_ALG; signed-action flows disabled",

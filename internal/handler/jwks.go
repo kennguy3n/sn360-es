@@ -58,7 +58,16 @@ func NewJWKSHandler(logger *slog.Logger, issuer *privacy.JWTIssuer) *JWKSHandler
 func (h *JWKSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		// Error responses use application/json so a consumer
+		// that parses the body (e.g. a JWKS-pinning verifier
+		// surfacing the error to ops) doesn't see a
+		// text/plain Content-Type pointing at a JSON-shaped
+		// body. http.Error would otherwise force text/plain
+		// here. Routes through the shared writeError helper
+		// (see banner_action.go) so the {"error":"..."}
+		// envelope matches every other handler in the
+		// package.
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -67,7 +76,7 @@ func (h *JWKSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.logger != nil {
 			h.logger.Error("jwks: build public key set failed", slog.Any("error", err))
 		}
-		http.Error(w, `{"error":"jwks_unavailable"}`, http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "jwks_unavailable")
 		return
 	}
 
