@@ -355,3 +355,117 @@ func TestRLS_UnboundSessionFailsClosed(t *testing.T) {
 		t.Errorf("unbound SELECT must fail closed; got %d row(s)", n)
 	}
 }
+
+// TestRLS_WithTenantScrubsStaleCrossTenantGUC pins the defence-in-depth
+// invariant that WithTenant guarantees the bound conn is in the
+// single-tenant state regardless of its prior history. Concretely:
+// if an earlier WithCrossTenant scope on the same physical pool conn
+// somehow released without RESETting sn360.cross_tenant (e.g. the RESET
+// raised a transient error and the conn was still returned to the pool
+// because *sql.Conn.Close hardcodes nil), the next WithTenant on that
+// same conn MUST scrub the stale 'on' value at bind time — otherwise
+// the RLS policy `tenant_id = <uuid> OR coalesce(cross_tenant, 'off')
+// = 'on'` would short-circuit to OR TRUE and admit every tenant's
+// rows.
+//
+// We force the pool to reuse the same physical conn (MaxOpenConns=1),
+// manually poison the conn with cross_tenant='on' through the bound
+// *sql.Conn (bypassing the release path that would have RESET it),
+// then call WithTenant again and assert the GUC is empty AND that a
+// cross-tenant SELECT only returns the bound tenant's rows.
+func TestRLS_WithTenantScrubsStaleCrossTenantGUC(t *testing.T) {
+	db, cleanup := openRLSTestDB(t)
+	defer cleanup()
+
+	rootCtx := context.Background()
+	tenantA := insertTenant(t, db, rootCtx, "tenant-a-scrub")
+	tenantB := insertTenant(t, db, rootCtx, "tenant-b-scrub")
+
+	// Seed tenant B's evaluation BEFORE pinning the pool to a single
+	// conn — the cross-tenant scope used to write it would otherwise
+	// dead-end the second WithTenant call below, because pool size 1
+	// means a held cross-tenant binding blocks every subsequent
+	// acquire.
+	{
+		bCtx, bRelease, err := db.WithTenant(rootCtx, tenantB)
+		if err != nil {
+			t.Fatalf("seed B: %v", err)
+		}
+		insertEvaluation(t, db, bCtx, tenantB, "hashBBBBBBBBBBBBBBBB")
+		if err := bRelease(); err != nil {
+			t.Fatalf("seed B release: %v", err)
+		}
+	}
+
+	// Now empty the pool and pin it to a single physical conn so the
+	// second WithTenant is guaranteed to reuse the poisoned conn.
+	// SetMaxIdleConns(0) closes all currently-idle conns; the
+	// subsequent SetMaxOpenConns(1) + SetMaxIdleConns(1) then
+	// constrains the pool going forward so there is exactly one
+	// physical Postgres backend behind every acquire.
+	db.SQL().SetMaxIdleConns(0)
+	db.SQL().SetMaxOpenConns(1)
+	db.SQL().SetMaxIdleConns(1)
+
+	// First bind: WithTenant(A). Manually poison the conn by
+	// SETting cross_tenant='on' directly through the bound *sql.Conn,
+	// simulating the post-condition of a WithCrossTenant scope whose
+	// release path failed to RESET. We drop the conn back to the pool
+	// via *sql.Conn.Close (rather than the ReleaseFunc) to preserve
+	// the stale GUC — the ReleaseFunc would scrub it via RESET, which
+	// is exactly the failure mode this test simulates.
+	ctxA, releaseA, err := db.WithTenant(rootCtx, tenantA)
+	if err != nil {
+		t.Fatalf("WithTenant A: %v", err)
+	}
+	conn := postgres.BoundConnFromContext(ctxA)
+	if conn == nil {
+		t.Fatal("BoundConnFromContext returned nil")
+	}
+	if _, perr := conn.ExecContext(rootCtx, `SELECT set_config('sn360.cross_tenant', 'on', false)`); perr != nil {
+		t.Fatalf("poison: %v", perr)
+	}
+	insertEvaluation(t, db, ctxA, tenantA, "hashAAAAAAAAAAAAAAAA")
+	// Drop the conn back to the pool WITHOUT scrubbing.
+	if cerr := conn.Close(); cerr != nil {
+		t.Fatalf("conn.Close: %v", cerr)
+	}
+	// releaseA() now operates on an already-closed conn; we expect
+	// it to error but the failure is not interesting for this test.
+	_ = releaseA()
+
+	// Second bind on the same physical conn. WithTenant's scrub MUST
+	// clear the stale cross_tenant GUC at bind time.
+	ctxBoundA2, releaseA2, err := db.WithTenant(rootCtx, tenantA)
+	if err != nil {
+		t.Fatalf("WithTenant A (second): %v", err)
+	}
+	defer func() { _ = releaseA2() }()
+	conn2 := postgres.BoundConnFromContext(ctxBoundA2)
+	if conn2 == nil {
+		t.Fatal("BoundConnFromContext (second) returned nil")
+	}
+
+	// The cross_tenant GUC on the rebound conn must be empty (the
+	// fix in WithTenant SELECT set_config('sn360.cross_tenant', '',
+	// false) scrubs it at bind time).
+	var crossTenant string
+	if qerr := conn2.QueryRowContext(rootCtx,
+		`SELECT coalesce(current_setting('sn360.cross_tenant', true), '')`).Scan(&crossTenant); qerr != nil {
+		t.Fatalf("read cross_tenant: %v", qerr)
+	}
+	if crossTenant != "" {
+		t.Fatalf("WithTenant did not scrub stale cross_tenant GUC: got %q", crossTenant)
+	}
+
+	// And the policy effect must hold: the rebound conn sees only
+	// tenant A's evaluation, not tenant B's.
+	var n int
+	if qerr := db.QueryRowContext(ctxBoundA2,
+		`SELECT count(*) FROM evaluation_results`).Scan(&n); qerr != nil {
+		t.Fatalf("count: %v", qerr)
+	}
+	if n != 1 {
+		t.Errorf("rebound conn must see only tenant A's row; got %d", n)
+	}
+}
