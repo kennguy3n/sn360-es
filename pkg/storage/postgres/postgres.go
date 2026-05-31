@@ -162,10 +162,31 @@ func openAndPing(ctx context.Context, driver string, cfg Config) (*sql.DB, error
 // returns, QueryContext / QueryRowContext on a ctx with no
 // bound-conn will route to the replica instead of the write pool.
 // The DB takes ownership of the read pool — Close shuts both pools
-// down. AttachReader is idempotent: calling it twice replaces the
-// previously-attached reader (the old reader is closed). Passing
-// an empty Host returns immediately with no error so callers can
-// pass a partially-populated config without nil-checks.
+// down. Passing an empty Host returns immediately with no error
+// so callers can pass a partially-populated config without
+// nil-checks.
+//
+// Concurrency contract.
+//
+//	AttachReader MUST be called once, during application boot,
+//	BEFORE any goroutine issues a Query / QueryRow / Exec /
+//	BeginTx on this DB. It mutates d.sqlRead / d.readHost /
+//	d.readOwned without synchronization; running it concurrently
+//	with a live query path would be a data race. The boot-only
+//	contract is what callers in cmd/sn360-es/app.go satisfy by
+//	invoking AttachReader inside the newApplication composition
+//	root, before the HTTP server starts and before any consumer
+//	goroutines spin up.
+//
+//	The replace-old-reader behaviour exists so test setup can
+//	call AttachReader multiple times against a fake driver; it
+//	is NOT a supported runtime re-attachment API. A real
+//	run-time fail-over to a different replica would require
+//	adding a sync.RWMutex around every d.sqlRead read in the
+//	Query* and Close paths, which we deliberately do not do
+//	here because it would impose a per-query lock cost on every
+//	deployment for a failure mode (replica swap) that operators
+//	handle today by rolling the pod with the new PG_READ_HOST.
 //
 // WS-2a (Read-Replica Routing): the read pool is wired separately
 // from Open so a deployment without PG_READ_HOST set still gets a
@@ -194,10 +215,11 @@ func (d *DB) AttachReader(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("postgres: AttachReader: %w", err)
 	}
-	// Replace any previously-attached reader to keep AttachReader
-	// idempotent. Closing the old pool here means the only path
-	// that leaks a reader is a caller who never called Close on
-	// the DB itself.
+	// Close any previously-attached reader before replacing it.
+	// This path is only exercised by tests that re-attach against
+	// a fake driver between cases (see TestDB_AttachReader_*
+	// suite). Production code calls AttachReader exactly once at
+	// boot — see the concurrency contract on the doc comment.
 	if d.sqlRead != nil && d.readOwned {
 		_ = d.sqlRead.Close()
 	}
@@ -319,6 +341,32 @@ func (d *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.Re
 // (audit log lookups, dashboard aggregations, vendor catalog
 // browsing) automatically benefit from replica offload without
 // any repo-side change.
+//
+// Read-after-write consistency.
+//
+//	Async replicas can lag the primary by tens to hundreds of ms.
+//	A handler that writes a row and then immediately reads it
+//	back through an unbound ctx (e.g. POST handler returns the
+//	just-inserted resource) would race the replication stream
+//	and could return a "not found" or a stale snapshot. Two
+//	patterns avoid this:
+//
+//	  - Wrap the write+read in WithTenant so both run on the
+//	    same primary-bound conn. This is the default for every
+//	    repo path that ingests messages, runs RLS, or mutates
+//	    tenant state — the BindTenant interceptor in
+//	    cmd/sn360-es/app.go does it transparently for every
+//	    request that carries a tenant_id claim.
+//
+//	  - For deliberately cross-tenant write paths (rare; e.g.
+//	    backfills, vendor catalog edits) the caller should
+//	    explicitly route the follow-up read to SQL() instead of
+//	    SQLRead(). The single existing case — the report-store
+//	    write-then-list pattern — is not yet wired into the
+//	    application, so this remains a forward-looking note;
+//	    when that store lands its insert/list methods should
+//	    open a tx via BeginTx (which always routes to the
+//	    write pool) for the strongly-consistent path.
 func (d *DB) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	if conn := boundConnFromContext(ctx); conn != nil {
 		return conn.QueryContext(ctx, query, args...)
