@@ -197,7 +197,7 @@ infrastructure is missing.
 | Area | Implemented | Wired into `cmd/sn360-es` | Notes |
 |---|---|---|---|
 | HTTP server, health, metrics, OpenAPI/docs | Yes | Yes | Always on |
-| Middleware (telemetry, request-id, request logger, CORS, rate limit, JWT auth) | Yes | Yes | Chain order: telemetry → request-id → request-logger → CORS → rate-limit → JWT-auth → mux. JWT-skipped paths are listed in `defaultAuthSkipPaths()` (`/healthz`, `/readyz`, `/metrics`, `/docs`, `/docs/`, `/openapi.yaml`, `/l/`, `/v1/banner/action`, `/v1/quarantine/release`, `/v1/education/lesson/`, `/v1/onboarding/callback`) |
+| Middleware (telemetry, request-id, request logger, CORS, rate limit, JWT auth) | Yes | Yes | Chain order: telemetry → request-id → request-logger → CORS → rate-limit → JWT-auth → mux. JWT-skipped paths are listed in `defaultAuthSkipPaths()` (`/healthz`, `/readyz`, `/metrics`, `/docs`, `/docs/`, `/openapi.yaml`, `/l/`, `/v1/banner/action`, `/v1/quarantine/release`, `/v1/education/lesson/`, `/v1/onboarding/callback`, `/v1/push/`, `/.well-known/jwks.json`). JWT signing supports HS256 (default) and ES256; the asymmetric public key is published at `GET /.well-known/jwks.json` (RFC 7517). |
 | Event bus (NATS JetStream + Redis Streams fallback + factory) | Yes | Yes | Selected via `EVENT_BUS_TYPE=nats\|redis` |
 | Tier 0 classification gate | Yes | Yes | Pure CPU, in-process |
 | Tier 1 encoder client | Yes | Optional | Requires the encoder service from [`deployments/encoder/`](./deployments/encoder/) |

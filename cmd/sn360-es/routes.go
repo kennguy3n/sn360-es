@@ -116,6 +116,20 @@ func buildMux(app *application) (http.Handler, error) {
 		}
 	}
 
+	// JWKS endpoint: publishes the ES256 public key (RFC 7517) at
+	// /.well-known/jwks.json so out-of-cluster verifiers can verify
+	// signed tokens. Public-by-design — see defaultAuthSkipPaths and
+	// the JWKSHandler doc-comment. Registered only when the issuer is
+	// wired; an HS256-only deployment with no issuer at all does not
+	// expose the path (404), which matches how the rest of the
+	// signed-action surface degrades when the issuer is missing. An
+	// HS256-only deployment WITH an issuer wired returns 200 with an
+	// empty {"keys":[]} body (the documented signal that no
+	// asymmetric verification material is available yet).
+	if app.jwtIssuer != nil {
+		mux.Handle("/.well-known/jwks.json", handler.NewJWKSHandler(logger, app.jwtIssuer))
+	}
+
 	// Escalation tickets. POST /v1/escalation/resolve is a write
 	// (operator clears the ticket); GET /v1/escalation/{id} is a
 	// read. Wrapping each route with the matching allow-list keeps
@@ -597,6 +611,7 @@ func defaultKnownExactRoutes() map[string]struct{} {
 		"/v1/onboarding/gws-setup-status": {},
 		"/v1/vendors":                     {},
 		"/v1/org-graph":                   {},
+		"/.well-known/jwks.json":          {},
 	}
 }
 
@@ -659,6 +674,13 @@ func defaultRateLimitSkipPaths() []string {
 		"/docs/",
 		"/openapi.yaml",
 		"/v1/push/",
+		// JWKS is a cache-friendly static-ish endpoint (5-minute
+		// Cache-Control). A consumer that has already failed JWT
+		// verification needs to refresh the JWKS to recover —
+		// rate-limiting JWKS would gate that recovery path under
+		// the same per-IP bucket as the API proper, which is the
+		// wrong trade-off for a discovery endpoint.
+		"/.well-known/jwks.json",
 	}
 }
 
@@ -669,6 +691,11 @@ func defaultRateLimitSkipPaths() []string {
 // Gmail, Microsoft Graph clientState for Outlook) verified inside
 // the PushWebhookHandler itself — not a Bearer JWT issued by us.
 // The handler still fails-closed without the verifier wired.
+//
+// /.well-known/jwks.json publishes the ES256 public key set so
+// out-of-cluster verifiers can bootstrap; it MUST be reachable
+// without a valid token (the consumer needs the JWKS to verify the
+// token in the first place).
 func defaultAuthSkipPaths() []string {
 	return []string{
 		"/healthz",
@@ -683,5 +710,6 @@ func defaultAuthSkipPaths() []string {
 		"/v1/education/lesson/",
 		"/v1/onboarding/callback",
 		"/v1/push/",
+		"/.well-known/jwks.json",
 	}
 }
