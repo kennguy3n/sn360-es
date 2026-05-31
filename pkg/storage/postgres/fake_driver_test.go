@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 )
 
 // fakeConnector is a minimal database/sql/driver.Connector whose
@@ -34,3 +35,45 @@ func (fakeConn) Close() error { return nil }
 func (fakeConn) Begin() (driver.Tx, error) {
 	return nil, errors.New("postgres: fakeConn does not implement Begin")
 }
+
+// taggedConnector is the same idea as fakeConnector, but every
+// operation produced by the *sql.DB it backs returns an error
+// whose text embeds the tag. Tests use it to distinguish which of
+// several *sql.DBs a Query / Exec / Begin call actually hit
+// (e.g. the WS-2a read-replica routing tests in
+// read_replica_test.go need to assert that QueryContext lands on
+// the read pool, not the write pool, when both are wired).
+type taggedConnector struct{ tag string }
+
+func (c taggedConnector) Connect(context.Context) (driver.Conn, error) {
+	return taggedConn(c), nil
+}
+func (taggedConnector) Driver() driver.Driver { return taggedDriver{} }
+
+type taggedDriver struct{}
+
+func (taggedDriver) Open(string) (driver.Conn, error) {
+	return taggedConn{tag: "unrouted"}, nil
+}
+
+type taggedConn struct{ tag string }
+
+func (c taggedConn) Prepare(string) (driver.Stmt, error) { return nil, errFromTag(c.tag) }
+func (taggedConn) Close() error                          { return nil }
+func (c taggedConn) Begin() (driver.Tx, error)           { return nil, errFromTag(c.tag) }
+
+// taggedError is the sentinel returned by every taggedConn op so
+// tests can use errors.Is(err, errFromTag("writer")) to assert
+// the routing path without depending on the exact stringification
+// of the wrapped database/sql error.
+type taggedError struct{ tag string }
+
+func (e taggedError) Error() string {
+	return fmt.Sprintf("postgres: taggedConn(%s) op rejected", e.tag)
+}
+func (e taggedError) Is(other error) bool {
+	o, ok := other.(taggedError)
+	return ok && o.tag == e.tag
+}
+
+func errFromTag(tag string) error { return taggedError{tag: tag} }
