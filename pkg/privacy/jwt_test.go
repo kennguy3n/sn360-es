@@ -61,6 +61,76 @@ func TestJWTIssueAndVerifyRoundTrip(t *testing.T) {
 	}
 }
 
+// TestJWTIssueAndVerifyStampsRole pins the round-trip of the new
+// role claim added for the RBAC layer. Without this, a regression on
+// the `json:"role,omitempty"` tag (or the IssueOptions.Role wiring)
+// would silently strip the claim on the wire and middleware.RequireRole
+// would 403 every previously-valid admin/operator token in production.
+func TestJWTIssueAndVerifyStampsRole(t *testing.T) {
+	iss := mustIssuer(t, time.Hour)
+	for _, role := range []string{RoleAdmin, RoleOperator, RoleViewer, RoleEndUser} {
+		tok, err := iss.Issue("tenant-1", "msg-abc", IssueOptions{Role: role})
+		if err != nil {
+			t.Fatalf("issue(role=%s): %v", role, err)
+		}
+		claims, err := iss.Verify(tok)
+		if err != nil {
+			t.Fatalf("verify(role=%s): %v", role, err)
+		}
+		if claims.Role != role {
+			t.Errorf("role round-trip: got %q want %q", claims.Role, role)
+		}
+	}
+}
+
+// TestIsValidRole pins the closed allowlist. If a future contributor
+// adds a fifth Role* constant without extending validRoles, the new
+// role will silently 403 against every RequireRole gate — this test
+// surfaces that mismatch at build time.
+func TestIsValidRole(t *testing.T) {
+	cases := map[string]bool{
+		RoleAdmin:    true,
+		RoleOperator: true,
+		RoleViewer:   true,
+		RoleEndUser:  true,
+		"":           false,
+		"root":       false,
+		"superuser":  false,
+		// Common typos that have historically slipped past code
+		// review on this pattern:
+		"end-user": false,
+		"enduser":  false,
+		"Admin":    false, // case-sensitive
+	}
+	for r, want := range cases {
+		if got := IsValidRole(r); got != want {
+			t.Errorf("IsValidRole(%q) = %v, want %v", r, got, want)
+		}
+	}
+}
+
+// TestJWTIssueRejectsInvalidRole pins the issuance-time validation
+// added in response to PR #51 Devin Review finding 0004. A typo'd
+// role constant (e.g. "adim" instead of "admin") must fail at the
+// Issue() call site, not later as a silent 403 against the RBAC
+// gate — that mismatch would burn an unbounded amount of debug
+// time before someone thinks to inspect the actual `role` claim
+// on the token. Empty string stays permitted (covered below).
+func TestJWTIssueRejectsInvalidRole(t *testing.T) {
+	iss := mustIssuer(t, time.Hour)
+	for _, bad := range []string{"adim", "Administrator", "root", "end-user", "ADMIN"} {
+		if _, err := iss.Issue("t", "msg", IssueOptions{Role: bad}); err == nil {
+			t.Errorf("expected error issuing with invalid role %q", bad)
+		}
+	}
+	// Empty role must still be accepted — see IssueOptions.Role
+	// docstring. Tests, transitional callers, and token classes
+	// that intentionally carry no role rely on this.
+	if _, err := iss.Issue("t", "msg", IssueOptions{Role: ""}); err != nil {
+		t.Errorf("empty role rejected: %v (must be permitted)", err)
+	}
+}
+
 func TestJWTIssueRequiresArgs(t *testing.T) {
 	iss := mustIssuer(t, time.Hour)
 	if _, err := iss.Issue("", "msg", IssueOptions{}); err == nil {
