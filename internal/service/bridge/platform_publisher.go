@@ -436,7 +436,16 @@ func (p *natsPlatformPublisher) PublishEvaluation(ctx context.Context, res *dto.
 	}
 	env := buildEnvelope(p.cfg, res.TenantID, ruleIDForVerdict(res, kind), ruleLevelForTier(res.Tier),
 		ruleDescriptionForVerdict(kind, res.Tier), payload)
-	return p.publish(ctx, subj, res.MessageID, res.CorrelationID, res.TenantID, "email.verdict."+kind, env)
+	eventClass := "email.verdict." + kind
+	env.enrichForEngine(
+		res.TenantID,
+		subj,
+		uuid.NewString(),
+		eventClass,
+		severityForTier(res.Tier),
+		engineFieldsForVerdict(payload),
+	)
+	return p.publish(ctx, subj, res.MessageID, res.CorrelationID, res.TenantID, eventClass, env)
 }
 
 // PublishQuarantine implements PlatformPublisher.
@@ -468,7 +477,32 @@ func (p *natsPlatformPublisher) PublishQuarantine(ctx context.Context, evt Quara
 	}
 	desc := fmt.Sprintf("sn360-es: quarantine %s", action)
 	env := buildEnvelope(p.cfg, evt.TenantID, ruleIDForQuarantine(action), level, desc, payload)
-	return p.publish(ctx, subj, evt.MessageID, evt.CorrelationID, evt.TenantID, "email.quarantine."+action, env)
+	eventClass := "email.quarantine." + action
+	// Derive the engine severity from the SAME `level` the Wazuh
+	// envelope carries — not the raw evt.Tier — so the two views
+	// of "how loud is this event" stay aligned. This matters in two
+	// cases the tier-only path got wrong:
+	//   (a) Quarantine-release events do not carry a tier (the
+	//       caller in consumers_action.go zero-values evt.Tier), so
+	//       severityForTier("") would return "medium" while the
+	//       Wazuh rule.level the same event publishes is 10 (which
+	//       severityForLevel maps to "high"). The engine and the
+	//       SIEM would then disagree on the severity of an admin-
+	//       initiated release.
+	//   (b) Quarantine-applied events with a non-terminal tier hit
+	//       the same `if level == 0 { level = 10 }` override above,
+	//       producing the same mismatch.
+	// Routing the engine severity through severityForLevel(level)
+	// uses the post-override level so both views always agree.
+	env.enrichForEngine(
+		evt.TenantID,
+		subj,
+		uuid.NewString(),
+		eventClass,
+		severityForLevel(level),
+		engineFieldsForQuarantine(payload),
+	)
+	return p.publish(ctx, subj, evt.MessageID, evt.CorrelationID, evt.TenantID, eventClass, env)
 }
 
 // PublishEscalation implements PlatformPublisher.
@@ -503,8 +537,18 @@ func (p *natsPlatformPublisher) PublishEscalation(ctx context.Context, action st
 		AISummary:     ticket.Incident.AISummary,
 	}
 	desc := fmt.Sprintf("sn360-es: escalation %s", action)
-	env := buildEnvelope(p.cfg, ticket.TenantID, ruleIDForEscalation(action), 12, desc, payload)
-	return p.publish(ctx, subj, ticket.TicketID, "", ticket.TenantID, "email.escalation."+action, env)
+	level := 12
+	env := buildEnvelope(p.cfg, ticket.TenantID, ruleIDForEscalation(action), level, desc, payload)
+	eventClass := "email.escalation." + action
+	env.enrichForEngine(
+		ticket.TenantID,
+		subj,
+		uuid.NewString(),
+		eventClass,
+		severityForLevel(level),
+		engineFieldsForEscalation(payload),
+	)
+	return p.publish(ctx, subj, ticket.TicketID, "", ticket.TenantID, eventClass, env)
 }
 
 // Close releases the NATS connection. Idempotent.
@@ -727,6 +771,130 @@ func ruleDescriptionForVerdict(kind string, tier constant.Tier) string {
 	return fmt.Sprintf("sn360-es: %s verdict (%s)", kind, tier)
 }
 
+// severityForTier maps a verdict tier to the correlation-engine
+// severity vocabulary (info|low|medium|high|critical). The
+// correlation-engine validator rejects any rule whose `severity`
+// is outside that set (see dac.validSeverities), and the engine's
+// composite-risk scoring weights rule severity vs. event severity
+// — so mismatched values would push every match into the
+// medium-bucket regardless of upstream tier.
+func severityForTier(t constant.Tier) string {
+	switch t {
+	case constant.TierBlocked:
+		return "critical"
+	case constant.TierHighRisk:
+		return "high"
+	default:
+		return "medium"
+	}
+}
+
+// severityForLevel is the fall-back when a tier-bearing field is
+// unavailable (escalation events). It mirrors the bridge's
+// ruleLevelForTier mapping in reverse.
+func severityForLevel(level int) string {
+	switch {
+	case level >= 12:
+		return "critical"
+	case level >= 8:
+		return "high"
+	case level >= 3:
+		return "medium"
+	case level > 0:
+		return "low"
+	default:
+		return "info"
+	}
+}
+
+// engineFieldsForVerdict flattens a VerdictPayload into the
+// `fields` map the correlation-engine reads. The keys mirror what
+// the engine's bundled rules expect to join on; adding a new
+// rule that joins on `link_score` would require the corresponding
+// entry to be present here.
+func engineFieldsForVerdict(p EvaluationPayload) map[string]any {
+	fields := map[string]any{
+		"message_id":     p.MessageID,
+		"correlation_id": p.CorrelationID,
+		"tier":           p.Tier,
+		"primary":        p.Primary,
+		"score":          p.Score,
+		"action":         p.Action,
+		"event_type":     p.EventType,
+		"recipient_hash": p.RecipientHash,
+		"sender_hash":    p.SenderHash,
+		"degraded":       p.Degraded,
+		"source":         p.Source,
+	}
+	if p.LinkScore != nil {
+		fields["link_score"] = *p.LinkScore
+	}
+	if p.AttachmentScore != nil {
+		fields["attachment_score"] = *p.AttachmentScore
+	}
+	if len(p.Secondary) > 0 {
+		fields["secondary"] = p.Secondary
+	}
+	if len(p.ReasonCodes) > 0 {
+		fields["reason_codes"] = p.ReasonCodes
+	}
+	return fields
+}
+
+// engineFieldsForQuarantine flattens a QuarantinePayload into the
+// engine `fields` map.
+func engineFieldsForQuarantine(p QuarantinePayload) map[string]any {
+	return map[string]any{
+		"message_id":     p.MessageID,
+		"correlation_id": p.CorrelationID,
+		"tier":           p.Tier,
+		"primary":        p.Primary,
+		"score":          p.Score,
+		"action":         p.Action,
+		"event_type":     p.EventType,
+		"recipient_hash": p.RecipientHash,
+		"requested_by":   p.RequestedBy,
+		"source":         p.Source,
+	}
+}
+
+// engineFieldsForEscalation flattens an EscalationPayload into the
+// engine `fields` map. Both `ticket_id` (canonical platform field)
+// and `message_id` (the originating email's ID, populated by the
+// caller from ticket.Incident.PseudoMessageID) are exposed as
+// distinct keys so rules can join on either one. The two values
+// have different lifecycles — a ticket can outlive its source
+// message (an analyst can re-open one weeks later) — so they are
+// intentionally NOT collapsed: a rule that needs to correlate an
+// escalation back to its originating email must join on
+// `message_id`, and a rule that needs to correlate two events on
+// the same SOC ticket joins on `ticket_id`. enrichForEngine drops
+// either key whose value is the empty string, so an escalation
+// with no source message_id simply will not satisfy a rule joining
+// on message_id (the rule will not fire, which is the desired
+// behaviour — silently substituting ticket_id would make the rule
+// fire on a key value that means something else).
+func engineFieldsForEscalation(p EscalationPayload) map[string]any {
+	fields := map[string]any{
+		"ticket_id":      p.TicketID,
+		"message_id":     p.MessageID,
+		"tier":           p.Tier,
+		"category":       p.Category,
+		"score":          p.Score,
+		"action":         p.Action,
+		"event_type":     p.EventType,
+		"reason":         p.Reason,
+		"outcome":        p.Outcome,
+		"resolver_hash":  p.ResolverHash,
+		"affected_users": p.AffectedUsers,
+		"source":         p.Source,
+	}
+	if len(p.Indicators) > 0 {
+		fields["indicators"] = p.Indicators
+	}
+	return fields
+}
+
 func categoriesAsStrings(in []constant.Category) []string {
 	if len(in) == 0 {
 		return nil
@@ -770,16 +938,84 @@ func hashIdentifier(tenantID, email string) string {
 
 // --- envelope -------------------------------------------------------------
 
-// Envelope is the platform-side event shape that
-// `services/alert-forwarder/internal/indexer.ParseAlert` already
-// indexes. Keeping the shape byte-for-byte compatible means the
-// platform needs zero new code to index sn360-es events.
+// Envelope is the platform-side event shape. It is a deliberate
+// hybrid: the Wazuh-shaped keys (`@timestamp`, `rule`, `agent`,
+// `data`, `cluster_id`) keep the wire byte-for-byte compatible
+// with `services/alert-forwarder/internal/indexer.ParseAlert`, and
+// the additional top-level keys (`tenant_id`, `subject`,
+// `event_id`, `event_class`, `severity`, `timestamp`, `fields`)
+// mirror the correlation-engine's `Event` struct
+// (services/correlation-engine/internal/engine/engine.go) so the
+// SAME JSON document deserialises into BOTH consumers without an
+// intermediate translator service:
+//
+//   - alert-forwarder reads `@timestamp`, `cluster_id`, `rule`,
+//     `agent.labels.sn360.tenant_id`, `data` (and ignores the
+//     engine-shape keys it doesn't reference).
+//   - correlation-engine json.Unmarshals into engine.Event and
+//     reads `tenant_id`, `subject`, `event_id`, `event_class`,
+//     `severity`, `timestamp`, `fields` (and ignores the Wazuh
+//     keys it doesn't reference).
+//
+// The `fields` block is the load-bearing addition: the engine's
+// `joinValueFor` extracts join-key values from ev.Fields, so any
+// rule that joins on `recipient_hash` / `sender_hash` /
+// `message_id` / `correlation_id` must see those keys promoted out
+// of `data` and into a flat `fields` map. Without that promotion
+// every join_value would be the empty string and every multi-
+// source rule would either match nothing or merge unrelated events
+// into one huge pending bucket.
 type Envelope struct {
+	// Wazuh-envelope keys (alert-forwarder).
 	Timestamp time.Time `json:"@timestamp"`
 	ClusterID string    `json:"cluster_id,omitempty"`
 	Rule      Rule      `json:"rule"`
 	Agent     Agent     `json:"agent"`
 	Data      any       `json:"data,omitempty"`
+
+	// engine.Event keys (correlation-engine). All `omitempty` so
+	// the envelope JSON remains compatible with any legacy
+	// consumer that only reads the Wazuh keys.
+	TenantID        string         `json:"tenant_id,omitempty"`
+	Subject         string         `json:"subject,omitempty"`
+	EventID         string         `json:"event_id,omitempty"`
+	EventClass      string         `json:"event_class,omitempty"`
+	Severity        string         `json:"severity,omitempty"`
+	EngineTimestamp time.Time      `json:"timestamp,omitempty"`
+	Fields          map[string]any `json:"fields,omitempty"`
+}
+
+// enrichForEngine populates the correlation-engine Event-shape
+// fields on an already-built envelope. Idempotent. Callers pass
+// the values they want to expose to multi-source rules in the
+// `fields` map; common entries are recipient_hash, sender_hash,
+// message_id, correlation_id, tier, primary, score, reason_codes.
+// Empty entries are dropped so the wire stays compact and so a
+// rule joining on e.g. sender_hash does NOT match every event
+// where the value happens to be the empty string.
+func (e *Envelope) enrichForEngine(tenantID, subject, eventID, eventClass, severity string, fields map[string]any) {
+	e.TenantID = tenantID
+	e.Subject = subject
+	e.EventID = eventID
+	e.EventClass = eventClass
+	e.Severity = severity
+	e.EngineTimestamp = e.Timestamp
+	if len(fields) == 0 {
+		return
+	}
+	clean := make(map[string]any, len(fields))
+	for k, v := range fields {
+		if v == nil {
+			continue
+		}
+		if s, ok := v.(string); ok && s == "" {
+			continue
+		}
+		clean[k] = v
+	}
+	if len(clean) > 0 {
+		e.Fields = clean
+	}
 }
 
 // Rule mirrors Wazuh's rule block. Only the fields the platform's
