@@ -36,16 +36,17 @@ func (xorEncryptor) Encrypt(p []byte) ([]byte, error) {
 
 func (xorEncryptor) Decrypt(p []byte) ([]byte, error) { return xorEncryptor{}.Encrypt(p) }
 
-// applyMigrationsThrough0018 loads every migrations/<NNNN>_*.up.sql
-// in numeric order up to and including 0018 and executes them in one
-// transaction-per-file. The integration suite previously only applied
-// 0001_init; once the RLS policy lands in 0018 we have to layer all
-// schema-evolution migrations in between or the FKs / tables /
-// columns the policy references don't exist yet.
+// applyAllMigrations loads every migrations/<NNNN>_*.up.sql in
+// numeric order and executes them in one transaction-per-file. The
+// integration suite previously only applied 0001_init; once the RLS
+// policy lands in 0018 we have to layer all schema-evolution
+// migrations in between or the FKs / tables / columns the policy
+// references don't exist yet.
 //
-// Migration 0017 partitions some append-only tables; we apply it as
-// well so the RLS policies attach to the *partitioned* parents
-// (which is the form they'll have in production).
+// Migration 0017 partitions some append-only tables and 0019
+// HASH-partitions communication_histories; both are applied here
+// so the RLS policies attach to the *partitioned* parents (which
+// is the form they'll have in production).
 //
 // rlsTestRole is the non-superuser login role we create for the RLS
 // integration tests. Postgres BYPASSes RLS for superusers and for
@@ -92,9 +93,9 @@ func provisionRLSTestRole(t *testing.T, admin *postgres.DB, base postgres.Config
 	return out
 }
 
-// openRLSTestDB starts a fresh Postgres, applies migrations 0001-0018
-// as the superuser, provisions a non-superuser login, and opens a
-// second handle as that login. Returns the non-superuser handle and
+// openRLSTestDB starts a fresh Postgres, applies every numbered
+// migration as the superuser, provisions a non-superuser login,
+// and opens a second handle as that login. Returns the non-superuser handle and
 // a cleanup func that closes both handles. RLS tests must use this
 // rather than `startPG` + `postgres.Open` directly because Postgres
 // silently bypasses RLS for superusers.
@@ -105,7 +106,7 @@ func openRLSTestDB(t *testing.T) (appDB *postgres.DB, cleanup func()) {
 	if err != nil {
 		t.Fatalf("open admin: %v", err)
 	}
-	applyMigrationsThrough0018(t, admin)
+	applyAllMigrations(t, admin)
 	appCfg := provisionRLSTestRole(t, admin, cfg)
 	appDB, err = postgres.Open(context.Background(), appCfg)
 	if err != nil {
@@ -118,7 +119,7 @@ func openRLSTestDB(t *testing.T) (appDB *postgres.DB, cleanup func()) {
 	}
 }
 
-func applyMigrationsThrough0018(t *testing.T, db *postgres.DB) {
+func applyAllMigrations(t *testing.T, db *postgres.DB) {
 	t.Helper()
 	wd, _ := os.Getwd()
 	root := filepath.Clean(filepath.Join(wd, "..", "..", ".."))
@@ -133,10 +134,10 @@ func applyMigrationsThrough0018(t *testing.T, db *postgres.DB) {
 		if !strings.HasSuffix(name, ".up.sql") {
 			continue
 		}
-		// Only apply 0001 through 0018; later migrations may
-		// not yet exist on a feature branch and shouldn't gate
-		// this RLS test.
-		if name < "0001" || name > "0018_zzzz.up.sql" {
+		// Apply every numbered migration. 0019+ are picked up
+		// automatically as they land; the RLS test depends on the
+		// terminal schema state, not a specific cut-off.
+		if name < "0001" {
 			continue
 		}
 		ups = append(ups, name)
