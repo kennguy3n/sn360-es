@@ -132,6 +132,79 @@ func TestBuildJWTIssuer_UnknownAlg_ReturnsNil(t *testing.T) {
 	}
 }
 
+// TestBuildJWTIssuer_HS256_StalePrivateKeyPath_Survives pins the
+// regression for Devin Review finding #3: an operator who rolls
+// BACK from ES256 to HS256 may leave JWT_PRIVATE_KEY_PATH pointing
+// at a missing/invalid file. HS256 doesn't NEED the private key,
+// so this misconfiguration must NOT disable the issuer — the
+// HS256 path stays live and we ignore the stale env var entirely.
+func TestBuildJWTIssuer_HS256_StalePrivateKeyPath_Survives(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Banner.TokenSecret = "this-is-a-very-long-banner-secret-32+ chars"
+	cfg.JWT.SigningAlg = "hs256"
+	cfg.JWT.PrivateKeyPath = filepath.Join(t.TempDir(), "stale-from-es256-rollback.pem")
+	iss := buildJWTIssuer(cfg, discardLogger())
+	if iss == nil {
+		t.Fatal("HS256 issuer must survive a stale JWT_PRIVATE_KEY_PATH; expected non-nil issuer")
+	}
+	tok, err := iss.Issue("t", "m", jwtIssueOptions())
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if _, err := iss.Verify(tok); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+}
+
+// TestBuildJWTIssuer_HS256_StalePublicKeyPath_DegradesToHS256Only
+// pins the parallel case for JWT_PUBLIC_KEY_PATH. In HS256 mode the
+// public key is OPTIONAL dual-verify material; load failure should
+// log a warning and degrade to HS256-only verification rather than
+// returning nil.
+func TestBuildJWTIssuer_HS256_StalePublicKeyPath_DegradesToHS256Only(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Banner.TokenSecret = "this-is-a-very-long-banner-secret-32+ chars"
+	cfg.JWT.SigningAlg = "hs256"
+	cfg.JWT.PublicKeyPath = filepath.Join(t.TempDir(), "stale.pem")
+	iss := buildJWTIssuer(cfg, discardLogger())
+	if iss == nil {
+		t.Fatal("HS256 issuer must survive a stale JWT_PUBLIC_KEY_PATH; expected non-nil issuer")
+	}
+	// Degradation invariant: JWKS is empty when the public key load
+	// failed (the issuer is HS256-only after the warning).
+	jwks, err := iss.PublicJWKS()
+	if err != nil {
+		t.Fatalf("PublicJWKS: %v", err)
+	}
+	if len(jwks.Keys) != 0 {
+		t.Fatalf("expected empty JWKS after stale-path degradation, got %d keys", len(jwks.Keys))
+	}
+}
+
+// TestBuildJWTIssuer_HS256_GoodPublicKeyPath_EnablesDualVerify pins
+// the positive case: an HS256-issuing deployment that wants to
+// dual-verify ES256 tokens from a sibling sets JWT_PUBLIC_KEY_PATH
+// alongside BANNER_TOKEN_SECRET. The resulting issuer is HS256 for
+// new tokens but accepts both algorithms at verify time.
+func TestBuildJWTIssuer_HS256_GoodPublicKeyPath_EnablesDualVerify(t *testing.T) {
+	_, pubPath := writeES256KeyPair(t, t.TempDir())
+	cfg := &config.Config{}
+	cfg.Banner.TokenSecret = "this-is-a-very-long-banner-secret-32+ chars"
+	cfg.JWT.SigningAlg = "hs256"
+	cfg.JWT.PublicKeyPath = pubPath
+	iss := buildJWTIssuer(cfg, discardLogger())
+	if iss == nil {
+		t.Fatal("expected non-nil HS256 + dual-verify issuer")
+	}
+	jwks, err := iss.PublicJWKS()
+	if err != nil {
+		t.Fatalf("PublicJWKS: %v", err)
+	}
+	if len(jwks.Keys) != 1 {
+		t.Fatalf("expected JWKS to publish the dual-verify public key, got %d keys", len(jwks.Keys))
+	}
+}
+
 // TestBuildJWTIssuer_DualVerifyMode pins the migration shape: the
 // operator sets JWT_SIGNING_ALG=es256 with both the new keys AND
 // the legacy BANNER_TOKEN_SECRET still in place. New tokens are

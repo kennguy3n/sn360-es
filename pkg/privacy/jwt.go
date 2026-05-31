@@ -208,16 +208,35 @@ type ActionClaims struct {
 //     verify ES256 tokens issued elsewhere.
 //   - ES256: PrivateKey and PublicKey must both be non-nil and use the
 //     P-256 curve. Secret is permitted to be set in parallel so the
-//     issuer can verify HS256 tokens still in flight during migration.
+//     issuer can verify HS256 tokens still in flight during migration —
+//     when set, it MUST still satisfy the >=32-byte minimum because
+//     validMethods() will enable HS256 verification for any non-nil
+//     secret regardless of which algorithm is selected for issuance.
 func NewJWTIssuer(cfg JWTConfig) (*JWTIssuer, error) {
 	alg := cfg.SigningAlg
 	if alg == "" {
 		alg = SigningAlgHS256
 	}
+
+	// HS256 secret length is validated whenever a secret is supplied,
+	// regardless of which algorithm is selected for issuance. The
+	// dual-verify path (ES256 issuer + legacy HS256 verify) would
+	// otherwise let an operator weaken the HMAC verification by
+	// configuring a short BANNER_TOKEN_SECRET — the issuer is still
+	// signing with ES256, but Verify() would accept forged HS256
+	// tokens minted against the weak shared secret.
+	if len(cfg.Secret) > 0 && len(cfg.Secret) < 32 {
+		return nil, fmt.Errorf("%w: JWT secret must be >= 32 bytes (got %d)", ErrInvalidKey, len(cfg.Secret))
+	}
+
 	switch alg {
 	case SigningAlgHS256:
-		if len(cfg.Secret) < 32 {
-			return nil, fmt.Errorf("%w: JWT secret must be >= 32 bytes (got %d)", ErrInvalidKey, len(cfg.Secret))
+		// HS256 is the issuing algorithm — secret is REQUIRED (the
+		// length guard above already covered the short-secret case
+		// but only fires when a secret is supplied; an empty secret
+		// must also fail closed for HS256 mode).
+		if len(cfg.Secret) == 0 {
+			return nil, fmt.Errorf("%w: HS256 requires a non-empty secret", ErrInvalidKey)
 		}
 	case SigningAlgES256:
 		if cfg.PrivateKey == nil {

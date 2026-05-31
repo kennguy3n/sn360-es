@@ -1,6 +1,7 @@
 package privacy
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/base64"
@@ -102,7 +103,7 @@ func JWKFromECDSAPublicKey(pub *ecdsa.PublicKey, kid string) (JWK, error) {
 }
 
 // Thumbprint computes the RFC 7638 JWK Thumbprint of this key. The
-// thumbprint is the base64url-encoded SHA-256 of the JSON
+// thumbprint is the base64url-encoded SHA-256 of the canonical JSON
 // representation of the JWK's required members in lexicographic
 // order — for an EC key these are crv, kty, x, y.
 //
@@ -111,15 +112,39 @@ func JWKFromECDSAPublicKey(pub *ecdsa.PublicKey, kid string) (JWK, error) {
 // canonical key identifier for clients that need to pin a specific
 // key across rotations.
 func (j JWK) Thumbprint() string {
-	// Build the canonical JSON manually to avoid relying on
-	// json.Marshal's struct-tag ordering (which is alphabetical only
-	// because we happen to name the fields that way). RFC 7638
-	// requires the member ordering be lexicographic on the JSON
-	// names, with no whitespace and no escaping beyond the JSON
-	// minimum.
-	canonical := fmt.Sprintf(`{"crv":%q,"kty":%q,"x":%q,"y":%q}`,
-		j.Curve, j.KeyType, j.X, j.Y)
-	sum := sha256.Sum256([]byte(canonical))
+	// Use the encoding/json encoder (with HTML escaping disabled) on
+	// a struct whose field order matches the RFC 7638-required
+	// lexicographic ordering of an EC JWK's mandatory members
+	// (crv, kty, x, y). json.Marshal escapes strings per the JSON
+	// spec, so any future extension to non-ASCII metadata produces
+	// interoperable thumbprints — earlier code used fmt.Sprintf
+	// with %q, whose Go-escape rules diverge from JSON for
+	// characters such as \x.. and embedded NULs. The Encoder also
+	// strips no whitespace by default, matching RFC 7638's "no
+	// whitespace and no line breaks" requirement.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	// Encode the four mandatory members in lexicographic order on
+	// the JSON name. The struct-tag ordering is authoritative for
+	// Go's json package, so an EC-only payload is produced here;
+	// extending to RSA/OKP would require a sibling helper.
+	_ = enc.Encode(struct {
+		Crv string `json:"crv"`
+		Kty string `json:"kty"`
+		X   string `json:"x"`
+		Y   string `json:"y"`
+	}{
+		Crv: j.Curve,
+		Kty: j.KeyType,
+		X:   j.X,
+		Y:   j.Y,
+	})
+	// json.Encoder.Encode appends a trailing newline. RFC 7638
+	// requires the hash input be the canonical JSON with no
+	// trailing whitespace, so we trim it.
+	canonical := bytes.TrimRight(buf.Bytes(), "\n")
+	sum := sha256.Sum256(canonical)
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 

@@ -3,6 +3,7 @@ package privacy
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"math/big"
@@ -87,6 +88,38 @@ func TestJWKThumbprint_StableAcrossInstances(t *testing.T) {
 	if a.Thumbprint() != b.Thumbprint() {
 		t.Errorf("thumbprint mismatch on same key: %q vs %q",
 			a.Thumbprint(), b.Thumbprint())
+	}
+}
+
+// TestJWKThumbprint_RFC7638CanonicalForm pins the RFC 7638 §3.1
+// canonical-JSON shape used as the SHA-256 input. The expected hash
+// is computed from the canonical bytes
+//
+//	{"crv":"P-256","kty":"EC","x":"<x>","y":"<y>"}
+//
+// (members in lexicographic order, no whitespace, no escaping
+// beyond JSON minimum). We compute the same hash here so the test
+// can also assert that the implementation produces THIS exact
+// canonical form — not a Go-quoted near-miss. Synthetic but
+// well-formed x/y values are used so the assertion is independent
+// of which curve.Point happens to be picked at random.
+func TestJWKThumbprint_RFC7638CanonicalForm(t *testing.T) {
+	jwk := JWK{
+		KeyType: "EC",
+		Curve:   "P-256",
+		// 32-byte all-zero coordinates encoded as base64url
+		// (43 chars). Their semantic invalidity as an ECDSA
+		// point is irrelevant — Thumbprint() does not interpret
+		// the coordinates, only encodes them.
+		X: base64.RawURLEncoding.EncodeToString(make([]byte, 32)),
+		Y: base64.RawURLEncoding.EncodeToString(make([]byte, 32)),
+	}
+	canonical := []byte(`{"crv":"P-256","kty":"EC","x":"` + jwk.X + `","y":"` + jwk.Y + `"}`)
+	expectedHash := sha256.Sum256(canonical)
+	expected := base64.RawURLEncoding.EncodeToString(expectedHash[:])
+	if got := jwk.Thumbprint(); got != expected {
+		t.Fatalf("thumbprint does not match canonical RFC 7638 form:\n  got      %q\n  expected %q\n  canonical input was %q",
+			got, expected, canonical)
 	}
 }
 

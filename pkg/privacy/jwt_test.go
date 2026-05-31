@@ -300,6 +300,43 @@ func TestJWTRejectsUnknownAlg(t *testing.T) {
 	}
 }
 
+// TestJWTES256RejectsShortDualVerifySecret pins the closed-by-default
+// behavior for the dual-verify migration path. When the operator
+// selects ES256 issuance AND supplies an HS256 secret for in-flight
+// token verification, the secret must still meet the >=32 byte
+// minimum or the issuer refuses to construct. Without this guard a
+// short BANNER_TOKEN_SECRET would silently weaken HS256 verification:
+// the issuer would sign ES256 but accept forged HS256 tokens minted
+// against a trivially brute-forceable HMAC key.
+func TestJWTES256RejectsShortDualVerifySecret(t *testing.T) {
+	priv := mustGenerateP256(t)
+	short := []byte("too-short")
+	if len(short) >= 32 {
+		t.Fatalf("test setup error: short secret unexpectedly long (%d)", len(short))
+	}
+	_, err := NewJWTIssuer(JWTConfig{
+		SigningAlg: SigningAlgES256,
+		Secret:     short,
+		PrivateKey: priv,
+		PublicKey:  &priv.PublicKey,
+		Issuer:     "sn360-test",
+		TTL:        time.Hour,
+	})
+	if err == nil {
+		t.Fatal("expected ES256 + short dual-verify secret to be rejected")
+	}
+}
+
+// TestJWTHS256RejectsEmptySecret pins the parallel boot-time check
+// for the primary HS256 issuance path: an empty Secret is rejected
+// even though the new "len(Secret) > 0" guard above only fires for
+// short-but-present secrets.
+func TestJWTHS256RejectsEmptySecret(t *testing.T) {
+	if _, err := NewJWTIssuer(JWTConfig{SigningAlg: SigningAlgHS256}); err == nil {
+		t.Fatal("expected HS256 with empty secret to be rejected")
+	}
+}
+
 // TestJWTDualVerifyHS256AndES256 pins the migration story: an issuer
 // configured with both an HS256 secret and an ES256 public key must
 // verify a token signed under either algorithm. This is what lets a
