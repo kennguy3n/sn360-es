@@ -197,15 +197,24 @@ func (c Config) withDefaults() Config {
 		// The zero-value (unset) maps to -1 ("retry forever"),
 		// which is the safer default for a fire-and-forget
 		// bridge — a long-lived network blip should not silently
-		// give up forwarding SOC events. Operators who genuinely
-		// want "no reconnect" must set PLATFORM_NATS_MAX_RECONNECTS
-		// to a negative value (e.g. -2 is treated as -2 by the
-		// NATS client; any negative value other than -1 still
-		// means "finite, never" semantics from the operator).
-		// We deliberately do not preserve 0 because Go's
-		// zero-value semantics make it impossible to distinguish
-		// "unset" from "explicit 0" without a pointer field,
-		// and "unset" is by far the common case.
+		// give up forwarding SOC events.
+		//
+		// We deliberately do not preserve an explicit 0 because
+		// Go's zero-value semantics make it impossible to
+		// distinguish "unset" from "explicit 0" without a
+		// pointer field, and "unset" is by far the common case.
+		//
+		// There is intentionally no MaxReconnects value that
+		// means "no reconnect" — the NATS Go client treats every
+		// MaxReconnect < 0 as infinite (the reconnect loop only
+		// breaks when MaxReconnect >= 0 && i >= MaxReconnect; see
+		// nats-io/nats.go@v1.52.0 conn.go), so -1, -2, and -999
+		// all produce the same behaviour as the default. An
+		// operator who genuinely wants the bridge to give up
+		// after the first disconnect must wire nats.NoReconnect()
+		// at the call site (intentionally not exposed as config
+		// because there is no realistic operational reason to
+		// silently stop forwarding SOC events on the first blip).
 		c.MaxReconnects = -1
 	}
 	if c.PublishTimeout <= 0 {
