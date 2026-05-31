@@ -249,9 +249,16 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	// Platform NATS bridge (WS-5A.1). The bridge is gated behind
 	// PLATFORM_NATS_ENABLED — when disabled it returns a no-op
 	// publisher so the consumer handlers can call its methods
-	// unconditionally. A connect failure surfaces as a boot error
-	// because a wired-but-broken bridge would silently drop every
-	// HighRisk+ verdict from reaching the SOC.
+	// unconditionally. The bridge uses nats.RetryOnFailedConnect
+	// internally, so a transient platform-NATS outage at boot
+	// degrades to "publishes buffered until reconnect" rather
+	// than blocking sn360-es boot — the core email-security
+	// pipeline does not depend on the platform bridge.
+	// bridge.New only returns an error for genuine configuration
+	// bugs (invalid TLS material, malformed URL) which are worth
+	// failing boot on. Production validation in
+	// internal/config/validate.go rejects ENABLED=true with empty
+	// URLs before we reach this point.
 	platformPub, perr := bridge.New(ctx, platformBridgeConfig(cfg), logger)
 	if perr != nil {
 		return nil, fmt.Errorf("platform bridge: %w", perr)

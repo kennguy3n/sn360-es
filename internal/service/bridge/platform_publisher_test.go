@@ -448,6 +448,27 @@ func TestTimeOrNow(t *testing.T) {
 	}
 }
 
+// TestRuleIDForQuarantine_ReleaseAndApplyDistinct exists so the
+// WS-5A.1 review fix that wires PublishQuarantine(Released) into
+// handleQuarantineRelease does not accidentally re-use the
+// .applied rule ID. The platform's correlation rules pivot on
+// (rule.id, data.action) so the two events MUST land on distinct
+// rule IDs (7830 vs 7831) AND distinct data.action strings
+// ("applied" vs "released"). This locks both halves of that
+// contract.
+func TestRuleIDForQuarantine_ReleaseAndApplyDistinct(t *testing.T) {
+	if got := ruleIDForQuarantine(QuarantineActionApplied); got != "7830" {
+		t.Errorf("ruleIDForQuarantine(applied) = %q, want 7830", got)
+	}
+	if got := ruleIDForQuarantine(QuarantineActionReleased); got != "7831" {
+		t.Errorf("ruleIDForQuarantine(released) = %q, want 7831", got)
+	}
+	if QuarantineActionApplied == QuarantineActionReleased {
+		t.Fatalf("QuarantineActionApplied (%q) must differ from QuarantineActionReleased (%q)",
+			QuarantineActionApplied, QuarantineActionReleased)
+	}
+}
+
 // TestNilIfZero returns nil for zero, pointer otherwise.
 func TestNilIfZero(t *testing.T) {
 	if p := nilIfZero(time.Time{}); p != nil {

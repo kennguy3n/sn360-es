@@ -194,9 +194,18 @@ func (c Config) withDefaults() Config {
 		c.ReconnectWait = 2 * time.Second
 	}
 	if c.MaxReconnects == 0 {
-		// -1 means "retry forever". An explicit 0 from the caller
-		// is preserved as 0 only when set via a constant; the
-		// zero-value default here is the safer "keep trying" mode.
+		// The zero-value (unset) maps to -1 ("retry forever"),
+		// which is the safer default for a fire-and-forget
+		// bridge — a long-lived network blip should not silently
+		// give up forwarding SOC events. Operators who genuinely
+		// want "no reconnect" must set PLATFORM_NATS_MAX_RECONNECTS
+		// to a negative value (e.g. -2 is treated as -2 by the
+		// NATS client; any negative value other than -1 still
+		// means "finite, never" semantics from the operator).
+		// We deliberately do not preserve 0 because Go's
+		// zero-value semantics make it impossible to distinguish
+		// "unset" from "explicit 0" without a pointer field,
+		// and "unset" is by far the common case.
 		c.MaxReconnects = -1
 	}
 	if c.PublishTimeout <= 0 {
@@ -236,6 +245,21 @@ func New(ctx context.Context, cfg Config, logger *slog.Logger) (PlatformPublishe
 		return nil, fmt.Errorf("bridge: build nats options: %w", err)
 	}
 	opts = append(opts,
+		// RetryOnFailedConnect makes nats.Connect return
+		// successfully even when the platform NATS cluster is
+		// unreachable at boot: the client schedules background
+		// reconnect attempts (governed by ReconnectWait /
+		// MaxReconnects) and queues nothing locally — Publish
+		// calls in the meantime surface ErrConnectionClosed /
+		// ErrNoServers and are absorbed by the bridge's
+		// log-and-continue policy. This decouples sn360-es boot
+		// from platform-NATS availability so a transient platform
+		// outage cannot prevent the core email-security pipeline
+		// from starting — operators who want the bridge to
+		// fail-closed on misconfiguration still get that from the
+		// production validation in internal/config/validate.go,
+		// which rejects ENABLED=true + URLS="" before this point.
+		nats.RetryOnFailedConnect(true),
 		nats.DisconnectErrHandler(func(_ *nats.Conn, derr error) {
 			logger.Warn("sn360-es: platform NATS disconnected", slog.Any("error", derr))
 		}),
@@ -252,6 +276,10 @@ func New(ctx context.Context, cfg Config, logger *slog.Logger) (PlatformPublishe
 
 	nc, err := nats.Connect(cfg.URLs, opts...)
 	if err != nil {
+		// With RetryOnFailedConnect, an error here means the
+		// options themselves are invalid (bad TLS cert, malformed
+		// URL, etc.) — not a transient network failure. Those are
+		// real configuration bugs and should fail boot.
 		return nil, fmt.Errorf("bridge: connect platform nats %q: %w", cfg.URLs, err)
 	}
 	js, err := jetstream.New(nc)
@@ -542,10 +570,23 @@ func (p *natsPlatformPublisher) publish(ctx context.Context, subject, msgID, cor
 			return nil
 		}
 		lastErr = perr
-		// Context cancellation propagates immediately — no point
-		// retrying a parent context that's already gone.
-		if errors.Is(perr, context.Canceled) {
-			return perr
+		// Context completion (cancellation or deadline) propagates
+		// immediately — no point retrying a parent context that
+		// is already gone. Without DeadlineExceeded here, an
+		// expired parent would burn through one wasted PublishMsg
+		// per remaining attempt (the derived callCtx fires
+		// immediately) before the delay-select catches it, which
+		// is harmless but wasteful.
+		if errors.Is(perr, context.Canceled) || errors.Is(perr, context.DeadlineExceeded) {
+			// Only treat the derived deadline as a publish-retry
+			// exit when the *parent* ctx is also done — a per-call
+			// timeout that fires while the parent is still healthy
+			// is a transient wire failure worth retrying.
+			if errors.Is(perr, context.DeadlineExceeded) && ctx.Err() == nil {
+				// fall through to retry path below
+			} else {
+				return perr
+			}
 		}
 		// jetstream.ErrNoStreamResponse means there is no stream
 		// matching the subject on the target server. That is a
