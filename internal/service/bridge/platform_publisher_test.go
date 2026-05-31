@@ -796,7 +796,15 @@ func TestPublishAllPaths_HybridWire(t *testing.T) {
 			payload: QuarantinePayload{Source: "sn360-es", MessageID: "m", RecipientHash: "r", Action: QuarantineActionApplied, Tier: string(constant.TierHighRisk)},
 			enrichWith: func(env *Envelope) {
 				p := QuarantinePayload{Source: "sn360-es", MessageID: "m", RecipientHash: "r", Action: QuarantineActionApplied, Tier: string(constant.TierHighRisk)}
-				env.enrichForEngine("tid", "sn360.events.email.tid.quarantine", "evt", "email.quarantine.applied", severityForTier(constant.TierHighRisk), engineFieldsForQuarantine(p))
+				// Mirror PublishQuarantine's severity derivation: route through
+				// severityForLevel(ruleLevelForTier(...)) instead of the
+				// tier-based shortcut. The current values match for TierHighRisk
+				// but a future drift in ruleLevelForTier / severityForLevel
+				// would break the wire invariant — TestPublishQuarantineRelease_SeverityMatchesWazuhLevel
+				// covers the release path, and this case extends the guard to
+				// the apply path on the hybrid-wire seam.
+				level := ruleLevelForTier(constant.TierHighRisk)
+				env.enrichForEngine("tid", "sn360.events.email.tid.quarantine", "evt", "email.quarantine.applied", severityForLevel(level), engineFieldsForQuarantine(p))
 			},
 			wantSubject: "sn360.events.email.tid.quarantine",
 			wantClass:   "email.quarantine.applied",
