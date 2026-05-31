@@ -23,7 +23,7 @@ func TestKindForVerdict_PrimaryCategoryRouting(t *testing.T) {
 		primary constant.Category
 		want    string
 	}{
-		// Phishing family — the default bucket.
+		// Phishing family -- the default bucket.
 		{"likely phishing", constant.CategoryLikelyPhishing, KindPhishing},
 		{"credential harvesting", constant.CategoryCredentialHarvesting, KindPhishing},
 		{"lookalike domain", constant.CategoryLookalikeDomain, KindPhishing},
@@ -32,13 +32,13 @@ func TestKindForVerdict_PrimaryCategoryRouting(t *testing.T) {
 		{"scam/fraud", constant.CategoryScamFraud, KindPhishing},
 		{"auth failed", constant.CategoryAuthFailed, KindPhishing},
 
-		// BEC family — fan into the bec subject.
+		// BEC family -- fan into the bec subject.
 		{"BEC impersonation", constant.CategoryBECImpersonation, KindBEC},
 		{"account takeover", constant.CategoryAccountTakeoverSuspected, KindBEC},
 		{"vendor compromise", constant.CategoryVendorCompromise, KindBEC},
 		{"invoice fraud", constant.CategoryInvoiceFraud, KindBEC},
 
-		// Malware family — attachment-bearing categories.
+		// Malware family -- attachment-bearing categories.
 		{"suspicious attachment", constant.CategorySuspiciousAttachment, KindMalware},
 	}
 	for _, tc := range cases {
@@ -144,7 +144,7 @@ func TestRuleIDForQuarantineAndEscalation(t *testing.T) {
 	}
 }
 
-// TestRuleLevelForTier locks the tier→Wazuh-level mapping. Blocked
+// TestRuleLevelForTier locks the tier->Wazuh-level mapping. Blocked
 // must land in the level that the platform's ISM policy promotes to
 // the `enterprise` retention bucket (>=12), and HighRisk must stay
 // at the SOC-investigable-but-not-page-on-call level (8).
@@ -192,10 +192,10 @@ func TestIsTerminalTier(t *testing.T) {
 
 // TestHashIdentifier_DeterministicAndTenantScoped checks the
 // privacy property the bridge relies on:
-//   - same (tenant, email) → same hash (correlation works)
-//   - different tenants → different hashes (cross-tenant isolation)
+//   - same (tenant, email) -> same hash (correlation works)
+//   - different tenants -> different hashes (cross-tenant isolation)
 //   - case + whitespace are normalised (User@Example.com == user@example.com)
-//   - empty inputs → empty output (no accidental fingerprint of "")
+//   - empty inputs -> empty output (no accidental fingerprint of "")
 func TestHashIdentifier_DeterministicAndTenantScoped(t *testing.T) {
 	const tenantA = "tenant-aaaa-1111"
 	const tenantB = "tenant-bbbb-2222"
@@ -288,7 +288,7 @@ func TestNew_DisabledFlagReturnsDisabled(t *testing.T) {
 
 // TestNew_EnabledNoURLsFallsBackToDisabled keeps the bridge from
 // hard-failing when an operator turns it on but forgets to set the
-// URL list — at boot time we degrade to the no-op publisher and let
+// URL list -- at boot time we degrade to the no-op publisher and let
 // config.validate() flag the misconfiguration with a clear error in
 // production. In dev/local where validate is permissive, the bridge
 // keeps running with no platform traffic.
@@ -478,5 +478,372 @@ func TestNilIfZero(t *testing.T) {
 	p := nilIfZero(want)
 	if p == nil || !p.Equal(want) {
 		t.Errorf("nilIfZero(non-zero) = %v, want %v", p, want)
+	}
+}
+
+// engineEvent is a minimal local copy of the correlation-engine
+// Event struct (services/correlation-engine/internal/engine/engine.go).
+// Kept in sync ONLY for the WS-5A.1 bridge interop tests so the
+// hybrid envelope contract stays grep-able from the bridge side.
+// If the engine struct grows a new required field, the
+// corresponding envelope key has to be added AND populated by
+// enrichForEngine.
+type engineEvent struct {
+	TenantID   string         `json:"tenant_id"`
+	Subject    string         `json:"subject"`
+	EventID    string         `json:"event_id"`
+	EventClass string         `json:"event_class"`
+	Severity   string         `json:"severity"`
+	Timestamp  time.Time      `json:"timestamp,omitempty"`
+	Fields     map[string]any `json:"fields,omitempty"`
+}
+
+// wazuhProbe is the alert-forwarder ParseAlert decoder
+// (services/alert-forwarder/internal/indexer.ParseAlert). The
+// bridge MUST keep producing JSON that satisfies BOTH shapes --
+// this probe stays grouped with the engineEvent probe to make the
+// dual-consumer contract explicit at the test level.
+type wazuhProbe struct {
+	Timestamp string `json:"@timestamp"`
+	ClusterID string `json:"cluster_id"`
+	Rule      struct {
+		ID    string `json:"id"`
+		Level int    `json:"level"`
+	} `json:"rule"`
+	Agent struct {
+		Labels struct {
+			SN360 struct {
+				TenantID string `json:"tenant_id"`
+			} `json:"sn360"`
+		} `json:"labels"`
+	} `json:"agent"`
+	Data json.RawMessage `json:"data"`
+}
+
+// TestEnvelope_DeserialisesIntoBothConsumerShapes is the
+// load-bearing invariant for WS-5A.2: the same envelope bytes
+// must unmarshal cleanly into BOTH the alert-forwarder Wazuh
+// probe AND the correlation-engine Event struct. Without that,
+// the engine's joinValueFor returns "" for every event and every
+// multi-source rule either fires on the empty join or collapses
+// unrelated events into one pending bucket.
+func TestEnvelope_DeserialisesIntoBothConsumerShapes(t *testing.T) {
+	cfg := Config{Source: "sn360-es", ClusterID: "prod-1"}
+	payload := EvaluationPayload{
+		Source:        "sn360-es",
+		EventType:     "email.verdict.phishing",
+		Action:        "verdict",
+		MessageID:     "msg-123",
+		CorrelationID: "corr-abc",
+		Tier:          string(constant.TierBlocked),
+		Primary:       string(constant.CategoryLikelyPhishing),
+		Score:         95,
+		RecipientHash: "sha256:rcpt",
+		SenderHash:    "sha256:sndr",
+		ReasonCodes:   []string{"R_PHISH_KEYWORDS", "R_LOOKALIKE"},
+		EvaluatedAt:   time.Now().UTC(),
+	}
+	env := buildEnvelope(cfg, "tid-1", "7800", 12, "sn360-es: phishing (Blocked)", payload)
+	env.enrichForEngine(
+		"tid-1",
+		"sn360.events.email.tid-1.phishing",
+		"evt-1",
+		"email.verdict.phishing",
+		severityForTier(constant.TierBlocked),
+		engineFieldsForVerdict(payload),
+	)
+
+	data, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+
+	// Alert-forwarder probe: must still see @timestamp, agent,
+	// rule, data -- byte-for-byte compatibility with the
+	// pre-hybrid wire is the whole point of keeping both shapes
+	// in one struct.
+	var wp wazuhProbe
+	if err := json.Unmarshal(data, &wp); err != nil {
+		t.Fatalf("wazuh probe unmarshal: %v", err)
+	}
+	if wp.Timestamp == "" {
+		t.Error("wazuh probe: @timestamp empty (alert-forwarder will reject)")
+	}
+	if wp.Agent.Labels.SN360.TenantID != "tid-1" {
+		t.Errorf("wazuh probe: agent.labels.sn360.tenant_id = %q, want tid-1", wp.Agent.Labels.SN360.TenantID)
+	}
+	if wp.Rule.ID != "7800" || wp.Rule.Level != 12 {
+		t.Errorf("wazuh probe: rule = %+v", wp.Rule)
+	}
+	if len(wp.Data) == 0 || string(wp.Data) == "null" {
+		t.Errorf("wazuh probe: data missing")
+	}
+
+	// Engine probe: must surface tenant_id, event_id, event_class,
+	// severity, fields so correlation-engine join_keys resolve.
+	var ee engineEvent
+	if err := json.Unmarshal(data, &ee); err != nil {
+		t.Fatalf("engine event unmarshal: %v", err)
+	}
+	if ee.TenantID != "tid-1" {
+		t.Errorf("engine: tenant_id = %q, want tid-1", ee.TenantID)
+	}
+	if ee.Subject != "sn360.events.email.tid-1.phishing" {
+		t.Errorf("engine: subject = %q", ee.Subject)
+	}
+	if ee.EventID != "evt-1" {
+		t.Errorf("engine: event_id = %q, want evt-1", ee.EventID)
+	}
+	if ee.EventClass != "email.verdict.phishing" {
+		t.Errorf("engine: event_class = %q", ee.EventClass)
+	}
+	if ee.Severity != "critical" {
+		t.Errorf("engine: severity = %q, want critical (Blocked->critical)", ee.Severity)
+	}
+	if ee.Timestamp.IsZero() {
+		t.Error("engine: timestamp empty")
+	}
+	for _, k := range []string{"recipient_hash", "sender_hash", "message_id", "correlation_id", "tier", "primary", "score", "reason_codes"} {
+		if _, ok := ee.Fields[k]; !ok {
+			t.Errorf("engine: fields[%q] missing -- multi-source rules joining on this key will not match", k)
+		}
+	}
+	if got, _ := ee.Fields["recipient_hash"].(string); got != "sha256:rcpt" {
+		t.Errorf("engine: fields.recipient_hash = %q", got)
+	}
+}
+
+// TestEnrichForEngine_DropsEmptyAndNilFields keeps the wire
+// compact AND prevents a rule joining on e.g. sender_hash from
+// matching every event where the value is the empty string --
+// the engine's joinValueFor concatenates "string|empty|string"
+// and would merge unrelated events into one pending bucket.
+func TestEnrichForEngine_DropsEmptyAndNilFields(t *testing.T) {
+	env := Envelope{Timestamp: time.Now().UTC()}
+	env.enrichForEngine("t", "s", "e", "c", "high", map[string]any{
+		"keep_str": "value",
+		"keep_int": 42,
+		"drop_str": "",
+		"drop_nil": nil,
+	})
+	if _, ok := env.Fields["drop_str"]; ok {
+		t.Error("empty string field must be dropped")
+	}
+	if _, ok := env.Fields["drop_nil"]; ok {
+		t.Error("nil field must be dropped")
+	}
+	if env.Fields["keep_str"] != "value" || env.Fields["keep_int"] != 42 {
+		t.Errorf("non-empty fields must survive: got %+v", env.Fields)
+	}
+}
+
+// TestEnrichForEngine_EngineTimestampMirrorsWazuhTimestamp pins
+// the two timestamp fields so a future refactor cannot drift
+// them. The engine matches its time window against ev.Timestamp
+// (lower-case) while alert-forwarder reads @timestamp -- they
+// MUST be the same instant.
+func TestEnrichForEngine_EngineTimestampMirrorsWazuhTimestamp(t *testing.T) {
+	want := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	env := Envelope{Timestamp: want}
+	env.enrichForEngine("t", "s", "e", "c", "high", nil)
+	if !env.EngineTimestamp.Equal(want) {
+		t.Errorf("EngineTimestamp = %v, want %v (must mirror @timestamp)", env.EngineTimestamp, want)
+	}
+}
+
+// TestSeverityForTier_MatchesEngineValidatorVocabulary locks the
+// mapping into the engine validator's allowed set
+// (info|low|medium|high|critical -- see dac.validSeverities).
+// A drift here would make every bridge event fail the engine's
+// per-event severity weighting.
+func TestSeverityForTier_MatchesEngineValidatorVocabulary(t *testing.T) {
+	validEngineSeverities := map[string]bool{
+		"info": true, "low": true, "medium": true, "high": true, "critical": true,
+	}
+	cases := []struct {
+		tier constant.Tier
+		want string
+	}{
+		{constant.TierBlocked, "critical"},
+		{constant.TierHighRisk, "high"},
+		{constant.TierWarning, "medium"},
+		{constant.TierTrusted, "medium"},
+	}
+	for _, tc := range cases {
+		got := severityForTier(tc.tier)
+		if got != tc.want {
+			t.Errorf("severityForTier(%s) = %q, want %q", tc.tier, got, tc.want)
+		}
+		if !validEngineSeverities[got] {
+			t.Errorf("severityForTier(%s) = %q, NOT in engine validator vocabulary", tc.tier, got)
+		}
+	}
+}
+
+// TestSeverityForLevel_MapsWazuhLevelsToEngineSeverity locks the
+// reverse mapping used for escalation events (where evt.Tier is
+// not present and the bridge falls back to rule.level).
+func TestSeverityForLevel_MapsWazuhLevelsToEngineSeverity(t *testing.T) {
+	cases := []struct {
+		level int
+		want  string
+	}{
+		{15, "critical"}, {12, "critical"},
+		{10, "high"}, {8, "high"},
+		{7, "medium"}, {3, "medium"},
+		{2, "low"}, {1, "low"},
+		{0, "info"},
+	}
+	for _, tc := range cases {
+		if got := severityForLevel(tc.level); got != tc.want {
+			t.Errorf("severityForLevel(%d) = %q, want %q", tc.level, got, tc.want)
+		}
+	}
+}
+
+// TestEngineFieldsForVerdict_ExposesAllJoinCandidates locks the
+// keys present in the engine fields map for verdict events. A
+// correlation rule joining on a key not listed here would
+// silently produce an empty join value and either miss the
+// intended match or merge events from unrelated tenants. Adding
+// a new rule that joins on a different verdict field MUST extend
+// engineFieldsForVerdict at the same time.
+func TestEngineFieldsForVerdict_ExposesAllJoinCandidates(t *testing.T) {
+	linkScore := 60
+	attachScore := 80
+	p := EvaluationPayload{
+		Source: "sn360-es", EventType: "email.verdict.phishing", Action: "verdict",
+		MessageID: "mid", CorrelationID: "cid",
+		Tier: string(constant.TierBlocked), Primary: string(constant.CategoryLikelyPhishing),
+		Score: 90, LinkScore: &linkScore, AttachmentScore: &attachScore,
+		RecipientHash: "r", SenderHash: "s",
+		ReasonCodes: []string{"R1"}, Secondary: []string{"X"},
+	}
+	f := engineFieldsForVerdict(p)
+	required := []string{
+		"message_id", "correlation_id", "tier", "primary", "score",
+		"action", "event_type", "recipient_hash", "sender_hash", "source",
+		"link_score", "attachment_score", "reason_codes", "secondary",
+	}
+	for _, k := range required {
+		if _, ok := f[k]; !ok {
+			t.Errorf("engineFieldsForVerdict missing key %q", k)
+		}
+	}
+}
+
+// TestEngineFieldsForQuarantine_ExposesAllJoinCandidates locks
+// the keys for quarantine events.
+func TestEngineFieldsForQuarantine_ExposesAllJoinCandidates(t *testing.T) {
+	p := QuarantinePayload{
+		Source: "sn360-es", EventType: "email.quarantine.applied", Action: QuarantineActionApplied,
+		MessageID: "mid", CorrelationID: "cid",
+		Tier: string(constant.TierBlocked), Primary: string(constant.CategoryLikelyPhishing),
+		Score: 90, RecipientHash: "r", RequestedBy: "admin", At: time.Now().UTC(),
+	}
+	f := engineFieldsForQuarantine(p)
+	for _, k := range []string{"message_id", "correlation_id", "tier", "primary", "score", "action", "event_type", "recipient_hash", "requested_by", "source"} {
+		if _, ok := f[k]; !ok {
+			t.Errorf("engineFieldsForQuarantine missing key %q", k)
+		}
+	}
+}
+
+// TestEngineFieldsForEscalation_ExposesAllJoinCandidates locks
+// the keys for escalation events.
+func TestEngineFieldsForEscalation_ExposesAllJoinCandidates(t *testing.T) {
+	p := EscalationPayload{
+		Source: "sn360-es", EventType: "email.escalation.created", Action: EscalationActionCreated,
+		TicketID: "T-1", MessageID: "mid", Tier: "Tier0", Category: "phishing",
+		Score: 90, Reason: "high-risk", AffectedUsers: 3, Indicators: []string{"i-1"},
+	}
+	f := engineFieldsForEscalation(p)
+	for _, k := range []string{"ticket_id", "message_id", "tier", "category", "score", "action", "event_type", "reason", "affected_users", "indicators", "source"} {
+		if _, ok := f[k]; !ok {
+			t.Errorf("engineFieldsForEscalation missing key %q", k)
+		}
+	}
+}
+
+// TestPublishEvaluation_HybridWire_FullStackUnmarshal verifies
+// the full end-to-end path: PublishEvaluation -> publish -> the
+// outgoing wire bytes -> both Wazuh probe AND engine Event
+// shapes. Catches a regression where a future refactor only
+// wires enrichForEngine on the verdict path but not on
+// quarantine / escalation.
+func TestPublishAllPaths_HybridWire(t *testing.T) {
+	cases := []struct {
+		name        string
+		payload     any
+		enrichWith  func(env *Envelope)
+		wantSubject string
+		wantClass   string
+		wantSev     string
+	}{
+		{
+			name:    "verdict",
+			payload: EvaluationPayload{Source: "sn360-es", MessageID: "m", RecipientHash: "r", Tier: string(constant.TierBlocked)},
+			enrichWith: func(env *Envelope) {
+				p := EvaluationPayload{Source: "sn360-es", MessageID: "m", RecipientHash: "r", Tier: string(constant.TierBlocked)}
+				env.enrichForEngine("tid", "sn360.events.email.tid.phishing", "evt", "email.verdict.phishing", severityForTier(constant.TierBlocked), engineFieldsForVerdict(p))
+			},
+			wantSubject: "sn360.events.email.tid.phishing",
+			wantClass:   "email.verdict.phishing",
+			wantSev:     "critical",
+		},
+		{
+			name:    "quarantine",
+			payload: QuarantinePayload{Source: "sn360-es", MessageID: "m", RecipientHash: "r", Action: QuarantineActionApplied, Tier: string(constant.TierHighRisk)},
+			enrichWith: func(env *Envelope) {
+				p := QuarantinePayload{Source: "sn360-es", MessageID: "m", RecipientHash: "r", Action: QuarantineActionApplied, Tier: string(constant.TierHighRisk)}
+				env.enrichForEngine("tid", "sn360.events.email.tid.quarantine", "evt", "email.quarantine.applied", severityForTier(constant.TierHighRisk), engineFieldsForQuarantine(p))
+			},
+			wantSubject: "sn360.events.email.tid.quarantine",
+			wantClass:   "email.quarantine.applied",
+			wantSev:     "high",
+		},
+		{
+			name:    "escalation",
+			payload: EscalationPayload{Source: "sn360-es", TicketID: "T", MessageID: "m", Action: EscalationActionCreated},
+			enrichWith: func(env *Envelope) {
+				p := EscalationPayload{Source: "sn360-es", TicketID: "T", MessageID: "m", Action: EscalationActionCreated}
+				env.enrichForEngine("tid", "sn360.events.email.tid.escalation", "evt", "email.escalation.created", severityForLevel(12), engineFieldsForEscalation(p))
+			},
+			wantSubject: "sn360.events.email.tid.escalation",
+			wantClass:   "email.escalation.created",
+			wantSev:     "critical",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			env := buildEnvelope(Config{Source: "sn360-es"}, "tid", "7800", 12, "", tc.payload)
+			tc.enrichWith(&env)
+			data, err := json.Marshal(env)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var wp wazuhProbe
+			if err := json.Unmarshal(data, &wp); err != nil {
+				t.Fatalf("wazuh probe: %v", err)
+			}
+			var ee engineEvent
+			if err := json.Unmarshal(data, &ee); err != nil {
+				t.Fatalf("engine event: %v", err)
+			}
+			if wp.Agent.Labels.SN360.TenantID != "tid" {
+				t.Errorf("wazuh tenant_id = %q", wp.Agent.Labels.SN360.TenantID)
+			}
+			if ee.Subject != tc.wantSubject {
+				t.Errorf("engine subject = %q, want %q", ee.Subject, tc.wantSubject)
+			}
+			if ee.EventClass != tc.wantClass {
+				t.Errorf("engine event_class = %q, want %q", ee.EventClass, tc.wantClass)
+			}
+			if ee.Severity != tc.wantSev {
+				t.Errorf("engine severity = %q, want %q", ee.Severity, tc.wantSev)
+			}
+		})
 	}
 }
