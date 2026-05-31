@@ -615,19 +615,24 @@ func TestValidate_PlatformDedupBudgetUsesRuntimeDefaultsForUnsetKnobs(t *testing
 }
 
 // TestValidate_PlatformDedupBudgetIgnoredWhenWindowZero pins the
-// opt-in shape of the dedup-budget check: an operator who has not
-// declared PLATFORM_NATS_DEDUP_WINDOW (still 0) is opting out of the
+// opt-in shape of the dedup-budget check: an operator who has
+// explicitly set PLATFORM_NATS_DEDUP_WINDOW=0s is opting out of the
 // validation entirely — there is no platform-side window value to
-// compare against. The check only fires once they've actually mirrored
-// the platform-side stream config into their .env.
+// compare against. Note that 0 here means "explicitly opted out", NOT
+// "env var not set": loadPlatform() in internal/config/platform.go
+// defaults NATSDedupWindow to 10m when the env var is missing, so
+// reaching 0 in production requires the operator to write
+// `PLATFORM_NATS_DEDUP_WINDOW=0s` in their .env on purpose. The check
+// only fires once the operator has either left the documented default
+// in place or actively mirrored the platform-side stream config.
 func TestValidate_PlatformDedupBudgetIgnoredWhenWindowZero(t *testing.T) {
 	cfg := validProdConfig()
 	cfg.Platform = validBridgePlatform()
-	cfg.Platform.NATSDedupWindow = 0
+	cfg.Platform.NATSDedupWindow = 0 // explicit opt-out (PLATFORM_NATS_DEDUP_WINDOW=0s)
 	cfg.Platform.NATSPublishTimeout = 1 * time.Hour
 	cfg.Platform.NATSPublishRetries = 100 // budget = 100h, would normally fail
 	if err := cfg.validate(); err != nil {
-		t.Errorf("validate() should skip dedup-budget check when DedupWindow=0 (unset); got %v", err)
+		t.Errorf("validate() should skip dedup-budget check when DedupWindow=0 (explicit opt-out); got %v", err)
 	}
 }
 
