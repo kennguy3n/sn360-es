@@ -6,6 +6,8 @@ import (
 	"math"
 	"strings"
 	"time"
+
+	"github.com/kennguy3n/sn360-es/internal/service/bridge"
 )
 
 // validate enforces minimal correctness invariants.
@@ -140,16 +142,20 @@ func (c Config) validate() error {
 		// dev/staging are still a misleading SOC-correctness regression,
 		// and the same .env file usually drives every tier.
 		if c.Platform.NATSDedupWindow > 0 {
+			// Mirror bridge.Config.withDefaults() exactly by
+			// pulling the runtime defaults from the bridge package's
+			// exported constants. This eliminates the silent-desync
+			// risk that would otherwise exist if the validator's
+			// floor and the runtime's floor were two unconnected
+			// magic numbers — if either default ever changes, both
+			// sites move together.
 			retries := c.Platform.NATSPublishRetries
 			if retries <= 0 {
-				// Mirror bridge.Config.withDefaults() floor — keep
-				// the validate math identical to the runtime math
-				// even when the operator leaves the knob unset.
-				retries = 3
+				retries = bridge.DefaultPublishRetries
 			}
 			timeout := c.Platform.NATSPublishTimeout
 			if timeout <= 0 {
-				timeout = 3 * time.Second
+				timeout = bridge.DefaultPublishTimeout
 			}
 			budget := timeout * time.Duration(retries)
 			if budget > c.Platform.NATSDedupWindow {
