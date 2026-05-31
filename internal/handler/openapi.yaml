@@ -113,6 +113,81 @@ paths:
           content:
             application/yaml: {}
 
+  /.well-known/jwks.json:
+    get:
+      tags: [system]
+      summary: JSON Web Key Set (RFC 7517)
+      description: |
+        Publishes the ECDSA P-256 public key that verifies ES256 JWTs
+        issued by this deployment. The endpoint is unauthenticated and
+        not rate-limited by design — JWKS consumers need to reach it
+        before they hold a token, and a verifier recovering from a key
+        rotation must be able to refresh without competing for the
+        per-IP API rate-limit bucket.
+
+        For an HS256-only deployment (no `JWT_PRIVATE_KEY_PATH` /
+        `JWT_PUBLIC_KEY_PATH` configured) the endpoint still returns
+        200 with an empty key set — `{"keys":[]}` is the documented
+        RFC 7517 signal that no asymmetric verification material is
+        currently available; verifiers fall back to whatever HS256
+        secret they were provisioned with out-of-band.
+      responses:
+        "200":
+          description: JWKS document
+          headers:
+            Cache-Control:
+              description: |
+                Five-minute public cache. JWKS values are stable across
+                a deployment lifecycle; clients (and CDNs) may cache.
+              schema:
+                type: string
+                example: "public, max-age=300"
+          content:
+            application/jwk-set+json:
+              schema:
+                type: object
+                required: [keys]
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      required: [kty, crv, x, y]
+                      properties:
+                        kty:
+                          type: string
+                          enum: [EC]
+                        crv:
+                          type: string
+                          enum: [P-256]
+                        x:
+                          type: string
+                          description: base64url-encoded 32-byte X coordinate
+                        y:
+                          type: string
+                          description: base64url-encoded 32-byte Y coordinate
+                        kid:
+                          type: string
+                          description: Key ID; defaults to the RFC 7638 thumbprint when unset.
+                        use:
+                          type: string
+                          enum: [sig]
+                        alg:
+                          type: string
+                          enum: [ES256]
+        "405":
+          description: Method not allowed (only GET and HEAD are supported)
+    head:
+      tags: [system]
+      summary: JWKS document headers (no body)
+      description: |
+        Mirrors `GET` but returns no body — used by HTTP probes that
+        need the `Cache-Control` and `Content-Type` headers without
+        downloading the key material.
+      responses:
+        "200":
+          description: JWKS document headers only
+
   /v1/banner/action:
     post:
       tags: [banner]

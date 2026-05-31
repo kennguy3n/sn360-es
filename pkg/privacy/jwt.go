@@ -1,6 +1,9 @@
 package privacy
 
 import (
+	"crypto/ecdsa"
+	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"time"
@@ -8,21 +11,115 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// SigningAlg names the JWT signature algorithm a token-issuing
+// JWTIssuer should use.
+//
+// HS256 — HMAC-SHA-256, the original (and still-supported) banner
+// token signing scheme. Symmetric, no JWKS publishing. Suitable for
+// in-cluster issue/verify only; consumers that need to verify a
+// token without holding the shared secret cannot use HS256.
+//
+// ES256 — ECDSA P-256 with SHA-256 (RFC 7518 §3.4). Asymmetric; the
+// public half is published over GET /.well-known/jwks.json so
+// out-of-cluster verifiers (downstream platforms, partner products,
+// the future eventbus signature consumer) can verify tokens without
+// shared-secret rotation. ES256 is the target steady-state algorithm;
+// HS256 remains as a migration bridge so tokens issued under the old
+// scheme keep verifying for the remainder of their TTL.
+type SigningAlg string
+
+const (
+	SigningAlgHS256 SigningAlg = "HS256"
+	SigningAlgES256 SigningAlg = "ES256"
+)
+
+// String exposes the canonical (uppercase) algorithm name. Useful in
+// log lines and headers without exposing the underlying type.
+func (a SigningAlg) String() string { return string(a) }
+
 // JWTIssuer signs and verifies action tokens used by the banner UX
-// (Report Phishing / Mark Safe / Trust Sender) and the URL interstitial.
-// Tokens are deliberately small (HS256, no PII) — see
-// ARCHITECTURE.md Section 8.6.
+// (Report Phishing / Mark Safe / Trust Sender) and the URL
+// interstitial, plus the principal-bearing platform session tokens
+// consumed by middleware.JWTAuth on /v1/* routes.
+//
+// The issuer supports two algorithms (see SigningAlg). The `signingAlg`
+// field selects which one Issue() uses. Verify() is intentionally more
+// permissive: it accepts ANY algorithm whose key material has been
+// configured on this issuer. This dual-verify behaviour is what lets a
+// deployment cut over from HS256 to ES256 without a flag-day: an
+// operator can deploy ES256 issuance while still verifying the trailing
+// tail of in-flight HS256 tokens, then deconfigure the HS256 secret
+// after one TTL window.
+//
+// Production deployments stamp a non-empty keyID on the issuer when
+// signing ES256 — the kid is propagated as a JWS header and lets a
+// JWKS-pinning consumer match the verification key without trial.
 type JWTIssuer struct {
+	signingAlg SigningAlg
+	issuer     string
+	ttl        time.Duration
+
+	// HS256 verifier (and issuer when signingAlg == HS256).
 	secret []byte
-	issuer string
-	ttl    time.Duration
+
+	// ES256 issuer (when signingAlg == ES256) and verifier (always,
+	// when the public key is configured).
+	privateKey *ecdsa.PrivateKey
+	publicKey  *ecdsa.PublicKey
+	keyID      string
+
+	// publicJWKS is the cached JWKS document produced from publicKey
+	// at construction time. PublicJWKS() returns this verbatim — the
+	// issuer is immutable after NewJWTIssuer, so re-encoding the same
+	// public point on every /.well-known/jwks.json hit would be pure
+	// waste (especially when an aggressive verifier ignores the
+	// Cache-Control header). On an HS256-only issuer this is the
+	// empty JWKS, which is the documented signal of "no asymmetric
+	// key material configured" (RFC 7517 §5).
+	publicJWKS JWKS
 }
 
 // JWTConfig holds the inputs for NewJWTIssuer.
+//
+// Algorithm selection:
+//
+//   - SigningAlg empty or SigningAlgHS256: issue HS256, require Secret
+//     to be set and ≥ 32 bytes.
+//   - SigningAlgES256: issue ES256, require both PrivateKey and
+//     PublicKey to be set (PublicKey is needed because Verify
+//     re-derives the verification material from the configured public
+//     half — we never trust the embedded key inside the private key
+//     struct as the verification key, so operators that rotate the
+//     public half independently still get the expected behaviour).
+//
+// Verifier configuration is orthogonal to issuer configuration: an
+// HS256-issuing process MAY still set PublicKey to dual-verify ES256
+// tokens issued by a sibling process, and vice-versa. Both keys may
+// be configured simultaneously during migration.
 type JWTConfig struct {
+	// SigningAlg selects which algorithm Issue() uses. Empty
+	// defaults to SigningAlgHS256 for backward compatibility —
+	// every existing caller continues to issue HS256 tokens
+	// without code change.
+	SigningAlg SigningAlg
 	// Secret is the HMAC secret. Must be at least 32 bytes (the issuer
 	// rejects shorter secrets to keep cryptographic strength sane).
 	Secret []byte
+	// PrivateKey signs ES256 tokens at Issue() time. Required when
+	// SigningAlg == SigningAlgES256. May be nil otherwise.
+	PrivateKey *ecdsa.PrivateKey
+	// PublicKey verifies ES256 tokens at Verify() time. Required
+	// when SigningAlg == SigningAlgES256 OR when this issuer is
+	// expected to dual-verify ES256 tokens issued elsewhere.
+	PublicKey *ecdsa.PublicKey
+	// KeyID is stamped as the JWS `kid` header on ES256 tokens and
+	// surfaces as the JWK `kid` member on the JWKS endpoint. Empty
+	// is permitted (the JWS header simply omits `kid`) but every
+	// production deployment should set a stable identifier so
+	// JWKS-pinning consumers can survive key rotation. Recommended
+	// default: the RFC 7638 thumbprint of the public key, computed
+	// by JWKFromECDSAPublicKey when KeyID is empty.
+	KeyID string
 	// Issuer is the `iss` claim emitted on every token.
 	Issuer string
 	// TTL is the default token lifetime. Per-call options can override.
@@ -114,11 +211,81 @@ type ActionClaims struct {
 	jwt.RegisteredClaims
 }
 
-// NewJWTIssuer constructs an issuer. Secrets shorter than 32 bytes are
-// rejected.
+// NewJWTIssuer constructs an issuer.
+//
+// Algorithm-specific requirements:
+//
+//   - HS256 (default): Secret must be at least 32 bytes. Public/private
+//     key fields are ignored unless the caller also wants to dual-
+//     verify ES256 tokens issued elsewhere.
+//   - ES256: PrivateKey and PublicKey must both be non-nil and use the
+//     P-256 curve. Secret is permitted to be set in parallel so the
+//     issuer can verify HS256 tokens still in flight during migration —
+//     when set, it MUST still satisfy the >=32-byte minimum because
+//     validMethods() will enable HS256 verification for any non-nil
+//     secret regardless of which algorithm is selected for issuance.
 func NewJWTIssuer(cfg JWTConfig) (*JWTIssuer, error) {
-	if len(cfg.Secret) < 32 {
+	alg := cfg.SigningAlg
+	if alg == "" {
+		alg = SigningAlgHS256
+	}
+
+	// HS256 secret length is validated whenever a secret is supplied,
+	// regardless of which algorithm is selected for issuance. The
+	// dual-verify path (ES256 issuer + legacy HS256 verify) would
+	// otherwise let an operator weaken the HMAC verification by
+	// configuring a short BANNER_TOKEN_SECRET — the issuer is still
+	// signing with ES256, but Verify() would accept forged HS256
+	// tokens minted against the weak shared secret.
+	if len(cfg.Secret) > 0 && len(cfg.Secret) < 32 {
 		return nil, fmt.Errorf("%w: JWT secret must be >= 32 bytes (got %d)", ErrInvalidKey, len(cfg.Secret))
+	}
+
+	switch alg {
+	case SigningAlgHS256:
+		// HS256 is the issuing algorithm — secret is REQUIRED (the
+		// length guard above already covered the short-secret case
+		// but only fires when a secret is supplied; an empty secret
+		// must also fail closed for HS256 mode).
+		if len(cfg.Secret) == 0 {
+			return nil, fmt.Errorf("%w: HS256 requires a non-empty secret", ErrInvalidKey)
+		}
+	case SigningAlgES256:
+		if cfg.PrivateKey == nil {
+			return nil, errors.New("privacy/jwt: ES256 requires a non-nil ECDSA P-256 private key")
+		}
+		if cfg.PublicKey == nil {
+			return nil, errors.New("privacy/jwt: ES256 requires a non-nil ECDSA P-256 public key")
+		}
+		if cfg.PrivateKey.Curve == nil || cfg.PrivateKey.Curve.Params().Name != "P-256" {
+			return nil, fmt.Errorf("privacy/jwt: ES256 private key curve is %q, want P-256", curveName(&cfg.PrivateKey.PublicKey))
+		}
+		if cfg.PublicKey.Curve == nil || cfg.PublicKey.Curve.Params().Name != "P-256" {
+			return nil, fmt.Errorf("privacy/jwt: ES256 public key curve is %q, want P-256", curveName(cfg.PublicKey))
+		}
+	default:
+		return nil, fmt.Errorf("privacy/jwt: unsupported signing algorithm %q (want %s or %s)", alg, SigningAlgHS256, SigningAlgES256)
+	}
+	// ES256 keypair consistency check. Validating curve names and
+	// non-nil pointers above doesn't catch the case where the
+	// operator wires a private key from one keypair against a public
+	// key from a different keypair — JWT_PUBLIC_KEY_PATH might point
+	// at an old or wrong file after a key roll. Without this guard
+	// the issuer would happily sign ES256 tokens that its own
+	// Verify() rejects (signature doesn't match the public point)
+	// AND would publish the wrong key on /.well-known/jwks.json,
+	// breaking sibling verifiers too. We catch this at boot by
+	// signing a tiny canonical payload with the private key and
+	// verifying the signature with the public key — a 32-byte
+	// SHA-256 of a fixed string is enough to exercise the curve
+	// math without needing any application data. The cost is one
+	// ECDSA sign + verify per process start, paid in exchange for
+	// fail-fast detection of a class of misconfiguration that would
+	// otherwise cause silent issuance of unverifiable tokens.
+	if alg == SigningAlgES256 {
+		if err := verifyECDSAKeypairMatches(cfg.PrivateKey, cfg.PublicKey); err != nil {
+			return nil, fmt.Errorf("%w: ES256 keypair mismatch: %w", ErrInvalidKey, err)
+		}
 	}
 	if cfg.TTL <= 0 {
 		cfg.TTL = 7 * 24 * time.Hour
@@ -126,7 +293,87 @@ func NewJWTIssuer(cfg JWTConfig) (*JWTIssuer, error) {
 	if cfg.Issuer == "" {
 		cfg.Issuer = "sn360-es"
 	}
-	return &JWTIssuer{secret: cfg.Secret, issuer: cfg.Issuer, ttl: cfg.TTL}, nil
+	iss := &JWTIssuer{
+		signingAlg: alg,
+		secret:     cfg.Secret,
+		privateKey: cfg.PrivateKey,
+		publicKey:  cfg.PublicKey,
+		keyID:      cfg.KeyID,
+		issuer:     cfg.Issuer,
+		ttl:        cfg.TTL,
+	}
+	// Precompute the JWKS document so PublicJWKS() is allocation-free
+	// on the hot path. The empty JWKS for an HS256-only deployment
+	// uses an explicit non-nil zero-length slice so the JSON encoder
+	// emits {"keys":[]} rather than {"keys":null} — that's the RFC
+	// 7517 §5 well-formed empty-set signal we document at the
+	// handler.
+	if iss.publicKey != nil {
+		jwk, err := JWKFromECDSAPublicKey(iss.publicKey, iss.keyID)
+		if err != nil {
+			return nil, fmt.Errorf("privacy/jwt: build JWK: %w", err)
+		}
+		iss.publicJWKS = JWKS{Keys: []JWK{jwk}}
+	} else {
+		iss.publicJWKS = JWKS{Keys: []JWK{}}
+	}
+	return iss, nil
+}
+
+// verifyECDSAKeypairMatches returns nil iff the public key half is
+// the verification counterpart of the private key — i.e. a signature
+// produced with priv verifies under pub. We use crypto/ecdsa's
+// SignASN1/VerifyASN1 over a fixed 32-byte digest so the check is
+// deterministic except for the signature nonce (which is fine: we
+// only verify the signature, we don't compare bytes). Curve-equality
+// is also checked because VerifyASN1 silently rejects cross-curve
+// material, which would be confusable with a real keypair mismatch.
+func verifyECDSAKeypairMatches(priv *ecdsa.PrivateKey, pub *ecdsa.PublicKey) error {
+	if priv == nil || pub == nil {
+		return errors.New("nil key half")
+	}
+	if priv.Curve != pub.Curve {
+		return errors.New("private/public curves differ")
+	}
+	digest := sha256.Sum256([]byte("sn360-es:jwt-issuer:keypair-consistency-check"))
+	sig, err := ecdsa.SignASN1(rand.Reader, priv, digest[:])
+	if err != nil {
+		return fmt.Errorf("sign probe: %w", err)
+	}
+	if !ecdsa.VerifyASN1(pub, digest[:], sig) {
+		return errors.New("public key does not verify signatures produced by the configured private key")
+	}
+	return nil
+}
+
+// SigningAlg returns the algorithm Issue() stamps onto fresh tokens.
+// Verify() may accept additional algorithms when the corresponding
+// key material is configured — see the JWTIssuer doc-comment.
+func (i *JWTIssuer) SigningAlg() SigningAlg { return i.signingAlg }
+
+// PublicJWKS returns the JWKS document that should be served at
+// /.well-known/jwks.json.
+//
+// The document is computed ONCE at construction time (see
+// NewJWTIssuer) and cached on the issuer struct, so this accessor
+// is allocation-free on the hot path — the JWKS handler can call it
+// per-request without re-encoding the public point. The issuer is
+// immutable after construction, so the cached doc is always current.
+//
+// When the issuer has no ECDSA public key configured (i.e. an
+// HS256-only deployment), an empty JWKS is returned — NOT an error.
+// This keeps the handler trivially correct: an HS256-only cluster
+// can still expose /.well-known/jwks.json and the consumer sees a
+// well-formed but empty key set, which is the documented signal
+// (RFC 7517 §5 implies an empty keys array is valid) that no
+// asymmetric verification material is available.
+//
+// The error return is retained for API stability but is always nil
+// in the current implementation — JWK construction happens at boot
+// where a failure aborts NewJWTIssuer instead of leaking into the
+// hot path.
+func (i *JWTIssuer) PublicJWKS() (JWKS, error) {
+	return i.publicJWKS, nil
 }
 
 // IssueOptions customises a single Issue call.
@@ -194,29 +441,86 @@ func (i *JWTIssuer) Issue(tenantID, pseudoMessageID string, opts IssueOptions) (
 			IssuedAt:  jwt.NewNumericDate(now),
 		},
 	}
-	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := tok.SignedString(i.secret)
+	var (
+		tok *jwt.Token
+		key any
+	)
+	switch i.signingAlg {
+	case SigningAlgES256:
+		tok = jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+		if i.keyID != "" {
+			// Stamp `kid` on the JWS header so a JWKS-pinning
+			// verifier can pick the right key out of a
+			// multi-entry JWKS without trial-verifying every
+			// candidate.
+			tok.Header["kid"] = i.keyID
+		}
+		key = i.privateKey
+	case SigningAlgHS256:
+		tok = jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+		key = i.secret
+	default:
+		// Defensive: NewJWTIssuer would have rejected this
+		// already, but covering the branch keeps an in-process
+		// mutation of i.signingAlg (e.g. fuzz tests, future
+		// hot-reload) from silently signing with an unintended
+		// algorithm.
+		return "", fmt.Errorf("privacy/jwt: signing algorithm %q is not configured for this issuer", i.signingAlg)
+	}
+	signed, err := tok.SignedString(key)
 	if err != nil {
 		return "", fmt.Errorf("privacy/jwt: sign: %w", err)
 	}
 	return signed, nil
 }
 
-// Verify parses and validates a token previously issued by Issue. It
+// Verify parses and validates a token previously issued by Issue (or
+// by a sibling process configured with the same key material). It
 // returns the embedded claims on success.
+//
+// Algorithm acceptance is determined by which key material is
+// configured on this issuer:
+//
+//   - When secret is set, HS256 tokens are accepted.
+//   - When publicKey is set, ES256 tokens are accepted.
+//
+// Both may be set simultaneously, in which case the issuer
+// dual-verifies. The fail-closed default still applies: a token with
+// alg=none, or with an algorithm whose key is not configured, is
+// rejected before any signature check runs (jwt.WithValidMethods is
+// computed from the configured set).
 func (i *JWTIssuer) Verify(token string) (*ActionClaims, error) {
 	if token == "" {
 		return nil, errors.New("privacy/jwt: token is required")
 	}
+	validMethods := i.validMethods()
+	if len(validMethods) == 0 {
+		return nil, errors.New("privacy/jwt: issuer has no verification material configured")
+	}
 	parsed, err := jwt.ParseWithClaims(token, &ActionClaims{},
 		func(t *jwt.Token) (interface{}, error) {
-			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			switch t.Method.(type) {
+			case *jwt.SigningMethodHMAC:
+				// Use the same `len > 0` predicate as
+				// validMethods() so a non-nil zero-length
+				// secret (unreachable today, but cheap to
+				// future-proof) is treated consistently in
+				// both the allow-list and the keyfunc.
+				if len(i.secret) == 0 {
+					return nil, errors.New("privacy/jwt: HS256 token but no HMAC secret configured")
+				}
+				return i.secret, nil
+			case *jwt.SigningMethodECDSA:
+				if i.publicKey == nil {
+					return nil, errors.New("privacy/jwt: ES256 token but no ECDSA public key configured")
+				}
+				return i.publicKey, nil
+			default:
 				return nil, fmt.Errorf("privacy/jwt: unexpected signing method %T", t.Method)
 			}
-			return i.secret, nil
 		},
 		jwt.WithIssuer(i.issuer),
-		jwt.WithValidMethods([]string{"HS256"}),
+		jwt.WithValidMethods(validMethods),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("privacy/jwt: parse: %w", err)
@@ -226,4 +530,28 @@ func (i *JWTIssuer) Verify(token string) (*ActionClaims, error) {
 		return nil, errors.New("privacy/jwt: invalid token")
 	}
 	return claims, nil
+}
+
+// validMethods returns the JWS `alg` values this issuer will accept
+// at verify time. It is the set of algorithms whose key material is
+// configured — NOT the set of algorithms supported by the library.
+// Returning an empty slice trips the explicit guard at the top of
+// Verify().
+//
+// HS256 acceptance uses `len(i.secret) > 0` (not `i.secret != nil`)
+// to mirror the keyfunc in Verify() exactly. NewJWTIssuer never
+// constructs an issuer with a non-nil zero-length secret today, but
+// pinning the same predicate in both spots removes a class of bug
+// where a hypothetical future refactor (e.g. a hot-reload path that
+// clears the secret to []byte{} without nil-ing it) would advertise
+// HS256 in WithValidMethods yet have the keyfunc reject the token.
+func (i *JWTIssuer) validMethods() []string {
+	out := make([]string, 0, 2)
+	if len(i.secret) > 0 {
+		out = append(out, string(SigningAlgHS256))
+	}
+	if i.publicKey != nil {
+		out = append(out, string(SigningAlgES256))
+	}
+	return out
 }

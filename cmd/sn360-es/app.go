@@ -296,23 +296,19 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	}
 
 	// JWT issuer.
-	if cfg.Banner.TokenSecret != "" {
-		ttl := cfg.Banner.TokenTTL
-		if ttl <= 0 {
-			ttl = 30 * 24 * time.Hour
-		}
-		issuer, jerr := privacy.NewJWTIssuer(privacy.JWTConfig{
-			Secret: []byte(cfg.Banner.TokenSecret),
-			Issuer: "sn360-es",
-			TTL:    ttl,
-		})
-		if jerr != nil {
-			logger.Warn("sn360-es: jwt issuer init failed", slog.Any("error", jerr))
-		} else {
-			app.jwtIssuer = issuer
-		}
-	} else {
-		logger.Info("sn360-es: banner token secret not configured; signed-action flows disabled")
+	//
+	// The issuer supports two signing algorithms (see
+	// pkg/privacy/SigningAlg). HS256 is the legacy default and is
+	// driven by BANNER_TOKEN_SECRET — every existing deployment keeps
+	// working unchanged. ES256 is the new asymmetric mode; operators
+	// opt in by setting JWT_SIGNING_ALG=es256 + JWT_PRIVATE_KEY_PATH +
+	// JWT_PUBLIC_KEY_PATH. Both modes may be wired simultaneously
+	// during migration: the issuer accepts HS256 OR ES256 tokens at
+	// verify time whenever the corresponding key material is
+	// configured, so in-flight tokens issued under the old scheme
+	// keep verifying for the remainder of their TTL.
+	if issuer := buildJWTIssuer(cfg, logger); issuer != nil {
+		app.jwtIssuer = issuer
 	}
 
 	// Banner renderer (HTML templates).

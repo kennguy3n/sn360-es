@@ -62,6 +62,7 @@ type Config struct {
 	CB                       CircuitBreaker
 	Privacy                  Privacy
 	Banner                   Banner
+	JWT                      JWT
 	Score                    ScoreThresholds
 	URLRewrite               URLRewrite
 	CORS                     CORS
@@ -110,6 +111,7 @@ func Load() (Config, error) {
 		CB:                       loadCircuitBreaker(),
 		Privacy:                  loadPrivacy(),
 		Banner:                   loadBanner(),
+		JWT:                      loadJWT(),
 		Score:                    loadScoreThresholds(),
 		URLRewrite:               loadURLRewrite(),
 		CORS:                     loadCORS(),

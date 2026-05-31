@@ -137,6 +137,47 @@ func TestDefaultAuthSkipPaths_PushIsBypassed(t *testing.T) {
 	}
 }
 
+// TestDefaultAuthSkipPaths_JWKSIsBypassed pins the invariant that
+// /.well-known/jwks.json bypasses JWT authentication. A JWKS endpoint
+// MUST be reachable before the consumer has a verifiable token —
+// otherwise the consumer has no way to fetch the public key needed
+// to verify the token in the first place (chicken-and-egg). The
+// data served is the public key half by construction; no secrets
+// leak by exposing the endpoint without auth.
+func TestDefaultAuthSkipPaths_JWKSIsBypassed(t *testing.T) {
+	paths := defaultAuthSkipPaths()
+	var has bool
+	for _, p := range paths {
+		if p == "/.well-known/jwks.json" {
+			has = true
+			break
+		}
+	}
+	if !has {
+		t.Fatalf("defaultAuthSkipPaths() must include %q so JWKS discovery is reachable without a token; got %v", "/.well-known/jwks.json", paths)
+	}
+}
+
+// TestDefaultRateLimitSkipPaths_JWKSIsBypassed pins the parallel
+// invariant for the per-IP rate limiter. A consumer that just got
+// a 401 from a stale-key rotation needs to refresh its JWKS to
+// recover; rate-limiting JWKS against the same per-IP bucket as
+// the API proper would gate that recovery path during exactly the
+// burst that triggered the refresh.
+func TestDefaultRateLimitSkipPaths_JWKSIsBypassed(t *testing.T) {
+	paths := defaultRateLimitSkipPaths()
+	var has bool
+	for _, p := range paths {
+		if p == "/.well-known/jwks.json" {
+			has = true
+			break
+		}
+	}
+	if !has {
+		t.Fatalf("defaultRateLimitSkipPaths() must include %q; got %v", "/.well-known/jwks.json", paths)
+	}
+}
+
 func synthPath(i int) string {
 	// Stable but unique per i; no chance any pattern or known-exact
 	// entry happens to match.
