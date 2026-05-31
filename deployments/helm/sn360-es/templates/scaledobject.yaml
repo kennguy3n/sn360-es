@@ -3,25 +3,52 @@
 
   When enabled, KEDA owns the HPA lifecycle for the consumers
   Deployment (KEDA creates and manages a HorizontalPodAutoscaler
-  underneath) and scales by the Prometheus `event_lag_seconds`
-  metric instead of CPU.
+  underneath) and scales by NATS JetStream consumer lag plus a
+  Prometheus-derived consumer-stuck signal — CPU stops being a
+  meaningful proxy for "do we need more consumers" once the
+  bottleneck shifts upstream (Tier-2 SLM RPC, Postgres write
+  amplification under burst).
 
-  Why this matters: a NATS consumer can be CPU-idle while the
-  Tier-2 SLM upstream is slow, which lets backlog (lag) grow
-  unboundedly. CPU-based HPA misses that mode entirely. KEDA on
-  lag closes the gap and gives operators a tunable lag SLO via
-  `lagThresholdSeconds` (the per-replica lag the cluster is
-  willing to tolerate).
+  Two triggers, evaluated independently — KEDA scales to
+  max(replica-count-each-trigger-would-produce):
+
+    1. NATS JetStream consumer lag (primary, roadmap Task 6)
+       Queries the NATS monitoring HTTP endpoint
+       (`/jsz?consumers=true`) for `num_pending` on the
+       `evaluate-svc` consumer of stream `ES_EVALUATE`. The
+       per-replica target is `lagThresholdMessages` (default
+       1000) — at 2 000 pending msgs the scaler asks for 2
+       replicas, at 10 000 it asks for 10, capped at
+       `maxReplicaCount`. `activationLagThreshold` (default
+       100) governs scale-from-zero hysteresis when
+       `minReplicaCount = 0` and otherwise is the floor below
+       which lag is considered "drained" for cooldown purposes.
+       This trigger is the canonical capacity signal: a single
+       in-flight Tier-2 call holding a goroutine doesn't show
+       up on CPU but DOES show up here as N+1 pending msgs.
+
+    2. Prometheus `event_lag_seconds` (secondary, stuck-consumer
+       safety net) Catches the failure mode where lag is small
+       in absolute terms but THE OLDEST queued message is
+       stale — e.g. the durable consumer is
+       partially-deadlocked behind a slow Tier-2 call and only
+       a handful of msgs are queued but each has been waiting
+       >>lagThresholdSeconds. Without this trigger a small
+       absolute backlog of long-stuck messages wouldn't scale
+       up.
 
   Requirements:
     - KEDA operator installed (kedacore/keda chart, namespace `keda`).
-    - Prometheus reachable at `prometheusServerAddress`.
+    - NATS monitoring endpoint reachable from the KEDA pod at
+      `natsMonitoringAddress` (the nats helm chart exposes
+      :8222 on the `<release>-nats` service by default; the
+      JetStream-only nats chart values opens this automatically).
+    - Prometheus reachable at `prometheusServerAddress` (for the
+      secondary trigger; remove this trigger if you don't run
+      Prometheus).
     - The `event_lag_seconds{component="consumer"}` metric
-      exported by the binary. The metric is registered in
-      internal/telemetry and incremented by the consumer loop's
-      lag-reporting tick; it is present on the monolith today
-      and continues to work on the role-split topology because
-      the consumers role still imports the telemetry package.
+      exported by the binary (registered in pkg/telemetry,
+      gauged from the consumer loop's lag-reporting tick).
 
   Mutual exclusivity with the per-role HPA: when keda.enabled is
   true, the per-role HPA template (`hpa-role.yaml`) skips emission
@@ -37,10 +64,25 @@
   $skipForKeda := and $kedaOn (eq $role "consumers") for the
   per-role gate.
 */}}
+{{- if and .Values.keda.enabled (not .Values.roleSplit.enabled) }}
+{{- fail "keda.enabled=true requires roleSplit.enabled=true — KEDA scales the dedicated `consumers` Deployment, which only exists in the role-split topology. Either flip roleSplit.enabled=true (see deployment-role.yaml) or set keda.enabled=false." }}
+{{- end }}
 {{- if and .Values.roleSplit.enabled .Values.keda.enabled }}
 {{- if hasKey .Values.roleSplit.roles "consumers" }}
 {{- $ctx := . }}
 {{- $cfg := .Values.keda.consumers }}
+{{- $nats := $cfg.nats }}
+{{- if not $nats.monitoringAddress }}
+{{- fail "keda.consumers.nats.monitoringAddress is required when keda.enabled=true — set it to the NATS monitoring endpoint (e.g. http://<release>-nats:8222)" }}
+{{- end }}
+{{- /*
+  monitoringAddress supports Helm templating (e.g. the default
+  `http://{{ .Release.Name }}-nats:8222`) so we pipe it through
+  `tpl` against the chart context — same pattern as
+  `pgbouncer.upstream.host` and the top-level
+  `config.natsURL`.
+*/}}
+{{- $natsMonitoringAddr := tpl $nats.monitoringAddress $ctx }}
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
@@ -57,6 +99,29 @@ spec:
   minReplicaCount: {{ $cfg.minReplicaCount }}
   maxReplicaCount: {{ $cfg.maxReplicaCount }}
   triggers:
+    {{- /*
+      Primary: NATS JetStream consumer lag (roadmap Task 6 spec).
+      Threshold is the per-replica target — KEDA computes
+      desired_replicas = ceil(num_pending / lagThreshold).
+    */}}
+    - type: nats-jetstream
+      metadata:
+        natsServerMonitoringEndpoint: {{ $natsMonitoringAddr | quote }}
+        account: {{ $nats.account | default "$G" | quote }}
+        stream: {{ $nats.stream | quote }}
+        consumer: {{ $nats.consumer | quote }}
+        lagThreshold: {{ $nats.lagThresholdMessages | quote }}
+        activationLagThreshold: {{ $nats.activationLagThresholdMessages | quote }}
+        {{- if $nats.useHTTPS }}
+        useHttps: {{ $nats.useHTTPS | quote }}
+        {{- end }}
+    {{- if $cfg.prometheusEnabled }}
+    {{- /*
+      Secondary: Prometheus `event_lag_seconds` stuck-consumer
+      safety net. Disable by setting
+      `keda.consumers.prometheusEnabled: false` if you don't run
+      Prometheus or want strict NATS-lag-only scaling.
+    */}}
     - type: prometheus
       metadata:
         serverAddress: {{ $cfg.prometheusServerAddress | quote }}
@@ -64,5 +129,6 @@ spec:
         threshold: {{ $cfg.lagThresholdSeconds | quote }}
         query: |-
           {{- $cfg.query | nindent 10 }}
+    {{- end }}
 {{- end }}
 {{- end }}
