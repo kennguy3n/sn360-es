@@ -410,21 +410,39 @@ func TestBuildMux_VendorRoute_GETApproveIs404(t *testing.T) {
 		{"viewer GET approve 404", http.MethodGet, "/v1/vendors/foo.test/approve", privacy.RoleViewer, http.StatusNotFound},
 		{"viewer GET revoke 404", http.MethodGet, "/v1/vendors/foo.test/revoke", privacy.RoleViewer, http.StatusNotFound},
 		{"admin GET approve 404", http.MethodGet, "/v1/vendors/foo.test/approve", privacy.RoleAdmin, http.StatusNotFound},
-		// POST is not in the RBAC method table for /v1/vendors/ —
-		// see routes.go where only GET/PUT/DELETE are listed —
-		// so the gate returns 403 (method_not_in_role_table)
-		// before the dispatch ever runs. This is decisively NOT
-		// a regression: the RBAC fix from PR #51 / Session 8 is
-		// what enforces "method must be in the table or fail
-		// closed". Asserted here so a future "let's allow POST
-		// too" change has to update both the table AND this
-		// expectation, surfacing the security choice.
-		{"admin POST approve 403 from method-table", http.MethodPost, "/v1/vendors/foo.test/approve", privacy.RoleAdmin, http.StatusForbidden},
+		// POST is now in the RBAC method table at readRoles —
+		// see routes.go finding ANALYSIS_..._0001 (round 3)
+		// closure — so admin POST passes the gate and falls to
+		// the dispatcher's default arm, which returns the honest
+		// 404. The previous expectation (403
+		// `method_not_in_role_table`) was the misleading UX the
+		// round-3 finding flagged: "your role is too low" when
+		// the real answer is "this verb isn't served here". The
+		// flip from 403 to 404 IS the fix.
+		{"admin POST approve 404 honest not 403", http.MethodPost, "/v1/vendors/foo.test/approve", privacy.RoleAdmin, http.StatusNotFound},
+		{"admin PATCH approve 404 honest not 403", http.MethodPatch, "/v1/vendors/foo.test/approve", privacy.RoleAdmin, http.StatusNotFound},
+		// DELETE /v1/vendors/foo.test/approve must 404 — the
+		// pre-fix behaviour silently deleted vendor "foo.test"
+		// because the extractor takes the third path segment as
+		// the domain (see internal/handler/vendor.go
+		// extractVendorDomainForDelete). Round-3 finding
+		// ANALYSIS_..._0004 surfaced the asymmetry; we resolve
+		// by gating DELETE on the absence of /approve and
+		// /revoke suffixes. Pin both /approve and /revoke
+		// because each is a separate suffix check.
+		{"admin DELETE on /approve must 404 not delete vendor", http.MethodDelete, "/v1/vendors/foo.test/approve", privacy.RoleAdmin, http.StatusNotFound},
+		{"admin DELETE on /revoke must 404 not delete vendor", http.MethodDelete, "/v1/vendors/foo.test/revoke", privacy.RoleAdmin, http.StatusNotFound},
 		// Positive case: PUT /approve as admin reaches the handler.
 		// ServeApprove will 400 on the empty body (no tenant_id /
 		// no payload), which proves the dispatch let the request
 		// through to handler logic — distinct from the 404 above.
 		{"admin PUT approve reaches handler", http.MethodPut, "/v1/vendors/foo.test/approve", privacy.RoleAdmin, http.StatusBadRequest},
+		// Positive DELETE case: bare /v1/vendors/{domain} still
+		// reaches the handler. tenant_id is absent so the handler
+		// 400s — that's a handler-layer assertion, but it
+		// distinguishes "reached the handler" from "404 from
+		// dispatch default" and so pins the legitimate path.
+		{"admin DELETE bare domain reaches handler", http.MethodDelete, "/v1/vendors/foo.test", privacy.RoleAdmin, http.StatusBadRequest},
 		// Unmatched vendor sub-route stays 404 for everyone — the
 		// default arm. Belt-and-braces in case a future refactor
 		// drops the default case.

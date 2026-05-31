@@ -155,6 +155,27 @@ func TestRequireRole_PanicsOnEmptyAllowListAtWrapTime(t *testing.T) {
 			},
 		},
 	}
+	// RequireRoleByMethod with an empty map is the third leg of the
+	// same wiring-bug surface. It's a distinct code path (the
+	// per-method loop never runs, so no per-slice panic would fire),
+	// so it gets its own assertion. PR #51 Devin Review round-3
+	// finding ANALYSIS_..._0003 (ID 3330020038) flagged this.
+	t.Run("RequireRoleByMethod empty map", func(t *testing.T) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("expected panic on empty byMethod map")
+			}
+			msg, ok := r.(string)
+			if !ok {
+				t.Fatalf("panic value should be a string: %T %v", r, r)
+			}
+			if !strings.Contains(msg, "empty byMethod map") {
+				t.Fatalf("panic message must mention 'empty byMethod map': %q", msg)
+			}
+		}()
+		_ = RequireRoleByMethod(map[string][]string{})
+	})
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			defer func() {

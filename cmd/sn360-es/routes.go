@@ -224,36 +224,65 @@ func buildMux(app *application) (http.Handler, error) {
 		mux.Handle("/v1/vendors/", middleware.RequireRoleByMethod(map[string][]string{
 			http.MethodDelete: adminOnlyRoles,
 			http.MethodPut:    writeRoles,
-			// GET is intentionally listed even though no GET
-			// sub-route is wired today. Without it the RBAC
-			// gate would intercept GET /v1/vendors/<domain>
-			// with 403 method_not_in_role_table, which would
-			// misleadingly suggest the caller's role is too
-			// low. Listing GET → readRoles lets the request
+			// GET, POST, and PATCH are all intentionally listed
+			// at readRoles even though no GET / POST / PATCH
+			// sub-route is wired today. Without these entries
+			// the RBAC gate would intercept e.g. `GET
+			// /v1/vendors/<domain>` with 403
+			// `method_not_in_role_table`, which misleadingly
+			// suggests the caller's role is too low. Listing
+			// them at the loosest allow-list lets the request
 			// reach the handler's default switch arm below,
-			// which returns the honest 404 ("no GET handler
-			// for individual vendor detail today"). Same
-			// reasoning for POST/PATCH: keep the gate's idea
-			// of "valid method" aligned with what the route
-			// actually supports.
-			http.MethodGet: readRoles,
+			// which returns the honest 404 ("no handler for
+			// this verb on individual vendor detail today") —
+			// same response any other unknown vendor sub-route
+			// returns. The RBAC table thus stays aligned with
+			// "what the route table actually serves" rather
+			// than "what the dispatcher happens to handle
+			// today", which is the consistent UX choice.
+			http.MethodGet:   readRoles,
+			http.MethodPost:  readRoles,
+			http.MethodPatch: readRoles,
 		})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Dispatch is gated on BOTH method AND path suffix.
-			// An earlier version only matched on the path suffix,
-			// which meant e.g. `GET /v1/vendors/foo/approve` —
-			// a viewer-readable method per the RBAC table above —
-			// would reach ServeApprove and bounce back with 405
-			// from the handler's own method check. That 405 leaks
-			// the existence of the /approve sub-path to readers
-			// (admin / operator / viewer) who have no business
-			// learning about admin-only mutation surfaces. With
-			// the method co-matched here, anything that isn't
-			// PUT-on-/approve, PUT-on-/revoke, or DELETE-on-the-
-			// path falls through to the honest 404 below — same
-			// response as any other unknown vendor sub-route, no
-			// leak of path shape.
+			// An earlier version only matched on the path suffix
+			// for PUT — and matched on no path shape at all for
+			// DELETE — which caused two distinct leaks:
+			//
+			// 1. `GET /v1/vendors/foo/approve` reached
+			//    ServeApprove and bounced back with 405 from
+			//    the handler's own method check. That 405 leaked
+			//    the existence of the /approve sub-path to
+			//    readers (admin / operator / viewer) who have
+			//    no business learning about admin-only mutation
+			//    surfaces. Co-matching method+suffix on PUT
+			//    closes this.
+			//
+			// 2. `DELETE /v1/vendors/foo/approve` reached
+			//    ServeDelete unconditionally because the
+			//    method-only arm absorbed any DELETE. The
+			//    handler then extracted the third path segment
+			//    ("foo") as the domain and — surprise —
+			//    proceeded to delete vendor `foo`. An admin
+			//    fat-fingering `curl -X DELETE
+			//    .../approve` would silently destroy the
+			//    vendor record rather than receive a 404.
+			//    Gating DELETE on the absence of /approve and
+			//    /revoke suffixes (i.e. "only the bare
+			//    /v1/vendors/{domain} path") closes the
+			//    surprise-delete vector — the legitimate
+			//    DELETE /v1/vendors/foo still reaches the
+			//    handler, while anything with an extra suffix
+			//    falls to the honest 404 below.
+			//
+			// All non-matching arms drop to the default 404,
+			// which is the same response any unknown vendor
+			// sub-route returns — no path shape is leaked
+			// through verb axis OR method axis.
+			hasMutationSuffix := strings.HasSuffix(r.URL.Path, "/approve") ||
+				strings.HasSuffix(r.URL.Path, "/revoke")
 			switch {
-			case r.Method == http.MethodDelete:
+			case r.Method == http.MethodDelete && !hasMutationSuffix:
 				vendorH.ServeDelete(w, r)
 			case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/approve"):
 				vendorH.ServeApprove(w, r)

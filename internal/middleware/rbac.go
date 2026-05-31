@@ -100,6 +100,14 @@ func RequireRoleWith(cfg RequireRoleConfig, allowedRoles ...string) func(http.Ha
 // the gate). Per-method values are validated against
 // privacy.IsValidRole at wrap time; any unknown role panics.
 //
+// Empty inputs panic at wrap time on the same boot-loud principle
+// as RequireRole: an empty byMethod map would silently 403
+// every request on every method (no entry can match), and an empty
+// per-method slice would silently 403 every request on that
+// method. Both are wiring bugs masquerading as fail-closed
+// behaviour, and both surface as 403_method_not_in_role_table or
+// 403_forbidden_role storms only after deploy.
+//
 // Used for ServeMux routes that fan out multiple HTTP verbs onto the
 // same path (e.g. `/v1/vendors` GET vs POST), where the underlying
 // handler dispatches on r.Method internally. The cleaner pattern in
@@ -114,6 +122,11 @@ func RequireRoleByMethod(byMethod map[string][]string) func(http.Handler) http.H
 
 // RequireRoleByMethodWith is RequireRoleByMethod plus a config block.
 func RequireRoleByMethodWith(cfg RequireRoleConfig, byMethod map[string][]string) func(http.Handler) http.Handler {
+	if len(byMethod) == 0 {
+		panic("middleware: RequireRoleByMethod received empty byMethod map; " +
+			"this is a wiring bug — no method would ever pass the gate, " +
+			"and silently 403ing every request would only surface in production")
+	}
 	allowed := make(map[string]map[string]struct{}, len(byMethod))
 	for method, roles := range byMethod {
 		allowed[method] = buildRoleSet(roles)
