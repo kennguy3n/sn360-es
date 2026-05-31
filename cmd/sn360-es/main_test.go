@@ -441,6 +441,27 @@ func TestBuildMux_VendorRoute_GETApproveIs404(t *testing.T) {
 		// wrong vendor. Pinned with three representative
 		// suffixes so a future refactor that loosens
 		// isBareVendorDetailPath breaks loudly here.
+		// HEAD must behave like GET per RFC 9110 §9.3.2.
+		// Round-5 finding ANALYSIS_..._0001 flagged that HEAD
+		// was returning 403 method_not_in_role_table while GET
+		// returned 404 — directly observable spec violation
+		// from any reader-allowed principal. After fix:
+		//   - HEAD on the bare list endpoint without
+		//     tenant_id reaches ServeList and returns 400
+		//     ("tenant_id required") — same as GET. That
+		//     400 (not 403, not 405, not 404) proves the
+		//     handler ran for HEAD too.
+		//   - HEAD on individual detail returns 404, same
+		//     as GET — the dispatcher's default arm.
+		//   - HEAD on /approve returns 404, same as GET — no
+		//     leak of the admin-mutation sub-path.
+		// Test the negative-direction reasons (400/404), not
+		// the 200 happy path, because the test wrapper doesn't
+		// thread a real repo through; the 400 distinguishes
+		// "reached handler" from any RBAC / dispatch failure.
+		{"viewer HEAD on /v1/vendors list reaches ServeList (400 no tenant_id)", http.MethodHead, "/v1/vendors", privacy.RoleViewer, http.StatusBadRequest},
+		{"viewer HEAD on /v1/vendors/foo 404 like GET", http.MethodHead, "/v1/vendors/foo.test", privacy.RoleViewer, http.StatusNotFound},
+		{"viewer HEAD on /v1/vendors/foo/approve 404 like GET", http.MethodHead, "/v1/vendors/foo.test/approve", privacy.RoleViewer, http.StatusNotFound},
 		{"admin DELETE on /wat must 404 (unknown suffix)", http.MethodDelete, "/v1/vendors/foo.test/wat", privacy.RoleAdmin, http.StatusNotFound},
 		{"admin DELETE on /audit must 404 (unknown suffix)", http.MethodDelete, "/v1/vendors/foo.test/audit", privacy.RoleAdmin, http.StatusNotFound},
 		{"admin DELETE on trailing slash must 404", http.MethodDelete, "/v1/vendors/foo.test/", privacy.RoleAdmin, http.StatusNotFound},

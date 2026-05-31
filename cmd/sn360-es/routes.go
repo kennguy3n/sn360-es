@@ -211,9 +211,18 @@ func buildMux(app *application) (http.Handler, error) {
 		mux.Handle("/v1/vendors", middleware.RequireRoleByMethod(map[string][]string{
 			http.MethodGet:  readRoles,
 			http.MethodPost: writeRoles,
+			// HEAD is the standard "GET headers only" verb. RFC
+			// 9110 §9.3.2 requires HEAD to behave identically to
+			// GET except for the response body, so it must be
+			// gated at the read allow-list (same as GET) and
+			// dispatched to the GET handler below. Go's
+			// net/http response writer suppresses the body for
+			// HEAD at the transport layer, so ServeList can
+			// remain method-agnostic.
+			http.MethodHead: readRoles,
 		})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.Method {
-			case http.MethodGet:
+			case http.MethodGet, http.MethodHead:
 				vendorH.ServeList(w, r)
 			case http.MethodPost:
 				vendorH.ServeCreate(w, r)
@@ -224,12 +233,12 @@ func buildMux(app *application) (http.Handler, error) {
 		mux.Handle("/v1/vendors/", middleware.RequireRoleByMethod(map[string][]string{
 			http.MethodDelete: adminOnlyRoles,
 			http.MethodPut:    writeRoles,
-			// GET, POST, and PATCH are all intentionally listed
-			// at readRoles even though no GET / POST / PATCH
-			// sub-route is wired today. Without these entries
-			// the RBAC gate would intercept e.g. `GET
-			// /v1/vendors/<domain>` with 403
-			// `method_not_in_role_table`, which misleadingly
+			// GET, HEAD, POST, and PATCH are all intentionally
+			// listed at readRoles even though no handler is
+			// wired for them on individual vendor detail today.
+			// Without these entries the RBAC gate would
+			// intercept e.g. `GET /v1/vendors/<domain>` with
+			// 403 `method_not_in_role_table`, which misleadingly
 			// suggests the caller's role is too low. Listing
 			// them at the loosest allow-list lets the request
 			// reach the handler's default switch arm below,
@@ -240,7 +249,17 @@ func buildMux(app *application) (http.Handler, error) {
 			// "what the route table actually serves" rather
 			// than "what the dispatcher happens to handle
 			// today", which is the consistent UX choice.
+			//
+			// HEAD specifically must mirror GET per RFC 9110
+			// §9.3.2; without it, `HEAD /v1/vendors/foo` would
+			// return 403 method_not_in_role_table while `GET
+			// /v1/vendors/foo` returns 404 — a directly
+			// observable spec violation. Both must produce the
+			// same response shape from a reader-allowed
+			// principal. PR #51 Devin Review round-5 finding
+			// ANALYSIS_..._0001 (ID 3330041707) caught this.
 			http.MethodGet:   readRoles,
+			http.MethodHead:  readRoles,
 			http.MethodPost:  readRoles,
 			http.MethodPatch: readRoles,
 		})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -35,8 +35,17 @@ type vendorApproveRequest struct {
 }
 
 // ServeList handles GET /v1/vendors?tenant_id={id}
+//
+// Also accepts HEAD per RFC 9110 §9.3.2 — HEAD must behave
+// identically to GET except for the response body. Go's
+// net/http server suppresses the body on HEAD at the
+// transport layer, so the rest of the handler stays
+// method-agnostic. The routes.go dispatcher only routes
+// GET and HEAD here, so this method check is belt-and-
+// braces against a future caller that wires a different
+// verb into ServeList directly.
 func (h *VendorHandler) ServeList(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
