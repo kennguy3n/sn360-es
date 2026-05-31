@@ -27,6 +27,13 @@ type DirectorySyncJobConfig struct {
 	Logger          *slog.Logger
 	SyncCheckpoints repository.SyncCheckpointRepository
 	OrgGraphs       repository.OrgGraphRepository
+	// Binder pins a Postgres conn to cross-tenant scope so the
+	// fan-out queries below — each gated by an explicit
+	// `WHERE tenant_id = $1` predicate — are not silently
+	// zero-filtered by the RLS policy installed in
+	// `migrations/0018_row_level_security.up.sql`. Nil is a valid
+	// no-op for in-memory tests.
+	Binder TenantBinder
 }
 
 // DirectorySyncJob implements the Job interface for periodic
@@ -79,6 +86,18 @@ func (j *DirectorySyncJob) Interval() time.Duration { return j.interval }
 // starts).
 func (j *DirectorySyncJob) Run(ctx context.Context) error {
 	var lastErr error
+
+	// tenant-lint:cross-tenant — directory-sync worker walks every
+	// tenant; per-tenant filtering is enforced in the SQL predicate.
+	if j.cfg.Binder != nil {
+		boundCtx, release, berr := j.cfg.Binder.WithCrossTenant(ctx)
+		if berr != nil {
+			return fmt.Errorf("directory sync: cross-tenant scope: %w", berr)
+		}
+		defer func() { _ = release() }()
+		ctx = boundCtx
+	}
+
 	iterErr := j.cfg.Tenants.IterateActive(ctx, 0, func(batch []repository.Tenant) error {
 		for _, t := range batch {
 			if err := ctx.Err(); err != nil {

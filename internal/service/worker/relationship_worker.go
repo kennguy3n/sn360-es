@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -69,6 +70,17 @@ type RelationshipJobConfig struct {
 	// send-hour distributions from CommunicationHistory rows and
 	// upserts them during each aggregation cycle.
 	Baselines repository.UserBehavioralBaselineRepository
+	// Binder pins a Postgres conn to each tenant for the per-tenant
+	// half of the cycle and to cross-tenant scope for the
+	// IterateActive pass that walks the tenants table itself.
+	// Nil is a valid no-op (in-memory tests) — when nil the worker
+	// proceeds without binding. In production wiring (cmd/sn360-es)
+	// this MUST be set whenever the repository layer is Postgres so
+	// the RLS policy installed in
+	// `migrations/0018_row_level_security.up.sql` evaluates with the
+	// right scope; without binding, per-tenant queries would acquire
+	// fresh pool conns with no GUC set and return zero rows.
+	Binder TenantBinder
 	// Hasher is a configuration-level parity guard: the worker
 	// writes per-(tenant, recipient_hash, sender_domain_hash)
 	// rows into BehavioralBaselines using the already-hashed
@@ -245,6 +257,19 @@ func (j *RelationshipJob) Name() string { return "relationship-aggregation" }
 func (j *RelationshipJob) Interval() time.Duration { return j.interval }
 
 // Run implements Job.
+//
+// The whole cycle runs inside a single cross-tenant scope (see the
+// `tenant-lint:cross-tenant` annotation below). The worker is
+// legitimately fan-out — it walks every tenant and refreshes
+// per-(tenant, sender, recipient) aggregates — so each per-tenant
+// query already supplies an explicit `WHERE tenant_id = $1`
+// predicate. The cross-tenant scope opts those queries out of the
+// RLS policy installed in `migrations/0018_row_level_security.up.sql`
+// so they're not double-filtered with an unset GUC (which would
+// silently return zero rows after migration 0018 lands). Tenant
+// isolation for these queries is enforced by the app-layer filter,
+// not by RLS; the RLS policy continues to protect the HTTP and
+// consumer paths where queries are issued in single-tenant scope.
 func (j *RelationshipJob) Run(ctx context.Context) error {
 	now := time.Now().UTC()
 	since := now.Add(-j.window)
@@ -262,6 +287,20 @@ func (j *RelationshipJob) Run(ctx context.Context) error {
 	// fine at 10k+; the row loop's per-tenant state stays scoped
 	// to the batch iteration so working-set memory stays O(batch).
 	activeTenantIDs := make(map[string]struct{})
+
+	// tenant-lint:cross-tenant — relationship-aggregation worker
+	// walks every tenant; each inner query supplies its own
+	// `WHERE tenant_id = $1` predicate, so the cross-tenant scope
+	// only relaxes RLS, it does not relax app-level isolation.
+	if j.cfg.Binder != nil {
+		boundCtx, release, berr := j.cfg.Binder.WithCrossTenant(ctx)
+		if berr != nil {
+			return fmt.Errorf("worker.relationship: cross-tenant scope: %w", berr)
+		}
+		defer func() { _ = release() }()
+		ctx = boundCtx
+	}
+
 	iterErr := j.cfg.Tenants.IterateActive(ctx, 0, func(batch []repository.Tenant) error {
 		for _, t := range batch {
 			if err := ctx.Err(); err != nil {
@@ -785,6 +824,13 @@ type VendorJobConfig struct {
 	VendorRepository repository.VendorRepository
 	Window           time.Duration
 	Logger           *slog.Logger
+	// Binder pins a Postgres conn to cross-tenant scope so the
+	// fan-out queries in Run are not silently zero-filtered by the
+	// RLS policy installed in
+	// `migrations/0018_row_level_security.up.sql`. See the
+	// matching field on RelationshipJobConfig for the full
+	// rationale; nil is a valid no-op for in-memory tests.
+	Binder TenantBinder
 }
 
 // VendorJob runs the recurring vendor-discovery heuristic. It walks
@@ -836,11 +882,31 @@ func (j *VendorJob) Name() string { return "vendor-discovery" }
 func (j *VendorJob) Interval() time.Duration { return j.interval }
 
 // Run implements Job.
+//
+// The whole cycle runs inside a single cross-tenant scope so the
+// per-tenant queries below — each gated by an explicit
+// `WHERE tenant_id = $1` predicate — are not also subject to the RLS
+// policy from `migrations/0018_row_level_security.up.sql` reading an
+// unset GUC and returning zero rows. The cross-tenant scope only
+// relaxes RLS, not the app-layer filter, so isolation between
+// tenants is preserved by the SQL predicates themselves.
 func (j *VendorJob) Run(ctx context.Context) error {
 	since := time.Now().UTC().Add(-j.window)
 	var firstErr error
 	totalProposed := 0
 	totalTenants := 0
+
+	// tenant-lint:cross-tenant — vendor-discovery worker walks every
+	// tenant; per-tenant filtering is enforced in the SQL predicate.
+	if j.cfg.Binder != nil {
+		boundCtx, release, berr := j.cfg.Binder.WithCrossTenant(ctx)
+		if berr != nil {
+			return fmt.Errorf("worker.vendor: cross-tenant scope: %w", berr)
+		}
+		defer func() { _ = release() }()
+		ctx = boundCtx
+	}
+
 	iterErr := j.cfg.Tenants.IterateActive(ctx, 0, func(batch []repository.Tenant) error {
 		for _, t := range batch {
 			if err := ctx.Err(); err != nil {

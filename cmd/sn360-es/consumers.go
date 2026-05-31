@@ -107,7 +107,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 
 	// es.evaluate.result → persist to the management Postgres layer.
 	if a.repos != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.result", a.handleEvaluateResult,
+		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.result", a.tenantBoundMessageHandler(a.handleEvaluateResult),
 			events.WithDurable("management-persist"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -122,7 +122,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 
 	// es.evaluate.result → trigger contextual micro-lessons.
 	if a.microLessonSvc != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.result", a.handleEducationTrigger,
+		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.result", a.tenantBoundMessageHandler(a.handleEducationTrigger),
 			events.WithDurable("education-trigger"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -145,7 +145,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	// silently degrade), but it does NOT gate the evaluate-svc
 	// checkpoint below; see the comment block on resultConsumerErrs.
 	if a.repos != nil && a.repos.FeedbackEvents != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.action.feedback.>", a.handleFeedbackPersist,
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.feedback.>", a.tenantBoundMessageHandler(a.handleFeedbackPersist),
 			events.WithDurable("feedback-persist"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -168,7 +168,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	// onto es.evaluate.result. See the INVARIANT block at the top of
 	// StartConsumers.
 	if a.bannerRenderer != nil || a.urlRewriter != nil || a.quarantineSvc != nil || a.labelApplier != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.result", a.handleIngestionAction,
+		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.result", a.tenantBoundMessageHandler(a.handleIngestionAction),
 			events.WithDurable("ingestion-action"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -240,7 +240,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	// interest stream cannot lose a produced result message to a
 	// not-yet-bound durable.
 	if a.evaluator != nil && a.batchOrch == nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.request", a.handleEvaluateRequest,
+		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.request", a.tenantBoundMessageHandler(a.handleEvaluateRequest),
 			events.WithDurable("evaluate-svc"),
 			events.WithMaxDeliver(5))
 		if err != nil {
@@ -254,7 +254,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 
 	// es.action.label → apply tier + category native labels.
 	if a.labelApplier != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.action.label", a.handleActionLabel,
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.label", a.tenantBoundMessageHandler(a.handleActionLabel),
 			events.WithDurable("action-label"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -267,7 +267,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 
 	// es.action.banner → inject pre-rendered banner HTML.
 	if a.providers != nil && a.providers.hasAny() {
-		sub, err := a.eventBus.Subscribe(ctx, "es.action.banner", a.handleActionBanner,
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.banner", a.tenantBoundMessageHandler(a.handleActionBanner),
 			events.WithDurable("action-banner"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -280,7 +280,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 
 	// es.action.url_rewrite → log + observe for now.
 	if a.urlRewriter != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.action.url_rewrite", a.handleActionURLRewrite,
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.url_rewrite", a.tenantBoundMessageHandler(a.handleActionURLRewrite),
 			events.WithDurable("action-url-rewrite"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -294,7 +294,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	// es.action.quarantine → move Blocked-tier messages into the
 	// hidden quarantine label / folder.
 	if a.quarantineSvc != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.action.quarantine", a.handleActionQuarantine,
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.quarantine", a.tenantBoundMessageHandler(a.handleActionQuarantine),
 			events.WithDurable("action-quarantine"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -307,7 +307,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 
 	// es.education.simulation.send → dispatch a campaign.
 	if a.simulationEng != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.education.simulation.send", a.handleSimulationSend,
+		sub, err := a.eventBus.Subscribe(ctx, "es.education.simulation.send", a.tenantBoundMessageHandler(a.handleSimulationSend),
 			events.WithDurable("education-sim"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -321,7 +321,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 
 	// es.education.simulation.result → record per-user interaction outcomes.
 	if a.simulationTracker != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.education.simulation.result", a.handleSimulationResult,
+		sub, err := a.eventBus.Subscribe(ctx, "es.education.simulation.result", a.tenantBoundMessageHandler(a.handleSimulationResult),
 			events.WithDurable("education-sim-track"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -333,6 +333,17 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	}
 
 	// es.onboarding.> → onboarding side effects.
+	// NOTE: handleOnboarding spawns a 10-min background goroutine via
+	// context.WithoutCancel, which would inherit (and outlive) any
+	// per-message bound conn attached by tenantBoundMessageHandler.
+	// Wrapping here would cause the goroutine's DB calls to fail with
+	// "conn already closed" once the outer handler returns and the
+	// wrapper's defer release() runs. Instead the goroutine acquires
+	// its OWN WithTenant binding inside handleOnboarding, which keeps
+	// the goroutine's writes under RLS for the full 10-min window
+	// without the bound conn being released out from under it. The
+	// outer (non-goroutine) path in handleOnboarding does no DB work,
+	// so leaving it unbound is safe.
 	sub, err := a.eventBus.Subscribe(ctx, "es.onboarding.>", a.handleOnboarding,
 		events.WithDurable("ingestion-onboard"),
 		events.WithMaxDeliver(3))
@@ -346,7 +357,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	// es.action.quarantine.release → user (or AI agent) released a
 	// quarantined message.
 	if a.releaseSvc != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.action.quarantine.release", a.handleQuarantineRelease,
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.quarantine.release", a.tenantBoundMessageHandler(a.handleQuarantineRelease),
 			events.WithDurable("quarantine-release"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -360,7 +371,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 
 	// es.action.escalation.> → fan escalation events into EscalationService.
 	if a.escalationSvc != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.action.escalation.>", a.handleEscalation,
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.escalation.>", a.tenantBoundMessageHandler(a.handleEscalation),
 			events.WithDurable("escalation"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -447,7 +458,24 @@ func (a *application) trackSub(sub events.Subscription) {
 }
 
 // handleFeedbackPersist writes each verified banner click into the
-// feedback_events table.
+// feedback_events table. The tenant id is sourced preferentially
+// from the verified NATS header via verifiedTenantID — the same
+// trust-boundary pattern handleEscalation uses (see consumers.go
+// handleEscalation, which calls verifiedTenantID(msg, env.TenantID)
+// for both create and resolve branches). The body's tenant_id is
+// used only as a transitional fallback for older publishers that
+// did not yet stamp the header.
+//
+// Why this matters now that the tenantBoundMessageHandler wrapper
+// is in place: the wrapper sets the bound conn's sn360.tenant_id
+// GUC from the header, so an INSERT whose row.TenantID is sourced
+// from a DIFFERENT (body) value would be rejected by the RLS
+// WITH CHECK on feedback_events once the connect role rotates to
+// the least-privilege role (Task 5). Sourcing both the GUC and
+// the row from the same verified header is the fail-open-then-
+// fail-closed shape that makes the RLS WITH CHECK behave as
+// "verify the publisher stamped the right tenant" rather than
+// "reject a benign header/body skew".
 func (a *application) handleFeedbackPersist(ctx context.Context, msg events.Message) error {
 	if a.repos == nil || a.repos.FeedbackEvents == nil {
 		return nil
@@ -458,9 +486,10 @@ func (a *application) handleFeedbackPersist(ctx context.Context, msg events.Mess
 			slog.Any("error", err))
 		return nil
 	}
-	if evt.TenantID == "" || evt.PseudonymizedMessage == "" || !evt.Action.Valid() {
+	tenantID := verifiedTenantID(msg, evt.TenantID)
+	if tenantID == "" || evt.PseudonymizedMessage == "" || !evt.Action.Valid() {
 		a.logger.WarnContext(ctx, "sn360-es: action.feedback missing required fields",
-			slog.String("tenant_id", evt.TenantID),
+			slog.String("tenant_id", tenantID),
 			slog.String("action", string(evt.Action)))
 		return nil
 	}
@@ -469,7 +498,7 @@ func (a *application) handleFeedbackPersist(ctx context.Context, msg events.Mess
 		occurred = time.Now().UTC()
 	}
 	row := &repository.FeedbackEvent{
-		TenantID:        evt.TenantID,
+		TenantID:        tenantID,
 		PseudoMessageID: evt.PseudonymizedMessage,
 		Action:          string(evt.Action),
 		Tier:            evt.Tier,
@@ -522,6 +551,27 @@ func (a *application) handleOnboarding(ctx context.Context, msg events.Message) 
 				defer a.bgWG.Done()
 				bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
 				defer cancel()
+				// Acquire a per-goroutine tenant binding so the
+				// onboarding agent's DB writes (PersistDiscoveredUsers,
+				// UpdateWeights, Audit.Record, …) run under the RLS
+				// policy installed by migration 0018. We MUST bind here
+				// rather than rely on the consumer-side wrapper: the
+				// wrapper's bound conn is released the instant
+				// handleOnboarding returns, which is up to 10 minutes
+				// before this goroutine finishes. pgDB == nil in
+				// in-memory mode is treated as a no-op (the agent's DB
+				// dependencies are also nil in that mode).
+				if a.pgDB != nil {
+					boundCtx, release, berr := a.pgDB.WithTenant(bgCtx, env.TenantID)
+					if berr != nil {
+						a.logger.Error("sn360-es: onboarding agent — tenant bind failed",
+							slog.String("tenant_id", env.TenantID),
+							slog.Any("error", berr))
+						return
+					}
+					defer func() { _ = release() }()
+					bgCtx = boundCtx
+				}
 				if _, err := a.onboardAgent.Onboard(bgCtx, tctx); err != nil {
 					a.logger.Error("sn360-es: onboarding agent failed",
 						slog.String("tenant_id", env.TenantID),
@@ -588,6 +638,56 @@ func verifiedTenantID(msg events.Message, bodyFallback string) string {
 		return tid
 	}
 	return bodyFallback
+}
+
+// tenantBoundMessageHandler wraps inner so every invocation runs with
+// a Postgres conn pinned to the message's tenant — the consumer-side
+// analogue of the HTTP TenantConnBinder middleware. This is what
+// makes the RLS policy installed in
+// `migrations/0018_row_level_security.up.sql` apply to consumer
+// writes the same way it applies to HTTP requests.
+//
+// The tenant id is sourced from the verified NATS header (see
+// verifiedTenantID); we deliberately do NOT peek into the JSON body
+// here because that would couple this generic wrapper to every
+// envelope shape the handlers consume. If the header is missing
+// (legacy publisher) the wrapper passes through without binding —
+// the downstream handler is then responsible for refusing the
+// message via its body-level tenant_id check, just as it does today.
+// pgDB == nil (in-memory mode / unit tests) also passes through.
+func (a *application) tenantBoundMessageHandler(inner func(context.Context, events.Message) error) func(context.Context, events.Message) error {
+	if a == nil || a.pgDB == nil {
+		return inner
+	}
+	return func(ctx context.Context, msg events.Message) error {
+		tenantID := msg.Headers()[events.HeaderTenantID]
+		if tenantID == "" {
+			return inner(ctx, msg)
+		}
+		boundCtx, release, err := a.pgDB.WithTenant(ctx, tenantID)
+		if err != nil {
+			a.logger.WarnContext(ctx, "sn360-es: consumer tenant_conn bind failed",
+				slog.String("tenant_id", tenantID),
+				slog.String("subject", msg.Subject()),
+				slog.Any("error", err))
+			// Returning the error triggers NATS redelivery; with
+			// a transient pool-exhaustion failure that's the
+			// right thing (let JetStream's MaxDeliver back-off
+			// pace the retry). Permanently-failed binds (e.g.
+			// the DB is gone) will exhaust deliveries and end up
+			// on the DLQ — explicit signalling, not silent drop.
+			return fmt.Errorf("tenant_conn bind: %w", err)
+		}
+		defer func() {
+			if relErr := release(); relErr != nil {
+				a.logger.WarnContext(ctx, "sn360-es: consumer tenant_conn release failed",
+					slog.String("tenant_id", tenantID),
+					slog.String("subject", msg.Subject()),
+					slog.Any("error", relErr))
+			}
+		}()
+		return inner(boundCtx, msg)
+	}
 }
 
 // handleEscalation dispatches by subject suffix between Escalate and

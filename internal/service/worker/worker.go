@@ -48,6 +48,46 @@ type MetricsRecorder interface {
 	ObserveCycle(name string, duration time.Duration, err error)
 }
 
+// TenantConnReleaseFunc unwinds a TenantBinder scope: it RESETs the
+// session GUC and returns the conn to the pool. Always paired with a
+// successful WithTenant / WithCrossTenant call via `defer release()`.
+type TenantConnReleaseFunc func() error
+
+// TenantBinder is the slim interface workers use to pin a Postgres
+// conn to a tenant (or to cross-tenant scope) for the lifetime of a
+// per-tenant operation. Satisfied by *pkg/storage/postgres.DB; kept
+// here as a port so unit tests can inject a no-op binder and the
+// worker package never imports the concrete postgres package.
+//
+// The binder is what activates the Row-Level Security policy
+// installed in `migrations/0018_row_level_security.up.sql` for
+// worker fan-out queries. Without it, every per-tenant query the
+// worker issues would acquire a fresh pool conn whose
+// `sn360.tenant_id` GUC is unset — the RLS policy would
+// deterministically return zero rows and the worker would silently
+// process nothing.
+//
+// Two modes:
+//
+//   - WithTenant(ctx, tenantID) is the right call inside a per-tenant
+//     loop body — the bound conn evaluates the RLS policy as that
+//     tenant, so the worker's `WHERE tenant_id = $1` predicates also
+//     match the policy and rows flow normally.
+//   - WithCrossTenant(ctx) is the escape hatch for queries that
+//     genuinely span tenants (boot-time enumeration, partition
+//     maintenance). Each call-site MUST be annotated with
+//     `// tenant-lint:cross-tenant — <reason>` so the static analyser
+//     accepts the unscoped SQL string at build time.
+//
+// A nil TenantBinder (the zero-value field) is a valid no-op: the
+// worker proceeds without binding, which is what unit tests with
+// in-memory repositories want. Production wiring in cmd/sn360-es is
+// responsible for providing a real binder when pgDB != nil.
+type TenantBinder interface {
+	WithTenant(ctx context.Context, tenantID string) (context.Context, TenantConnReleaseFunc, error)
+	WithCrossTenant(ctx context.Context) (context.Context, TenantConnReleaseFunc, error)
+}
+
 // Runner drives a Job on its declared interval. It is safe to start
 // a single Runner per Job; multiple replicas can run concurrent
 // Runners with the same lock name and only one will execute each

@@ -3,6 +3,9 @@ package main
 import (
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -407,5 +410,80 @@ func TestCollectExemptionLines_RequiresJustification(t *testing.T) {
 	}
 	if !crossTenantAnnotation.MatchString("// tenant-lint:cross-tenant: colon justification") {
 		t.Fatal("annotation with colon justification must match")
+	}
+}
+
+// TestTenantScopedTables_CoveredByRLSMigration is a drift guard. The
+// tenantScopedTables map and migrations/0018_row_level_security.up.sql
+// MUST stay in sync — every RLS-protected table is exactly the set
+// of tables this lint refuses to query without a tenant_id predicate.
+// If someone adds a new tenant-scoped table they must update both
+// places, and this test fails loudly if they only update one.
+func TestTenantScopedTables_CoveredByRLSMigration(t *testing.T) {
+	mig, err := os.ReadFile(filepath.Join("..", "..", "migrations", "0018_row_level_security.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	migText := string(mig)
+	// Build a single normalised view of the migration with consecutive
+	// whitespace collapsed to single spaces. The migration's
+	// "ALTER TABLE <t> ENABLE ROW LEVEL SECURITY;" statements are
+	// formatted with column-aligned padding so the table column has
+	// variable whitespace before the ENABLE/FORCE keyword. A naive
+	// `strings.Contains(migText, "ALTER TABLE <t> ENABLE ROW LEVEL SECURITY")`
+	// would false-negative when the padding adds tabs/multiple spaces.
+	collapsed := strings.Join(strings.Fields(migText), " ")
+	for tbl := range tenantScopedTables {
+		// Each tenant-scoped table MUST get BOTH:
+		//   ALTER TABLE <t> ENABLE ROW LEVEL SECURITY
+		//   ALTER TABLE <t> FORCE  ROW LEVEL SECURITY
+		// FORCE is the load-bearing one — without it, the policy is
+		// silently bypassed for the table owner (and historically
+		// our app connect role IS the schema owner). ENABLE without
+		// FORCE would shipping-mode pass through writes from the
+		// owner, defeating the whole isolation goal.
+		enableMarker := "ALTER TABLE " + tbl + " ENABLE ROW LEVEL SECURITY"
+		forceMarker := "ALTER TABLE " + tbl + " FORCE ROW LEVEL SECURITY"
+		if !strings.Contains(collapsed, enableMarker) {
+			t.Errorf("migration 0018 missing %q for tenant-scoped table %q", enableMarker, tbl)
+		}
+		if !strings.Contains(collapsed, forceMarker) {
+			t.Errorf("migration 0018 missing %q for tenant-scoped table %q (FORCE is required so the table owner does not bypass the policy)", forceMarker, tbl)
+		}
+		// The policy block is also per-table; check for the
+		// CREATE POLICY line so a half-applied edit (ALTER but
+		// no policy) is caught.
+		policyMarker := "CREATE POLICY tenant_isolation ON " + tbl
+		if !strings.Contains(migText, policyMarker) {
+			t.Errorf("migration 0018 missing CREATE POLICY tenant_isolation for tenant-scoped table %q", tbl)
+		}
+	}
+
+	// Reverse drift guard: every table that migration 0018 has
+	// turned on RLS for MUST also appear in `tenantScopedTables`,
+	// otherwise the tenant-lint analyser will silently fail to
+	// enforce `WHERE tenant_id = $N` on it. The forward check above
+	// catches "added to lint but forgot the migration"; this reverse
+	// check catches the equally-bad inverse — "added the RLS
+	// migration but forgot the lint" — which would let unscoped SQL
+	// against that table compile cleanly and only fail at runtime
+	// against a real Postgres (and only if the test environment
+	// happens to seed the right multi-tenant data).
+	//
+	// Parsing strategy: scan the migration for every
+	//   `ALTER TABLE <tbl> ENABLE ROW LEVEL SECURITY`
+	// occurrence and assert each <tbl> is in `tenantScopedTables`.
+	// We use ENABLE rather than FORCE because the up migration
+	// always lands ENABLE first; if both are present the check
+	// passes once on ENABLE (which is the gate that activates the
+	// policy at all — FORCE without ENABLE is a no-op).
+	enableRE := regexp.MustCompile(`(?m)^\s*ALTER\s+TABLE\s+(\w+)\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY\s*;`)
+	for _, m := range enableRE.FindAllStringSubmatch(migText, -1) {
+		tbl := m[1]
+		if _, ok := tenantScopedTables[tbl]; !ok {
+			t.Errorf("migration 0018 enables RLS on table %q but it is NOT in tenantScopedTables "+
+				"in cmd/sn360-es-tenant-lint/main.go — the lint analyser will fail to enforce "+
+				"WHERE tenant_id predicates for it; add %q to the tenantScopedTables map", tbl, tbl)
+		}
 	}
 }

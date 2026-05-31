@@ -178,7 +178,7 @@ func buildMux(app *application) (http.Handler, error) {
 // wrapMiddleware applies the standard middleware chain. Order matters:
 // the outermost wrapper runs first.
 //
-//	telemetry  →  request-id  →  request-logger  →  CORS  →  rate-limit  →  JWT-auth  →  mux
+//	telemetry  →  request-id  →  request-logger  →  CORS  →  rate-limit  →  JWT-auth  →  tenant-conn  →  mux
 //
 // Telemetry runs first so it captures total latency including auth
 // rejections and rate-limit denials. Request-ID sits between
@@ -189,9 +189,33 @@ func buildMux(app *application) (http.Handler, error) {
 // limiting sits OUTSIDE JWT auth so we can shed load before doing
 // the expensive token-verify work — an attacker hammering us with
 // garbage Bearer tokens still gets cut off at the limiter.
+//
+// The tenant-conn binder sits BETWEEN JWT and the mux because it
+// depends on JWT having put the verified tenant_id on the request
+// context. The binder acquires a *sql.Conn, runs `SELECT
+// set_config('sn360.tenant_id', $1, false)` on it, attaches the
+// pinned conn to the request ctx, and defers a release on response
+// completion. That binding is what activates the Postgres Row-Level
+// Security policy installed in
+// `migrations/0018_row_level_security.up.sql`: without it, every
+// handler would acquire a fresh pool conn with no GUC and the
+// policy would deterministically return zero rows.
 func wrapMiddleware(mux http.Handler, app *application) (http.Handler, error) {
 	logger := app.logger
 	var h = mux
+
+	// Tenant-conn binder: only wired when a real Postgres pool is
+	// available. Wraps the mux first so it sits *inside* JWT —
+	// JWT injects tenant_id into ctx, the binder reads it, the
+	// mux handlers see a ctx with both tenant_id AND a pinned
+	// conn whose session GUC is set to that tenant.
+	if app.pgDB != nil {
+		h = middleware.NewTenantConnBinder(h, middleware.TenantConnConfig{
+			DB:        app.pgDB,
+			Logger:    logger,
+			SkipPaths: defaultAuthSkipPaths(),
+		})
+	}
 
 	// JWT auth: optional. Skipped when no issuer is configured (dev
 	// runs with no banner secret).

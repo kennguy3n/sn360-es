@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 )
@@ -25,6 +26,13 @@ type CleanupJobConfig struct {
 	RetentionDays int
 	Pruners       []Pruner
 	Logger        *slog.Logger
+	// Binder pins a Postgres conn to cross-tenant scope so the
+	// retention DELETE statements below — which legitimately span
+	// every tenant in a single statement — are not silently
+	// zero-filtered by the RLS policy installed in
+	// `migrations/0018_row_level_security.up.sql`. Nil is a valid
+	// no-op for in-memory tests.
+	Binder TenantBinder
 }
 
 // CleanupJob walks every configured Pruner once per cycle and
@@ -36,6 +44,7 @@ type CleanupJob struct {
 	retention time.Duration
 	pruners   []Pruner
 	logger    *slog.Logger
+	binder    TenantBinder
 }
 
 // NewCleanupJob constructs the job and applies defaults.
@@ -59,6 +68,7 @@ func NewCleanupJob(cfg CleanupJobConfig) (*CleanupJob, error) {
 		retention: time.Duration(retentionDays) * 24 * time.Hour,
 		pruners:   cfg.Pruners,
 		logger:    logger,
+		binder:    cfg.Binder,
 	}, nil
 }
 
@@ -69,9 +79,30 @@ func (j *CleanupJob) Name() string { return "cleanup" }
 func (j *CleanupJob) Interval() time.Duration { return j.interval }
 
 // Run implements Job.
+//
+// The whole cycle runs inside a single cross-tenant scope. Each
+// Pruner issues a `DELETE ... WHERE created_at < $1` that
+// intentionally spans every tenant in one statement, so the RLS
+// policy from `migrations/0018_row_level_security.up.sql` would
+// see an unset `sn360.tenant_id` GUC and match zero rows. The
+// cross-tenant scope is the explicit opt-out for that pattern;
+// retention itself is a global operation, not a per-tenant one.
 func (j *CleanupJob) Run(ctx context.Context) error {
 	cutoff := time.Now().UTC().Add(-j.retention)
 	var firstErr error
+
+	// tenant-lint:cross-tenant — retention DELETE statements
+	// intentionally cross tenants; per-row tenant_id is irrelevant
+	// to the cutoff predicate.
+	if j.binder != nil {
+		boundCtx, release, berr := j.binder.WithCrossTenant(ctx)
+		if berr != nil {
+			return fmt.Errorf("worker.cleanup: cross-tenant scope: %w", berr)
+		}
+		defer func() { _ = release() }()
+		ctx = boundCtx
+	}
+
 	for _, p := range j.pruners {
 		if err := ctx.Err(); err != nil {
 			return err

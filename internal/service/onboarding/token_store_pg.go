@@ -39,11 +39,58 @@ func NewPgTokenStore(db *postgres.DB, enc TokenEncryptor) (*PgTokenStore, error)
 	return &PgTokenStore{db: db, encryptor: enc}, nil
 }
 
+// bindTenantIfNeeded returns ctx unchanged when an upstream caller has
+// already pinned a tenant-bound *sql.Conn (HTTP TenantConnBinder,
+// consumer tenantBoundMessageHandler, worker WithTenant scope), and
+// acquires a fresh single-tenant binding otherwise.
+//
+// This is what makes PgTokenStore.{Save,Load,Delete} survive callers
+// that have NO upstream binding — most notably the OAuth callback
+// flow at `/v1/onboarding/callback`, which is in
+// `defaultAuthSkipPaths()` because it receives a redirect from the
+// IdP (no Bearer JWT, no JWTAuth-injected tenant_id, no
+// TenantConnBinder). Without this self-binding, the INSERT inside
+// Save would run on a fresh pool conn whose `sn360.tenant_id` GUC is
+// empty, and the RLS WITH CHECK on oauth_tokens — installed by
+// `migrations/0018_row_level_security.up.sql` — would reject every
+// write once the connect role is rotated to a non-superuser (the
+// rotation lands in a follow-up Helm/Terraform PR per Task 5).
+//
+// Self-binding here also future-proofs background refresh: TokenFor
+// calls Save when a stored token has expired, and that path can run
+// from a worker / scheduled-job context that never went through HTTP
+// middleware and therefore has no bound conn either.
+//
+// We deliberately reuse the caller's existing binding when present
+// rather than acquire a second conn: a JWT-authenticated request that
+// already pinned a conn for tenant X should be allowed to call Save
+// for tenant X without consuming a second pool slot, and a mismatch
+// (Save for tenant Y on a conn bound to X) is already correctly
+// blocked by the RLS WITH CHECK clause itself.
+func (s *PgTokenStore) bindTenantIfNeeded(ctx context.Context, tenantID string) (context.Context, postgres.ReleaseFunc, error) {
+	if postgres.BoundConnFromContext(ctx) != nil {
+		return ctx, noopRelease, nil
+	}
+	return s.db.WithTenant(ctx, tenantID)
+}
+
+// noopRelease is the zero-value ReleaseFunc returned when
+// bindTenantIfNeeded reuses an existing bound conn. Defining it here
+// (rather than importing from package postgres) keeps the helper's
+// call-site shape — `defer release()` — uniform between the
+// pass-through and acquire branches.
+func noopRelease() error { return nil }
+
 // Save encrypts the token and upserts it into oauth_tokens.
 func (s *PgTokenStore) Save(ctx context.Context, tenantID string, provider ProviderType, tok Token) error {
 	if tenantID == "" {
 		return errors.New("onboarding: tenant_id is required")
 	}
+	boundCtx, release, err := s.bindTenantIfNeeded(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("onboarding: bind tenant for token save: %w", err)
+	}
+	defer func() { _ = release() }()
 	plain, err := json.Marshal(tok)
 	if err != nil {
 		return fmt.Errorf("onboarding: marshal token: %w", err)
@@ -52,7 +99,7 @@ func (s *PgTokenStore) Save(ctx context.Context, tenantID string, provider Provi
 	if err != nil {
 		return fmt.Errorf("onboarding: encrypt token: %w", err)
 	}
-	_, err = s.db.ExecContext(ctx, `
+	_, err = s.db.ExecContext(boundCtx, `
 INSERT INTO oauth_tokens (tenant_id, provider, ciphertext, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $4)
 ON CONFLICT (tenant_id, provider) DO UPDATE SET
@@ -67,8 +114,16 @@ ON CONFLICT (tenant_id, provider) DO UPDATE SET
 
 // Load decrypts and returns the token for (tenantID, provider).
 func (s *PgTokenStore) Load(ctx context.Context, tenantID string, provider ProviderType) (Token, error) {
+	if tenantID == "" {
+		return Token{}, errors.New("onboarding: tenant_id is required")
+	}
+	boundCtx, release, err := s.bindTenantIfNeeded(ctx, tenantID)
+	if err != nil {
+		return Token{}, fmt.Errorf("onboarding: bind tenant for token load: %w", err)
+	}
+	defer func() { _ = release() }()
 	var ct []byte
-	err := s.db.QueryRowContext(ctx, `
+	err = s.db.QueryRowContext(boundCtx, `
 SELECT ciphertext FROM oauth_tokens WHERE tenant_id=$1 AND provider=$2`,
 		tenantID, string(provider)).Scan(&ct)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -90,7 +145,15 @@ SELECT ciphertext FROM oauth_tokens WHERE tenant_id=$1 AND provider=$2`,
 
 // Delete removes the token for (tenantID, provider).
 func (s *PgTokenStore) Delete(ctx context.Context, tenantID string, provider ProviderType) error {
-	_, err := s.db.ExecContext(ctx, `
+	if tenantID == "" {
+		return errors.New("onboarding: tenant_id is required")
+	}
+	boundCtx, release, err := s.bindTenantIfNeeded(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("onboarding: bind tenant for token delete: %w", err)
+	}
+	defer func() { _ = release() }()
+	_, err = s.db.ExecContext(boundCtx, `
 DELETE FROM oauth_tokens WHERE tenant_id=$1 AND provider=$2`,
 		tenantID, string(provider))
 	if err != nil {
@@ -104,11 +167,61 @@ DELETE FROM oauth_tokens WHERE tenant_id=$1 AND provider=$2`,
 // always echoes tenant_id back to the caller so the provider registry
 // can re-key by tenant; one tenant's rows are never surfaced under
 // another tenant's identity.
+//
+// This is one of the small handful of genuinely cross-tenant queries
+// in the codebase (boot-time provider registry rebuild). The
+// `tenant-lint:cross-tenant` annotation below opts the static
+// analyser out of its per-call tenant_id check, and the runtime
+// `WithCrossTenant` scope opts the query out of the RLS policy
+// installed by `migrations/0018_row_level_security.up.sql`. Both
+// opt-outs are deliberate and audited together — without the
+// runtime scope the policy would silently return zero rows after
+// migration 0018 lands.
 func (s *PgTokenStore) ListAll(ctx context.Context) ([]StoredTokenRef, error) {
+	// Defensive guard: if the caller's ctx already pins a tenant-bound
+	// *sql.Conn (HTTP TenantConnBinder, consumer dispatcher,
+	// worker WithTenant scope), we MUST fail fast rather than acquire
+	// a second pool conn via WithCrossTenant.
+	//
+	// Two reasons:
+	//
+	//   (1) Resource leak / latent deadlock. Acquiring a fresh conn
+	//       while the caller's conn is still pinned holds two pool
+	//       slots simultaneously for the duration of ListAll. Under
+	//       MaxOpenConns=1 (test harnesses, low-tier deployments) this
+	//       deadlocks: WithCrossTenant blocks waiting for a conn that
+	//       can only come from the very caller that called us.
+	//
+	//   (2) Semantic confusion. ListAll is genuinely cross-tenant —
+	//       it returns rows for every tenant. Calling it under a
+	//       single-tenant bound conn is a category error: what tenant
+	//       did the caller think they were operating as? Surfacing
+	//       this as a clear error at the call site is far better than
+	//       returning all-tenant rows to a caller that probably meant
+	//       to read just their own.
+	//
+	// In practice ListAll is only called from boot-time application
+	// init with context.Background() (no upstream binding), so this
+	// guard is a never-trip safety net for future callers. It is
+	// symmetric with the bindTenantIfNeeded helper used by Save /
+	// Load / Delete — both halves of the store now make their
+	// binding state explicit at the entrypoint rather than silently
+	// stacking scopes.
+	if postgres.BoundConnFromContext(ctx) != nil {
+		return nil, errors.New("onboarding: ListAll: ctx already carries a tenant-bound conn; ListAll is cross-tenant and must be called from an unbound ctx (e.g. boot-time context.Background()) — calling it under a single-tenant binding is a category error and risks a pool-exhaustion deadlock")
+	}
+	crossCtx, release, err := s.db.WithCrossTenant(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("onboarding: list tokens: cross-tenant scope: %w", err)
+	}
+	defer func() { _ = release() }()
 	// tenant-lint:cross-tenant — boot-time provider registry rebuild;
 	// returns (tenant_id, provider) tuples that the registry re-keys
-	// per tenant downstream.
-	rows, err := s.db.QueryContext(ctx, `
+	// per tenant downstream. The runtime WithCrossTenant scope above
+	// opts the query out of the RLS policy installed by
+	// migrations/0018_row_level_security.up.sql so the unscoped
+	// SELECT below is the intentional, audited form of the query.
+	rows, err := s.db.QueryContext(crossCtx, `
 SELECT tenant_id, provider FROM oauth_tokens ORDER BY created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("onboarding: list tokens: %w", err)
