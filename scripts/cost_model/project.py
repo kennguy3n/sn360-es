@@ -222,7 +222,10 @@ class CostLevers:
     partitioning_active: bool      # native PG partitioning + DROP retention
     role_split_active: bool        # API / consumers / workers separated
     keda_on_lag: bool              # KEDA NATS-lag scaler vs CPU HPA
-    pgbouncer_active: bool         # transaction pooling
+    pgbouncer_active: bool         # connection pooling sidecar (see
+                                   # pg_postgres_cost docstring for the
+                                   # session-vs-transaction caveat re:
+                                   # the 0.40x multiplier)
     rate_limiter_backend: str      # "memory" | "redis"
 
     @classmethod
@@ -392,8 +395,29 @@ def cost_postgres(
     Three contributing line items:
       * connection budget: without PgBouncer, every replica holds
         a connection pool that's mostly idle but reserved. With
-        PgBouncer (transaction pooling), we land 50:1 multiplexing
-        on idle connections — modeled as 0.40x base cost.
+        PgBouncer in *transaction* pooling we land ~50:1
+        multiplexing on idle connections, modeled here as 0.40x
+        base cost.
+
+        IMPORTANT CAVEAT — the chart currently ships PgBouncer in
+        *session* pooling (forced by the RLS session-GUC binding
+        in `pkg/storage/postgres/tenant_context.go`, which uses
+        `set_config('sn360.tenant_id', ..., false)` to outlive
+        transaction boundaries). Session pooling does NOT
+        multiplex — each client conn is pinned 1:1 to a backend
+        conn for its lifetime. The 0.40x multiplier therefore
+        represents the cost-model TARGET, conditional on the
+        future refactor of WithTenant / WithCrossTenant to wrap
+        the GUC `SET` + tenant-scoped SQL inside an explicit
+        transaction with `SET LOCAL` (is_local=true), which
+        becomes safe under transaction pooling. The as-shipped
+        session-mode value is closer to 0.85x (smaller-RDS-shape
+        feasibility + backend-handshake amortisation, but no
+        connection collapse). Re-baseline this multiplier when
+        the refactor lands; until then the model overstates the
+        savings from this lever. See `benchmarks/COST_MODEL.md`
+        and `deployments/helm/sn360-es/values.yaml` for the
+        end-to-end rationale.
       * storage: scales with message retention. Native partitioning
         (PR #45) doesn't reduce storage but enables O(1) DROP
         PARTITION retention, which the cleanup-worker fallback

@@ -119,10 +119,13 @@ spec:
             {{- /*
               PgBouncer sidecar overrides. The bouncer listens on
               the pod's loopback at 6432; the application connects
-              there instead of the real Postgres. PG_HOST_BACKEND
-              is consumed by the bouncer's INI template (see the
-              sidecar definition below) so the app config and
-              bouncer config stay in sync.
+              there instead of the real Postgres. The shared
+              ConfigMap's PG_HOST / PG_PORT (envFrom above) are
+              shadowed by these explicit `env:` entries because
+              Kubernetes resolves `env:` after `envFrom:` — so the
+              app sees 127.0.0.1:6432 without us having to rewrite
+              the ConfigMap. Matches deployment.yaml's monolith
+              block byte-for-byte.
             */}}
             - name: PG_HOST
               value: "127.0.0.1"
@@ -206,6 +209,26 @@ spec:
           securityContext:
             {{- toYaml $ctx.Values.securityContext | nindent 12 }}
           {{- /*
+            edoburu/pgbouncer's docker-entrypoint renders
+            /etc/pgbouncer/pgbouncer.ini + userlist.txt from env
+            vars on every container start, AND pgbouncer itself
+            writes /tmp/pgbouncer.pid + a unix-socket file at
+            /tmp/.s.PGSQL.6432 at runtime. The pod-level
+            securityContext inherits `readOnlyRootFilesystem: true`,
+            so without these emptyDir mounts the bouncer would
+            crash on startup with `EROFS` and the app pod would
+            have no reachable database backend — a total outage.
+            Per-container emptyDirs are scoped to this single
+            pgbouncer container (not shared with the app's /tmp
+            mount above) so a malicious config injection in one
+            container can't read or overwrite the other's files.
+          */}}
+          volumeMounts:
+            - name: pgbouncer-config
+              mountPath: /etc/pgbouncer
+            - name: pgbouncer-tmp
+              mountPath: /tmp
+          {{- /*
             TCP liveness + readiness probes on the bouncer's listen
             port. Without these, a crashed-but-still-running pgbouncer
             process (e.g. OOM-killed and not restarting, or wedged in a
@@ -240,6 +263,14 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+        {{- if $ctx.Values.pgbouncer.enabled }}
+        - name: pgbouncer-config
+          emptyDir:
+            sizeLimit: 1Mi
+        - name: pgbouncer-tmp
+          emptyDir:
+            sizeLimit: 16Mi
+        {{- end }}
       {{- with $rcfg.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

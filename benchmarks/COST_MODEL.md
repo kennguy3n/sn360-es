@@ -65,10 +65,20 @@ components, in order of contribution to the high-cohort total:
    Proportional to `messages × (1 - tier0_bypass) × tier2_pct`.
    The Tier 0 bypass lever (post-PR #44 AI cache, tenant-scoped)
    cuts this directly.
-2. **postgres** — RDS instance + gp3 storage. PgBouncer cuts the
-   shared-instance baseline by ~60% on idle connection budget;
-   native partitioning takes 20% off the write I/O budget by
-   eliminating the full-table cleanup-worker scan.
+2. **postgres** — RDS instance + gp3 storage. PgBouncer caps
+   the shared-instance idle connection budget by enforcing a
+   per-pod `maxClientConn` ceiling and amortising backend
+   TLS+startup handshakes across a long-lived backend conn pool
+   (`serverLifetime: 3600`). It does NOT currently multiplex
+   clients onto fewer backend conns: pool mode defaults to
+   `session` while the RLS tenant binding in
+   `pkg/storage/postgres/tenant_context.go` uses session-level
+   `set_config(..., false)` GUCs. True multiplexing
+   (e.g. 50:1) becomes available after the planned
+   `SET LOCAL`-in-explicit-txn refactor unlocks transaction
+   pooling — the cost model lever below tracks the session-mode
+   baseline today. Native partitioning takes 20% off the write
+   I/O budget by eliminating the full-table cleanup-worker scan.
 3. **s3** — Object storage for raw email blobs. Lever-independent
    in this model (no PR #44–#46 lever changes the retention
    curve), but a large absolute line item at high traffic. A
@@ -111,8 +121,8 @@ components, in order of contribution to the high-cohort total:
    `test_levers_on_strictly_cheaper` in
    `scripts/cost_model/test_project.py`. The reason is that
    savings from Tier 0 bypass (tenant-scoped cache hit-rate),
-   Tier 1 batch amortisation, native PG partitioning, and
-   PgBouncer connection multiplexing outweigh the extra replica
+   Tier 1 batch amortisation, native PG partitioning, and the
+   PgBouncer connection ceiling outweigh the extra replica
    floor at the 1000-tenant density the chart is designed for.
    See "Tenant density" further down for how the breakeven moves
    with `tenants_per_deployment`.
@@ -130,7 +140,7 @@ components, in order of contribution to the high-cohort total:
 | Native PG partitioning | PR #45 | `partitioning_active` → 0.85x storage + 0.80x write I/O | DROP PARTITION at O(1) vs row-by-row DELETE; cleanup-worker fallback for partition-worker failures |
 | Redis cluster rate limiter | PR #45 | `rate_limiter_backend` redis → tighter API-role autoscale | Cluster-wide buckets; replicas can scale to floor without bucket-eviction concern |
 | Role-split + KEDA on lag | PR #46 | `role_split_active` + `keda_on_lag` → 0.85x consumer compute | Slow Tier-2 SLM call no longer stalls API request handlers; consumer autoscale tracks actual queue depth |
-| PgBouncer sidecar | PR #46 | `pgbouncer_active` → 0.40x shared idle connection budget | 50:1 transaction-pooled multiplexing; smaller RDS shape supports same fleet |
+| PgBouncer sidecar | PR #46 / #53 | `pgbouncer_active` → hard per-pod `maxClientConn` ceiling (200); long-lived backend conns amortise handshakes | Session-mode pooling today (1:1 client→backend pinning, required by RLS session GUCs in `pkg/storage/postgres/tenant_context.go`); transaction-mode multiplexing pending `SET LOCAL`-in-explicit-txn refactor in `WithTenant` / `WithCrossTenant`. The 0.40x idle-budget figure was modelled against the transaction-mode target and is preserved as the model's design target, but the as-shipped value is closer to 1.0x for session mode. Re-baseline once the refactor lands. |
 
 ## Calibration & assumptions
 
