@@ -432,6 +432,18 @@ func TestBuildMux_VendorRoute_GETApproveIs404(t *testing.T) {
 		// because each is a separate suffix check.
 		{"admin DELETE on /approve must 404 not delete vendor", http.MethodDelete, "/v1/vendors/foo.test/approve", privacy.RoleAdmin, http.StatusNotFound},
 		{"admin DELETE on /revoke must 404 not delete vendor", http.MethodDelete, "/v1/vendors/foo.test/revoke", privacy.RoleAdmin, http.StatusNotFound},
+		// Round-4 finding ANALYSIS_..._0004: a blocklist of
+		// {/approve, /revoke} suffixes was too narrow. ANY
+		// trailing segment must 404 — `/wat`, `/audit`, `/foo`,
+		// trailing slash — because any of them would otherwise
+		// reach ServeDelete with the third path segment
+		// ("foo.test") extracted as the domain and delete the
+		// wrong vendor. Pinned with three representative
+		// suffixes so a future refactor that loosens
+		// isBareVendorDetailPath breaks loudly here.
+		{"admin DELETE on /wat must 404 (unknown suffix)", http.MethodDelete, "/v1/vendors/foo.test/wat", privacy.RoleAdmin, http.StatusNotFound},
+		{"admin DELETE on /audit must 404 (unknown suffix)", http.MethodDelete, "/v1/vendors/foo.test/audit", privacy.RoleAdmin, http.StatusNotFound},
+		{"admin DELETE on trailing slash must 404", http.MethodDelete, "/v1/vendors/foo.test/", privacy.RoleAdmin, http.StatusNotFound},
 		// Positive case: PUT /approve as admin reaches the handler.
 		// ServeApprove will 400 on the empty body (no tenant_id /
 		// no payload), which proves the dispatch let the request

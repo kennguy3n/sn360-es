@@ -204,10 +204,22 @@ func extractVendorDomain(path, suffix string) string {
 	return ""
 }
 
-// extractVendorDomainForDelete extracts domain from /v1/vendors/{domain}
+// extractVendorDomainForDelete extracts domain from
+// /v1/vendors/{domain}.
+//
+// Returns "" for any path with extra trailing segments
+// (e.g. /v1/vendors/foo/wat). This is defence-in-depth
+// against a surprise-delete vector: the dispatcher in
+// cmd/sn360-es/routes.go already gates DELETE on a positive
+// 3-segment shape check, but the extractor itself MUST
+// refuse loose inputs so a future caller that bypasses the
+// dispatcher (worker fan-out, admin tooling, internal
+// migration script) doesn't accidentally delete the
+// wrong vendor. PR #51 Devin Review finding
+// ANALYSIS_..._0004 (round 4) flagged the asymmetry.
 func extractVendorDomainForDelete(path string) string {
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(parts) >= 3 && parts[0] == "v1" && parts[1] == "vendors" {
+	if len(parts) == 3 && parts[0] == "v1" && parts[1] == "vendors" {
 		return strings.ToLower(parts[2])
 	}
 	return ""

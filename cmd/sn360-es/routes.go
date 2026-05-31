@@ -258,31 +258,38 @@ func buildMux(app *application) (http.Handler, error) {
 			//    surfaces. Co-matching method+suffix on PUT
 			//    closes this.
 			//
-			// 2. `DELETE /v1/vendors/foo/approve` reached
+			// 2. `DELETE /v1/vendors/foo/<anything>` reached
 			//    ServeDelete unconditionally because the
 			//    method-only arm absorbed any DELETE. The
 			//    handler then extracted the third path segment
 			//    ("foo") as the domain and — surprise —
 			//    proceeded to delete vendor `foo`. An admin
-			//    fat-fingering `curl -X DELETE
-			//    .../approve` would silently destroy the
-			//    vendor record rather than receive a 404.
-			//    Gating DELETE on the absence of /approve and
-			//    /revoke suffixes (i.e. "only the bare
-			//    /v1/vendors/{domain} path") closes the
-			//    surprise-delete vector — the legitimate
-			//    DELETE /v1/vendors/foo still reaches the
-			//    handler, while anything with an extra suffix
-			//    falls to the honest 404 below.
+			//    fat-fingering `curl -X DELETE .../approve`
+			//    would silently destroy the vendor record
+			//    rather than receive a 404 — same hazard for
+			//    /revoke, /wat, /audit, or any trailing
+			//    segment a typo could introduce. A blocklist
+			//    of known mutation suffixes is therefore the
+			//    wrong shape: any unknown suffix would still
+			//    delete vendor `foo`. The correct gate is a
+			//    POSITIVE shape check: DELETE only matches if
+			//    the path is exactly /v1/vendors/{domain}
+			//    with no further segments. PR #51 Devin
+			//    Review round-4 finding
+			//    ANALYSIS_..._0004 (ID 3330031646) caught
+			//    that the round-3 blocklist was too narrow.
+			//    See isBareVendorDetailPath below; the
+			//    extractor in internal/handler/vendor.go is
+			//    tightened to the same shape as a defence-in-
+			//    depth measure for any future caller that
+			//    bypasses this dispatcher.
 			//
 			// All non-matching arms drop to the default 404,
 			// which is the same response any unknown vendor
 			// sub-route returns — no path shape is leaked
 			// through verb axis OR method axis.
-			hasMutationSuffix := strings.HasSuffix(r.URL.Path, "/approve") ||
-				strings.HasSuffix(r.URL.Path, "/revoke")
 			switch {
-			case r.Method == http.MethodDelete && !hasMutationSuffix:
+			case r.Method == http.MethodDelete && isBareVendorDetailPath(r.URL.Path):
 				vendorH.ServeDelete(w, r)
 			case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/approve"):
 				vendorH.ServeApprove(w, r)
@@ -311,6 +318,37 @@ func buildMux(app *application) (http.Handler, error) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 	return mux, nil
+}
+
+// isBareVendorDetailPath reports whether path is exactly
+// /v1/vendors/{domain} with NO additional sub-route segments.
+//
+// This is the gate the DELETE arm of the /v1/vendors/ dispatcher
+// uses. Without it, `DELETE /v1/vendors/foo/<anything>` reaches
+// the handler, which then extracts the third segment ("foo") as
+// the domain and deletes vendor `foo` — a surprise-delete vector
+// for any caller who fat-fingers a sub-path. A blocklist of
+// known mutation suffixes (the round-3 approach) is the wrong
+// shape because any unknown suffix would still reach the
+// handler; only a positive shape check correctly fails closed
+// on novel trailing segments.
+//
+// Bare means:
+//   - path begins with /v1/vendors/
+//   - the remainder after the prefix is non-empty and contains
+//     no '/' (so no trailing slash, no nested sub-route).
+//
+// PR #51 Devin Review round-4 finding ANALYSIS_..._0004.
+func isBareVendorDetailPath(path string) bool {
+	const prefix = "/v1/vendors/"
+	rest, ok := strings.CutPrefix(path, prefix)
+	if !ok {
+		return false
+	}
+	if rest == "" {
+		return false
+	}
+	return !strings.Contains(rest, "/")
 }
 
 // wrapMiddleware applies the standard middleware chain. Order matters:

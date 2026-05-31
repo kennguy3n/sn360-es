@@ -80,8 +80,16 @@ func TestRequireRole_MatrixAcceptsAndRejects(t *testing.T) {
 			if rec.Code != tc.wantStatus {
 				t.Fatalf("status: got %d want %d body=%q", rec.Code, tc.wantStatus, rec.Body.String())
 			}
-			if tc.wantReason != "" && readReason(t, rec) != tc.wantReason {
-				t.Fatalf("reason: got %q want %q", readReason(t, rec), tc.wantReason)
+			// readReason reads from rec.Body via json.NewDecoder, so
+			// each call consumes the buffer. Capture once, then
+			// compare AND format with the captured value — otherwise
+			// the failure path re-reads an empty buffer and produces
+			// a confusing "decode body: EOF" instead of the intended
+			// assertion text.
+			if tc.wantReason != "" {
+				if got := readReason(t, rec); got != tc.wantReason {
+					t.Fatalf("reason: got %q want %q", got, tc.wantReason)
+				}
 			}
 		})
 	}
@@ -102,8 +110,8 @@ func TestRequireRole_NoClaimsIs401(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("code=%d (expected 401)", rec.Code)
 	}
-	if readReason(t, rec) != "missing_role_claim" {
-		t.Fatalf("reason=%q", readReason(t, rec))
+	if got := readReason(t, rec); got != "missing_role_claim" {
+		t.Fatalf("reason=%q", got)
 	}
 }
 
@@ -283,8 +291,8 @@ func TestRequireRoleByMethod_MethodNotInTable(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("code=%d", rec.Code)
 	}
-	if readReason(t, rec) != "method_not_in_role_table" {
-		t.Fatalf("reason=%q", readReason(t, rec))
+	if got := readReason(t, rec); got != "method_not_in_role_table" {
+		t.Fatalf("reason=%q", got)
 	}
 }
 
