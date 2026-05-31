@@ -5,7 +5,26 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
+
+// resetGUCTimeout bounds the RESET ... statements issued from the
+// release path of WithTenant / WithCrossTenant. We deliberately
+// derive the RESET context from `context.Background()` (NOT the
+// caller's ctx) so that cancellation / shutdown of the request does
+// not skip the GUC scrub — the conn would otherwise return to the
+// pool still bound to a prior tenant. But the corollary is that
+// `context.Background()` has no deadline, so if the Postgres backend
+// is wedged the release would block the calling goroutine forever
+// (HTTP middleware deferred-release, consumer message handler,
+// worker job). database/sql plus pgx have internal conn-health
+// checks that make a true infinite hang unlikely, but bounding the
+// call explicitly converts "unlikely" into "impossible" — if the
+// RESET cannot complete in 5s the release surfaces the timeout
+// error AND still proceeds to close the conn (so the pool slot is
+// recovered). 5s is well above any healthy GUC RESET latency
+// (sub-millisecond) and well below any user-visible request budget.
+const resetGUCTimeout = 5 * time.Second
 
 // boundConnCtxKey is the unexported context-key type used to attach a
 // pinned tenant-bound *sql.Conn to a request / message context. A
@@ -122,16 +141,22 @@ func (d *DB) WithTenant(ctx context.Context, tenantID string) (context.Context, 
 		return ctx, noopRelease, fmt.Errorf("postgres: WithTenant: set tenant GUCs: %w", err)
 	}
 	release := func() error {
-		// RESET BOTH GUCs on the conn before Close. We use a
-		// background ctx so shutdown / cancellation of the caller's
-		// ctx does not skip the RESET — the conn would otherwise
-		// return to the pool still bound. The cross_tenant RESET
-		// is belt-and-suspenders: the bind above already set it to
-		// '', but RESET is idempotent and keeps the release symmetric
-		// with WithCrossTenant.release. Errors are surfaced for
-		// telemetry; the conn is closed regardless.
-		_, resetTenantErr := conn.ExecContext(context.Background(), `RESET sn360.tenant_id`)
-		_, resetCrossErr := conn.ExecContext(context.Background(), `RESET sn360.cross_tenant`)
+		// RESET BOTH GUCs on the conn before Close. We derive the
+		// RESET ctx from context.Background() (not the caller's
+		// ctx) so shutdown / cancellation of the request does NOT
+		// skip the RESET — the conn would otherwise return to the
+		// pool still bound. Then we cap with resetGUCTimeout so a
+		// wedged backend cannot block the goroutine indefinitely
+		// (see resetGUCTimeout comment for full reasoning). The
+		// cross_tenant RESET is belt-and-suspenders: the bind above
+		// already set it to '', but RESET is idempotent and keeps
+		// the release symmetric with WithCrossTenant.release.
+		// Errors are surfaced for telemetry; the conn is closed
+		// regardless so the pool slot is always recovered.
+		resetCtx, cancel := context.WithTimeout(context.Background(), resetGUCTimeout)
+		defer cancel()
+		_, resetTenantErr := conn.ExecContext(resetCtx, `RESET sn360.tenant_id`)
+		_, resetCrossErr := conn.ExecContext(resetCtx, `RESET sn360.cross_tenant`)
 		closeErr := conn.Close()
 		if resetTenantErr != nil {
 			return fmt.Errorf("postgres: WithTenant: reset tenant_id GUC: %w", resetTenantErr)
@@ -184,8 +209,14 @@ func (d *DB) WithCrossTenant(ctx context.Context) (context.Context, ReleaseFunc,
 		return ctx, noopRelease, fmt.Errorf("postgres: WithCrossTenant: set cross_tenant GUCs: %w", err)
 	}
 	release := func() error {
-		_, resetCrossErr := conn.ExecContext(context.Background(), `RESET sn360.cross_tenant`)
-		_, resetTenantErr := conn.ExecContext(context.Background(), `RESET sn360.tenant_id`)
+		// Same RESET-deadline rationale as WithTenant.release —
+		// background ctx so cancellation cannot skip the scrub,
+		// then bounded by resetGUCTimeout so a wedged backend
+		// cannot wedge the goroutine.
+		resetCtx, cancel := context.WithTimeout(context.Background(), resetGUCTimeout)
+		defer cancel()
+		_, resetCrossErr := conn.ExecContext(resetCtx, `RESET sn360.cross_tenant`)
+		_, resetTenantErr := conn.ExecContext(resetCtx, `RESET sn360.tenant_id`)
 		closeErr := conn.Close()
 		if resetCrossErr != nil {
 			return fmt.Errorf("postgres: WithCrossTenant: reset cross_tenant GUC: %w", resetCrossErr)
