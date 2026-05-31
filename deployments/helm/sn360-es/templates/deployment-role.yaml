@@ -204,6 +204,26 @@ spec:
                   name: {{ include "sn360-es.fullname" $ctx }}
                   key: PG_PASSWORD
                   optional: true
+            {{- /*
+              Pin DB_NAME explicitly to the chart's `config.pgDB`.
+              When DB_NAME is unset, edoburu/pgbouncer's entrypoint
+              writes a `* = host=$DB_HOST port=$DB_PORT` wildcard
+              section into pgbouncer.ini, meaning the bouncer will
+              happily proxy whatever database name the client puts
+              in its connection string. The bouncer only listens on
+              loopback so the realistic blast radius is limited,
+              but a stray app misconfig (e.g. PG_DB swapped to a
+              neighbouring database in a multi-DB instance) would
+              silently route through the bouncer instead of failing
+              loudly. Setting DB_NAME explicitly turns that into
+              an authentication failure at the bouncer. Matches
+              deployment.yaml's monolith block byte-for-byte.
+            */}}
+            - name: DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "sn360-es.fullname" $ctx }}
+                  key: PG_DB
           resources:
             {{- toYaml $ctx.Values.pgbouncer.resources | nindent 12 }}
           securityContext:
