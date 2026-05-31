@@ -424,16 +424,30 @@ func TestTenantScopedTables_CoveredByRLSMigration(t *testing.T) {
 		t.Fatalf("read migration: %v", err)
 	}
 	migText := string(mig)
+	// Build a single normalised view of the migration with consecutive
+	// whitespace collapsed to single spaces. The migration's
+	// "ALTER TABLE <t> ENABLE ROW LEVEL SECURITY;" statements are
+	// formatted with column-aligned padding so the table column has
+	// variable whitespace before the ENABLE/FORCE keyword. A naive
+	// `strings.Contains(migText, "ALTER TABLE <t> ENABLE ROW LEVEL SECURITY")`
+	// would false-negative when the padding adds tabs/multiple spaces.
+	collapsed := strings.Join(strings.Fields(migText), " ")
 	for tbl := range tenantScopedTables {
-		// Every table must have both an ENABLE RLS line and a
-		// FORCE RLS line; FORCE is the load-bearing one because
-		// the application historically connects as schema owner
-		// and without FORCE the policy would be silently
-		// disabled for owners.
-		enable := "ALTER TABLE " + tbl
-		if !strings.Contains(migText, enable+" ") && !strings.Contains(migText, enable+"\t") && !strings.Contains(migText, enable+"\n") {
-			t.Errorf("migration 0018 missing ENABLE/FORCE RLS for tenant-scoped table %q", tbl)
-			continue
+		// Each tenant-scoped table MUST get BOTH:
+		//   ALTER TABLE <t> ENABLE ROW LEVEL SECURITY
+		//   ALTER TABLE <t> FORCE  ROW LEVEL SECURITY
+		// FORCE is the load-bearing one — without it, the policy is
+		// silently bypassed for the table owner (and historically
+		// our app connect role IS the schema owner). ENABLE without
+		// FORCE would shipping-mode pass through writes from the
+		// owner, defeating the whole isolation goal.
+		enableMarker := "ALTER TABLE " + tbl + " ENABLE ROW LEVEL SECURITY"
+		forceMarker := "ALTER TABLE " + tbl + " FORCE ROW LEVEL SECURITY"
+		if !strings.Contains(collapsed, enableMarker) {
+			t.Errorf("migration 0018 missing %q for tenant-scoped table %q", enableMarker, tbl)
+		}
+		if !strings.Contains(collapsed, forceMarker) {
+			t.Errorf("migration 0018 missing %q for tenant-scoped table %q (FORCE is required so the table owner does not bypass the policy)", forceMarker, tbl)
 		}
 		// The policy block is also per-table; check for the
 		// CREATE POLICY line so a half-applied edit (ALTER but

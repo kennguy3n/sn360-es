@@ -130,3 +130,29 @@ func TestStoredTokenRef(t *testing.T) {
 		t.Errorf("Provider = %q, want %q", ref.Provider, "google_workspace")
 	}
 }
+
+// TestPgTokenStore_RejectsEmptyTenantID asserts the tenant-id
+// validation Save / Load / Delete share via the bindTenantIfNeeded
+// helper. The helper would otherwise call WithTenant with an empty
+// string, which postgres.DB.WithTenant rejects explicitly — but the
+// caller-facing error message becomes "postgres: WithTenant: tenantID
+// is empty" which loses the onboarding-layer signal. Validating up
+// front returns the same `tenant_id is required` shape callers
+// already handle.
+func TestPgTokenStore_RejectsEmptyTenantID(t *testing.T) {
+	// db can be nil here because the empty-tenant validation runs
+	// before any db method is touched — Save / Load / Delete each
+	// early-return on the empty tenantID check.
+	s := &PgTokenStore{db: nil, encryptor: &testEncryptor{}}
+	ctx := context.Background()
+
+	if err := s.Save(ctx, "", ProviderGoogle, Token{}); err == nil {
+		t.Error("Save with empty tenantID must error")
+	}
+	if _, err := s.Load(ctx, "", ProviderGoogle); err == nil {
+		t.Error("Load with empty tenantID must error")
+	}
+	if err := s.Delete(ctx, "", ProviderGoogle); err == nil {
+		t.Error("Delete with empty tenantID must error")
+	}
+}

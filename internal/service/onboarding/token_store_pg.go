@@ -39,11 +39,58 @@ func NewPgTokenStore(db *postgres.DB, enc TokenEncryptor) (*PgTokenStore, error)
 	return &PgTokenStore{db: db, encryptor: enc}, nil
 }
 
+// bindTenantIfNeeded returns ctx unchanged when an upstream caller has
+// already pinned a tenant-bound *sql.Conn (HTTP TenantConnBinder,
+// consumer tenantBoundMessageHandler, worker WithTenant scope), and
+// acquires a fresh single-tenant binding otherwise.
+//
+// This is what makes PgTokenStore.{Save,Load,Delete} survive callers
+// that have NO upstream binding — most notably the OAuth callback
+// flow at `/v1/onboarding/callback`, which is in
+// `defaultAuthSkipPaths()` because it receives a redirect from the
+// IdP (no Bearer JWT, no JWTAuth-injected tenant_id, no
+// TenantConnBinder). Without this self-binding, the INSERT inside
+// Save would run on a fresh pool conn whose `sn360.tenant_id` GUC is
+// empty, and the RLS WITH CHECK on oauth_tokens — installed by
+// `migrations/0018_row_level_security.up.sql` — would reject every
+// write once the connect role is rotated to a non-superuser (the
+// rotation lands in a follow-up Helm/Terraform PR per Task 5).
+//
+// Self-binding here also future-proofs background refresh: TokenFor
+// calls Save when a stored token has expired, and that path can run
+// from a worker / scheduled-job context that never went through HTTP
+// middleware and therefore has no bound conn either.
+//
+// We deliberately reuse the caller's existing binding when present
+// rather than acquire a second conn: a JWT-authenticated request that
+// already pinned a conn for tenant X should be allowed to call Save
+// for tenant X without consuming a second pool slot, and a mismatch
+// (Save for tenant Y on a conn bound to X) is already correctly
+// blocked by the RLS WITH CHECK clause itself.
+func (s *PgTokenStore) bindTenantIfNeeded(ctx context.Context, tenantID string) (context.Context, postgres.ReleaseFunc, error) {
+	if postgres.BoundConnFromContext(ctx) != nil {
+		return ctx, noopRelease, nil
+	}
+	return s.db.WithTenant(ctx, tenantID)
+}
+
+// noopRelease is the zero-value ReleaseFunc returned when
+// bindTenantIfNeeded reuses an existing bound conn. Defining it here
+// (rather than importing from package postgres) keeps the helper's
+// call-site shape — `defer release()` — uniform between the
+// pass-through and acquire branches.
+func noopRelease() error { return nil }
+
 // Save encrypts the token and upserts it into oauth_tokens.
 func (s *PgTokenStore) Save(ctx context.Context, tenantID string, provider ProviderType, tok Token) error {
 	if tenantID == "" {
 		return errors.New("onboarding: tenant_id is required")
 	}
+	boundCtx, release, err := s.bindTenantIfNeeded(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("onboarding: bind tenant for token save: %w", err)
+	}
+	defer func() { _ = release() }()
 	plain, err := json.Marshal(tok)
 	if err != nil {
 		return fmt.Errorf("onboarding: marshal token: %w", err)
@@ -52,7 +99,7 @@ func (s *PgTokenStore) Save(ctx context.Context, tenantID string, provider Provi
 	if err != nil {
 		return fmt.Errorf("onboarding: encrypt token: %w", err)
 	}
-	_, err = s.db.ExecContext(ctx, `
+	_, err = s.db.ExecContext(boundCtx, `
 INSERT INTO oauth_tokens (tenant_id, provider, ciphertext, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $4)
 ON CONFLICT (tenant_id, provider) DO UPDATE SET
@@ -67,8 +114,16 @@ ON CONFLICT (tenant_id, provider) DO UPDATE SET
 
 // Load decrypts and returns the token for (tenantID, provider).
 func (s *PgTokenStore) Load(ctx context.Context, tenantID string, provider ProviderType) (Token, error) {
+	if tenantID == "" {
+		return Token{}, errors.New("onboarding: tenant_id is required")
+	}
+	boundCtx, release, err := s.bindTenantIfNeeded(ctx, tenantID)
+	if err != nil {
+		return Token{}, fmt.Errorf("onboarding: bind tenant for token load: %w", err)
+	}
+	defer func() { _ = release() }()
 	var ct []byte
-	err := s.db.QueryRowContext(ctx, `
+	err = s.db.QueryRowContext(boundCtx, `
 SELECT ciphertext FROM oauth_tokens WHERE tenant_id=$1 AND provider=$2`,
 		tenantID, string(provider)).Scan(&ct)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -90,7 +145,15 @@ SELECT ciphertext FROM oauth_tokens WHERE tenant_id=$1 AND provider=$2`,
 
 // Delete removes the token for (tenantID, provider).
 func (s *PgTokenStore) Delete(ctx context.Context, tenantID string, provider ProviderType) error {
-	_, err := s.db.ExecContext(ctx, `
+	if tenantID == "" {
+		return errors.New("onboarding: tenant_id is required")
+	}
+	boundCtx, release, err := s.bindTenantIfNeeded(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("onboarding: bind tenant for token delete: %w", err)
+	}
+	defer func() { _ = release() }()
+	_, err = s.db.ExecContext(boundCtx, `
 DELETE FROM oauth_tokens WHERE tenant_id=$1 AND provider=$2`,
 		tenantID, string(provider))
 	if err != nil {

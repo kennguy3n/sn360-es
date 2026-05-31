@@ -15,8 +15,26 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/kennguy3n/sn360-es/internal/service/onboarding"
 	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
 )
+
+// xorEncryptor is an integration-test-only TokenEncryptor that XORs
+// bytes with a constant. RLS is the property under test here, not the
+// AES-GCM envelope — using a deterministic round-trippable cipher
+// keeps the test focused and self-contained without dragging in the
+// real KMS-backed encryptor.
+type xorEncryptor struct{}
+
+func (xorEncryptor) Encrypt(p []byte) ([]byte, error) {
+	out := make([]byte, len(p))
+	for i, b := range p {
+		out[i] = b ^ 0x42
+	}
+	return out, nil
+}
+
+func (xorEncryptor) Decrypt(p []byte) ([]byte, error) { return xorEncryptor{}.Encrypt(p) }
 
 // applyMigrationsThrough0018 loads every migrations/<NNNN>_*.up.sql
 // in numeric order up to and including 0018 and executes them in one
@@ -467,5 +485,101 @@ func TestRLS_WithTenantScrubsStaleCrossTenantGUC(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("rebound conn must see only tenant A's row; got %d", n)
+	}
+}
+
+// TestRLS_PgTokenStoreSelfBindsOnUnboundCtx is the regression test
+// for the OAuth-callback bug Devin Review flagged on PR #50.
+//
+// Background: `/v1/onboarding/callback` is in `defaultAuthSkipPaths()`
+// (it receives an HTTP redirect from Google/Microsoft and has no
+// Bearer JWT). The TenantConnBinder middleware therefore also skips
+// it, so the request ctx reaching `PgTokenStore.Save` has NO bound
+// *sql.Conn. Before the fix in PR #50, Save routed straight through
+// the pool and the INSERT into `oauth_tokens` failed once RLS was
+// enforced — the policy's WITH CHECK clause sees an empty
+// `sn360.tenant_id` GUC, evaluates to NULL, and rejects the row.
+//
+// This test reproduces that exact scenario end-to-end against a real
+// Postgres with the 0018 migration applied and a non-superuser role
+// (the only configuration that exercises RLS): construct a token
+// store, call Save with `context.Background()` (no bound conn, no
+// JWT), and assert the row lands. It also verifies the row is
+// readable under the matching tenant scope — proving the INSERT
+// actually wrote tenant_id correctly rather than spurious-passing on
+// a misconfigured RLS predicate.
+func TestRLS_PgTokenStoreSelfBindsOnUnboundCtx(t *testing.T) {
+	db, cleanup := openRLSTestDB(t)
+	defer cleanup()
+
+	rootCtx := context.Background()
+
+	// Seed two tenants so we can prove the second tenant's scope sees
+	// NONE of the first tenant's token — i.e. the self-binding
+	// actually used the supplied tenant_id rather than leaking a
+	// cross-tenant scope.
+	tenantA := insertTenant(t, db, rootCtx, "tenant-a-oauth")
+	tenantB := insertTenant(t, db, rootCtx, "tenant-b-oauth")
+
+	store, err := onboarding.NewPgTokenStore(db, xorEncryptor{})
+	if err != nil {
+		t.Fatalf("NewPgTokenStore: %v", err)
+	}
+
+	tok := onboarding.Token{
+		AccessToken:  "ya29.testaccesstoken",
+		RefreshToken: "1//testrefreshtoken",
+		TokenType:    "Bearer",
+		ExpiresAt:    time.Now().Add(time.Hour).UTC(),
+		Scope:        "https://www.googleapis.com/auth/gmail.readonly",
+	}
+
+	// THE LOAD-BEARING ASSERTION: Save with an unbound ctx (no JWT
+	// middleware, no TenantConnBinder, no upstream WithTenant). The
+	// pre-fix behaviour returns an RLS rejection error from Postgres;
+	// the post-fix behaviour self-binds via WithTenant(tenantA) and
+	// the INSERT succeeds.
+	if err := store.Save(rootCtx, tenantA, onboarding.ProviderGoogle, tok); err != nil {
+		t.Fatalf("Save with unbound ctx must succeed (self-binding); got: %v", err)
+	}
+
+	// Verify the row was actually written under tenant A's UUID:
+	// read it back under WithTenant(tenantA) scope.
+	ctxA, releaseA, err := db.WithTenant(rootCtx, tenantA)
+	if err != nil {
+		t.Fatalf("WithTenant A: %v", err)
+	}
+	loaded, err := store.Load(ctxA, tenantA, onboarding.ProviderGoogle)
+	if err != nil {
+		_ = releaseA()
+		t.Fatalf("Load under bound ctx A: %v", err)
+	}
+	if loaded.AccessToken != tok.AccessToken {
+		t.Errorf("loaded.AccessToken = %q, want %q", loaded.AccessToken, tok.AccessToken)
+	}
+	if err := releaseA(); err != nil {
+		t.Fatalf("release A: %v", err)
+	}
+
+	// Tenant B's scope must NOT see tenant A's token. This protects
+	// against the false-positive where the self-binding "worked" but
+	// inadvertently planted the row with a NULL or cross-tenant
+	// scope, which would defeat the entire RLS guarantee.
+	ctxB, releaseB, err := db.WithTenant(rootCtx, tenantB)
+	if err != nil {
+		t.Fatalf("WithTenant B: %v", err)
+	}
+	defer func() { _ = releaseB() }()
+	_, err = store.Load(ctxB, tenantB, onboarding.ProviderGoogle)
+	if err == nil {
+		t.Errorf("tenant B must NOT see tenant A's token; Load returned nil error")
+	}
+
+	// Also exercise Delete on the unbound path — same self-bind code
+	// path, so any regression in the helper that breaks Save would
+	// also break Delete. Bound-ctx callers (every JWT-authenticated
+	// path) are covered by the higher-level handler/route tests.
+	if err := store.Delete(rootCtx, tenantA, onboarding.ProviderGoogle); err != nil {
+		t.Errorf("Delete with unbound ctx must succeed (self-binding); got: %v", err)
 	}
 }
