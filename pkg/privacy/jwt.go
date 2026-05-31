@@ -136,12 +136,19 @@ type IssueOptions struct {
 	Action  string
 	URLHash string
 	// Role stamps the `role` claim onto the issued token. Must be
-	// one of the Role* constants. The empty string is permitted —
-	// Issue won't validate it here so test tokens stay minimal —
-	// but RequireRole fails-closed on empty / unknown values, so
-	// production issuers must stamp one of the four canonical
-	// roles for the token to actually authorise anything against
-	// the JWT-gated routes.
+	// one of the Role* constants OR the empty string. The empty
+	// string is permitted so a caller that doesn't yet know the
+	// principal (e.g. a unit test focused on tenant_id round-trip,
+	// or a token class that intentionally carries no role) can
+	// still issue a token; RequireRole will then fail-closed at
+	// verify time because the empty role isn't in any allow-list.
+	//
+	// Non-empty values, by contrast, are validated against the
+	// closed enum below — Issue refuses to sign a token with a
+	// role string that isn't one of admin / operator / viewer /
+	// end_user. This catches typo'd role constants (e.g.
+	// "RoleAdmni") at the call-site rather than letting the typo
+	// flow all the way to a 403 in production.
 	Role string
 }
 
@@ -155,6 +162,18 @@ func (i *JWTIssuer) Issue(tenantID, pseudoMessageID string, opts IssueOptions) (
 	}
 	if pseudoMessageID == "" {
 		return "", errors.New("privacy/jwt: pseudoMessageID is required")
+	}
+	// Validate the role claim at issuance time so a typo'd role
+	// constant — e.g. RequireRole(privacy.RoleAdmin) at the gate
+	// site but Issue(... Role: "adim") at the issuance site —
+	// fails fast at the issuance call instead of silently
+	// 403-ing in production. Empty string remains permitted (see
+	// IssueOptions.Role docstring): RequireRole fails closed on
+	// it anyway, so the round-trip is still safe, but tests and
+	// transitional callers that don't carry a role aren't forced
+	// to.
+	if opts.Role != "" && !IsValidRole(opts.Role) {
+		return "", fmt.Errorf("privacy/jwt: invalid role %q (must be one of admin, operator, viewer, end_user, or empty)", opts.Role)
 	}
 	ttl := opts.TTL
 	if ttl <= 0 {

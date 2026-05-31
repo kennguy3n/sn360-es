@@ -216,3 +216,43 @@ func TestRequireRoleByMethod_MethodNotInTable(t *testing.T) {
 		t.Fatalf("reason=%q", readReason(t, rec))
 	}
 }
+
+// TestRequireRoleByMethod_AuthBeforeMethodTable pins the 401-vs-403
+// ordering contract added in response to PR #51 Devin Review
+// finding 0001. An unauthenticated request that ALSO uses a method
+// not in the role table must surface as 401 (missing_role_claim),
+// not 403 (method_not_in_role_table) — because the latter would
+// leak the shape of the RBAC table (specifically, which methods
+// the route DOES enforce) to a caller we can't even identify.
+// Authenticated callers continue to see method_not_in_role_table
+// because at that point the leak is irrelevant: they're already
+// past the auth gate, and the distinct reason code helps operators
+// debug 403 storms.
+func TestRequireRoleByMethod_AuthBeforeMethodTable(t *testing.T) {
+	mw := RequireRoleByMethod(map[string][]string{
+		http.MethodGet: {privacy.RoleAdmin},
+	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	// Unauthenticated + method-not-in-table → 401, not 403.
+	req := httptest.NewRequest(http.MethodPatch, "/v1/test", nil)
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth + bad method: code=%d (expected 401)", rec.Code)
+	}
+	if got := readReason(t, rec); got != "missing_role_claim" {
+		t.Fatalf("unauth + bad method: reason=%q (expected missing_role_claim)", got)
+	}
+	// Authenticated + method-not-in-table → 403
+	// method_not_in_role_table (unchanged contract).
+	req = withClaims(httptest.NewRequest(http.MethodPatch, "/v1/test", nil), privacy.RoleAdmin)
+	rec = httptest.NewRecorder()
+	mw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("auth + bad method: code=%d (expected 403)", rec.Code)
+	}
+	if got := readReason(t, rec); got != "method_not_in_role_table" {
+		t.Fatalf("auth + bad method: reason=%q (expected method_not_in_role_table)", got)
+	}
+}

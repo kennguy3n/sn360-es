@@ -122,20 +122,33 @@ func RequireRoleByMethodWith(cfg RequireRoleConfig, byMethod map[string][]string
 				next.ServeHTTP(w, r)
 				return
 			}
-			methodAllowed, ok := allowed[r.Method]
+			// Phase 1: claims presence + role validity. Done
+			// BEFORE the per-method lookup so an
+			// unauthenticated request hitting an unlisted
+			// method gets 401 (missing_role_claim), not 403
+			// (method_not_in_role_table). The earlier ordering
+			// leaked the shape of the RBAC table to
+			// unauthenticated callers in dev / standalone
+			// configurations where JWTAuth wasn't wired
+			// upstream. See PR #51 Devin Review finding 0001.
+			role, ok := requireVerifiedRole(r, w)
 			if !ok {
-				// Method not registered for this route's
-				// RBAC table. Surface as 403 so it lines up
-				// with the rest of the gate's failure
-				// codes; the underlying handler will then
-				// also reject it with 405 if reached, but
-				// we don't want to fall through to a
-				// handler that might mistakenly accept a
-				// method the RBAC table doesn't cover.
+				return
+			}
+			// Phase 2: method routing. Only after we know we
+			// have a valid principal do we consult the
+			// per-method allow-list. A method not registered
+			// in the RBAC table is still a 403
+			// (method_not_in_role_table) — the principal is
+			// known, the system just has no allow-list
+			// mapping for this verb on this route.
+			methodAllowed, listed := allowed[r.Method]
+			if !listed {
 				writeForbidden(w, "method_not_in_role_table")
 				return
 			}
-			if !authorize(r, methodAllowed, w) {
+			if _, allow := methodAllowed[role]; !allow {
+				writeForbidden(w, "forbidden_role")
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -143,11 +156,19 @@ func RequireRoleByMethodWith(cfg RequireRoleConfig, byMethod map[string][]string
 	}
 }
 
-// authorize is the shared decision point. It returns true and lets
-// the handler proceed when the JWT principal's role is in `allowed`;
-// otherwise it writes the appropriate 401/403 response and returns
-// false so the caller short-circuits.
-func authorize(r *http.Request, allowed map[string]struct{}, w http.ResponseWriter) bool {
+// requireVerifiedRole runs the claims-presence + role-validity gate
+// shared by RequireRole and RequireRoleByMethod. It returns
+// (role, true) when the request carries a verified principal whose
+// role is one of the four canonical constants. Otherwise it writes
+// the appropriate 401/403 response (missing_role_claim /
+// forbidden_role) and returns ("", false) so the caller short-
+// circuits without consulting any allow-list.
+//
+// Extracting this from authorize() lets RequireRoleByMethod do the
+// claims check BEFORE the method-table lookup, which keeps the
+// 401-vs-403 contract stable regardless of whether JWTAuth ran
+// upstream — an unauthenticated request always sees 401, never 403.
+func requireVerifiedRole(r *http.Request, w http.ResponseWriter) (string, bool) {
 	claims := ClaimsFromContext(r.Context())
 	if claims == nil {
 		// No verified principal on context — RBAC cannot make a
@@ -156,7 +177,7 @@ func authorize(r *http.Request, allowed map[string]struct{}, w http.ResponseWrit
 		// configuration bug that strips claims should not be
 		// silently waved through.
 		writeUnauthorized(w, "missing_role_claim")
-		return false
+		return "", false
 	}
 	role := claims.Role
 	if !privacy.IsValidRole(role) {
@@ -166,9 +187,22 @@ func authorize(r *http.Request, allowed map[string]struct{}, w http.ResponseWrit
 		// authenticated but the system has no basis to grant
 		// access.
 		writeForbidden(w, "forbidden_role")
+		return "", false
+	}
+	return role, true
+}
+
+// authorize is the shared decision point for the single-allow-list
+// RequireRole gate. It returns true and lets the handler proceed
+// when the JWT principal's role is in `allowed`; otherwise it writes
+// the appropriate 401/403 response and returns false so the caller
+// short-circuits.
+func authorize(r *http.Request, allowed map[string]struct{}, w http.ResponseWriter) bool {
+	role, ok := requireVerifiedRole(r, w)
+	if !ok {
 		return false
 	}
-	if _, ok := allowed[role]; !ok {
+	if _, allow := allowed[role]; !allow {
 		writeForbidden(w, "forbidden_role")
 		return false
 	}

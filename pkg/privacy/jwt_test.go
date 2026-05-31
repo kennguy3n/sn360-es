@@ -109,6 +109,28 @@ func TestIsValidRole(t *testing.T) {
 	}
 }
 
+// TestJWTIssueRejectsInvalidRole pins the issuance-time validation
+// added in response to PR #51 Devin Review finding 0004. A typo'd
+// role constant (e.g. "adim" instead of "admin") must fail at the
+// Issue() call site, not later as a silent 403 against the RBAC
+// gate — that mismatch would burn an unbounded amount of debug
+// time before someone thinks to inspect the actual `role` claim
+// on the token. Empty string stays permitted (covered below).
+func TestJWTIssueRejectsInvalidRole(t *testing.T) {
+	iss := mustIssuer(t, time.Hour)
+	for _, bad := range []string{"adim", "Administrator", "root", "end-user", "ADMIN"} {
+		if _, err := iss.Issue("t", "msg", IssueOptions{Role: bad}); err == nil {
+			t.Errorf("expected error issuing with invalid role %q", bad)
+		}
+	}
+	// Empty role must still be accepted — see IssueOptions.Role
+	// docstring. Tests, transitional callers, and token classes
+	// that intentionally carry no role rely on this.
+	if _, err := iss.Issue("t", "msg", IssueOptions{Role: ""}); err != nil {
+		t.Errorf("empty role rejected: %v (must be permitted)", err)
+	}
+}
+
 func TestJWTIssueRequiresArgs(t *testing.T) {
 	iss := mustIssuer(t, time.Hour)
 	if _, err := iss.Issue("", "msg", IssueOptions{}); err == nil {

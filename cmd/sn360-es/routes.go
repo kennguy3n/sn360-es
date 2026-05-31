@@ -224,6 +224,19 @@ func buildMux(app *application) (http.Handler, error) {
 		mux.Handle("/v1/vendors/", middleware.RequireRoleByMethod(map[string][]string{
 			http.MethodDelete: adminOnlyRoles,
 			http.MethodPut:    writeRoles,
+			// GET is intentionally listed even though no GET
+			// sub-route is wired today. Without it the RBAC
+			// gate would intercept GET /v1/vendors/<domain>
+			// with 403 method_not_in_role_table, which would
+			// misleadingly suggest the caller's role is too
+			// low. Listing GET → readRoles lets the request
+			// reach the handler's default switch arm below,
+			// which returns the honest 404 ("no GET handler
+			// for individual vendor detail today"). Same
+			// reasoning for POST/PATCH: keep the gate's idea
+			// of "valid method" aligned with what the route
+			// actually supports.
+			http.MethodGet: readRoles,
 		})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.Method == http.MethodDelete:
