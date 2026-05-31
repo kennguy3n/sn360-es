@@ -55,3 +55,28 @@ ingress:
 #   default behaviour avoids stacking the fleet on one node.
 podHA:
   enabled: true
+
+# PgBouncer sidecar — REQUIRED for 5,000-tenant production scale.
+#
+# Each application pod (monolith OR each role-split pod) gets a
+# PgBouncer sidecar listening on 127.0.0.1:6432 and the app's
+# PG_HOST is rewritten to that loopback. This collapses the
+# fleet-wide Postgres connection budget from `replicaCount *
+# maxOpenConns` (potentially hundreds at 5k tenants and the
+# default 12-replica autoscaling cap) down to the bouncer's
+# `maxClientConn` * pods, keeping Postgres' own
+# `max_connections` ceiling viable.
+#
+# Pool mode stays at the chart default of `session` because the
+# RLS tenant-binding code in `pkg/storage/postgres/tenant_context.go`
+# uses session-level `set_config(..., false)` and assumes one
+# PgBouncer client = one backend conn for the GUC's lifetime.
+# See the long comment on `pgbouncer.upstream.poolMode` in
+# values.yaml for the future path to transaction pooling.
+#
+# `upstream.host` is intentionally left empty so the bouncer
+# inherits `config.pgHost` (the chart's primary Postgres host).
+# Override in cluster-specific overlays (e.g. RDS endpoint) when
+# the prod Postgres lives outside the cluster.
+pgbouncer:
+  enabled: true

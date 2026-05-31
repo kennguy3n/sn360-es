@@ -65,6 +65,26 @@ spec:
             - secretRef:
                 name: {{ include "sn360-es.fullname" . }}
             {{- end }}
+          {{- if .Values.pgbouncer.enabled }}
+          env:
+            {{- /*
+              PgBouncer sidecar overrides. The bouncer listens on
+              the pod's loopback at 6432; the application connects
+              there instead of the real Postgres. The ConfigMap's
+              PG_HOST / PG_PORT (envFrom above) are shadowed by
+              these explicit `env:` entries because Kubernetes
+              resolves `env:` after `envFrom:` — so the app sees
+              127.0.0.1:6432 without us having to rewrite the
+              ConfigMap. Mirrors the role-split deployment's
+              behaviour in deployment-role.yaml so monolith vs
+              role-split topologies stay byte-compatible from the
+              application's perspective.
+            */}}
+            - name: PG_HOST
+              value: "127.0.0.1"
+            - name: PG_PORT
+              value: "6432"
+          {{- end }}
           livenessProbe:
             httpGet:
               path: {{ .Values.probes.liveness.path }}
@@ -88,6 +108,68 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+        {{- if .Values.pgbouncer.enabled }}
+        - name: pgbouncer
+          image: "{{ .Values.pgbouncer.image.repository }}:{{ .Values.pgbouncer.image.tag }}"
+          imagePullPolicy: {{ .Values.pgbouncer.image.pullPolicy }}
+          ports:
+            - name: pgbouncer
+              containerPort: 6432
+              protocol: TCP
+          env:
+            {{- $up := .Values.pgbouncer.upstream }}
+            {{- /*
+              DB_HOST resolves to either the bouncer's explicit
+              upstream (when set) or the chart's main PG_HOST.
+              Both values support Helm templating (e.g. the
+              default config.pgHost is
+              `{{ .Release.Name }}-postgresql`) so we pipe through
+              `tpl` against the chart context. Identical to the
+              role-split sidecar in deployment-role.yaml — the
+              sidecar spec is duplicated rather than extracted
+              into a helper because Helm template functions inside
+              a container spec produce subtly different YAML
+              indentation across Helm versions, and keeping the
+              block local to the topology keeps rendered manifests
+              deterministic.
+            */}}
+            {{- $rawHost := $up.host | default .Values.config.pgHost }}
+            - name: DB_HOST
+              value: {{ tpl ($rawHost | toString) . | quote }}
+            - name: DB_PORT
+              value: {{ $up.port | quote }}
+            - name: POOL_MODE
+              value: {{ $up.poolMode | quote }}
+            - name: MAX_CLIENT_CONN
+              value: {{ $up.maxClientConn | quote }}
+            - name: DEFAULT_POOL_SIZE
+              value: {{ $up.defaultPoolSize | quote }}
+            - name: RESERVE_POOL_SIZE
+              value: {{ $up.reservePoolSize | quote }}
+            - name: SERVER_IDLE_TIMEOUT
+              value: {{ $up.serverIdleTimeout | quote }}
+            - name: SERVER_LIFETIME
+              value: {{ $up.serverLifetime | quote }}
+            - name: AUTH_TYPE
+              value: "scram-sha-256"
+            - name: AUTH_USER
+              value: {{ .Values.config.pgUser | quote }}
+            - name: DB_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "sn360-es.fullname" . }}
+                  key: PG_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sn360-es.fullname" . }}
+                  key: PG_PASSWORD
+                  optional: true
+          resources:
+            {{- toYaml .Values.pgbouncer.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+        {{- end }}
       volumes:
         - name: tmp
           emptyDir:
