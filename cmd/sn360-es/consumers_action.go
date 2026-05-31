@@ -13,6 +13,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/constant"
 	"github.com/kennguy3n/sn360-es/internal/dto"
 	"github.com/kennguy3n/sn360-es/internal/service/action"
+	"github.com/kennguy3n/sn360-es/internal/service/bridge"
 	"github.com/kennguy3n/sn360-es/pkg/events"
 	"github.com/kennguy3n/sn360-es/pkg/privacy"
 )
@@ -246,6 +247,30 @@ func (a *application) handleActionQuarantine(ctx context.Context, msg events.Mes
 		slog.String("provider", string(kind)),
 		slog.String("primary", string(env.Primary)),
 		slog.Int("score", env.Score))
+
+	// WS-5A.1: fan the quarantine apply event out to the
+	// sn360-security-platform SOC so the platform's correlation
+	// engine and OpenSearch indexer see the quarantine action on
+	// the same `sn360.events.email.<tid>.quarantine` subject the
+	// rest of the platform consumes. The bridge no-ops when
+	// PLATFORM_NATS_ENABLED=false so this call costs nothing in
+	// standalone deployments.
+	if a.platformBridge != nil {
+		if perr := a.platformBridge.PublishQuarantine(ctx, bridge.QuarantineEvent{
+			TenantID:      env.TenantID,
+			MessageID:     env.MessageID,
+			CorrelationID: env.CorrelationID,
+			Action:        bridge.QuarantineActionApplied,
+			Tier:          env.Tier,
+			Primary:       env.Primary,
+			Score:         env.Score,
+			Recipient:     env.Email,
+		}); perr != nil {
+			a.logger.WarnContext(ctx, "sn360-es: action.quarantine: platform bridge publish failed",
+				slog.String("tenant_id", env.TenantID),
+				slog.Any("error", perr))
+		}
+	}
 	return nil
 }
 
@@ -384,6 +409,21 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 		}
 	}
 
+	// 5. WS-5A.1 — fan terminal verdicts out to the
+	// sn360-security-platform SOC after the local action signals
+	// have been published. The bridge gates itself on tier
+	// (Blocked / HighRisk only) and no-ops when
+	// PLATFORM_NATS_ENABLED=false so this call costs nothing in
+	// standalone deployments.
+	if a.platformBridge != nil {
+		if perr := a.platformBridge.PublishEvaluation(ctx, &res); perr != nil {
+			a.logger.WarnContext(ctx, "sn360-es: ingestion-action: platform bridge publish failed",
+				slog.String("tenant_id", res.TenantID),
+				slog.String("tier", string(res.Tier)),
+				slog.Any("error", perr))
+		}
+	}
+
 	return nil
 }
 
@@ -418,6 +458,30 @@ func (a *application) handleQuarantineRelease(ctx context.Context, msg events.Me
 		CorrelationID:        env.CorrelationID,
 	}); err != nil {
 		return fmt.Errorf("quarantine.release: %w", err)
+	}
+
+	// WS-5A.1: close the bi-directional quarantine lifecycle loop
+	// to the platform SOC. The platform's correlation engine and
+	// OpenSearch indexer pair this release event (via MessageID)
+	// with the original `.quarantine.applied` event so the SOC UI
+	// can show the full lifecycle (apply -> release) without
+	// re-querying sn360-es. Tier / Primary / Score are not on the
+	// release envelope by design — the platform joins on MessageID
+	// to retrieve the original verdict metadata. Bridge no-ops
+	// when PLATFORM_NATS_ENABLED=false so this call costs nothing
+	// in standalone deployments.
+	if a.platformBridge != nil {
+		if perr := a.platformBridge.PublishQuarantine(ctx, bridge.QuarantineEvent{
+			TenantID:      env.TenantID,
+			MessageID:     env.PseudonymizedMessage,
+			CorrelationID: env.CorrelationID,
+			Action:        bridge.QuarantineActionReleased,
+			RequestedBy:   env.RequestedBy,
+		}); perr != nil {
+			a.logger.WarnContext(ctx, "sn360-es: quarantine.release: platform bridge publish failed",
+				slog.String("tenant_id", env.TenantID),
+				slog.Any("error", perr))
+		}
 	}
 	return nil
 }

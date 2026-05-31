@@ -18,6 +18,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/repository"
 	"github.com/kennguy3n/sn360-es/internal/service/action"
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
+	"github.com/kennguy3n/sn360-es/internal/service/bridge"
 	"github.com/kennguy3n/sn360-es/internal/service/education"
 	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
 	"github.com/kennguy3n/sn360-es/internal/service/predict"
@@ -97,6 +98,10 @@ func newTestApp(t *testing.T) *application {
 		eventBus:       bus,
 		recipientSvc:   predict.NewRecipientService(predict.RecipientServiceConfig{}),
 		openSvc:        predict.NewOpenService(predict.OpenServiceConfig{}),
+		// Disabled platform bridge so consumer handlers can call
+		// PublishEvaluation / PublishQuarantine / PublishEscalation
+		// without nil-checking.
+		platformBridge: bridge.Disabled(),
 	}
 
 	// Real micro-lesson service so the education route serves an

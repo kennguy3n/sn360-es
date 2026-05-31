@@ -119,6 +119,22 @@ func (c Config) validate() error {
 		if c.NATS.TLSInsecure {
 			return errors.New("NATS_TLS_INSECURE=true is not allowed in production environments (UAT/prod)")
 		}
+		// Mirror the NATS_TLS_INSECURE check for the platform
+		// bridge connection. PLATFORM_NATS_TLS_INSECURE=true would
+		// silently strip transport security on the cross-cluster
+		// link that carries every HighRisk+ verdict to the SOC —
+		// exactly the kind of integrity-critical channel that must
+		// not ship a quiet downgrade.
+		if c.Platform.NATSTLSInsecure {
+			return errors.New("PLATFORM_NATS_TLS_INSECURE=true is not allowed in production environments (UAT/prod)")
+		}
+		// WS-5A.1 bridge requires URLs to be set when enabled.
+		// Enforce at boot so a misconfigured deploy fails fast
+		// instead of silently running with bridge publishes
+		// going nowhere.
+		if c.Platform.NATSEnabled && strings.TrimSpace(c.Platform.NATSURLs) == "" {
+			return errors.New("PLATFORM_NATS_URLS must be set when PLATFORM_NATS_ENABLED=true")
+		}
 		if c.SMTP.SkipVerify {
 			return errors.New("SMTP_SKIP_VERIFY=true is not allowed in production environments (UAT/prod)")
 		}
