@@ -286,6 +286,40 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 			app.pgDB = pgDB
 			app.repos = repository.NewPostgresRegistry(pgDB)
 			app.closers = append(app.closers, pgDB.Close)
+
+			// WS-2a (Read-Replica Routing): when PG_READ_HOST
+			// is set, attach a second pool against the
+			// replica. Unbound Query* calls then route to the
+			// replica automatically; tenant-bound queries
+			// stay on the primary (their conn already holds
+			// the RLS session GUC). A failed AttachReader is
+			// fatal because a deployment that explicitly
+			// configured a replica AND wired the URL into the
+			// rollout almost certainly relies on the read
+			// offload for capacity — silently degrading to
+			// single-pool would mask a real misconfig until
+			// the primary saturates under load. Operators who
+			// want to disable replica routing without
+			// changing manifests should unset PG_READ_HOST.
+			if cfg.Postgres.Read.Host != "" {
+				readCfg := postgres.Config{
+					Host:            cfg.Postgres.Read.Host,
+					Port:            cfg.Postgres.Read.Port,
+					User:            cfg.Postgres.Read.User,
+					Password:        cfg.Postgres.Read.Password,
+					Database:        cfg.Postgres.Read.Database,
+					SSLMode:         cfg.Postgres.Read.SSLMode,
+					MaxOpenConns:    cfg.Postgres.Read.MaxOpenConns,
+					MaxIdleConns:    cfg.Postgres.Read.MaxIdleConns,
+					ConnMaxLifetime: cfg.Postgres.Read.ConnMaxLifetime,
+				}
+				if rerr := pgDB.AttachReader(ctx, readCfg); rerr != nil {
+					return nil, fmt.Errorf("postgres read replica: %w", rerr)
+				}
+				logger.Info("sn360-es: postgres read replica attached",
+					slog.String("read_host", pgDB.ReadHost()),
+					slog.String("primary_host", cfg.Postgres.Host))
+			}
 		}
 	} else {
 		logger.Info("sn360-es: postgres not configured; repository layer disabled")

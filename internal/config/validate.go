@@ -150,6 +150,17 @@ func (c Config) validate() error {
 		if strings.EqualFold(strings.TrimSpace(c.Postgres.SSLMode), "disable") {
 			return errors.New("PG_SSLMODE=disable is not allowed in production environments (UAT/prod); set PG_SSLMODE=require or PG_SSLMODE=verify-full")
 		}
+		// WS-2a: the read replica carries the same row-level data
+		// as the primary, so PG_READ_SSLMODE=disable downgrades
+		// the trust chain in exactly the same way as the primary
+		// guard above. Only check when an operator has explicitly
+		// wired a replica (PG_READ_HOST != "") — when the field
+		// is left blank the replica path is not used at all and
+		// the guard is moot.
+		if c.Postgres.Read.Host != "" &&
+			strings.EqualFold(strings.TrimSpace(c.Postgres.Read.SSLMode), "disable") {
+			return errors.New("PG_READ_SSLMODE=disable is not allowed in production environments (UAT/prod) when PG_READ_HOST is set; set PG_READ_SSLMODE=require or PG_READ_SSLMODE=verify-full")
+		}
 		// CORS_ALLOWED_ORIGINS=* (wildcard) defeats browser SOP for
 		// every authenticated route. middleware/cors.go already
 		// fails closed by defaulting to no origins in non-dev, but
