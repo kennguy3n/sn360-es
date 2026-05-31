@@ -362,14 +362,30 @@ pgbouncer:
     # client to one backend conn for its lifetime, which is
     # what the GUC binding assumes.
     #
-    # The connection-collapse benefit is preserved: each Go
-    # pod still gets up to `db.maxOpenConns` PgBouncer
-    # connections (typically 25), so a 5-replica deployment
-    # holds 5 × 25 = 125 client conns — bouncer multiplexes
-    # these down to `defaultPoolSize` backend conns per pool,
-    # capped globally at `maxClientConn`. That's the lever
-    # that keeps Postgres' `max_connections` budget sustainable
-    # at 5,000 tenants regardless of replica count.
+    # Session pooling does NOT multiplex multiple clients onto
+    # fewer backend conns — each PgBouncer client conn is pinned
+    # 1:1 to a backend conn for its full lifetime. What session
+    # mode buys at scale is:
+    #
+    #   1. A global `maxClientConn` ceiling per pod (200): the
+    #      bouncer refuses new clients past that cap, which puts
+    #      a hard upper bound on backend conns and prevents the
+    #      Go app's pool from unbounded growth under bursts.
+    #
+    #   2. `defaultPoolSize` as a concurrency cap per
+    #      database/user pool (25): subsequent client conns
+    #      queue at the bouncer instead of opening more backend
+    #      conns, smoothing out pool churn.
+    #
+    #   3. Cheap conn churn: TCP+TLS+startup handshakes are
+    #      paid once per long-lived backend conn instead of per
+    #      Go conn, even if the Go pool aggressively recycles.
+    #
+    # Steady-state backend conn count = min(Go MaxOpenConns ×
+    # pod_replicas, maxClientConn × pod_replicas). To actually
+    # collapse fleet-wide backend conns (e.g. 5000 tenants ×
+    # peak concurrency) below that linear floor we'd need
+    # `transaction` pooling — see the next paragraph.
     #
     # To switch to `transaction` pooling later, refactor
     # WithTenant / WithCrossTenant to wrap the GUC set + the

@@ -56,23 +56,31 @@ ingress:
 podHA:
   enabled: true
 
-# PgBouncer sidecar — REQUIRED for 5,000-tenant production scale.
+# PgBouncer sidecar — enabled for 5,000-tenant production scale.
 #
 # Each application pod (monolith OR each role-split pod) gets a
 # PgBouncer sidecar listening on 127.0.0.1:6432 and the app's
-# PG_HOST is rewritten to that loopback. This collapses the
-# fleet-wide Postgres connection budget from `replicaCount *
-# maxOpenConns` (potentially hundreds at 5k tenants and the
-# default 12-replica autoscaling cap) down to the bouncer's
-# `maxClientConn` * pods, keeping Postgres' own
-# `max_connections` ceiling viable.
+# PG_HOST is rewritten to that loopback.
 #
-# Pool mode stays at the chart default of `session` because the
-# RLS tenant-binding code in `pkg/storage/postgres/tenant_context.go`
-# uses session-level `set_config(..., false)` and assumes one
-# PgBouncer client = one backend conn for the GUC's lifetime.
-# See the long comment on `pgbouncer.upstream.poolMode` in
-# values.yaml for the future path to transaction pooling.
+# Why this is on in prod (session mode):
+#   * `maxClientConn` is a HARD per-pod cap on backend conns
+#     (defaults to 200) — without the bouncer, an under-tuned
+#     Go pool or a tenant burst can push fleet-wide conns past
+#     Postgres' `max_connections` and start refusing new conns.
+#   * Backend conns are long-lived (`serverLifetime: 3600`),
+#     so TCP+TLS+startup handshakes amortise across many
+#     short-lived Go conns instead of per app conn.
+#   * Mid-tier work (graceful shutdown drain, rolling deploy,
+#     node eviction) can hold the conn open across the brief
+#     reconnect window while the Go app reopens its pool.
+#
+# Note: session pooling does NOT multiplex clients onto fewer
+# backend conns — each PgBouncer client is pinned 1:1 to a
+# backend for its lifetime. Full multiplexing requires
+# `transaction` mode, which is incompatible with the RLS
+# session-GUC binding in pkg/storage/postgres/tenant_context.go
+# today. See the long comment on `pgbouncer.upstream.poolMode`
+# in values.yaml for the exact path to transaction pooling.
 #
 # `upstream.host` is intentionally left empty so the bouncer
 # inherits `config.pgHost` (the chart's primary Postgres host).

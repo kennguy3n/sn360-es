@@ -205,6 +205,36 @@ spec:
             {{- toYaml $ctx.Values.pgbouncer.resources | nindent 12 }}
           securityContext:
             {{- toYaml $ctx.Values.securityContext | nindent 12 }}
+          {{- /*
+            TCP liveness + readiness probes on the bouncer's listen
+            port. Without these, a crashed-but-still-running pgbouncer
+            process (e.g. OOM-killed and not restarting, or wedged in a
+            DNS-resolution loop against `upstream.host`) would NOT
+            evict the pod from Service endpoints — the app container's
+            /healthz probe doesn't exercise the DB path, and /readyz
+            checks DB connectivity but uses 127.0.0.1:6432 which would
+            time out instead of error fast, so the pod would oscillate
+            between Ready and NotReady on probe-timeout intervals.
+
+            A direct TCP probe on the bouncer's port closes that gap:
+            readiness flips to NotReady within `failureThreshold *
+            periodSeconds` of bouncer death, and liveness restarts the
+            sidecar container within the same window.
+          */}}
+          livenessProbe:
+            tcpSocket:
+              port: 6432
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: 6432
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
         {{- end }}
       volumes:
         - name: tmp
