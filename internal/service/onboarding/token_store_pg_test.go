@@ -2,9 +2,13 @@ package onboarding
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
 )
 
 type testEncryptor struct{}
@@ -154,5 +158,51 @@ func TestPgTokenStore_RejectsEmptyTenantID(t *testing.T) {
 	}
 	if err := s.Delete(ctx, "", ProviderGoogle); err == nil {
 		t.Error("Delete with empty tenantID must error")
+	}
+}
+
+// TestPgTokenStore_ListAll_RejectsBoundCtx asserts the defensive
+// guard added in response to Devin Review on PR #50. ListAll is
+// genuinely cross-tenant — it returns rows for every tenant — and
+// it MUST NOT be called from a ctx that already pins a per-tenant
+// bound conn. Two failure modes the guard prevents:
+//
+//  1. Resource leak / latent deadlock — acquiring a fresh conn via
+//     WithCrossTenant while the caller's conn is still pinned holds
+//     two pool slots simultaneously. Under MaxOpenConns=1 (test
+//     harnesses, low-tier deployments) this deadlocks: the second
+//     acquire blocks waiting for the conn that only the calling
+//     goroutine can release.
+//
+//  2. Semantic confusion — calling a cross-tenant function from
+//     inside a single-tenant scope is a category error; the row set
+//     the caller gets back has nothing to do with the binding they
+//     thought they were operating under.
+//
+// We seed ctx with a sentinel *sql.Conn (the value never gets used
+// for SQL — the guard short-circuits before any conn methods run)
+// and assert the error mentions both "ListAll" and "bound conn" so
+// future regressions are caught with a high-signal failure mode.
+func TestPgTokenStore_ListAll_RejectsBoundCtx(t *testing.T) {
+	s := &PgTokenStore{db: nil, encryptor: &testEncryptor{}}
+	// The guard inspects postgres.BoundConnFromContext(ctx) and
+	// returns immediately on a non-nil conn — the conn is never
+	// dereferenced. A bare (*sql.Conn)(nil) typed as *sql.Conn
+	// would be nil-equivalent for the guard, so we use a heap
+	// address via new() to ensure BoundConnFromContext returns
+	// non-nil. This is the same trick the integration test in
+	// pkg/storage/postgres uses; it does not bind a real Postgres
+	// session because we are testing the GUARD, not the query.
+	ctx := postgres.WithBoundConn(context.Background(), new(sql.Conn))
+	_, err := s.ListAll(ctx)
+	if err == nil {
+		t.Fatal("ListAll under a bound ctx must error; got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "ListAll") {
+		t.Errorf("error message %q does not mention ListAll", msg)
+	}
+	if !strings.Contains(msg, "bound conn") {
+		t.Errorf("error message %q does not explain the bound-conn precondition", msg)
 	}
 }

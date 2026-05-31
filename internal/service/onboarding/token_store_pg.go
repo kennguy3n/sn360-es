@@ -178,6 +178,38 @@ DELETE FROM oauth_tokens WHERE tenant_id=$1 AND provider=$2`,
 // runtime scope the policy would silently return zero rows after
 // migration 0018 lands.
 func (s *PgTokenStore) ListAll(ctx context.Context) ([]StoredTokenRef, error) {
+	// Defensive guard: if the caller's ctx already pins a tenant-bound
+	// *sql.Conn (HTTP TenantConnBinder, consumer dispatcher,
+	// worker WithTenant scope), we MUST fail fast rather than acquire
+	// a second pool conn via WithCrossTenant.
+	//
+	// Two reasons:
+	//
+	//   (1) Resource leak / latent deadlock. Acquiring a fresh conn
+	//       while the caller's conn is still pinned holds two pool
+	//       slots simultaneously for the duration of ListAll. Under
+	//       MaxOpenConns=1 (test harnesses, low-tier deployments) this
+	//       deadlocks: WithCrossTenant blocks waiting for a conn that
+	//       can only come from the very caller that called us.
+	//
+	//   (2) Semantic confusion. ListAll is genuinely cross-tenant —
+	//       it returns rows for every tenant. Calling it under a
+	//       single-tenant bound conn is a category error: what tenant
+	//       did the caller think they were operating as? Surfacing
+	//       this as a clear error at the call site is far better than
+	//       returning all-tenant rows to a caller that probably meant
+	//       to read just their own.
+	//
+	// In practice ListAll is only called from boot-time application
+	// init with context.Background() (no upstream binding), so this
+	// guard is a never-trip safety net for future callers. It is
+	// symmetric with the bindTenantIfNeeded helper used by Save /
+	// Load / Delete — both halves of the store now make their
+	// binding state explicit at the entrypoint rather than silently
+	// stacking scopes.
+	if postgres.BoundConnFromContext(ctx) != nil {
+		return nil, errors.New("onboarding: ListAll: ctx already carries a tenant-bound conn; ListAll is cross-tenant and must be called from an unbound ctx (e.g. boot-time context.Background()) — calling it under a single-tenant binding is a category error and risks a pool-exhaustion deadlock")
+	}
 	crossCtx, release, err := s.db.WithCrossTenant(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("onboarding: list tokens: cross-tenant scope: %w", err)
