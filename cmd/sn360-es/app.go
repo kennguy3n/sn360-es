@@ -299,7 +299,17 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	if cfg.Banner.TokenSecret != "" {
 		ttl := cfg.Banner.TokenTTL
 		if ttl <= 0 {
-			ttl = 30 * 24 * time.Hour
+			// 7 days matches the explicit default in
+			// internal/config/scoring.go::loadBanner() and the
+			// NewJWTIssuer fallback in pkg/privacy/jwt.go. Keeping
+			// the three call-sites in sync caps the replay window
+			// for leaked banner / quarantine / interstitial tokens
+			// at one week — long enough that real-world banner
+			// rendering still works after a holiday but short
+			// enough that a rotated secret or offboarded user
+			// retires their outstanding tokens within a sane
+			// forensic horizon.
+			ttl = 7 * 24 * time.Hour
 		}
 		issuer, jerr := privacy.NewJWTIssuer(privacy.JWTConfig{
 			Secret: []byte(cfg.Banner.TokenSecret),
