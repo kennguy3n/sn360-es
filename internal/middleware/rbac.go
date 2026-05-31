@@ -60,8 +60,11 @@ type RequireRoleConfig struct {
 //     allowedRoles, the request is denied with 403.
 //
 // Passing an empty or all-empty allowedRoles slice is a wiring bug
-// (no role would ever satisfy it) — the middleware logs a clear
-// warning and 403s every request so the misconfiguration is loud.
+// (no role would ever satisfy it) so RequireRole panics at wrap
+// time. This mirrors the unknown-role panic and means the
+// misconfiguration surfaces at process boot — the alternative of
+// silently 403ing every request would only show up as a
+// production-time outage on whichever route was wrapped.
 //
 // allowedRoles is validated against privacy.IsValidRole at wrap
 // time: any unknown role string panics so a typo in the call-site
@@ -211,8 +214,21 @@ func authorize(r *http.Request, allowed map[string]struct{}, w http.ResponseWrit
 
 // buildRoleSet converts an allow-list slice into the constant-time
 // lookup map used by authorize. Panics if any role is not in the
-// privacy.IsValidRole allowlist so typos surface at boot.
+// privacy.IsValidRole allowlist so typos surface at boot, and panics
+// on an empty input because that's a wiring bug — no role would
+// ever satisfy the gate, and we'd rather catch the empty wire at
+// process start than discover it via a 100% 403 rate on whichever
+// route the gate was applied to. RequireRoleByMethodWith calls this
+// per-method so an empty per-method slice also panics for the same
+// reason: an empty per-method list means "method registered but no
+// role permitted", which is indistinguishable from "method
+// accidentally typed twice and the second copy lost its roles".
 func buildRoleSet(roles []string) map[string]struct{} {
+	if len(roles) == 0 {
+		panic("middleware: RequireRole / RequireRoleByMethod received empty allow-list; " +
+			"this is a wiring bug — no role would ever satisfy the gate, " +
+			"and silently 403ing every request would only surface in production")
+	}
 	out := make(map[string]struct{}, len(roles))
 	for _, role := range roles {
 		if !privacy.IsValidRole(role) {

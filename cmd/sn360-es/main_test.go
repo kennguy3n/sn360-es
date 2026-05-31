@@ -352,6 +352,107 @@ func TestBuildMux_RegistersAllRoutes(t *testing.T) {
 	})
 }
 
+// TestBuildMux_VendorRoute_GETApproveIs404 pins the dispatch fix
+// from PR #51 Devin Review ANALYSIS_..._0001: under the older
+// dispatch the `/v1/vendors/{domain}/approve` arm matched on the
+// path suffix alone, so a viewer's `GET /v1/vendors/foo/approve`
+// passed the RBAC gate (GET is in readRoles per the method table)
+// and reached ServeApprove, which 405'd. That 405 leaked the
+// existence of the admin-only /approve sub-path to readers. The
+// fixed dispatch co-matches HTTP method with the path suffix, so
+// non-PUT requests to /approve and /revoke fall through to the
+// generic 404 — same response shape as any other unknown vendor
+// sub-route, no leak. We assert each principal × method × suffix
+// combination explicitly because the failure mode (405 vs 404)
+// hinges on a one-line case condition that's easy to regress.
+func TestBuildMux_VendorRoute_GETApproveIs404(t *testing.T) {
+	app := newTestApp(t)
+	app.repos = repository.NewInMemoryRegistry()
+	mux, err := buildMux(app)
+	if err != nil {
+		t.Fatalf("buildMux: %v", err)
+	}
+	// Same auth-injecting wrapper as TestBuildMux_RegistersAllRoutes
+	// (verbatim) so the test exercises the route table through the
+	// real RBAC middleware, not a bypassed code path.
+	authedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if tid := r.Header.Get("X-Test-Tenant"); tid != "" {
+			ctx := middleware.ContextWithTenantID(r.Context(), tid)
+			role := r.Header.Get("X-Test-Role")
+			if role == "" {
+				role = privacy.RoleViewer
+			}
+			ctx = middleware.ContextWithClaims(ctx, &privacy.ActionClaims{
+				TenantID: tid,
+				Role:     role,
+			})
+			r = r.WithContext(ctx)
+		}
+		mux.ServeHTTP(w, r)
+	})
+	srv := httptest.NewServer(authedMux)
+	t.Cleanup(srv.Close)
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		role   string
+		// wantStatus is the expected HTTP status. 404 means the
+		// dispatch's default arm absorbed the request; 405 would
+		// mean we leaked the path to the handler. 200 / 400 /
+		// 4xx-other means the handler ran (proves wiring).
+		wantStatus int
+	}{
+		// Negative cases the dispatch fix introduces. GET /approve
+		// and /revoke must now 404 regardless of role — the path
+		// shape is hidden from anyone who isn't using PUT.
+		{"viewer GET approve 404", http.MethodGet, "/v1/vendors/foo.test/approve", privacy.RoleViewer, http.StatusNotFound},
+		{"viewer GET revoke 404", http.MethodGet, "/v1/vendors/foo.test/revoke", privacy.RoleViewer, http.StatusNotFound},
+		{"admin GET approve 404", http.MethodGet, "/v1/vendors/foo.test/approve", privacy.RoleAdmin, http.StatusNotFound},
+		// POST is not in the RBAC method table for /v1/vendors/ —
+		// see routes.go where only GET/PUT/DELETE are listed —
+		// so the gate returns 403 (method_not_in_role_table)
+		// before the dispatch ever runs. This is decisively NOT
+		// a regression: the RBAC fix from PR #51 / Session 8 is
+		// what enforces "method must be in the table or fail
+		// closed". Asserted here so a future "let's allow POST
+		// too" change has to update both the table AND this
+		// expectation, surfacing the security choice.
+		{"admin POST approve 403 from method-table", http.MethodPost, "/v1/vendors/foo.test/approve", privacy.RoleAdmin, http.StatusForbidden},
+		// Positive case: PUT /approve as admin reaches the handler.
+		// ServeApprove will 400 on the empty body (no tenant_id /
+		// no payload), which proves the dispatch let the request
+		// through to handler logic — distinct from the 404 above.
+		{"admin PUT approve reaches handler", http.MethodPut, "/v1/vendors/foo.test/approve", privacy.RoleAdmin, http.StatusBadRequest},
+		// Unmatched vendor sub-route stays 404 for everyone — the
+		// default arm. Belt-and-braces in case a future refactor
+		// drops the default case.
+		{"admin GET unknown subpath 404", http.MethodGet, "/v1/vendors/foo.test/wat", privacy.RoleAdmin, http.StatusNotFound},
+	}
+	client := srv.Client()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest(tc.method, srv.URL+tc.path, strings.NewReader("{}"))
+			if err != nil {
+				t.Fatalf("request: %v", err)
+			}
+			req.Header.Set("X-Test-Tenant", "t-vendor-route")
+			req.Header.Set("X-Test-Role", tc.role)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatalf("do: %v", err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != tc.wantStatus {
+				t.Errorf("status: got %d, want %d (method=%s path=%s role=%s)",
+					resp.StatusCode, tc.wantStatus, tc.method, tc.path, tc.role)
+			}
+		})
+	}
+}
+
 // TestBuildMux_RoleGating confirms that the role enum collapses
 // the mux to /healthz, /readyz, /metrics, /docs* for non-API
 // roles. Consumer and worker pods still need probes + scrapes,

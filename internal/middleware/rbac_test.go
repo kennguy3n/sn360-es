@@ -125,6 +125,56 @@ func TestRequireRole_PanicsOnUnknownRoleAtWrapTime(t *testing.T) {
 	_ = RequireRole("adim")
 }
 
+// TestRequireRole_PanicsOnEmptyAllowListAtWrapTime asserts the
+// boot-time guard for the other half of the wiring-bug surface:
+// RequireRole() with no roles at all. The docstring previously
+// claimed this "logs a clear warning and 403s every request" but
+// the implementation just returned an empty allow-list, which
+// silently 403'd every request without any boot-time signal — the
+// exact misconfig the docstring promised to make loud. PR #51
+// Devin Review finding ANALYSIS_..._0003 surfaced the mismatch.
+// We resolve in favour of the doc's promise: empty allow-list now
+// panics at wrap time, matching the unknown-role panic. The
+// panic message must name the symptom so an operator can grep for
+// it from a stack trace alone.
+func TestRequireRole_PanicsOnEmptyAllowListAtWrapTime(t *testing.T) {
+	cases := []struct {
+		name string
+		call func()
+	}{
+		{
+			name: "RequireRole zero args",
+			call: func() { _ = RequireRole() },
+		},
+		{
+			name: "RequireRoleByMethod method with empty roles",
+			call: func() {
+				_ = RequireRoleByMethod(map[string][]string{
+					http.MethodGet: {},
+				})
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatal("expected panic on empty allow-list")
+				}
+				msg, ok := r.(string)
+				if !ok {
+					t.Fatalf("panic value should be a string: %T %v", r, r)
+				}
+				if !strings.Contains(msg, "empty allow-list") {
+					t.Fatalf("panic message must mention 'empty allow-list': %q", msg)
+				}
+			}()
+			tc.call()
+		})
+	}
+}
+
 // TestRequireRole_SkipPathsBypass pins the skip-paths behaviour. The
 // gate must wave through anything that matches an exact path or a
 // trailing-slash prefix, even when no claims are present — this is

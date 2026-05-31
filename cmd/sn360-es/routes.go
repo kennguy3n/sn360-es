@@ -238,12 +238,26 @@ func buildMux(app *application) (http.Handler, error) {
 			// actually supports.
 			http.MethodGet: readRoles,
 		})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Dispatch is gated on BOTH method AND path suffix.
+			// An earlier version only matched on the path suffix,
+			// which meant e.g. `GET /v1/vendors/foo/approve` —
+			// a viewer-readable method per the RBAC table above —
+			// would reach ServeApprove and bounce back with 405
+			// from the handler's own method check. That 405 leaks
+			// the existence of the /approve sub-path to readers
+			// (admin / operator / viewer) who have no business
+			// learning about admin-only mutation surfaces. With
+			// the method co-matched here, anything that isn't
+			// PUT-on-/approve, PUT-on-/revoke, or DELETE-on-the-
+			// path falls through to the honest 404 below — same
+			// response as any other unknown vendor sub-route, no
+			// leak of path shape.
 			switch {
 			case r.Method == http.MethodDelete:
 				vendorH.ServeDelete(w, r)
-			case strings.HasSuffix(r.URL.Path, "/approve"):
+			case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/approve"):
 				vendorH.ServeApprove(w, r)
-			case strings.HasSuffix(r.URL.Path, "/revoke"):
+			case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/revoke"):
 				vendorH.ServeRevoke(w, r)
 			default:
 				w.Header().Set("Content-Type", "application/json")
