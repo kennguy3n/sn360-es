@@ -488,3 +488,86 @@ func TestJWTIssuerPublicJWKS(t *testing.T) {
 		}
 	})
 }
+
+// TestJWTES256RejectsKeypairMismatch pins the boot-time keypair
+// consistency check (round-2 finding #4). Without this guard an
+// operator who points JWT_PUBLIC_KEY_PATH at a leftover file from a
+// previous keypair would get an issuer that signs ES256 tokens its
+// own Verify() rejects AND publishes the wrong key on
+// /.well-known/jwks.json, breaking sibling verifiers too. The
+// regression simulates exactly that misconfiguration: priv from
+// pair A, pub from pair B (both valid P-256 keys, but from
+// different generations) — NewJWTIssuer must refuse.
+func TestJWTES256RejectsKeypairMismatch(t *testing.T) {
+	a := mustGenerateP256(t)
+	b := mustGenerateP256(t)
+	_, err := NewJWTIssuer(JWTConfig{
+		SigningAlg: SigningAlgES256,
+		PrivateKey: a,
+		PublicKey:  &b.PublicKey, // mismatched half — wrong file
+		Issuer:     "sn360-test",
+		TTL:        time.Hour,
+	})
+	if err == nil {
+		t.Fatal("expected ES256 + mismatched public key to be rejected at construction time")
+	}
+	if !errors.Is(err, ErrInvalidKey) {
+		t.Errorf("expected ErrInvalidKey wrapped, got %v", err)
+	}
+}
+
+// TestJWTES256AcceptsMatchingKeypair confirms the keypair check is
+// not over-eager: priv + &priv.PublicKey is the canonical happy
+// path and must remain accepted.
+func TestJWTES256AcceptsMatchingKeypair(t *testing.T) {
+	priv := mustGenerateP256(t)
+	iss, err := NewJWTIssuer(JWTConfig{
+		SigningAlg: SigningAlgES256,
+		PrivateKey: priv,
+		PublicKey:  &priv.PublicKey,
+		Issuer:     "sn360-test",
+		TTL:        time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("matching keypair should be accepted, got: %v", err)
+	}
+	if iss == nil {
+		t.Fatal("matching keypair: issuer is nil")
+	}
+}
+
+// TestJWTIssuerPublicJWKSStableAcrossCalls pins the round-2
+// finding #3 fix: PublicJWKS() returns a cached document computed
+// once at construction time. Two consecutive calls must return
+// bit-identical JWKS docs; the same property would hold for the
+// pre-fix recompute path, but pinning it explicitly catches any
+// future regression that re-introduces nondeterminism (e.g. a
+// random JWK ordering, or a recomputation that re-derives kid
+// differently).
+func TestJWTIssuerPublicJWKSStableAcrossCalls(t *testing.T) {
+	priv := mustGenerateP256(t)
+	iss, err := NewJWTIssuer(JWTConfig{
+		SigningAlg: SigningAlgES256,
+		PrivateKey: priv,
+		PublicKey:  &priv.PublicKey,
+		Issuer:     "sn360-test",
+		TTL:        time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("NewJWTIssuer: %v", err)
+	}
+	first, err := iss.PublicJWKS()
+	if err != nil {
+		t.Fatalf("PublicJWKS first call: %v", err)
+	}
+	second, err := iss.PublicJWKS()
+	if err != nil {
+		t.Fatalf("PublicJWKS second call: %v", err)
+	}
+	if len(first.Keys) != 1 || len(second.Keys) != 1 {
+		t.Fatalf("expected exactly one key per call, got %d and %d", len(first.Keys), len(second.Keys))
+	}
+	if first.Keys[0] != second.Keys[0] {
+		t.Errorf("JWKS is not stable across calls:\nfirst : %+v\nsecond: %+v", first.Keys[0], second.Keys[0])
+	}
+}

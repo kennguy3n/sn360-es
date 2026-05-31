@@ -2,6 +2,8 @@ package privacy
 
 import (
 	"crypto/ecdsa"
+	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"time"
@@ -65,6 +67,16 @@ type JWTIssuer struct {
 	privateKey *ecdsa.PrivateKey
 	publicKey  *ecdsa.PublicKey
 	keyID      string
+
+	// publicJWKS is the cached JWKS document produced from publicKey
+	// at construction time. PublicJWKS() returns this verbatim — the
+	// issuer is immutable after NewJWTIssuer, so re-encoding the same
+	// public point on every /.well-known/jwks.json hit would be pure
+	// waste (especially when an aggressive verifier ignores the
+	// Cache-Control header). On an HS256-only issuer this is the
+	// empty JWKS, which is the documented signal of "no asymmetric
+	// key material configured" (RFC 7517 §5).
+	publicJWKS JWKS
 }
 
 // JWTConfig holds the inputs for NewJWTIssuer.
@@ -254,13 +266,34 @@ func NewJWTIssuer(cfg JWTConfig) (*JWTIssuer, error) {
 	default:
 		return nil, fmt.Errorf("privacy/jwt: unsupported signing algorithm %q (want %s or %s)", alg, SigningAlgHS256, SigningAlgES256)
 	}
+	// ES256 keypair consistency check. Validating curve names and
+	// non-nil pointers above doesn't catch the case where the
+	// operator wires a private key from one keypair against a public
+	// key from a different keypair — JWT_PUBLIC_KEY_PATH might point
+	// at an old or wrong file after a key roll. Without this guard
+	// the issuer would happily sign ES256 tokens that its own
+	// Verify() rejects (signature doesn't match the public point)
+	// AND would publish the wrong key on /.well-known/jwks.json,
+	// breaking sibling verifiers too. We catch this at boot by
+	// signing a tiny canonical payload with the private key and
+	// verifying the signature with the public key — a 32-byte
+	// SHA-256 of a fixed string is enough to exercise the curve
+	// math without needing any application data. The cost is one
+	// ECDSA sign + verify per process start, paid in exchange for
+	// fail-fast detection of a class of misconfiguration that would
+	// otherwise cause silent issuance of unverifiable tokens.
+	if alg == SigningAlgES256 {
+		if err := verifyECDSAKeypairMatches(cfg.PrivateKey, cfg.PublicKey); err != nil {
+			return nil, fmt.Errorf("%w: ES256 keypair mismatch: %w", ErrInvalidKey, err)
+		}
+	}
 	if cfg.TTL <= 0 {
 		cfg.TTL = 7 * 24 * time.Hour
 	}
 	if cfg.Issuer == "" {
 		cfg.Issuer = "sn360-es"
 	}
-	return &JWTIssuer{
+	iss := &JWTIssuer{
 		signingAlg: alg,
 		secret:     cfg.Secret,
 		privateKey: cfg.PrivateKey,
@@ -268,7 +301,49 @@ func NewJWTIssuer(cfg JWTConfig) (*JWTIssuer, error) {
 		keyID:      cfg.KeyID,
 		issuer:     cfg.Issuer,
 		ttl:        cfg.TTL,
-	}, nil
+	}
+	// Precompute the JWKS document so PublicJWKS() is allocation-free
+	// on the hot path. The empty JWKS for an HS256-only deployment
+	// uses an explicit non-nil zero-length slice so the JSON encoder
+	// emits {"keys":[]} rather than {"keys":null} — that's the RFC
+	// 7517 §5 well-formed empty-set signal we document at the
+	// handler.
+	if iss.publicKey != nil {
+		jwk, err := JWKFromECDSAPublicKey(iss.publicKey, iss.keyID)
+		if err != nil {
+			return nil, fmt.Errorf("privacy/jwt: build JWK: %w", err)
+		}
+		iss.publicJWKS = JWKS{Keys: []JWK{jwk}}
+	} else {
+		iss.publicJWKS = JWKS{Keys: []JWK{}}
+	}
+	return iss, nil
+}
+
+// verifyECDSAKeypairMatches returns nil iff the public key half is
+// the verification counterpart of the private key — i.e. a signature
+// produced with priv verifies under pub. We use crypto/ecdsa's
+// SignASN1/VerifyASN1 over a fixed 32-byte digest so the check is
+// deterministic except for the signature nonce (which is fine: we
+// only verify the signature, we don't compare bytes). Curve-equality
+// is also checked because VerifyASN1 silently rejects cross-curve
+// material, which would be confusable with a real keypair mismatch.
+func verifyECDSAKeypairMatches(priv *ecdsa.PrivateKey, pub *ecdsa.PublicKey) error {
+	if priv == nil || pub == nil {
+		return errors.New("nil key half")
+	}
+	if priv.Curve != pub.Curve {
+		return errors.New("private/public curves differ")
+	}
+	digest := sha256.Sum256([]byte("sn360-es:jwt-issuer:keypair-consistency-check"))
+	sig, err := ecdsa.SignASN1(rand.Reader, priv, digest[:])
+	if err != nil {
+		return fmt.Errorf("sign probe: %w", err)
+	}
+	if !ecdsa.VerifyASN1(pub, digest[:], sig) {
+		return errors.New("public key does not verify signatures produced by the configured private key")
+	}
+	return nil
 }
 
 // SigningAlg returns the algorithm Issue() stamps onto fresh tokens.
@@ -279,6 +354,12 @@ func (i *JWTIssuer) SigningAlg() SigningAlg { return i.signingAlg }
 // PublicJWKS returns the JWKS document that should be served at
 // /.well-known/jwks.json.
 //
+// The document is computed ONCE at construction time (see
+// NewJWTIssuer) and cached on the issuer struct, so this accessor
+// is allocation-free on the hot path — the JWKS handler can call it
+// per-request without re-encoding the public point. The issuer is
+// immutable after construction, so the cached doc is always current.
+//
 // When the issuer has no ECDSA public key configured (i.e. an
 // HS256-only deployment), an empty JWKS is returned — NOT an error.
 // This keeps the handler trivially correct: an HS256-only cluster
@@ -287,17 +368,12 @@ func (i *JWTIssuer) SigningAlg() SigningAlg { return i.signingAlg }
 // (RFC 7517 §5 implies an empty keys array is valid) that no
 // asymmetric verification material is available.
 //
-// When the keyID is empty, JWKFromECDSAPublicKey falls back to the
-// RFC 7638 thumbprint so the JWK is still self-identifying.
+// The error return is retained for API stability but is always nil
+// in the current implementation — JWK construction happens at boot
+// where a failure aborts NewJWTIssuer instead of leaking into the
+// hot path.
 func (i *JWTIssuer) PublicJWKS() (JWKS, error) {
-	if i.publicKey == nil {
-		return JWKS{Keys: []JWK{}}, nil
-	}
-	jwk, err := JWKFromECDSAPublicKey(i.publicKey, i.keyID)
-	if err != nil {
-		return JWKS{}, fmt.Errorf("privacy/jwt: build JWK: %w", err)
-	}
-	return JWKS{Keys: []JWK{jwk}}, nil
+	return i.publicJWKS, nil
 }
 
 // IssueOptions customises a single Issue call.
@@ -425,7 +501,12 @@ func (i *JWTIssuer) Verify(token string) (*ActionClaims, error) {
 		func(t *jwt.Token) (interface{}, error) {
 			switch t.Method.(type) {
 			case *jwt.SigningMethodHMAC:
-				if i.secret == nil {
+				// Use the same `len > 0` predicate as
+				// validMethods() so a non-nil zero-length
+				// secret (unreachable today, but cheap to
+				// future-proof) is treated consistently in
+				// both the allow-list and the keyfunc.
+				if len(i.secret) == 0 {
 					return nil, errors.New("privacy/jwt: HS256 token but no HMAC secret configured")
 				}
 				return i.secret, nil
@@ -456,6 +537,14 @@ func (i *JWTIssuer) Verify(token string) (*ActionClaims, error) {
 // configured — NOT the set of algorithms supported by the library.
 // Returning an empty slice trips the explicit guard at the top of
 // Verify().
+//
+// HS256 acceptance uses `len(i.secret) > 0` (not `i.secret != nil`)
+// to mirror the keyfunc in Verify() exactly. NewJWTIssuer never
+// constructs an issuer with a non-nil zero-length secret today, but
+// pinning the same predicate in both spots removes a class of bug
+// where a hypothetical future refactor (e.g. a hot-reload path that
+// clears the secret to []byte{} without nil-ing it) would advertise
+// HS256 in WithValidMethods yet have the keyfunc reject the token.
 func (i *JWTIssuer) validMethods() []string {
 	out := make([]string, 0, 2)
 	if len(i.secret) > 0 {
