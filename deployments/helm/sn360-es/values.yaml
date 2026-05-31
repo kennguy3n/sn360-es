@@ -281,20 +281,33 @@ roleSplit:
 # KEDA-driven autoscaling for the consumers role.
 #
 # When enabled, the chart emits a ScaledObject that scales the
-# consumers Deployment by the Prometheus query
-# `event_lag_seconds{component="consumer"}` rather than CPU.
-# CPU is a poor signal for consumer scaling — a consumer can
-# be CPU-idle while NATS lag piles up (waiting on Tier-2 SLM
-# latency, slow downstream sinks, etc.). Lag is the actual
-# backlog metric and the natural input for KEDA.
+# consumers Deployment by NATS JetStream consumer lag (primary)
+# plus a Prometheus `event_lag_seconds` stuck-consumer safety net
+# (secondary). CPU is a poor signal for consumer scaling — a
+# consumer can be CPU-idle while NATS lag piles up (waiting on
+# Tier-2 SLM latency, slow downstream sinks, etc.). Message-count
+# lag is the actual capacity-demand signal and is what the
+# 5,000-tenant roadmap specifies; the seconds-based Prometheus
+# trigger catches the orthogonal "small backlog of long-stuck
+# messages" failure mode that pure message-count lag misses.
+#
+# KEDA evaluates both triggers independently and scales to
+# `max(replicas-each-trigger-would-produce)`, so the two are
+# additive rather than conflicting.
 #
 # REQUIREMENTS:
 #   - KEDA operator installed in the cluster
 #     (helm install keda kedacore/keda -n keda)
-#   - Prometheus reachable from KEDA at `prometheusServerAddress`
-#   - The `event_lag_seconds` metric is exported by the consumer
-#     loop (already wired into internal/telemetry; see the
-#     metric registration in cmd/sn360-es/wire_infra.go)
+#   - NATS monitoring endpoint reachable from KEDA at
+#     `consumers.nats.monitoringAddress` (defaults to the
+#     bundled nats chart's :8222 monitoring port)
+#   - For the secondary Prometheus trigger: Prometheus
+#     reachable from KEDA at `prometheusServerAddress`, and the
+#     `event_lag_seconds` metric exported by the consumer loop
+#     (registered in pkg/telemetry; see the consumer-loop
+#     observer in pkg/events/nats/consumer.go). To disable the
+#     Prometheus trigger entirely (NATS-only scaling), set
+#     `consumers.prometheusEnabled: false`.
 keda:
   enabled: false
   # Only applies when roleSplit.enabled=true; meaningless on the
@@ -305,12 +318,50 @@ keda:
     cooldownPeriod: 300
     minReplicaCount: 2
     maxReplicaCount: 20
+
+    # ---- Primary trigger: NATS JetStream consumer lag ----
+    # Scales by `num_pending` on the `evaluate-svc` durable
+    # consumer of the `ES_EVALUATE` stream — the canonical
+    # capacity-demand signal per roadmap Task 6.
+    nats:
+      # The HTTP monitoring endpoint of the NATS server (the
+      # `/jsz?consumers=true` route lives here). The bundled
+      # nats chart exposes 8222 on the `<release>-nats` service
+      # by default; override when NATS lives outside the cluster
+      # or under a custom service name.
+      monitoringAddress: "http://{{ .Release.Name }}-nats:8222"
+      # The NATS account that owns the stream. Default account
+      # `$G` is what the chart's bundled NATS uses when no
+      # explicit accounts are configured. Override only if you
+      # provision multi-account NATS.
+      account: "$G"
+      stream: "ES_EVALUATE"
+      consumer: "evaluate-svc"
+      # The per-replica target — KEDA computes
+      # `desired_replicas = ceil(num_pending / lagThresholdMessages)`.
+      # 1000 means "every additional 1 000 pending msgs adds one
+      # consumer replica, up to maxReplicaCount". Matches the
+      # roadmap's "Scale up threshold: lag > 1000 messages".
+      lagThresholdMessages: 1000
+      # The activation/floor threshold. With minReplicaCount=2
+      # the consumers never scale to zero, so this primarily
+      # governs the cooldown floor — once lag drops below 100
+      # the scaler treats the consumer as "drained" and the
+      # cooldownPeriod countdown to scaledown can start.
+      # Matches the roadmap's "scale down: lag < 100".
+      activationLagThresholdMessages: 100
+      # Set to "true" if the NATS monitoring endpoint is HTTPS.
+      useHTTPS: false
+
+    # ---- Secondary trigger: Prometheus stuck-consumer signal ----
+    # Set to false to disable (NATS-only scaling).
+    prometheusEnabled: true
     prometheusServerAddress: "http://prometheus-server.monitoring.svc:80"
     # The threshold is the lag value at which one additional
     # replica is provisioned (KEDA's "averageValue" semantics).
-    # 5s means "every additional 5 seconds of lag adds one
-    # consumer replica, up to maxReplicaCount". Tune downward
-    # for lower-latency SLOs.
+    # 5s means "every additional 5 seconds of oldest-pending
+    # message age adds one consumer replica, up to
+    # maxReplicaCount". Tune downward for lower-latency SLOs.
     lagThresholdSeconds: 5
     query: |
       max(

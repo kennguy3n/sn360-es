@@ -55,3 +55,81 @@ ingress:
 #   default behaviour avoids stacking the fleet on one node.
 podHA:
   enabled: true
+
+# Role-split topology — three independent Deployments for api,
+# consumers and workers instead of one monolith Deployment. This
+# is the 5,000-tenant production topology: each role scales
+# independently (the api by HTTP RPS, the consumers by NATS lag,
+# the workers as a leader-elected singleton) and a slow Tier-2
+# RPC blocking a consumer goroutine no longer steals CPU from the
+# api or workers in the same pod.
+#
+# Operators upgrading from monolith: this flips the Deployment
+# name from `<release>-sn360-es` to three new names
+# (`<release>-sn360-es-api`, `<release>-sn360-es-consumers`,
+# `<release>-sn360-es-workers`). Helm performs the rename as
+# delete-then-create. Recommended procedure:
+#   1. Snapshot Postgres / NATS so the monolith pods can be
+#      restored if the new topology mis-rolls.
+#   2. Apply the upgrade off-hours OR with a maintenance banner
+#      since briefly there will be zero healthy app pods between
+#      the monolith going down and the new role pods coming up.
+#   3. Watch the api role's readiness for a steady-state Ready
+#      majority before declaring the cutover complete.
+# A more conservative two-step migration (deploy split alongside
+# monolith at replicaCount: 0, drain monolith traffic via the
+# Service selector, then scale split up) is out-of-scope for
+# this overlay but doable via custom values.
+#
+# The monolith top-level `autoscaling` and `replicaCount`
+# settings above are inert under role-split (the chart's
+# monolith Deployment / monolith HPA templates skip emission)
+# but kept around so that flipping back to monolith for a
+# rollback yields a working HPA without further config changes.
+roleSplit:
+  enabled: true
+
+# KEDA-driven autoscaling on NATS JetStream consumer lag — the
+# 5,000-tenant production capacity signal for the consumers role.
+#
+# When enabled, the chart emits a ScaledObject (see
+# templates/scaledobject.yaml) that scales the consumers
+# Deployment on TWO triggers:
+#
+#   1. Primary: NATS JetStream `num_pending` on the `evaluate-svc`
+#      durable consumer of stream `ES_EVALUATE`. At 1 000 pending
+#      msgs/replica the scaler asks for one more replica
+#      (`lagThresholdMessages: 1000`, configurable under
+#      `keda.consumers.nats`).
+#   2. Secondary: Prometheus `event_lag_seconds` stuck-consumer
+#      safety net — catches small backlogs of long-stuck msgs
+#      that pure message-count lag would miss (e.g. a single
+#      Tier-2 call hung past the response deadline). Disable
+#      with `keda.consumers.prometheusEnabled: false` if you
+#      don't run Prometheus.
+#
+# KEDA scales to `max()` of the two triggers, so they are additive
+# rather than conflicting. CPU/memory HPA continues to govern the
+# api role (`roleSplit.roles.api.autoscaling`) — KEDA-on-consumers
+# is the ONLY autoscaler that displaces CPU HPA for its role, and
+# only because Kubernetes forbids two autoscalers on one
+# Deployment (the `$skipForKeda` gate in hpa-role.yaml enforces
+# this exclusivity).
+#
+# REQUIREMENTS (cluster-side, validated by the operator):
+#   - KEDA operator installed in the cluster
+#     (`helm install keda kedacore/keda -n keda`).
+#   - Prometheus reachable from KEDA at
+#     `keda.consumers.prometheusServerAddress` (or disable the
+#     secondary trigger as above).
+#   - The bundled NATS chart's monitoring endpoint at
+#     :8222 on the `<release>-nats` service (the default
+#     `keda.consumers.nats.monitoringAddress` references this).
+#     Override if NATS is external.
+#
+# The chart `fail`s at template-render time if `keda.enabled=true`
+# but `roleSplit.enabled=false` (KEDA has no `consumers`
+# Deployment to scale on the monolith topology), preventing the
+# silent-inert misconfiguration.
+keda:
+  enabled: true
