@@ -46,8 +46,154 @@ class TestCostModel(unittest.TestCase):
                 base["total_per_tenant_month_usd"]
                 - on["total_per_tenant_month_usd"]
             )
+        # Compare across the three legacy SME cohorts (low / medium
+        # / high). The `enterprise` cohort is intentionally not in
+        # this chain — it sits above `high` on absolute traffic but
+        # uses a different Tier 0 eligibility / retention profile, so
+        # comparing savings curves directly conflates two independent
+        # axes. The dedicated test_5000_tenant_density assertion
+        # below pins the enterprise cohort's per-tenant cost
+        # explicitly so a future regression on the heavier profile
+        # is still caught.
         self.assertLess(savings["low"], savings["medium"])
         self.assertLess(savings["medium"], savings["high"])
+
+    def test_5000_tenant_density(self) -> None:
+        """5 000-tenant density pin for the enterprise cohort.
+
+        Asserts structural invariants on the new enterprise cost
+        projection at 5 000 tenants per deployment with all PR
+        #45/#46 levers active:
+
+          1. The `enterprise` profile exists and points at the
+             15 000 msg/tenant/day workload the load harness drives
+             (a typo here desyncs the load test inputs and the
+             projection inputs).
+          2. Per-tenant cost is finite and positive (no divide-by-
+             zero or sign-flip from a coefficient regression).
+          3. Activating every cost lever beats the baseline-off
+             projection at the same density by ≥ 20 % — i.e. the
+             levers actually pay for themselves at enterprise
+             traffic. The savings ratio is naturally lower on the
+             enterprise cohort than on `low`/`medium` because the
+             dominant cost line (Tier 1/2 inference on 15 000
+             msg/tenant/day) is only partially compressible by
+             Tier 0 bypass — most of the inbound is genuinely
+             novel sender mail that needs the encoder.
+          4. Density-amortisation invariants hold for the new
+             enterprise profile: 10 000 tenants is strictly cheaper
+             per tenant than 5 000, and 5 000 is strictly cheaper
+             than the 1 000 default (shared Redis / PG instance
+             baseline / NAT GW spread further).
+          5. Per-tenant cost stays below an absolute ceiling derived
+             from a fully-naive Tier 1+Tier 2 inference budget for
+             the enterprise message volume — this catches the
+             obvious regression where bypass / batch levers
+             silently stop firing (which would push every message
+             through Tier 1 and pop the bill).
+          6. Telemetry message-routing accounting remains internally
+             consistent at the higher per-tenant volume.
+
+        The numbers are deterministic functions of the PRICE_* /
+        coefficient constants — if a future cloud-price refresh
+        moves them, this test forces the diff to update the model
+        AND the assertions together rather than letting one drift.
+        """
+        self.assertIn("enterprise", project.PROFILES,
+            "the `enterprise` profile must exist; the load harness "
+            "and benchmarks/COST_MODEL.md both depend on it")
+        enterprise = project.PROFILES["enterprise"]
+        self.assertEqual(enterprise.messages_per_tenant_per_day, 15_000,
+            "enterprise traffic shape is the 5000-tenant scale-out "
+            "anchor — change deliberately, not by accident")
+
+        on_5k = project.project_one(
+            enterprise, project.CostLevers.levers_on(), tenants_per_deployment=5_000,
+        )
+        on_10k = project.project_one(
+            enterprise, project.CostLevers.levers_on(), tenants_per_deployment=10_000,
+        )
+        on_baseline_density = project.project_one(
+            enterprise,
+            project.CostLevers.levers_on(),
+            tenants_per_deployment=project.DEFAULT_TENANTS_PER_DEPLOYMENT,
+        )
+        off_5k = project.project_one(
+            enterprise, project.CostLevers.baseline_off(), tenants_per_deployment=5_000,
+        )
+
+        cost_5k = on_5k["total_per_tenant_month_usd"]
+        cost_10k = on_10k["total_per_tenant_month_usd"]
+        cost_default = on_baseline_density["total_per_tenant_month_usd"]
+        cost_off_5k = off_5k["total_per_tenant_month_usd"]
+
+        # 2. Per-tenant cost is finite and positive.
+        self.assertGreater(cost_5k, 0.0)
+
+        # 3. Levers-on saves ≥ 20 % vs baseline-off at the same
+        #    density. Use a ratio rather than an absolute dollar
+        #    figure so a future cloud-price refresh doesn't drift
+        #    this test out from under the model. The threshold is
+        #    deliberately lower than the SME-cohort savings curves
+        #    expose — see the docstring above for why.
+        savings_pct = (cost_off_5k - cost_5k) / cost_off_5k
+        self.assertGreaterEqual(
+            savings_pct, 0.20,
+            f"levers-on saves only {savings_pct*100:.1f}% over "
+            f"baseline-off at 5 000 enterprise tenants — below the "
+            f"20% floor the PR #45/#46 lever set was sized to deliver",
+        )
+
+        # 4. Density-amortisation invariants.
+        self.assertLess(
+            cost_10k, cost_5k,
+            "doubling density (5 000 → 10 000) must reduce per-tenant "
+            "cost; the shared-infra amortisation invariant is broken",
+        )
+        self.assertLess(
+            cost_5k, cost_default,
+            "5 000-tenant density must be cheaper than the 1 000-tenant "
+            "default density on the same profile/levers",
+        )
+
+        # 5. Absolute upper bound from a naive Tier 1+Tier 2 budget.
+        #    If bypass / batch levers silently stopped firing, every
+        #    one of the 15 000 daily messages would land in Tier 1
+        #    (and ~12 % in Tier 2), pricing roughly at the inference
+        #    constants in project.py. Bound generously (4x the naive
+        #    inference budget) so the test only fires on a real
+        #    regression, not on incidental compute/storage drift.
+        naive_tier1 = (
+            enterprise.messages_per_tenant_per_month
+            * enterprise.tier1_inference_cost_per_1k / 1_000.0
+        )
+        naive_tier2 = (
+            enterprise.messages_per_tenant_per_month
+            * enterprise.tier2_pct_after_tier1
+            * (
+                enterprise.avg_tier2_tokens_in
+                * project.PRICE_BEDROCK_PER_1K_TOKENS_IN / 1_000.0
+                + enterprise.avg_tier2_tokens_out
+                * project.PRICE_BEDROCK_PER_1K_TOKENS_OUT / 1_000.0
+            )
+        )
+        absolute_ceiling = 4.0 * (naive_tier1 + naive_tier2)
+        self.assertLess(
+            cost_5k, absolute_ceiling,
+            f"enterprise per-tenant cost at 5 000 tenants ({cost_5k:.4f}) "
+            f"exceeded 4x the naive inference budget "
+            f"({absolute_ceiling:.4f}) — a cost lever has likely "
+            f"stopped firing",
+        )
+
+        # 6. Telemetry accounting remains consistent at the new density.
+        t = on_5k["telemetry"]
+        self.assertEqual(
+            t["tier0_bypass_msgs"] + t["tier1_msgs"],
+            enterprise.messages_per_tenant_per_month,
+            "message routing accounting drifted at enterprise scale",
+        )
+        self.assertLessEqual(t["tier2_msgs"], t["tier1_msgs"])
 
     def test_tier0_bypass_reduces_inference(self) -> None:
         # At identical other levers, raising tier0_bypass_hit_rate

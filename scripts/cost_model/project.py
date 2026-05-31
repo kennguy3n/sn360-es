@@ -194,6 +194,38 @@ PROFILES: Dict[str, TrafficProfile] = {
         avg_tier2_tokens_out=220,
         storage_retention_days=365,
     ),
+    # The `enterprise` profile models the 5 000-tenant scale-out
+    # cohort: ~15 000 inbound messages per tenant per day with
+    # mature external-partner graphs (lower cold-call ratio than
+    # `high`), larger average message sizes (more attachments,
+    # signed-mail headers, calendar invites), longer retention
+    # windows (legal hold). These are the inputs the load tests in
+    # tests/load/ exercise — keeping the profile here means the
+    # cost projection and the load harness draw from the same
+    # numbers, so a future bump to messages_per_tenant_per_day
+    # ripples through both.
+    "enterprise": TrafficProfile(
+        name="enterprise",
+        messages_per_tenant_per_day=15_000,
+        avg_message_kb=70.0,
+        # Enterprise tenants have larger intra-org graphs (more
+        # employees, more internal newsletters) and a wider set of
+        # established external partners (vendor portals, contract
+        # counterparties), so structural Tier 0 eligibility is
+        # higher than `high` but still below the `low` cohort
+        # which is dominated by intra-team mail.
+        pct_internal=0.50,
+        pct_known_partner=0.20,
+        tier1_inference_cost_per_1k=0.012,
+        # Heavier Tier 2 escalation rate: enterprise inbound is
+        # more frequently business-development with ambiguous
+        # urgency cues that the encoder cannot resolve on its own.
+        tier2_pct_after_tier1=0.13,
+        avg_tier2_tokens_in=1_500,
+        avg_tier2_tokens_out=260,
+        # Legal hold + audit retention.
+        storage_retention_days=730,
+    ),
 }
 
 

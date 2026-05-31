@@ -31,19 +31,31 @@ USD per tenant per month at three representative traffic
 profiles, with all PR #44–#46 levers active versus a pre-PR #44
 baseline.
 
-| Profile | Messages / tenant / day | Baseline (pre-PR #44) | All levers on (post-PR #46) | $/tenant/mo saving | % saving |
-| --- | --: | --: | --: | --: | --: |
-| low    |   200 | $0.641  | $0.425  | $0.216  | 33.7% |
-| medium | 1 200 | $3.774  | $2.545  | $1.230  | 32.6% |
-| high   | 8 500 | $45.509 | $34.065 | $11.445 | 25.1% |
+| Profile    | Messages / tenant / day | Baseline (pre-PR #44) | All levers on (post-PR #46) | $/tenant/mo saving | % saving |
+| ---        | --: | --: | --: | --: | --: |
+| low        |     200 | $0.641   | $0.425   | $0.216   | 33.7% |
+| medium     |   1 200 | $3.774   | $2.545   | $1.230   | 32.6% |
+| high       |   8 500 | $45.509  | $34.065  | $11.445  | 25.1% |
+| enterprise |  15 000 | $148.872 | $115.281 | $33.591  | 22.6% |
 
 Percentage savings descend with traffic because the Bedrock Tier 2
 token cost — proportional to escalated messages and not affected
-by any compute / storage lever — dominates the high cohort's
-total. The high cohort still gains the largest *absolute* dollar
-saving per tenant, but levers like Tier 1 batching and PG
-partitioning amortise less aggressively against the Tier 2 token
-line at that scale.
+by any compute / storage lever — dominates the high / enterprise
+cohort totals. Those cohorts still gain the largest *absolute*
+dollar savings per tenant, but levers like Tier 1 batching and
+PG partitioning amortise less aggressively against the Tier 2
+token line at that scale.
+
+The `enterprise` row is the 5 000-tenant scale-out anchor: the
+load tests in `tests/load/` drive this same 15 000 msg / tenant /
+day workload, and the `test_5000_tenant_density` regression in
+`scripts/cost_model/test_project.py` pins the structural
+invariants (lever savings ≥ 20 %, density amortisation in the
+right direction, Tier 1+2 inference budget bounded). When the
+density is 5 000 tenants per deployment (vs the 1 000-tenant
+default the table is computed against), shared Redis / PG /
+NAT GW lines amortise across more tenants, dropping the
+enterprise per-tenant figure to roughly $115.12 / month.
 
 Both columns use the architecturally-bounded Tier 0 bypass model
 (post-2026-05 PR #47 refinement): the lever's hit rate is capped

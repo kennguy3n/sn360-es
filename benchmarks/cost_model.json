@@ -137,6 +137,52 @@
         "vcpu_hours": 1.7455
       },
       "total_per_tenant_month_usd": 34.0645
+    },
+    {
+      "breakdown": {
+        "compute": 0.1409,
+        "egress": 0.168,
+        "kms": 1.35,
+        "postgres": 84.9217,
+        "redis": 0.1234,
+        "s3": 19.0628,
+        "tier1": 5.022,
+        "tier2": 38.0835
+      },
+      "levers": "baseline (pre-PR #44)",
+      "profile": "enterprise",
+      "telemetry": {
+        "pg_storage_gb": 730.9914,
+        "s3_gb": 730.9914,
+        "tier0_bypass_msgs": 31500,
+        "tier1_msgs": 418500,
+        "tier2_msgs": 54405,
+        "vcpu_hours": 2.429
+      },
+      "total_per_tenant_month_usd": 148.8723
+    },
+    {
+      "breakdown": {
+        "compute": 0.1778,
+        "egress": 0.168,
+        "kms": 1.35,
+        "postgres": 72.0927,
+        "redis": 0.1234,
+        "s3": 19.0628,
+        "tier1": 0.8489,
+        "tier2": 21.4578
+      },
+      "levers": "all levers on (post-PR #46)",
+      "profile": "enterprise",
+      "telemetry": {
+        "pg_storage_gb": 621.3427,
+        "s3_gb": 730.9914,
+        "tier0_bypass_msgs": 214200,
+        "tier1_msgs": 235800,
+        "tier2_msgs": 30654,
+        "vcpu_hours": 3.065
+      },
+      "total_per_tenant_month_usd": 115.2814
     }
   ]
 }
