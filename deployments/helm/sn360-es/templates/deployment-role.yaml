@@ -131,6 +131,24 @@ spec:
               value: "127.0.0.1"
             - name: PG_PORT
               value: "6432"
+            {{- /*
+              Cap the Go pool at what the bouncer can actually
+              serve. In session pool mode each Go conn is pinned
+              1:1 to a backend conn, so backend capacity per pod
+              is `defaultPoolSize + reservePoolSize` — anything
+              above that just queues at the bouncer (latency, no
+              throughput gain) and risks server_pool exhaustion
+              warnings. The Go default `PG_MAX_OPEN_CONNS=40`
+              (`internal/config/storage.go`) is higher than the
+              chart's default 25+5=30 backend slots, which would
+              queue ~10 conns per pod under load. Explicitly
+              coupling the two here means a single Helm value
+              change (`pgbouncer.upstream.defaultPoolSize`) flows
+              through to the app pool automatically. Matches
+              deployment.yaml's monolith block byte-for-byte.
+            */}}
+            - name: PG_MAX_OPEN_CONNS
+              value: {{ add (int $ctx.Values.pgbouncer.upstream.defaultPoolSize) (int $ctx.Values.pgbouncer.upstream.reservePoolSize) | quote }}
           {{- end }}
           livenessProbe:
             httpGet:

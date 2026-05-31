@@ -386,11 +386,25 @@ pgbouncer:
     #      paid once per long-lived backend conn instead of per
     #      Go conn, even if the Go pool aggressively recycles.
     #
-    # Steady-state backend conn count = min(Go MaxOpenConns ×
-    # pod_replicas, maxClientConn × pod_replicas). To actually
-    # collapse fleet-wide backend conns (e.g. 5000 tenants ×
-    # peak concurrency) below that linear floor we'd need
-    # `transaction` pooling — see the next paragraph.
+    # Steady-state backend conn count per pod is bounded by
+    # `min(Go MaxOpenConns, defaultPoolSize + reservePoolSize)`
+    # because session mode pins 1:1 — `defaultPoolSize` is the
+    # tightest of the three caps. To keep the Go pool from
+    # silently queuing past that ceiling, the chart's
+    # `deployment.yaml` / `deployment-role.yaml` explicitly
+    # inject `PG_MAX_OPEN_CONNS = defaultPoolSize + reservePoolSize`
+    # on the app container when `pgbouncer.enabled = true`.
+    # That keeps a single Helm value change to
+    # `defaultPoolSize` flowing through to the app pool
+    # automatically — bumping it from 25 to e.g. 50 widens
+    # both ends of the pipe in one go. Fleet-wide backend conn
+    # count is then `min(Go MaxOpenConns, defaultPoolSize +
+    # reservePoolSize) × pod_replicas`, with `maxClientConn`
+    # acting as a per-pod safety ceiling on transient client
+    # bursts that arrive faster than the bouncer can hand them
+    # off. To actually collapse fleet-wide backend conns
+    # (e.g. 5000 tenants × peak concurrency) below that linear
+    # floor we'd need `transaction` pooling — see next paragraph.
     #
     # To switch to `transaction` pooling later, refactor
     # WithTenant / WithCrossTenant to wrap the GUC set + the
