@@ -55,3 +55,36 @@ ingress:
 #   default behaviour avoids stacking the fleet on one node.
 podHA:
   enabled: true
+
+# PgBouncer sidecar — enabled for 5,000-tenant production scale.
+#
+# Each application pod (monolith OR each role-split pod) gets a
+# PgBouncer sidecar listening on 127.0.0.1:6432 and the app's
+# PG_HOST is rewritten to that loopback.
+#
+# Why this is on in prod (session mode):
+#   * `maxClientConn` is a HARD per-pod cap on backend conns
+#     (defaults to 200) — without the bouncer, an under-tuned
+#     Go pool or a tenant burst can push fleet-wide conns past
+#     Postgres' `max_connections` and start refusing new conns.
+#   * Backend conns are long-lived (`serverLifetime: 3600`),
+#     so TCP+TLS+startup handshakes amortise across many
+#     short-lived Go conns instead of per app conn.
+#   * Mid-tier work (graceful shutdown drain, rolling deploy,
+#     node eviction) can hold the conn open across the brief
+#     reconnect window while the Go app reopens its pool.
+#
+# Note: session pooling does NOT multiplex clients onto fewer
+# backend conns — each PgBouncer client is pinned 1:1 to a
+# backend for its lifetime. Full multiplexing requires
+# `transaction` mode, which is incompatible with the RLS
+# session-GUC binding in pkg/storage/postgres/tenant_context.go
+# today. See the long comment on `pgbouncer.upstream.poolMode`
+# in values.yaml for the exact path to transaction pooling.
+#
+# `upstream.host` is intentionally left empty so the bouncer
+# inherits `config.pgHost` (the chart's primary Postgres host).
+# Override in cluster-specific overlays (e.g. RDS endpoint) when
+# the prod Postgres lives outside the cluster.
+pgbouncer:
+  enabled: true

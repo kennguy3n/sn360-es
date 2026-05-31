@@ -28,7 +28,7 @@
         "compute": 0.0035,
         "egress": 0.0336,
         "kms": 0.018,
-        "postgres": 0.1061,
+        "postgres": 0.16,
         "redis": 0.1234,
         "s3": 0.0418,
         "tier1": 0.0106,
@@ -44,7 +44,7 @@
         "tier2_msgs": 235,
         "vcpu_hours": 0.0606
       },
-      "total_per_tenant_month_usd": 0.4251
+      "total_per_tenant_month_usd": 0.479
     },
     {
       "breakdown": {
@@ -74,7 +74,7 @@
         "compute": 0.0153,
         "egress": 0.039,
         "kms": 0.108,
-        "postgres": 0.9006,
+        "postgres": 0.9544,
         "redis": 0.1234,
         "s3": 0.3695,
         "tier1": 0.0697,
@@ -90,7 +90,7 @@
         "tier2_msgs": 1935,
         "vcpu_hours": 0.2636
       },
-      "total_per_tenant_month_usd": 2.5446
+      "total_per_tenant_month_usd": 2.5984
     },
     {
       "breakdown": {
@@ -120,7 +120,7 @@
         "compute": 0.1012,
         "egress": 0.093,
         "kms": 0.765,
-        "postgres": 16.2896,
+        "postgres": 16.3434,
         "redis": 0.1234,
         "s3": 5.0178,
         "tier1": 0.5559,
@@ -136,7 +136,7 @@
         "tier2_msgs": 18531,
         "vcpu_hours": 1.7455
       },
-      "total_per_tenant_month_usd": 34.0645
+      "total_per_tenant_month_usd": 34.1183
     }
   ]
 }

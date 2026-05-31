@@ -222,7 +222,12 @@ class CostLevers:
     partitioning_active: bool      # native PG partitioning + DROP retention
     role_split_active: bool        # API / consumers / workers separated
     keda_on_lag: bool              # KEDA NATS-lag scaler vs CPU HPA
-    pgbouncer_active: bool         # transaction pooling
+    pgbouncer_active: bool         # connection pooling sidecar
+                                   # (0.85x shared idle cost under
+                                   # the as-shipped session mode;
+                                   # see cost_postgres docstring
+                                   # for the path to ~0.40x via
+                                   # transaction-mode pooling)
     rate_limiter_backend: str      # "memory" | "redis"
 
     @classmethod
@@ -390,10 +395,35 @@ def cost_postgres(
     """Postgres compute + storage cost.
 
     Three contributing line items:
-      * connection budget: without PgBouncer, every replica holds
-        a connection pool that's mostly idle but reserved. With
-        PgBouncer (transaction pooling), we land 50:1 multiplexing
-        on idle connections — modeled as 0.40x base cost.
+      * connection budget: without PgBouncer, every replica
+        holds a connection pool that's mostly idle but reserved.
+        With PgBouncer enabled, the shared idle vCPU-hour
+        baseline is multiplied by one of two values depending on
+        the bouncer's pool mode:
+
+        AS-SHIPPED (the multiplier this code applies) — 0.85x.
+        The chart ships PgBouncer in *session* pooling (forced
+        by the RLS session-GUC binding in
+        `pkg/storage/postgres/tenant_context.go`, which uses
+        `set_config('sn360.tenant_id', ..., false)` to outlive
+        transaction boundaries). Session pooling does NOT
+        multiplex — each client conn is pinned 1:1 to a backend
+        conn for its lifetime. The savings under session mode
+        come from the per-pod `maxClientConn` ceiling (preventing
+        unbounded backend conn growth), amortising
+        TCP+TLS+startup handshakes across long-lived backend
+        conns, and feasibility of a smaller RDS shape under the
+        capped budget.
+
+        DESIGN TARGET (NOT applied today) — 0.40x. Once the
+        WithTenant / WithCrossTenant refactor lands (wrap the
+        GUC `SET` + tenant-scoped SQL inside an explicit
+        transaction with `SET LOCAL`, is_local=true), the chart
+        can flip to `transaction` pool mode and unlock ~50:1
+        multiplexing on idle conns, which would re-baseline
+        this multiplier to ~0.40x. See `benchmarks/COST_MODEL.md`
+        and `deployments/helm/sn360-es/values.yaml` for the
+        end-to-end rationale.
       * storage: scales with message retention. Native partitioning
         (PR #45) doesn't reduce storage but enables O(1) DROP
         PARTITION retention, which the cleanup-worker fallback
@@ -413,7 +443,13 @@ def cost_postgres(
     # per-tenant-equivalent at the 1000-tenant default.
     shared_idle_vcpu_h_per_tenant = 2.0 * HOURS_PER_MONTH / tenants_per_deployment
     if levers.pgbouncer_active:
-        shared_idle_vcpu_h_per_tenant *= 0.40
+        # 0.85x reflects the as-shipped session-mode behaviour
+        # (1:1 client-to-backend pinning + `maxClientConn` cap
+        # + long-lived backend conns amortising handshakes).
+        # Re-baseline to ~0.40x once the WithTenant / WithCrossTenant
+        # SET-LOCAL-in-explicit-txn refactor (see docstring above)
+        # unlocks transaction-mode pooling and its ~50:1 multiplexing.
+        shared_idle_vcpu_h_per_tenant *= 0.85
 
     # Variable write cost: scales with messages.
     write_vcpu_h = 0.0006 * profile.messages_per_tenant_per_day

@@ -322,10 +322,15 @@ keda:
 # When enabled, each application pod (api / consumers / workers,
 # or the monolith) gets a PgBouncer sidecar listening on 127.0.0.1
 # and the app's PG_HOST is rewritten to that loopback address.
-# This collapses the per-pod connection count from
-# `pool_max_idle * pod_replicas` down to `pgbouncer.maxClientConn`
-# at the Postgres server, which is the single biggest lever for
-# sustainable database connection budgets at 1000s of tenants.
+# In the default `session` pool mode (see `upstream.poolMode`
+# further down), the bouncer CAPS the per-pod backend connection
+# count at `pgbouncer.maxClientConn` and amortises backend
+# handshake cost across long-lived conns — it does NOT collapse
+# clients onto fewer backends (session mode pins 1:1). True
+# connection collapse requires `transaction` pooling, which is
+# incompatible with the RLS session-GUC binding today; see the
+# extended discussion under `upstream.poolMode` for the path
+# forward.
 #
 # REQUIREMENTS:
 #   - The application's PG_HOST resolves to the in-pod PgBouncer
@@ -350,11 +355,66 @@ pgbouncer:
   upstream:
     host: ""
     port: 5432
-    # `transaction` pooling is the right choice for sn360-es —
-    # the application uses short-lived transactions and does
-    # not rely on session-pinned state (no SET LOCAL, no
-    # prepared statements scoped to a session).
-    poolMode: transaction
+    # `session` pooling is REQUIRED for sn360-es while the RLS
+    # tenant context (pkg/storage/postgres/tenant_context.go)
+    # binds the `sn360.tenant_id` GUC with `set_config(..., false)`
+    # (session-level — outlives any explicit transaction). With
+    # transaction-mode pooling PgBouncer would hand the
+    # post-set_config client to a different backend conn on
+    # the next statement, and RLS would see an empty / wrong
+    # tenant_id GUC and either reject every row or admit the
+    # wrong tenant's rows. Session pooling pins each PgBouncer
+    # client to one backend conn for its lifetime, which is
+    # what the GUC binding assumes.
+    #
+    # Session pooling does NOT multiplex multiple clients onto
+    # fewer backend conns — each PgBouncer client conn is pinned
+    # 1:1 to a backend conn for its full lifetime. What session
+    # mode buys at scale is:
+    #
+    #   1. A global `maxClientConn` ceiling per pod (200): the
+    #      bouncer refuses new clients past that cap, which puts
+    #      a hard upper bound on backend conns and prevents the
+    #      Go app's pool from unbounded growth under bursts.
+    #
+    #   2. `defaultPoolSize` as a concurrency cap per
+    #      database/user pool (25): subsequent client conns
+    #      queue at the bouncer instead of opening more backend
+    #      conns, smoothing out pool churn.
+    #
+    #   3. Cheap conn churn: TCP+TLS+startup handshakes are
+    #      paid once per long-lived backend conn instead of per
+    #      Go conn, even if the Go pool aggressively recycles.
+    #
+    # Steady-state backend conn count per pod is bounded by
+    # `min(Go MaxOpenConns, defaultPoolSize + reservePoolSize)`
+    # because session mode pins 1:1 — `defaultPoolSize` is the
+    # tightest of the three caps. To keep the Go pool from
+    # silently queuing past that ceiling, the chart's
+    # `deployment.yaml` / `deployment-role.yaml` explicitly
+    # inject `PG_MAX_OPEN_CONNS = defaultPoolSize + reservePoolSize`
+    # on the app container when `pgbouncer.enabled = true`.
+    # That keeps a single Helm value change to
+    # `defaultPoolSize` flowing through to the app pool
+    # automatically — bumping it from 25 to e.g. 50 widens
+    # both ends of the pipe in one go. Fleet-wide backend conn
+    # count is then `min(Go MaxOpenConns, defaultPoolSize +
+    # reservePoolSize) × pod_replicas`, with `maxClientConn`
+    # acting as a per-pod safety ceiling on transient client
+    # bursts that arrive faster than the bouncer can hand them
+    # off. To actually collapse fleet-wide backend conns
+    # (e.g. 5000 tenants × peak concurrency) below that linear
+    # floor we'd need `transaction` pooling — see next paragraph.
+    #
+    # To switch to `transaction` pooling later, refactor
+    # WithTenant / WithCrossTenant to wrap the GUC set + the
+    # tenant-scoped SQL inside a single explicit transaction
+    # using `SET LOCAL` (is_local=true). That keeps the GUC
+    # alive only for the txn's lifetime and is safe with
+    # transaction-mode bouncing. See the comment block in
+    # tenant_context.go above WithTenant for the exact shape
+    # of that refactor.
+    poolMode: session
     maxClientConn: 200
     defaultPoolSize: 25
     reservePoolSize: 5
