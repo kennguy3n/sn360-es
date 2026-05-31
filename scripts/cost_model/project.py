@@ -395,14 +395,15 @@ def cost_postgres(
     """Postgres compute + storage cost.
 
     Three contributing line items:
-      * connection budget: without PgBouncer, every replica holds
-        a connection pool that's mostly idle but reserved. With
-        PgBouncer in *transaction* pooling we land ~50:1
-        multiplexing on idle connections, modeled here as 0.40x
-        base cost.
+      * connection budget: without PgBouncer, every replica
+        holds a connection pool that's mostly idle but reserved.
+        With PgBouncer enabled, the shared idle vCPU-hour
+        baseline is multiplied by one of two values depending on
+        the bouncer's pool mode:
 
-        AS-SHIPPED — the chart ships PgBouncer in *session*
-        pooling (forced by the RLS session-GUC binding in
+        AS-SHIPPED (the multiplier this code applies) — 0.85x.
+        The chart ships PgBouncer in *session* pooling (forced
+        by the RLS session-GUC binding in
         `pkg/storage/postgres/tenant_context.go`, which uses
         `set_config('sn360.tenant_id', ..., false)` to outlive
         transaction boundaries). Session pooling does NOT
@@ -412,17 +413,16 @@ def cost_postgres(
         unbounded backend conn growth), amortising
         TCP+TLS+startup handshakes across long-lived backend
         conns, and feasibility of a smaller RDS shape under the
-        capped budget. We model that as a 0.85x multiplier on
-        the shared idle vCPU-hour baseline.
+        capped budget.
 
-        DESIGN TARGET — once the WithTenant / WithCrossTenant
-        refactor lands (wrap the GUC `SET` + tenant-scoped SQL
-        inside an explicit transaction with `SET LOCAL`,
-        is_local=true), the chart can flip to `transaction`
-        pool mode and unlock ~50:1 multiplexing on idle conns,
-        which would re-baseline this multiplier to ~0.40x. See
-        `benchmarks/COST_MODEL.md` and
-        `deployments/helm/sn360-es/values.yaml` for the
+        DESIGN TARGET (NOT applied today) — 0.40x. Once the
+        WithTenant / WithCrossTenant refactor lands (wrap the
+        GUC `SET` + tenant-scoped SQL inside an explicit
+        transaction with `SET LOCAL`, is_local=true), the chart
+        can flip to `transaction` pool mode and unlock ~50:1
+        multiplexing on idle conns, which would re-baseline
+        this multiplier to ~0.40x. See `benchmarks/COST_MODEL.md`
+        and `deployments/helm/sn360-es/values.yaml` for the
         end-to-end rationale.
       * storage: scales with message retention. Native partitioning
         (PR #45) doesn't reduce storage but enables O(1) DROP

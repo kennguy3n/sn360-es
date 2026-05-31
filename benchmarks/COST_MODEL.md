@@ -37,22 +37,40 @@ baseline.
 | medium | 1 200 | $3.774  | $2.598  | $1.176  | 31.2% |
 | high   | 8 500 | $45.509 | $34.118 | $11.391 | 25.0% |
 
-Percentage savings descend with traffic because the Bedrock Tier 2
-token cost — proportional to escalated messages and not affected
-by any compute / storage lever — dominates the high cohort's
-total. The high cohort still gains the largest *absolute* dollar
-saving per tenant, but levers like Tier 1 batching and PG
-partitioning amortise less aggressively against the Tier 2 token
-line at that scale.
+Percentage savings are non-monotonic in traffic — medium peaks at
+31.2%, low and high both sit around 25%. Three components shape
+this:
 
-Both columns use the architecturally-bounded Tier 0 bypass model
-(post-2026-05 PR #47 refinement): the lever's hit rate is capped
-by the profile's structural eligibility ceiling
-(`pct_internal + pct_known_partner`) so cold-call external mail
-can never be bypassed regardless of cache health. High-traffic
-tenants therefore get a smaller absolute bypass benefit than low-
-traffic tenants — they have proportionally more cold-call mail to
-begin with.
+1. **Bedrock Tier 2 token cost** scales with messages and is
+   unaffected by any compute/storage lever, so it caps the
+   high-cohort percentage saving at 25.0% (the high cohort still
+   gains the largest *absolute* dollar saving per tenant —
+   $11.39/tenant/mo — but Tier 1 batching and PG partitioning
+   amortise less aggressively against the Tier 2 token line at
+   that scale).
+2. **PgBouncer in session mode** (0.85x shared idle vCPU-hour
+   multiplier — see §postgres below) compresses the
+   PgBouncer-related saving versus the transaction-mode design
+   target of 0.40x. Shared idle infra is a larger fraction of
+   the low cohort's small total, so the session-mode downgrade
+   takes a proportionally larger bite out of the low cohort's
+   percentage saving (25.3%) than the medium cohort's (31.2%).
+   The medium cohort lives in the sweet spot where per-tenant
+   variable cost is high enough that Tier 0 bypass + Tier 1
+   batching dominate, but not so high that Tier 2 tokens swamp
+   the levers.
+3. **Tier 0 bypass** is structurally capped by
+   `pct_internal + pct_known_partner` (post-2026-05 PR #47
+   refinement, applied to both columns of the table) — cold-call
+   external mail can never be bypassed regardless of cache
+   health. High-traffic tenants get a smaller *absolute* bypass
+   benefit than low-traffic tenants because they have
+   proportionally more cold-call mail to begin with.
+
+The non-monotonicity will flatten back to a descending curve
+once the `WithTenant` / `WithCrossTenant` `SET LOCAL`-in-txn
+refactor lets us flip PgBouncer to transaction mode and
+re-baseline its multiplier from 0.85x to 0.40x.
 
 ## How to read each component
 
