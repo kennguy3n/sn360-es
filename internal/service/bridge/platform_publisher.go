@@ -478,12 +478,28 @@ func (p *natsPlatformPublisher) PublishQuarantine(ctx context.Context, evt Quara
 	desc := fmt.Sprintf("sn360-es: quarantine %s", action)
 	env := buildEnvelope(p.cfg, evt.TenantID, ruleIDForQuarantine(action), level, desc, payload)
 	eventClass := "email.quarantine." + action
+	// Derive the engine severity from the SAME `level` the Wazuh
+	// envelope carries — not the raw evt.Tier — so the two views
+	// of "how loud is this event" stay aligned. This matters in two
+	// cases the tier-only path got wrong:
+	//   (a) Quarantine-release events do not carry a tier (the
+	//       caller in consumers_action.go zero-values evt.Tier), so
+	//       severityForTier("") would return "medium" while the
+	//       Wazuh rule.level the same event publishes is 10 (which
+	//       severityForLevel maps to "high"). The engine and the
+	//       SIEM would then disagree on the severity of an admin-
+	//       initiated release.
+	//   (b) Quarantine-applied events with a non-terminal tier hit
+	//       the same `if level == 0 { level = 10 }` override above,
+	//       producing the same mismatch.
+	// Routing the engine severity through severityForLevel(level)
+	// uses the post-override level so both views always agree.
 	env.enrichForEngine(
 		evt.TenantID,
 		subj,
 		uuid.NewString(),
 		eventClass,
-		severityForTier(evt.Tier),
+		severityForLevel(level),
 		engineFieldsForQuarantine(payload),
 	)
 	return p.publish(ctx, subj, evt.MessageID, evt.CorrelationID, evt.TenantID, eventClass, env)
@@ -843,11 +859,21 @@ func engineFieldsForQuarantine(p QuarantinePayload) map[string]any {
 }
 
 // engineFieldsForEscalation flattens an EscalationPayload into the
-// engine `fields` map. ticket-id is exposed under the dual name
-// `ticket_id` (the canonical platform field) and `message_id`
-// (preserves the existing rule corpus that joins email events on
-// message_id) when the underlying incident message id is empty;
-// most escalation events carry both.
+// engine `fields` map. Both `ticket_id` (canonical platform field)
+// and `message_id` (the originating email's ID, populated by the
+// caller from ticket.Incident.PseudoMessageID) are exposed as
+// distinct keys so rules can join on either one. The two values
+// have different lifecycles — a ticket can outlive its source
+// message (an analyst can re-open one weeks later) — so they are
+// intentionally NOT collapsed: a rule that needs to correlate an
+// escalation back to its originating email must join on
+// `message_id`, and a rule that needs to correlate two events on
+// the same SOC ticket joins on `ticket_id`. enrichForEngine drops
+// either key whose value is the empty string, so an escalation
+// with no source message_id simply will not satisfy a rule joining
+// on message_id (the rule will not fire, which is the desired
+// behaviour — silently substituting ticket_id would make the rule
+// fire on a key value that means something else).
 func engineFieldsForEscalation(p EscalationPayload) map[string]any {
 	fields := map[string]any{
 		"ticket_id":      p.TicketID,

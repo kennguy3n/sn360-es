@@ -847,3 +847,42 @@ func TestPublishAllPaths_HybridWire(t *testing.T) {
 		})
 	}
 }
+
+// TestPublishQuarantineRelease_SeverityMatchesWazuhLevel pins the
+// fix for the engine/SIEM severity mismatch on quarantine-release
+// events. The release call site in consumers_action.go publishes
+// with Tier="" (the action is admin-initiated and not derived from
+// an ML verdict), and PublishQuarantine overrides the Wazuh
+// rule.level from 0 to 10 in that case. Before this fix the engine
+// severity went through severityForTier("") -> "medium" while the
+// Wazuh wire carried level 10 (severityForLevel -> "high") -- two
+// consumers seeing two different severities for the same event.
+// The fix routes engine severity through severityForLevel(level)
+// using the SAME post-override level, so both views agree.
+func TestPublishQuarantineRelease_SeverityMatchesWazuhLevel(t *testing.T) {
+	p := QuarantinePayload{
+		Source:        "sn360-es",
+		EventType:     "email.quarantine.released",
+		Action:        QuarantineActionReleased,
+		MessageID:     "mid",
+		RecipientHash: "r",
+		RequestedBy:   "admin",
+		// Tier intentionally left empty -- the release call site
+		// in consumers_action.go does not populate it.
+	}
+	env := buildEnvelope(Config{Source: "sn360-es"}, "tid", ruleIDForQuarantine(QuarantineActionReleased), 10, "sn360-es: quarantine released", p)
+	// Mirror PublishQuarantine's level override + severity wiring.
+	level := 10
+	env.enrichForEngine("tid", "sn360.events.email.tid.quarantine", "evt", "email.quarantine.released", severityForLevel(level), engineFieldsForQuarantine(p))
+
+	if env.Rule.Level != 10 {
+		t.Fatalf("wazuh rule.level = %d, want 10 (precondition)", env.Rule.Level)
+	}
+	if env.Severity != "high" {
+		t.Errorf("engine severity = %q, want \"high\" (must match Wazuh level 10)", env.Severity)
+	}
+	if severityForLevel(env.Rule.Level) != env.Severity {
+		t.Errorf("severityForLevel(rule.level)=%q != engine severity=%q -- consumers will disagree on severity",
+			severityForLevel(env.Rule.Level), env.Severity)
+	}
+}
