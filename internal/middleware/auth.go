@@ -61,6 +61,21 @@ func ClaimsFromContext(ctx context.Context) *privacy.ActionClaims {
 	return v
 }
 
+// ContextWithClaims returns ctx augmented with the supplied verified
+// claims under the same key JWTAuth uses to inject them. Parallel to
+// ContextWithTenantID — same trust contract: production callers MUST
+// treat the claims as already-verified, and only tests / consumers
+// extracting from signed message headers should set this key. RBAC
+// (RequireRole / RequireRoleByMethod) reads from this key, so seeding
+// claims here is what lets a test exercise a role-gated route without
+// standing up a real JWT issuer.
+func ContextWithClaims(ctx context.Context, claims *privacy.ActionClaims) context.Context {
+	if claims == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyClaims, claims)
+}
+
 // JWTAuthConfig wires JWTAuth.
 type JWTAuthConfig struct {
 	// Issuer verifies tokens. Must be non-nil.

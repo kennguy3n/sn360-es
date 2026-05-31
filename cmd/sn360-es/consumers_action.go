@@ -279,6 +279,16 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 		if a.jwtIssuer != nil {
 			if tok, terr := a.jwtIssuer.Issue(res.TenantID, res.MessageID, privacy.IssueOptions{
 				Tier: string(res.Tier),
+				// Banner tokens are consumed by recipients (the
+				// end users) when they click Report Phishing /
+				// Mark Safe / Trust Sender. The path
+				// /v1/banner/action bypasses the platform JWT
+				// middleware (see defaultAuthSkipPaths) so the
+				// role is mostly informational on the wire
+				// today, but stamping RoleEndUser keeps the
+				// token self-describing for any future audit
+				// or transitional gate.
+				Role: privacy.RoleEndUser,
 			}); terr == nil {
 				input.ActionToken = tok
 			} else {

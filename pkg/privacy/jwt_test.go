@@ -61,6 +61,54 @@ func TestJWTIssueAndVerifyRoundTrip(t *testing.T) {
 	}
 }
 
+// TestJWTIssueAndVerifyStampsRole pins the round-trip of the new
+// role claim added for the RBAC layer. Without this, a regression on
+// the `json:"role,omitempty"` tag (or the IssueOptions.Role wiring)
+// would silently strip the claim on the wire and middleware.RequireRole
+// would 403 every previously-valid admin/operator token in production.
+func TestJWTIssueAndVerifyStampsRole(t *testing.T) {
+	iss := mustIssuer(t, time.Hour)
+	for _, role := range []string{RoleAdmin, RoleOperator, RoleViewer, RoleEndUser} {
+		tok, err := iss.Issue("tenant-1", "msg-abc", IssueOptions{Role: role})
+		if err != nil {
+			t.Fatalf("issue(role=%s): %v", role, err)
+		}
+		claims, err := iss.Verify(tok)
+		if err != nil {
+			t.Fatalf("verify(role=%s): %v", role, err)
+		}
+		if claims.Role != role {
+			t.Errorf("role round-trip: got %q want %q", claims.Role, role)
+		}
+	}
+}
+
+// TestIsValidRole pins the closed allowlist. If a future contributor
+// adds a fifth Role* constant without extending validRoles, the new
+// role will silently 403 against every RequireRole gate — this test
+// surfaces that mismatch at build time.
+func TestIsValidRole(t *testing.T) {
+	cases := map[string]bool{
+		RoleAdmin:    true,
+		RoleOperator: true,
+		RoleViewer:   true,
+		RoleEndUser:  true,
+		"":           false,
+		"root":       false,
+		"superuser":  false,
+		// Common typos that have historically slipped past code
+		// review on this pattern:
+		"end-user": false,
+		"enduser":  false,
+		"Admin":    false, // case-sensitive
+	}
+	for r, want := range cases {
+		if got := IsValidRole(r); got != want {
+			t.Errorf("IsValidRole(%q) = %v, want %v", r, got, want)
+		}
+	}
+}
+
 func TestJWTIssueRequiresArgs(t *testing.T) {
 	iss := mustIssuer(t, time.Hour)
 	if _, err := iss.Issue("", "msg", IssueOptions{}); err == nil {

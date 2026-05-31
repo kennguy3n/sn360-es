@@ -22,6 +22,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
 	"github.com/kennguy3n/sn360-es/internal/service/predict"
 	"github.com/kennguy3n/sn360-es/pkg/events"
+	"github.com/kennguy3n/sn360-es/pkg/privacy"
 	"github.com/kennguy3n/sn360-es/pkg/telemetry"
 )
 
@@ -131,18 +132,36 @@ func TestBuildMux_RegistersAllRoutes(t *testing.T) {
 	}
 	// buildMux registers handlers but does not wire JWTAuth (which
 	// needs an Issuer the test fixture does not stand up). The
-	// escalation handlers now require a tenant in context, so we
-	// wrap the mux with a minimal test middleware that reads the
-	// tenant from an "X-Test-Tenant" header and seeds the same
-	// context key the JWT middleware would. Tests that want to
-	// exercise the unauthenticated path simply omit the header.
+	// escalation handlers now require a tenant in context, AND
+	// every protected /v1/* route is RBAC-gated by RequireRole
+	// (see cmd/sn360-es/routes.go), so we wrap the mux with a
+	// minimal test middleware that reads the tenant + role from
+	// "X-Test-Tenant" / "X-Test-Role" headers and seeds both the
+	// tenant_id context key AND the full claims context key the
+	// JWT middleware would. Tests that want to exercise the
+	// unauthenticated path simply omit the headers; tests that
+	// want to exercise a 403 omit the role header but set the
+	// tenant header (RBAC sees claims with an empty role and
+	// fail-closes). The default role when X-Test-Role is omitted
+	// but X-Test-Tenant is set is "viewer" — the loosest
+	// authenticated principal, which is enough to exercise any
+	// read-gated route without granting accidental write access.
 	authedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Rename to `tid` so the closure parameter does not shadow
 		// the enclosing *testing.T (which is intentionally NOT
 		// captured here — handlers reach for the request, not the
 		// test, and shadowing makes that easy to misread).
 		if tid := r.Header.Get("X-Test-Tenant"); tid != "" {
-			r = r.WithContext(middleware.ContextWithTenantID(r.Context(), tid))
+			ctx := middleware.ContextWithTenantID(r.Context(), tid)
+			role := r.Header.Get("X-Test-Role")
+			if role == "" {
+				role = privacy.RoleViewer
+			}
+			ctx = middleware.ContextWithClaims(ctx, &privacy.ActionClaims{
+				TenantID: tid,
+				Role:     role,
+			})
+			r = r.WithContext(ctx)
 		}
 		mux.ServeHTTP(w, r)
 	})
@@ -262,6 +281,73 @@ func TestBuildMux_RegistersAllRoutes(t *testing.T) {
 		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("status: got %d, want 200 (route wired, auth gate passed, ticket returned)", resp.StatusCode)
+		}
+	})
+
+	// RBAC negative paths exercised through the real route table.
+	// Each case picks a route + role pairing that must 403 under
+	// the new RequireRole gate. These complement the focused unit
+	// tests in internal/middleware/rbac_test.go by proving the
+	// wiring in routes.go matches the documented allow-lists.
+	//
+	// We use always-registered routes (predict + escalation +
+	// dashboard) so the cases don't depend on optional wiring like
+	// app.repos.Vendors or app.onboardingSvc. The admin-only path
+	// is covered by TestRequireRole_MatrixAcceptsAndRejects in
+	// internal/middleware/rbac_test.go.
+	t.Run("rbac denies viewer on escalation resolve", func(t *testing.T) {
+		// Default seed role is "viewer". POST /v1/escalation/resolve
+		// is in writeRoles (admin + operator), so viewer must be
+		// 403. The handler would otherwise 200 (or 400 on a bad
+		// body), so 403 is decisive evidence the gate is wired.
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/escalation/resolve",
+			strings.NewReader(`{"tenant_id":"t-1","ticket_id":"x"}`))
+		req.Header.Set("X-Test-Tenant", "t-1")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("do: %v", err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("status: got %d, want 403", resp.StatusCode)
+		}
+	})
+	t.Run("rbac denies end_user on dashboard summary", func(t *testing.T) {
+		// /v1/dashboard/summary is read-gated (viewer+). end_user
+		// is the principal type for banner-action / quarantine
+		// tokens and has no business loading the SOC dashboard.
+		req, _ := http.NewRequest(http.MethodGet,
+			srv.URL+"/v1/dashboard/summary?tenant_id=t-1&range=24h", nil)
+		req.Header.Set("X-Test-Tenant", "t-1")
+		req.Header.Set("X-Test-Role", privacy.RoleEndUser)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("do: %v", err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("status: got %d, want 403", resp.StatusCode)
+		}
+	})
+	t.Run("rbac denies end_user on predict open", func(t *testing.T) {
+		// /v1/predict/open is read-gated. The pre-open risk
+		// lookup is consumed by the Outlook / Gmail add-in
+		// (Task 22) on behalf of a viewer/operator/admin tenant
+		// principal; end_user (banner-action) tokens must not be
+		// able to drain Tier-2 budget by hitting it.
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/predict/open",
+			strings.NewReader(`{}`))
+		req.Header.Set("X-Test-Tenant", "t-1")
+		req.Header.Set("X-Test-Role", privacy.RoleEndUser)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("do: %v", err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("status: got %d, want 403", resp.StatusCode)
 		}
 	})
 }

@@ -10,8 +10,35 @@ import (
 
 	"github.com/kennguy3n/sn360-es/internal/handler"
 	"github.com/kennguy3n/sn360-es/internal/middleware"
+	"github.com/kennguy3n/sn360-es/pkg/privacy"
 	storageredis "github.com/kennguy3n/sn360-es/pkg/storage/redis"
 )
+
+// readRoles is the canonical allow-list for read-only /v1/* endpoints
+// (dashboard, predict, status reads, list vendors, org-graph, single
+// escalation fetch). Every authenticated principal type except
+// end_user can see these surfaces — end_user tokens are scoped to
+// banner-action / interstitial / quarantine flows and never carry an
+// admin-console session.
+//
+// Centralised here (rather than inlined at every mux.Handle call) so
+// adding a fifth read-capable role later is a single edit, and so a
+// reviewer reading routes.go can confirm consistency by name rather
+// than re-checking string sets.
+var readRoles = []string{privacy.RoleAdmin, privacy.RoleOperator, privacy.RoleViewer}
+
+// writeRoles is the canonical allow-list for state-changing /v1/*
+// endpoints (vendor approve/revoke/create, escalation resolve,
+// onboarding start). Admins and operators only — viewers must not be
+// able to mutate tenant state, end_users never authenticate against
+// the admin console.
+var writeRoles = []string{privacy.RoleAdmin, privacy.RoleOperator}
+
+// adminOnlyRoles guards destructive / privileged actions (delete
+// vendor, revoke onboarding) where operator-level access is
+// intentionally insufficient. The roadmap calls these out
+// explicitly: "admin: ... destructive tenant-scoped operations".
+var adminOnlyRoles = []string{privacy.RoleAdmin}
 
 // buildMux constructs the HTTP routing tree. Handlers from
 // internal/handler are wired here so future routes have one obvious
@@ -60,18 +87,25 @@ func buildMux(app *application) (http.Handler, error) {
 	bannerAction := handler.NewBannerActionHandler(logger, app.feedbackSvc)
 	mux.Handle("/v1/banner/action", bannerAction)
 
-	// Dashboard summary.
+	// Dashboard summary. Read-only — viewer / operator / admin can
+	// see it; end_users (banner-action principals) have no business
+	// loading the SOC dashboard.
 	dashboardH := handler.NewDashboardHandler(logger, app.dashboardGen)
-	mux.Handle("/v1/dashboard/summary", dashboardH)
+	mux.Handle("/v1/dashboard/summary", middleware.RequireRole(readRoles...)(dashboardH))
 
 	// Education micro-lessons.
 	educationH := handler.NewEducationHandler(logger, app.microLessonSvc)
 	mux.Handle("/v1/education/lesson/", educationH)
 
-	// Predict (pre-send + pre-open).
+	// Predict (pre-send + pre-open). Read-only risk lookups consumed
+	// by the Outlook / Gmail add-ins (Task 22). Treated as reads from
+	// the RBAC perspective because they don't mutate any tenant
+	// state — they just score a candidate recipient or open. The
+	// add-in's tenant-bearing token will need a viewer (or higher)
+	// role once issuance flips.
 	predictH := handler.NewPredictHandler(logger, app.recipientSvc, app.openSvc)
-	mux.HandleFunc("/v1/predict/recipient", predictH.ServeRecipient)
-	mux.HandleFunc("/v1/predict/open", predictH.ServeOpen)
+	mux.Handle("/v1/predict/recipient", middleware.RequireRole(readRoles...)(http.HandlerFunc(predictH.ServeRecipient)))
+	mux.Handle("/v1/predict/open", middleware.RequireRole(readRoles...)(http.HandlerFunc(predictH.ServeOpen)))
 
 	// Quarantine release.
 	if app.jwtIssuer != nil {
@@ -82,10 +116,14 @@ func buildMux(app *application) (http.Handler, error) {
 		}
 	}
 
-	// Escalation tickets.
+	// Escalation tickets. POST /v1/escalation/resolve is a write
+	// (operator clears the ticket); GET /v1/escalation/{id} is a
+	// read. Wrapping each route with the matching allow-list keeps
+	// the gate strict per-endpoint even though the underlying
+	// handlers share state.
 	escalationH := handler.NewEscalationHandler(logger, app.escalationSvc)
-	mux.HandleFunc("/v1/escalation/resolve", escalationH.ServeResolve)
-	mux.HandleFunc("/v1/escalation/", escalationH.ServeGet)
+	mux.Handle("/v1/escalation/resolve", middleware.RequireRole(writeRoles...)(http.HandlerFunc(escalationH.ServeResolve)))
+	mux.Handle("/v1/escalation/", middleware.RequireRole(readRoles...)(http.HandlerFunc(escalationH.ServeGet)))
 
 	// Interstitial click handler. Only registered when the URL
 	// rewriter is configured; the handler unconditionally calls into
@@ -114,16 +152,30 @@ func buildMux(app *application) (http.Handler, error) {
 	}
 
 	// Onboarding OAuth consent flow.
+	//
+	//   - /v1/onboarding/start    — initiates OAuth consent (write;
+	//                               admin / operator).
+	//   - /v1/onboarding/callback — provider redirect target, no
+	//                               principal context. Stays in
+	//                               defaultAuthSkipPaths so neither
+	//                               JWT nor RBAC runs against it.
+	//   - /v1/onboarding/status   — read-only status check (read;
+	//                               viewer / operator / admin).
+	//   - /v1/onboarding/revoke   — destructive (write; admin only)
+	//                               because it tears down the
+	//                               tenant's provider-side grant
+	//                               and cannot be undone without a
+	//                               full re-consent flow.
 	if app.onboardingSvc != nil {
 		adapter := &onboardingServiceAdapter{
 			svc:   app.onboardingSvc,
 			repos: app.repos,
 		}
 		onboardingH := handler.NewOnboardingHandler(logger, adapter)
-		mux.HandleFunc("/v1/onboarding/start", onboardingH.ServeStart)
+		mux.Handle("/v1/onboarding/start", middleware.RequireRole(writeRoles...)(http.HandlerFunc(onboardingH.ServeStart)))
 		mux.HandleFunc("/v1/onboarding/callback", onboardingH.ServeCallback)
-		mux.HandleFunc("/v1/onboarding/status", onboardingH.ServeStatus)
-		mux.HandleFunc("/v1/onboarding/revoke", onboardingH.ServeRevoke)
+		mux.Handle("/v1/onboarding/status", middleware.RequireRole(readRoles...)(http.HandlerFunc(onboardingH.ServeStatus)))
+		mux.Handle("/v1/onboarding/revoke", middleware.RequireRole(adminOnlyRoles...)(http.HandlerFunc(onboardingH.ServeRevoke)))
 	}
 
 	// GWS setup wizard — always registered so tenants can check
@@ -132,12 +184,34 @@ func buildMux(app *application) (http.Handler, error) {
 		cfg:    app.cfg,
 		logger: logger,
 	})
-	mux.HandleFunc("/v1/onboarding/gws-setup-status", wizardH.ServeGWSSetupStatus)
+	// Read-only setup status — a viewer running through the wizard
+	// to confirm DNS / SPF / DKIM should be able to see it.
+	mux.Handle("/v1/onboarding/gws-setup-status", middleware.RequireRole(readRoles...)(http.HandlerFunc(wizardH.ServeGWSSetupStatus)))
 
 	// Vendor management CRUD.
+	//
+	// /v1/vendors fans out two methods to one path: GET (list,
+	// read) and POST (create, write). RequireRoleByMethod splits
+	// the allow-lists per verb so a viewer can list vendors but
+	// cannot create one. DELETE/PUT methods are intentionally not
+	// listed here — they belong to the /v1/vendors/{domain}/
+	// sub-route below.
+	//
+	// /v1/vendors/ handles destructive (DELETE — admin only) and
+	// state-changing (PUT approve / revoke — admin or operator)
+	// actions on a specific vendor row. We dispatch on method first
+	// (RequireRoleByMethod), then the inner handler dispatches on
+	// the path-suffix to ServeApprove / ServeRevoke / ServeDelete.
+	// PUT covers both approve and revoke, which is the loosest
+	// allow-list (admin + operator). DELETE is admin-only because
+	// deleting a vendor record is destructive and removes the
+	// approval history.
 	if app.repos != nil && app.repos.Vendors != nil {
 		vendorH := handler.NewVendorHandler(logger, app.repos.Vendors)
-		mux.HandleFunc("/v1/vendors", func(w http.ResponseWriter, r *http.Request) {
+		mux.Handle("/v1/vendors", middleware.RequireRoleByMethod(map[string][]string{
+			http.MethodGet:  readRoles,
+			http.MethodPost: writeRoles,
+		})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.Method {
 			case http.MethodGet:
 				vendorH.ServeList(w, r)
@@ -146,8 +220,11 @@ func buildMux(app *application) (http.Handler, error) {
 			default:
 				http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			}
-		})
-		mux.HandleFunc("/v1/vendors/", func(w http.ResponseWriter, r *http.Request) {
+		})))
+		mux.Handle("/v1/vendors/", middleware.RequireRoleByMethod(map[string][]string{
+			http.MethodDelete: adminOnlyRoles,
+			http.MethodPut:    writeRoles,
+		})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.Method == http.MethodDelete:
 				vendorH.ServeDelete(w, r)
@@ -160,12 +237,17 @@ func buildMux(app *application) (http.Handler, error) {
 				w.WriteHeader(http.StatusNotFound)
 				_, _ = w.Write([]byte(`{"error":"not found"}`))
 			}
-		})
+		})))
 	}
 
 	if app.repos != nil && app.repos.OrgGraphs != nil {
 		orgGraphH := handler.NewOrgGraphHandler(logger, app.repos.OrgGraphs)
-		mux.Handle("/v1/org-graph", orgGraphH)
+		// Org graph is read-only — a directory snapshot used by
+		// dashboard and investigation surfaces. No mutation
+		// surface today, but we gate at the read allow-list so
+		// the contract is explicit if future PATCH semantics
+		// ever land here.
+		mux.Handle("/v1/org-graph", middleware.RequireRole(readRoles...)(orgGraphH))
 	}
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

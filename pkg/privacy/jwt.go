@@ -29,15 +29,88 @@ type JWTConfig struct {
 	TTL time.Duration
 }
 
+// Role enumerates the principal types the RBAC layer understands.
+// These values are stamped into the `role` JWT claim at issuance
+// time and read back by middleware.RequireRole on every authenticated
+// HTTP request. Keep this enum closed — the middleware fails-closed
+// on any value not in this set, so adding a new role requires:
+//
+//  1. Adding it here.
+//  2. Updating the issuance site (e.g. the dashboard login flow) to
+//     stamp the new value.
+//  3. Updating every RequireRole(...) call-site in cmd/sn360-es/
+//     routes.go that should accept it.
+//
+// Compile-time tying of the constants keeps the call-sites grep-able
+// and prevents typo'd role strings from silently 403-ing in prod.
+const (
+	// RoleAdmin can perform every action including destructive
+	// tenant-scoped operations (delete vendor, revoke onboarding,
+	// tune score engine, modify RBAC). Reserved for human SOC /
+	// platform owners.
+	RoleAdmin = "admin"
+	// RoleOperator can perform most day-to-day write operations
+	// (approve / revoke vendor, resolve escalation, start
+	// onboarding) but cannot revoke onboarding or perform
+	// destructive deletes. Reserved for tenant-admin operators.
+	RoleOperator = "operator"
+	// RoleViewer is read-only across the dashboard and investigation
+	// surfaces. Cannot mutate anything.
+	RoleViewer = "viewer"
+	// RoleEndUser is the principal type stamped onto banner-action,
+	// URL-interstitial and quarantine-release tokens consumed by
+	// end recipients. These tokens are validated inside their own
+	// per-route handlers (see handler.BannerActionHandler,
+	// handler.InterstitialHandler, handler.QuarantineHandler) and
+	// the paths they hit bypass the platform-wide JWT middleware
+	// (see defaultAuthSkipPaths) — so RoleEndUser is mostly
+	// informational on the wire today, but it is the value any
+	// future RequireRole(end_user) gate would match.
+	RoleEndUser = "end_user"
+)
+
+// validRoles is the closed allowlist used by IsValidRole. Update both
+// the constants above and this map together — RBAC fails-closed on
+// unknown role strings, so a typo here surfaces as 403 in production.
+var validRoles = map[string]struct{}{
+	RoleAdmin:    {},
+	RoleOperator: {},
+	RoleViewer:   {},
+	RoleEndUser:  {},
+}
+
+// IsValidRole reports whether r is one of the four canonical role
+// constants (Admin, Operator, Viewer, EndUser). The empty string and
+// any unknown value return false. This is the sole sanctioned check
+// callers should use to validate role values — middleware.RequireRole
+// invokes it on both the principal's claim and on each role listed in
+// an Allow(...) tuple, so misspellings in either are caught before any
+// authorization decision is made.
+func IsValidRole(r string) bool {
+	_, ok := validRoles[r]
+	return ok
+}
+
 // ActionClaims is the canonical claim shape for banner / interstitial
-// tokens. The intent is to carry zero PII so a leaked token cannot be
-// used to enumerate users or messages from a third party.
+// tokens AND for the principal-bearing API session tokens consumed by
+// middleware.JWTAuth on /v1/* routes. The intent is to carry zero PII
+// so a leaked token cannot be used to enumerate users or messages
+// from a third party — Role and TenantID are the only fields that
+// influence access decisions, and Role only resolves to one of the
+// four constants above.
 type ActionClaims struct {
 	TenantID             string `json:"tid"`
 	PseudonymizedMessage string `json:"pmid"`
 	Tier                 string `json:"tier,omitempty"`
 	Action               string `json:"act,omitempty"`
 	OriginalURLHash      string `json:"urlh,omitempty"`
+	// Role is the RBAC principal type. Required on tokens that hit
+	// JWT-protected /v1/* routes. Banner-action / interstitial /
+	// quarantine-release tokens stamp RoleEndUser even though their
+	// paths bypass the platform JWT middleware — this keeps every
+	// token issued by sn360-es self-describing for any future audit
+	// or transition-period gate.
+	Role string `json:"role,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -62,6 +135,14 @@ type IssueOptions struct {
 	Tier    string
 	Action  string
 	URLHash string
+	// Role stamps the `role` claim onto the issued token. Must be
+	// one of the Role* constants. The empty string is permitted —
+	// Issue won't validate it here so test tokens stay minimal —
+	// but RequireRole fails-closed on empty / unknown values, so
+	// production issuers must stamp one of the four canonical
+	// roles for the token to actually authorise anything against
+	// the JWT-gated routes.
+	Role string
 }
 
 // Issue signs a fresh ActionClaims token for tenantID + pseudoMessageID.
@@ -86,6 +167,7 @@ func (i *JWTIssuer) Issue(tenantID, pseudoMessageID string, opts IssueOptions) (
 		Tier:                 opts.Tier,
 		Action:               opts.Action,
 		OriginalURLHash:      opts.URLHash,
+		Role:                 opts.Role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    i.issuer,
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),

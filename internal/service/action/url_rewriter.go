@@ -188,6 +188,14 @@ func (rw *URLRewriter) issueToken(ctx context.Context, tenantID, pseudoMessage s
 		Tier:    string(tier),
 		Action:  "url_redirect",
 		URLHash: hash,
+		// Interstitial click tokens are consumed by end recipients
+		// when they click a rewritten URL. The /l/ path bypasses
+		// the platform JWT middleware (see defaultAuthSkipPaths)
+		// and the handler validates the token directly, so the
+		// role is mostly informational on the wire — but
+		// stamping RoleEndUser keeps every token issued by
+		// sn360-es self-describing.
+		Role: privacy.RoleEndUser,
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("issue: %w", err)
