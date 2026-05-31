@@ -322,10 +322,15 @@ keda:
 # When enabled, each application pod (api / consumers / workers,
 # or the monolith) gets a PgBouncer sidecar listening on 127.0.0.1
 # and the app's PG_HOST is rewritten to that loopback address.
-# This collapses the per-pod connection count from
-# `pool_max_idle * pod_replicas` down to `pgbouncer.maxClientConn`
-# at the Postgres server, which is the single biggest lever for
-# sustainable database connection budgets at 1000s of tenants.
+# In the default `session` pool mode (see `upstream.poolMode`
+# further down), the bouncer CAPS the per-pod backend connection
+# count at `pgbouncer.maxClientConn` and amortises backend
+# handshake cost across long-lived conns — it does NOT collapse
+# clients onto fewer backends (session mode pins 1:1). True
+# connection collapse requires `transaction` pooling, which is
+# incompatible with the RLS session-GUC binding today; see the
+# extended discussion under `upstream.poolMode` for the path
+# forward.
 #
 # REQUIREMENTS:
 #   - The application's PG_HOST resolves to the in-pod PgBouncer

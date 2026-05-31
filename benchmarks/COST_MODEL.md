@@ -33,9 +33,9 @@ baseline.
 
 | Profile | Messages / tenant / day | Baseline (pre-PR #44) | All levers on (post-PR #46) | $/tenant/mo saving | % saving |
 | --- | --: | --: | --: | --: | --: |
-| low    |   200 | $0.641  | $0.425  | $0.216  | 33.7% |
-| medium | 1 200 | $3.774  | $2.545  | $1.230  | 32.6% |
-| high   | 8 500 | $45.509 | $34.065 | $11.445 | 25.1% |
+| low    |   200 | $0.641  | $0.479  | $0.162  | 25.3% |
+| medium | 1 200 | $3.774  | $2.598  | $1.176  | 31.2% |
+| high   | 8 500 | $45.509 | $34.118 | $11.391 | 25.0% |
 
 Percentage savings descend with traffic because the Bedrock Tier 2
 token cost — proportional to escalated messages and not affected
@@ -69,16 +69,17 @@ components, in order of contribution to the high-cohort total:
    the shared-instance idle connection budget by enforcing a
    per-pod `maxClientConn` ceiling and amortising backend
    TLS+startup handshakes across a long-lived backend conn pool
-   (`serverLifetime: 3600`). It does NOT currently multiplex
-   clients onto fewer backend conns: pool mode defaults to
-   `session` while the RLS tenant binding in
+   (`serverLifetime: 3600`). Modelled as a 0.85x multiplier on
+   the shared idle vCPU-hour baseline (session mode — 1:1
+   client→backend pinning, no multiplexing). The chart ships
+   `poolMode: session` because the RLS tenant binding in
    `pkg/storage/postgres/tenant_context.go` uses session-level
-   `set_config(..., false)` GUCs. True multiplexing
-   (e.g. 50:1) becomes available after the planned
-   `SET LOCAL`-in-explicit-txn refactor unlocks transaction
-   pooling — the cost model lever below tracks the session-mode
-   baseline today. Native partitioning takes 20% off the write
-   I/O budget by eliminating the full-table cleanup-worker scan.
+   `set_config(..., false)` GUCs. The transaction-mode target
+   (~50:1 multiplexing, 0.40x multiplier) is available after
+   the `WithTenant` / `WithCrossTenant` `SET LOCAL`-in-txn
+   refactor unlocks transaction pooling — tracked as a separate
+   future PR. Native partitioning takes 20% off the write I/O
+   budget by eliminating the full-table cleanup-worker scan.
 3. **s3** — Object storage for raw email blobs. Lever-independent
    in this model (no PR #44–#46 lever changes the retention
    curve), but a large absolute line item at high traffic. A
@@ -140,7 +141,8 @@ components, in order of contribution to the high-cohort total:
 | Native PG partitioning | PR #45 | `partitioning_active` → 0.85x storage + 0.80x write I/O | DROP PARTITION at O(1) vs row-by-row DELETE; cleanup-worker fallback for partition-worker failures |
 | Redis cluster rate limiter | PR #45 | `rate_limiter_backend` redis → tighter API-role autoscale | Cluster-wide buckets; replicas can scale to floor without bucket-eviction concern |
 | Role-split + KEDA on lag | PR #46 | `role_split_active` + `keda_on_lag` → 0.85x consumer compute | Slow Tier-2 SLM call no longer stalls API request handlers; consumer autoscale tracks actual queue depth |
-| PgBouncer sidecar | PR #46 / #53 | `pgbouncer_active` → hard per-pod `maxClientConn` ceiling (200); long-lived backend conns amortise handshakes | Session-mode pooling today (1:1 client→backend pinning, required by RLS session GUCs in `pkg/storage/postgres/tenant_context.go`); transaction-mode multiplexing pending `SET LOCAL`-in-explicit-txn refactor in `WithTenant` / `WithCrossTenant`. The 0.40x idle-budget figure was modelled against the transaction-mode target and is preserved as the model's design target, but the as-shipped value is closer to 1.0x for session mode. Re-baseline once the refactor lands. |
+| PgBouncer sidecar (session mode) | PR #46 / #53 | `pgbouncer_active` → 0.85x shared idle vCPU-hour budget | Per-pod `maxClientConn` ceiling caps backend conn growth; long-lived backend conns amortise TLS+startup handshakes; smaller RDS shape becomes feasible. Session mode is mandatory while the RLS session-GUC binding in `pkg/storage/postgres/tenant_context.go` uses `set_config(..., false)` — 1:1 client→backend pinning, no multiplexing. |
+| PgBouncer sidecar (transaction mode) | _future_ | `pgbouncer_active` re-baseline → 0.40x shared idle vCPU-hour budget | ~50:1 multiplexing on idle conns. Requires refactoring `WithTenant` / `WithCrossTenant` to wrap GUC `SET` + tenant SQL inside an explicit txn with `SET LOCAL` (is_local=true) so the GUC's lifetime matches a single bouncer-pinned transaction. Track separately from this PR. |
 
 ## Calibration & assumptions
 
