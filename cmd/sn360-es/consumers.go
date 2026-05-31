@@ -333,7 +333,18 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	}
 
 	// es.onboarding.> → onboarding side effects.
-	sub, err := a.eventBus.Subscribe(ctx, "es.onboarding.>", a.tenantBoundMessageHandler(a.handleOnboarding),
+	// NOTE: handleOnboarding spawns a 10-min background goroutine via
+	// context.WithoutCancel, which would inherit (and outlive) any
+	// per-message bound conn attached by tenantBoundMessageHandler.
+	// Wrapping here would cause the goroutine's DB calls to fail with
+	// "conn already closed" once the outer handler returns and the
+	// wrapper's defer release() runs. Instead the goroutine acquires
+	// its OWN WithTenant binding inside handleOnboarding, which keeps
+	// the goroutine's writes under RLS for the full 10-min window
+	// without the bound conn being released out from under it. The
+	// outer (non-goroutine) path in handleOnboarding does no DB work,
+	// so leaving it unbound is safe.
+	sub, err := a.eventBus.Subscribe(ctx, "es.onboarding.>", a.handleOnboarding,
 		events.WithDurable("ingestion-onboard"),
 		events.WithMaxDeliver(3))
 	if err != nil {
@@ -522,6 +533,27 @@ func (a *application) handleOnboarding(ctx context.Context, msg events.Message) 
 				defer a.bgWG.Done()
 				bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
 				defer cancel()
+				// Acquire a per-goroutine tenant binding so the
+				// onboarding agent's DB writes (PersistDiscoveredUsers,
+				// UpdateWeights, Audit.Record, …) run under the RLS
+				// policy installed by migration 0018. We MUST bind here
+				// rather than rely on the consumer-side wrapper: the
+				// wrapper's bound conn is released the instant
+				// handleOnboarding returns, which is up to 10 minutes
+				// before this goroutine finishes. pgDB == nil in
+				// in-memory mode is treated as a no-op (the agent's DB
+				// dependencies are also nil in that mode).
+				if a.pgDB != nil {
+					boundCtx, release, berr := a.pgDB.WithTenant(bgCtx, env.TenantID)
+					if berr != nil {
+						a.logger.Error("sn360-es: onboarding agent — tenant bind failed",
+							slog.String("tenant_id", env.TenantID),
+							slog.Any("error", berr))
+						return
+					}
+					defer func() { _ = release() }()
+					bgCtx = boundCtx
+				}
 				if _, err := a.onboardAgent.Onboard(bgCtx, tctx); err != nil {
 					a.logger.Error("sn360-es: onboarding agent failed",
 						slog.String("tenant_id", env.TenantID),
