@@ -732,6 +732,86 @@ func TestHandleFeedbackPersist_NoRepo(t *testing.T) {
 	}
 }
 
+// stubMessageWithHeaders is a stubMessage with both a settable payload
+// AND settable headers, used to drive the header-precedence path of
+// handleFeedbackPersist.
+type stubMessageWithHeaders struct {
+	payload []byte
+	headers map[string]string
+}
+
+func (m stubMessageWithHeaders) Data() []byte               { return m.payload }
+func (m stubMessageWithHeaders) Subject() string            { return "es.action.feedback.report_phishing" }
+func (m stubMessageWithHeaders) Headers() map[string]string { return m.headers }
+func (m stubMessageWithHeaders) Ack() error                 { return nil }
+func (m stubMessageWithHeaders) Nak(time.Duration) error    { return nil }
+func (m stubMessageWithHeaders) Metadata() (events.MessageMetadata, error) {
+	return events.MessageMetadata{}, nil
+}
+
+// TestHandleFeedbackPersist_PrefersHeaderTenantID locks in the
+// trust-boundary fix from Devin Review round 4: when the NATS
+// HeaderTenantID is present, the row's TenantID MUST come from
+// the header, NOT from the (less-trusted) JSON body field. This
+// matches the convention handleEscalation already uses for the
+// es.action.escalation.> subjects and is the load-bearing
+// invariant that lets Task 5 (least-privilege connect role) flip
+// from "RLS exists but is inert" to "RLS rejects header/body
+// mismatches" without changing handler behaviour. Without this
+// fix, an INSERT whose row.TenantID came from the body but whose
+// bound conn's GUC came from the header would be rejected by the
+// RLS WITH CHECK clause as a benign skew — surfacing a misleading
+// "tenant mismatch" error instead of the intended "this publisher
+// is unauthenticated" / "this header was tampered" signal.
+func TestHandleFeedbackPersist_PrefersHeaderTenantID(t *testing.T) {
+	ctx := context.Background()
+	repos := repository.NewInMemoryRegistry()
+	app := newTestApp(t)
+	app.repos = repos
+
+	occurred := time.Date(2026, 5, 17, 12, 0, 0, 0, time.UTC)
+	payload, err := json.Marshal(action.FeedbackEvent{
+		// Body says "t-untrusted" — this is the value we want to
+		// ensure is NOT used when a verified header is present.
+		TenantID:             "t-untrusted",
+		PseudonymizedMessage: "msg-1",
+		Action:               action.FeedbackReportPhishing,
+		Tier:                 string(constant.TierWarning),
+		OccurredAt:           occurred,
+		CorrelationID:        "corr-1",
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	msg := stubMessageWithHeaders{
+		payload: payload,
+		// Header says "t-trusted" — this is the verified value
+		// the publisher's outbox stamped post-auth.
+		headers: map[string]string{events.HeaderTenantID: "t-trusted"},
+	}
+	if err := app.handleFeedbackPersist(ctx, msg); err != nil {
+		t.Fatalf("handleFeedbackPersist: %v", err)
+	}
+	// The trusted tenant should have the row.
+	trustedCounts, err := repos.FeedbackEvents.Counts(ctx, "t-trusted",
+		occurred.Add(-time.Hour), occurred.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Counts(trusted): %v", err)
+	}
+	if trustedCounts.ReportedPhishing != 1 {
+		t.Errorf("expected 1 ReportedPhishing for trusted tenant, got %+v", trustedCounts)
+	}
+	// The untrusted body-supplied tenant must have NOTHING.
+	untrustedCounts, err := repos.FeedbackEvents.Counts(ctx, "t-untrusted",
+		occurred.Add(-time.Hour), occurred.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Counts(untrusted): %v", err)
+	}
+	if untrustedCounts.ReportedPhishing+untrustedCounts.MarkedSafe+untrustedCounts.TrustedSender != 0 {
+		t.Errorf("expected 0 rows for untrusted body tenant, got %+v", untrustedCounts)
+	}
+}
+
 func mustJSON(t *testing.T, v any) []byte {
 	t.Helper()
 	b, err := json.Marshal(v)

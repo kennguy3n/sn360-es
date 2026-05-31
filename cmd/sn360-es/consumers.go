@@ -458,7 +458,24 @@ func (a *application) trackSub(sub events.Subscription) {
 }
 
 // handleFeedbackPersist writes each verified banner click into the
-// feedback_events table.
+// feedback_events table. The tenant id is sourced preferentially
+// from the verified NATS header via verifiedTenantID — the same
+// trust-boundary pattern handleEscalation uses (see consumers.go
+// handleEscalation, which calls verifiedTenantID(msg, env.TenantID)
+// for both create and resolve branches). The body's tenant_id is
+// used only as a transitional fallback for older publishers that
+// did not yet stamp the header.
+//
+// Why this matters now that the tenantBoundMessageHandler wrapper
+// is in place: the wrapper sets the bound conn's sn360.tenant_id
+// GUC from the header, so an INSERT whose row.TenantID is sourced
+// from a DIFFERENT (body) value would be rejected by the RLS
+// WITH CHECK on feedback_events once the connect role rotates to
+// the least-privilege role (Task 5). Sourcing both the GUC and
+// the row from the same verified header is the fail-open-then-
+// fail-closed shape that makes the RLS WITH CHECK behave as
+// "verify the publisher stamped the right tenant" rather than
+// "reject a benign header/body skew".
 func (a *application) handleFeedbackPersist(ctx context.Context, msg events.Message) error {
 	if a.repos == nil || a.repos.FeedbackEvents == nil {
 		return nil
@@ -469,9 +486,10 @@ func (a *application) handleFeedbackPersist(ctx context.Context, msg events.Mess
 			slog.Any("error", err))
 		return nil
 	}
-	if evt.TenantID == "" || evt.PseudonymizedMessage == "" || !evt.Action.Valid() {
+	tenantID := verifiedTenantID(msg, evt.TenantID)
+	if tenantID == "" || evt.PseudonymizedMessage == "" || !evt.Action.Valid() {
 		a.logger.WarnContext(ctx, "sn360-es: action.feedback missing required fields",
-			slog.String("tenant_id", evt.TenantID),
+			slog.String("tenant_id", tenantID),
 			slog.String("action", string(evt.Action)))
 		return nil
 	}
@@ -480,7 +498,7 @@ func (a *application) handleFeedbackPersist(ctx context.Context, msg events.Mess
 		occurred = time.Now().UTC()
 	}
 	row := &repository.FeedbackEvent{
-		TenantID:        evt.TenantID,
+		TenantID:        tenantID,
 		PseudoMessageID: evt.PseudonymizedMessage,
 		Action:          string(evt.Action),
 		Tier:            evt.Tier,
