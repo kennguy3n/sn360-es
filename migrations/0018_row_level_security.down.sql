@@ -69,25 +69,39 @@ ALTER TABLE org_graphs                DISABLE ROW LEVEL SECURITY;
 
 -- ----------------------------------------------------------------------
 -- 2. Revoke sn360_app's table grants and drop the role.
+--
+-- Postgres has no `REVOKE ... IF EXISTS <role>` syntax, and bare
+-- REVOKEs against a missing role raise ERROR which aborts the entire
+-- BEGIN/COMMIT transaction — rolling back the policy drops above
+-- alongside the failed REVOKEs. Wrap the REVOKEs (and the DROP ROLE)
+-- in a single PL/pgSQL DO block that short-circuits when sn360_app is
+-- already absent, so the down migration stays idempotent against
+-- environments that have been partially rolled back manually.
 -- ----------------------------------------------------------------------
 
-REVOKE ALL ON users                     FROM sn360_app;
-REVOKE ALL ON groups                    FROM sn360_app;
-REVOKE ALL ON labels                    FROM sn360_app;
-REVOKE ALL ON score_engine              FROM sn360_app;
-REVOKE ALL ON vendors                   FROM sn360_app;
-REVOKE ALL ON evaluation_results        FROM sn360_app;
-REVOKE ALL ON communication_histories   FROM sn360_app;
-REVOKE ALL ON campaigns                 FROM sn360_app;
-REVOKE ALL ON simulation_results        FROM sn360_app;
-REVOKE ALL ON escalation_tickets        FROM sn360_app;
-REVOKE ALL ON audit_logs                FROM sn360_app;
-REVOKE ALL ON feedback_events           FROM sn360_app;
-REVOKE ALL ON oauth_tokens              FROM sn360_app;
-REVOKE ALL ON sync_checkpoints          FROM sn360_app;
-REVOKE ALL ON user_behavioral_baselines FROM sn360_app;
-REVOKE ALL ON org_graphs                FROM sn360_app;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sn360_app') THEN
+        REVOKE ALL ON users                     FROM sn360_app;
+        REVOKE ALL ON groups                    FROM sn360_app;
+        REVOKE ALL ON labels                    FROM sn360_app;
+        REVOKE ALL ON score_engine              FROM sn360_app;
+        REVOKE ALL ON vendors                   FROM sn360_app;
+        REVOKE ALL ON evaluation_results        FROM sn360_app;
+        REVOKE ALL ON communication_histories   FROM sn360_app;
+        REVOKE ALL ON campaigns                 FROM sn360_app;
+        REVOKE ALL ON simulation_results        FROM sn360_app;
+        REVOKE ALL ON escalation_tickets        FROM sn360_app;
+        REVOKE ALL ON audit_logs                FROM sn360_app;
+        REVOKE ALL ON feedback_events           FROM sn360_app;
+        REVOKE ALL ON oauth_tokens              FROM sn360_app;
+        REVOKE ALL ON sync_checkpoints          FROM sn360_app;
+        REVOKE ALL ON user_behavioral_baselines FROM sn360_app;
+        REVOKE ALL ON org_graphs                FROM sn360_app;
 
-DROP ROLE IF EXISTS sn360_app;
+        DROP ROLE sn360_app;
+    END IF;
+END
+$$;
 
 COMMIT;
