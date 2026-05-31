@@ -17,6 +17,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/handler"
 	"github.com/kennguy3n/sn360-es/internal/middleware"
 	"github.com/kennguy3n/sn360-es/internal/service/action"
+	"github.com/kennguy3n/sn360-es/internal/service/bridge"
 	"github.com/kennguy3n/sn360-es/internal/service/ingestion"
 	"github.com/kennguy3n/sn360-es/internal/service/relationship"
 	"github.com/kennguy3n/sn360-es/internal/service/worker"
@@ -32,6 +33,38 @@ import (
 	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
 	"github.com/kennguy3n/sn360-es/pkg/storage/redis"
 )
+
+// platformBridgeConfig projects the application config into the
+// bridge package's Config. Kept here next to factoryConfigFromAppConfig
+// so the (config.Config → wiring-specific struct) translations all live
+// in the same file.
+func platformBridgeConfig(cfg *config.Config) bridge.Config {
+	if cfg == nil {
+		return bridge.Config{}
+	}
+	clusterID := cfg.Platform.ClusterID
+	if clusterID == "" {
+		clusterID = cfg.AppName
+	}
+	return bridge.Config{
+		Enabled:        cfg.Platform.NATSEnabled,
+		URLs:           cfg.Platform.NATSURLs,
+		CredsFile:      cfg.Platform.NATSCredsFile,
+		Token:          cfg.Platform.NATSToken,
+		Name:           cfg.Platform.NATSName,
+		Source:         cfg.AppName,
+		ClusterID:      clusterID,
+		TLSCAFile:      cfg.Platform.NATSTLSCAFile,
+		TLSCertFile:    cfg.Platform.NATSTLSCertFile,
+		TLSKeyFile:     cfg.Platform.NATSTLSKeyFile,
+		TLSInsecure:    cfg.Platform.NATSTLSInsecure,
+		ReconnectWait:  cfg.Platform.NATSReconnectWait,
+		MaxReconnects:  cfg.Platform.NATSMaxReconnects,
+		PublishTimeout: cfg.Platform.NATSPublishTimeout,
+		PublishRetries: cfg.Platform.NATSPublishRetries,
+		Stream:         cfg.Platform.NATSStream,
+	}
+}
 
 // factoryConfigFromAppConfig maps the application config into the
 // event-bus factory configuration that bus.New expects.

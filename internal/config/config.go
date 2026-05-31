@@ -22,6 +22,7 @@
 //   - providers.go  — GWS, O365, Zoho, Fastmail, WorkMail (+ Has* predicates,
 //     zohoDataCenterOrDefault)
 //   - pipeline.go   — Ingestion, Worker, Onboarding, CORS, RateLimit
+//   - platform.go   — Platform (sn360-security-platform bridge config)
 //   - validate.go   — Config.validate() + isLowEntropy()
 //   - helpers.go    — env-reading helpers (getStr, getInt, getIntStrict, etc.)
 //     and loadDotEnv
@@ -76,6 +77,7 @@ type Config struct {
 	Worker                   Worker
 	Onboarding               Onboarding
 	Telemetry                Telemetry
+	Platform                 Platform
 }
 
 // Load reads configuration from the environment.
@@ -124,6 +126,7 @@ func Load() (Config, error) {
 		Worker:                   loadWorker(),
 		Onboarding:               loadOnboarding(),
 		Telemetry:                loadTelemetry(),
+		Platform:                 loadPlatform(),
 	}
 
 	// Critical numeric settings: re-parse with the strict helpers so a

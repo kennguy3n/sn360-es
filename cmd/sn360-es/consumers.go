@@ -27,6 +27,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service"
 	"github.com/kennguy3n/sn360-es/internal/service/action"
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
+	"github.com/kennguy3n/sn360-es/internal/service/bridge"
 	"github.com/kennguy3n/sn360-es/pkg/events"
 )
 
@@ -711,8 +712,21 @@ func (a *application) handleEscalation(ctx context.Context, msg events.Message) 
 			a.logger.WarnContext(ctx, "sn360-es: escalation.created missing tenant_id")
 			return nil
 		}
-		if _, err := a.escalationSvc.Escalate(ctx, tenantID, env.Incident); err != nil {
+		ticket, err := a.escalationSvc.Escalate(ctx, tenantID, env.Incident)
+		if err != nil {
 			return fmt.Errorf("escalation.created: %w", err)
+		}
+		// WS-5A.1: fan ticket open out to platform SOC so the
+		// correlation engine can pivot from the email evidence
+		// to any concurrent endpoint / identity / network alert
+		// for the same actor. Bridge is no-op when disabled.
+		if a.platformBridge != nil {
+			if perr := a.platformBridge.PublishEscalation(ctx, bridge.EscalationActionCreated, &ticket); perr != nil {
+				a.logger.WarnContext(ctx, "sn360-es: escalation.created: platform bridge publish failed",
+					slog.String("tenant_id", tenantID),
+					slog.String("ticket_id", ticket.TicketID),
+					slog.Any("error", perr))
+			}
 		}
 	case strings.HasSuffix(subject, ".resolved"):
 		var env escalationResolveEnvelope
@@ -730,8 +744,21 @@ func (a *application) handleEscalation(ctx context.Context, msg events.Message) 
 				slog.String("ticket_id", env.TicketID))
 			return nil
 		}
-		if _, err := a.escalationSvc.ResolveEscalation(ctx, tenantID, env.TicketID, env.ResolverHash, env.Outcome, env.Notes); err != nil {
+		ticket, err := a.escalationSvc.ResolveEscalation(ctx, tenantID, env.TicketID, env.ResolverHash, env.Outcome, env.Notes)
+		if err != nil {
 			return fmt.Errorf("escalation.resolved: %w", err)
+		}
+		// WS-5A.1: ticket resolution closes the SOC's bi-directional
+		// loop — the platform updates its ticket index, drops any
+		// downstream open-incident alerts, and feeds the outcome
+		// back into the feedback loop. No-op when bridge disabled.
+		if a.platformBridge != nil {
+			if perr := a.platformBridge.PublishEscalation(ctx, bridge.EscalationActionResolved, &ticket); perr != nil {
+				a.logger.WarnContext(ctx, "sn360-es: escalation.resolved: platform bridge publish failed",
+					slog.String("tenant_id", tenantID),
+					slog.String("ticket_id", ticket.TicketID),
+					slog.Any("error", perr))
+			}
 		}
 	default:
 		a.logger.DebugContext(ctx, "sn360-es: escalation event ignored (unknown suffix)",

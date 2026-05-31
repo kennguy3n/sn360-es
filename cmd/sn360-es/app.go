@@ -18,6 +18,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service"
 	"github.com/kennguy3n/sn360-es/internal/service/action"
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
+	"github.com/kennguy3n/sn360-es/internal/service/bridge"
 	"github.com/kennguy3n/sn360-es/internal/service/cache"
 	"github.com/kennguy3n/sn360-es/internal/service/dashboard"
 	"github.com/kennguy3n/sn360-es/internal/service/education"
@@ -108,6 +109,14 @@ type application struct {
 	recipientSvc        *predict.RecipientService
 	openSvc             *predict.OpenService
 	escalationSvc       *agent.EscalationService
+
+	// platformBridge fans HighRisk+ verdicts, quarantine actions,
+	// and escalation ticket transitions out to the
+	// sn360-security-platform NATS stream (WS-5A.1). Always non-nil
+	// — a disabled bridge is returned from bridge.New when
+	// PLATFORM_NATS_ENABLED is false so handlers can call its
+	// methods unconditionally.
+	platformBridge bridge.PlatformPublisher
 
 	// Provider-side action machinery.
 	providers     *providerRegistry
@@ -236,6 +245,19 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 			gauge.WithLabelValues("nats", stream).Set(lag.Seconds())
 		})
 	}
+
+	// Platform NATS bridge (WS-5A.1). The bridge is gated behind
+	// PLATFORM_NATS_ENABLED — when disabled it returns a no-op
+	// publisher so the consumer handlers can call its methods
+	// unconditionally. A connect failure surfaces as a boot error
+	// because a wired-but-broken bridge would silently drop every
+	// HighRisk+ verdict from reaching the SOC.
+	platformPub, perr := bridge.New(ctx, platformBridgeConfig(cfg), logger)
+	if perr != nil {
+		return nil, fmt.Errorf("platform bridge: %w", perr)
+	}
+	app.platformBridge = platformPub
+	app.closers = append(app.closers, platformPub.Close)
 
 	// Postgres is optional but strongly preferred.
 	if cfg.Postgres.Host != "" && cfg.Postgres.Database != "" {
