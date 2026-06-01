@@ -285,13 +285,46 @@ func TestChaos_NATSSingleNodeFailure(t *testing.T) {
 
 	// Wait for the FIRST publish of dupID to produce its result
 	// (it should — it's a fresh message), then drain for a
-	// bounded window and confirm only ONE result lands for dupID.
-	// A SECOND result would mean the dedup window failed to
-	// suppress the second publish despite the broker returning
-	// Duplicate=true.
+	// short additional window and confirm only ONE result lands
+	// for dupID. A SECOND result would mean the dedup window
+	// failed to suppress the second publish despite the broker
+	// returning Duplicate=true.
+	//
+	// Budget split (was a single 45 s fixed deadline — adopted
+	// the two-phase shape so the happy path doesn't always burn
+	// the full window):
+	//   - 45 s arrival deadline: the first result must traverse
+	//     Tier 0 → Tier 1 → Tier 2 → Rspamd and land. Matches
+	//     the burst-arrival budget at line ~199.
+	//   - 10 s post-arrival drain: any duplicate would be the
+	//     immediate downstream effect of the broker NOT having
+	//     deduped, which means the consumer would see the second
+	//     publish as a fresh message. That second pass would take
+	//     roughly the same end-to-end latency as the first (a few
+	//     hundred ms in the chaos harness). 10 s is two orders of
+	//     magnitude above the per-message latency observed in the
+	//     burst phase, so a missed duplicate cannot hide inside it.
 	dupSeen := 0
-	deadline := time.NewTimer(45 * time.Second)
-	defer deadline.Stop()
+	arrivalDeadline := time.NewTimer(45 * time.Second)
+	defer arrivalDeadline.Stop()
+arrival:
+	for {
+		select {
+		case msg := <-resultCh:
+			var r dto.EvaluateResult
+			if err := json.Unmarshal(msg.Data(), &r); err == nil && r.MessageID == dupID {
+				dupSeen++
+				break arrival
+			}
+		case <-arrivalDeadline.C:
+			break arrival
+		}
+	}
+	if dupSeen == 0 {
+		t.Fatalf("dedup: no result observed for %q — the FIRST (non-duplicate) publish never reached the consumer", dupID)
+	}
+	dupDrain := time.NewTimer(10 * time.Second)
+	defer dupDrain.Stop()
 draining:
 	for {
 		select {
@@ -303,12 +336,9 @@ draining:
 					t.Fatalf("dedup: saw a SECOND result for %q — DedupWindow did not suppress reprocessing", dupID)
 				}
 			}
-		case <-deadline.C:
+		case <-dupDrain.C:
 			break draining
 		}
-	}
-	if dupSeen == 0 {
-		t.Fatalf("dedup: no result observed for %q — the FIRST (non-duplicate) publish never reached the consumer", dupID)
 	}
 }
 

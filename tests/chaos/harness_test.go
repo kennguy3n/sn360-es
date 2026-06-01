@@ -193,14 +193,26 @@ func pgCfgFrom(ctx context.Context, t *testing.T, c *tcpg.PostgresContainer) pos
 	}
 }
 
-// startRedis spins a real Redis container. Pass extra Cmd args (e.g.
-// "--maxmemory", "32mb", "--maxmemory-policy", "allkeys-lru") to
-// configure the eviction policy for the eviction-storm scenario.
-func startRedis(ctx context.Context, t *testing.T) (*tcredis.RedisContainer, string) {
+// startRedis spins a real Redis container. Pass extra testcontainers
+// options (e.g. testcontainers.WithCmdArgs("--maxmemory", "32mb",
+// "--maxmemory-policy", "allkeys-lru")) to configure the eviction
+// policy for the eviction-storm scenario; the variadic signature
+// keeps a single Docker-skip + lifecycle path (skipIfNoDocker +
+// t.Cleanup) for every Redis container the suite stands up.
+func startRedis(ctx context.Context, t *testing.T, opts ...testcontainers.ContainerCustomizer) (*tcredis.RedisContainer, string) {
 	t.Helper()
-	c, err := tcredis.Run(ctx, "redis:7-alpine")
+	c, err := tcredis.Run(ctx, "redis:7-alpine", opts...)
 	skipIfNoDocker(t, err)
-	t.Cleanup(func() { _ = c.Terminate(context.Background()) })
+	t.Cleanup(func() {
+		// stop + terminate (not just terminate) so the
+		// container's RDB save does not block the test exit.
+		// (Redis containers configured with maxmemory may
+		// snapshot on shutdown — the brief Stop drains the
+		// RDB write before the unconditional Terminate.)
+		grace := 1 * time.Second
+		_ = c.Stop(context.Background(), &grace)
+		_ = c.Terminate(context.Background())
+	})
 	host, err := c.Host(ctx)
 	if err != nil {
 		t.Fatalf("redis host: %v", err)

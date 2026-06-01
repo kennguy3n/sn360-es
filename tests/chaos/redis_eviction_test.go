@@ -46,6 +46,7 @@
 package chaos_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -53,6 +54,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -297,31 +299,15 @@ const chaosRedisTenantID = "00000000-0000-0000-0000-0000ed150001"
 // startTinyRedis spins a redis:7-alpine with a 16 MiB cap and
 // allkeys-lru eviction policy. The cap is tight enough that even
 // the chaos flood inevitably triggers eviction inside a few
-// seconds.
+// seconds. Thin wrapper over startRedis so we inherit the shared
+// skipIfNoDocker + stop+terminate cleanup path — the eviction
+// scenario gets the maxmemory knobs without forking the helper.
 func startTinyRedis(ctx context.Context, t *testing.T) (*tcredis.RedisContainer, string) {
 	t.Helper()
-	c, err := tcredis.Run(ctx, "redis:7-alpine",
-		testcontainers.WithCmdArgs("--maxmemory", "16mb", "--maxmemory-policy", "allkeys-lru"),
-	)
-	if err != nil {
-		t.Fatalf("start tiny redis: %v", err)
-	}
-	t.Cleanup(func() {
-		// stop + terminate (not just terminate) so the
-		// container's RDB save does not block the test exit.
-		grace := 1 * time.Second
-		_ = c.Stop(context.Background(), &grace)
-		_ = c.Terminate(context.Background())
-	})
-	host, err := c.Host(ctx)
-	if err != nil {
-		t.Fatalf("redis host: %v", err)
-	}
-	port, err := c.MappedPort(ctx, "6379/tcp")
-	if err != nil {
-		t.Fatalf("redis port: %v", err)
-	}
-	return c, fmt.Sprintf("%s:%s", host, port.Port())
+	return startRedis(ctx, t, testcontainers.WithCmdArgs(
+		"--maxmemory", "16mb",
+		"--maxmemory-policy", "allkeys-lru",
+	))
 }
 
 // redisInfoStat parses INFO stats and returns the integer value of
@@ -354,29 +340,50 @@ func redisInfoStat(ctx context.Context, t *testing.T, c *tcredis.RedisContainer,
 // mode (one redis-cli invocation, every SET on stdin) which
 // pushes ~50k SETs/s on a typical container — well inside the
 // chaos test's budget.
+//
+// Memory shape: the script is streamed directly to a host
+// tempfile via a buffered writer, then CopyFileToContainer
+// streams it into /tmp inside the container. Peak heap on the
+// test process is O(bufio.Writer buffer) ≈ 64 KiB irrespective
+// of `count`, so memory-constrained developer laptops can run
+// `make chaos` without paging.
 func floodRedis(ctx context.Context, t *testing.T, c *tcredis.RedisContainer, count, bytesPerVal int) {
 	t.Helper()
 
-	// Build the pipeline script in-memory: each line is one SET
-	// command consumed by `redis-cli --pipe`. The value is the
-	// same constant for every key — gives Redis maximum
-	// compression headroom which actually makes the LRU
-	// pressure WORSE (the encoded entries are smaller, so more
-	// keys fit before eviction starts; the test wants eviction
-	// to engage even with that compression).
+	// Build the pipeline script directly to a host tempfile.
+	// Each line is one SET command consumed by `redis-cli --pipe`.
+	// The value is the same constant for every key — gives
+	// Redis maximum compression headroom which actually makes
+	// the LRU pressure WORSE (the encoded entries are smaller,
+	// so more keys fit before eviction starts; the test wants
+	// eviction to engage even with that compression).
+	scriptFile, err := os.CreateTemp("", "sn360-es-chaos-flood-*.txt")
+	if err != nil {
+		t.Fatalf("flood tempfile: %v", err)
+	}
+	scriptPath := scriptFile.Name()
+	t.Cleanup(func() { _ = os.Remove(scriptPath) })
+	bw := bufio.NewWriter(scriptFile)
 	val := strings.Repeat("x", bytesPerVal)
-	var script bytes.Buffer
 	for i := 0; i < count; i++ {
-		fmt.Fprintf(&script, "SET chaos:flood:%d %s\n", i, val)
+		if _, err := fmt.Fprintf(bw, "SET chaos:flood:%d %s\n", i, val); err != nil {
+			_ = scriptFile.Close()
+			t.Fatalf("flood write line %d: %v", i, err)
+		}
+	}
+	if err := bw.Flush(); err != nil {
+		_ = scriptFile.Close()
+		t.Fatalf("flood flush: %v", err)
+	}
+	if err := scriptFile.Close(); err != nil {
+		t.Fatalf("flood close: %v", err)
 	}
 
-	// We use `redis-cli --pipe` with the script on stdin. The
-	// container Exec API does not expose stdin directly, so we
-	// stage the script inside the container's /tmp via tar
-	// upload (testcontainers helper) and then feed it.
-	tarHeader := map[string]string{"flood.txt": script.String()}
-	if err := uploadTextFiles(ctx, c.Container, "/tmp", tarHeader); err != nil {
-		t.Fatalf("upload flood script: %v", err)
+	// CopyFileToContainer streams the host tempfile into the
+	// container's /tmp without materialising the contents on
+	// the test heap.
+	if err := c.CopyFileToContainer(ctx, scriptPath, "/tmp/flood.txt", 0o644); err != nil {
+		t.Fatalf("flood copy to container: %v", err)
 	}
 	_, reader, err := c.Exec(ctx,
 		[]string{"sh", "-c", "redis-cli --pipe < /tmp/flood.txt"})
@@ -389,18 +396,6 @@ func floodRedis(ctx context.Context, t *testing.T, c *tcredis.RedisContainer, co
 		// as the eviction counter advances.
 		t.Logf("flood pipe drain: %v", err)
 	}
-}
-
-// uploadTextFiles writes the provided map[name]contents into
-// targetDir inside the container. testcontainers does not expose a
-// generic stdin pipe for Exec, so this is the standard idiom.
-func uploadTextFiles(ctx context.Context, c testcontainers.Container, targetDir string, files map[string]string) error {
-	for name, content := range files {
-		if err := c.CopyToContainer(ctx, []byte(content), fmt.Sprintf("%s/%s", targetDir, name), 0o644); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // healthStatus issues a GET against the given URL with a tight
