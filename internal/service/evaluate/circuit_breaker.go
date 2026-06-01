@@ -111,6 +111,18 @@ type CircuitBreaker struct {
 	// that just came back from an outage. The slot is released by
 	// onSuccess / onFailure (or by a transition that leaves
 	// StateHalfOpen).
+	//
+	// All current accesses — the CAS in allow(), and the Store in
+	// onSuccess and transition — happen while cb.mu is held, so a
+	// plain bool would be functionally equivalent today. We keep
+	// atomic.Bool deliberately as a future-proofing guarantee: if a
+	// future refactor moves the half-open probe gate to a lock-free
+	// fast path (e.g. an outer atomic check before the mutex
+	// acquire), the CAS semantics already match what that path
+	// would need. The cost is zero — atomic.Bool is a single word
+	// with the same layout as a plain bool — and the contract
+	// invariant ("at most one in-flight probe per half-open cycle")
+	// is preserved either way.
 	halfOpenProbe atomic.Bool
 
 	// totals are atomics so metrics can be sampled without taking the lock.

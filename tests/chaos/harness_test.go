@@ -75,6 +75,14 @@ const (
 	publishWait       = 30 * time.Second
 	defaultPollEvery  = 250 * time.Millisecond
 	binaryBuildBudget = 90 * time.Second
+	// natsPortRetries bounds the freePort → Docker bind retry
+	// loop in startNATSWithOptions. The race window between
+	// `net.Listen` returning a port and Docker calling `bind(2)`
+	// is on the order of tens of milliseconds, so 5 attempts is
+	// effectively limitless against a non-adversarial host; the
+	// bound is here to guarantee termination, not to mask a
+	// genuinely-saturated CI runner.
+	natsPortRetries = 5
 )
 
 // binary build is shared across scenarios via this sync.Once so a
@@ -239,8 +247,67 @@ func startNATS(ctx context.Context, t *testing.T) (*tcnats.NATSContainer, string
 // preserves the host-side URL. The Postgres / Redis chaos tests do
 // not need a stable port, so they use the zero-value form which
 // lets testcontainers pick an ephemeral port.
+//
+// When hostPort != 0 we retry the entire (freePort → Docker bind)
+// dance up to natsPortRetries times so a TOCTOU loss against
+// another process that grabbed the same ephemeral port between
+// `net.Listen` returning and Docker calling `bind(2)` is recovered
+// transparently. Each retry uses a fresh ephemeral port; the
+// terminal failure mode after exhausting retries is a t.Fatalf.
 func startNATSWithOptions(ctx context.Context, t *testing.T, hostPort int) (*tcnats.NATSContainer, string) {
 	t.Helper()
+	if hostPort == 0 {
+		return startNATSOnce(ctx, t, 0)
+	}
+	var lastErr error
+	for attempt := 0; attempt < natsPortRetries; attempt++ {
+		port := hostPort
+		if attempt > 0 {
+			port = freePort(t)
+		}
+		c, url, err := tryStartNATS(ctx, port)
+		if err == nil {
+			t.Cleanup(func() { _ = c.Terminate(context.Background()) })
+			return c, url
+		}
+		lastErr = err
+		// On bind-port failure, terminate the partially-started
+		// container so retries don't accumulate orphans.
+		if c != nil {
+			_ = c.Terminate(context.Background())
+		}
+		if !isPortBindError(err) {
+			// Not a port collision — propagate to the
+			// canonical skip/fatal handler so docker-missing
+			// hosts still skip cleanly.
+			skipIfNoDocker(t, err)
+			return nil, ""
+		}
+	}
+	t.Fatalf("start nats after %d port-collision retries: %v", natsPortRetries, lastErr)
+	return nil, ""
+}
+
+// startNATSOnce is the simple, no-retry path used when the caller
+// is happy with a Docker-assigned ephemeral port (i.e. the Postgres
+// / Redis chaos tests). Pulled out of startNATSWithOptions so the
+// retry wrapper above doesn't accidentally retry the zero-port
+// case (where freePort is irrelevant).
+func startNATSOnce(ctx context.Context, t *testing.T, hostPort int) (*tcnats.NATSContainer, string) {
+	t.Helper()
+	c, url, err := tryStartNATS(ctx, hostPort)
+	skipIfNoDocker(t, err)
+	t.Cleanup(func() { _ = c.Terminate(context.Background()) })
+	return c, url
+}
+
+// tryStartNATS performs a single Docker `tcnats.Run` attempt and,
+// on success, resolves the connection URL. The returned error is
+// suitable for isPortBindError detection. Lifetime of the returned
+// container is the caller's responsibility — on retry the caller
+// must Terminate the partially-started container before the next
+// attempt to avoid orphans.
+func tryStartNATS(ctx context.Context, hostPort int) (*tcnats.NATSContainer, string, error) {
 	// Default nats:2.10-alpine command is `-DV -js` which enables
 	// JetStream with file storage at `/data`. Container Stop
 	// preserves the container filesystem (only Terminate destroys
@@ -267,13 +334,30 @@ func startNATSWithOptions(ctx context.Context, t *testing.T, hostPort int) (*tcn
 		}))
 	}
 	c, err := tcnats.Run(ctx, "nats:2.10-alpine", opts...)
-	skipIfNoDocker(t, err)
-	t.Cleanup(func() { _ = c.Terminate(context.Background()) })
+	if err != nil {
+		return c, "", err
+	}
 	url, err := c.ConnectionString(ctx)
 	if err != nil {
-		t.Fatalf("nats url: %v", err)
+		return c, "", fmt.Errorf("nats connection string: %w", err)
 	}
-	return c, url
+	return c, url, nil
+}
+
+// isPortBindError pattern-matches the Docker engine's port-already-
+// allocated message. We don't have a typed error to inspect because
+// the testcontainers-go module wraps the Docker engine response in
+// an opaque fmt.Errorf chain; substring matching against the
+// engine's canonical wording is the only practical signal. The two
+// substrings cover both classic Linux Docker ("port is already
+// allocated") and Docker Desktop ("address already in use").
+func isPortBindError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "port is already allocated") ||
+		strings.Contains(msg, "address already in use")
 }
 
 // applyMigrations runs every migrations/*.up.sql against the live
