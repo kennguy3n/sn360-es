@@ -497,6 +497,16 @@ type tenantScoringConfigAdapter struct {
 
 	mu    sync.RWMutex
 	cache map[string]tenantScoringConfigCacheEntry
+
+	// onInvalidate is called (without holding mu) for every
+	// Invalidate(tenantID) call. The slm.Router registers its
+	// Invalidate method here so per-tenant Tier 2 client caches are
+	// cleared at the same time as the scoring-config cache —
+	// without this hook the Router would keep handing back a stale
+	// override client after an admin flips score_engine.tier2_provider.
+	// Composition root sets the hook after both the adapter and
+	// router exist; nil is fine, the adapter just skips the call.
+	onInvalidate func(tenantID string)
 }
 
 type tenantScoringConfigCacheEntry struct {
@@ -731,6 +741,29 @@ func (a *tenantScoringConfigAdapter) Invalidate(tenantID string) {
 	}
 	a.mu.Lock()
 	delete(a.cache, tenantID)
+	hook := a.onInvalidate
+	a.mu.Unlock()
+	// Call the downstream hook (e.g. slm.Router.Invalidate) outside
+	// the lock so it cannot deadlock against any goroutine that
+	// re-enters the adapter while invalidation propagates.
+	if hook != nil {
+		hook(tenantID)
+	}
+}
+
+// SetOnInvalidate installs a callback fired (without holding the
+// adapter's lock) for every Invalidate(tenantID). Used by the
+// composition root to wire slm.Router.Invalidate so a tuning write —
+// or any future admin write that calls Invalidate — clears both
+// caches together. Passing nil clears any prior hook. Safe for
+// concurrent calls with Invalidate; the hook is read under the same
+// lock that protects the cache map.
+func (a *tenantScoringConfigAdapter) SetOnInvalidate(hook func(tenantID string)) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	a.onInvalidate = hook
 	a.mu.Unlock()
 }
 

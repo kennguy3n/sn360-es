@@ -81,6 +81,15 @@ func New(cfg ProviderConfig) (Client, error) {
 	// Normalise the name on the cfg copy passed to the factory so
 	// the factory does not have to know about case rules.
 	cfg.Name = key
+	// ProviderConfig documents ProviderOpts as "always non-nil for
+	// factories" so a future factory that writes into the map
+	// (e.g. cfg.ProviderOpts["computed_default"] = "...") does not
+	// panic on a nil-map assignment when callers pass nil. Allocate
+	// an empty map here so the contract holds even when the caller
+	// (or TIER2_PROVIDER_OPTS) yields nil.
+	if cfg.ProviderOpts == nil {
+		cfg.ProviderOpts = map[string]string{}
+	}
 	return f(cfg)
 }
 

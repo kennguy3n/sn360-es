@@ -163,9 +163,11 @@ func (r *Router) resolve(ctx context.Context, tenantID string) Client {
 	if name == "" {
 		// "No override configured" is the steady state for most
 		// tenants — cache so we never re-query the DB for the
-		// same tenant.
-		r.cache.Store(tenantID, &routerEntry{fellThroughToDefault: true})
-		return r.defaultClient
+		// same tenant. LoadOrStore (not Store) preserves any entry
+		// another goroutine resolved first; see the comment at the
+		// bottom of this function for the race window we are
+		// closing.
+		return r.cacheAndReturn(tenantID, &routerEntry{fellThroughToDefault: true})
 	}
 
 	if r.resolveCfg == nil {
@@ -175,8 +177,7 @@ func (r *Router) resolve(ctx context.Context, tenantID string) Client {
 		r.log.WarnContext(ctx, "slm.Router: tenant override resolved but ResolveConfig is nil; using deployment default",
 			slog.String("tenant_id", tenantID),
 			slog.String("override", name))
-		r.cache.Store(tenantID, &routerEntry{fellThroughToDefault: true, overrideProviderName: name})
-		return r.defaultClient
+		return r.cacheAndReturn(tenantID, &routerEntry{fellThroughToDefault: true, overrideProviderName: name})
 	}
 
 	providerCfg, err := r.resolveCfg(name)
@@ -185,12 +186,11 @@ func (r *Router) resolve(ctx context.Context, tenantID string) Client {
 			slog.String("tenant_id", tenantID),
 			slog.String("override", name),
 			slog.Any("error", err))
-		r.cache.Store(tenantID, &routerEntry{
+		return r.cacheAndReturn(tenantID, &routerEntry{
 			fellThroughToDefault: true,
 			overrideProviderName: name,
 			constructionError:    err,
 		})
-		return r.defaultClient
 	}
 	providerCfg.Name = name
 
@@ -200,12 +200,11 @@ func (r *Router) resolve(ctx context.Context, tenantID string) Client {
 			slog.String("tenant_id", tenantID),
 			slog.String("override", name),
 			slog.Any("error", err))
-		r.cache.Store(tenantID, &routerEntry{
+		return r.cacheAndReturn(tenantID, &routerEntry{
 			fellThroughToDefault: true,
 			overrideProviderName: name,
 			constructionError:    err,
 		})
-		return r.defaultClient
 	}
 
 	r.log.InfoContext(ctx, "slm.Router: tenant override resolved",
@@ -217,7 +216,19 @@ func (r *Router) resolve(ctx context.Context, tenantID string) Client {
 	// wins; the loser's client is dropped (no leaked
 	// goroutines — providers hold only an http.Client which the
 	// runtime GCs).
-	entry := &routerEntry{client: client, overrideProviderName: name}
+	return r.cacheAndReturn(tenantID, &routerEntry{client: client, overrideProviderName: name})
+}
+
+// cacheAndReturn installs entry for tenantID if no entry exists yet,
+// and returns the client the winning entry resolves to. Always uses
+// LoadOrStore (never Store) so that two goroutines racing to resolve
+// the same tenant — one taking a fast no-override path, the other
+// taking the slow construct-override path — cannot have the faster
+// one overwrite the slower one's successful client with a
+// fall-through entry. Whichever goroutine wins LoadOrStore is the
+// canonical entry; the loser's allocation drops on the floor and
+// the runtime GCs it.
+func (r *Router) cacheAndReturn(tenantID string, entry *routerEntry) Client {
 	actual, _ := r.cache.LoadOrStore(tenantID, entry)
 	winner := actual.(*routerEntry)
 	if winner.fellThroughToDefault {

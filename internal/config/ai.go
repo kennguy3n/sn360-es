@@ -1,8 +1,9 @@
 package config
 
 import (
-	"strings"
 	"time"
+
+	"github.com/kennguy3n/sn360-es/pkg/inference/slm"
 )
 
 // Rspamd configures the Rspamd HTTP client.
@@ -71,32 +72,14 @@ type AI struct {
 // ParseProviderOpts is exported so callers (Validate, tests, the
 // composition root) can re-parse the env var when AI is constructed
 // outside loadAI (e.g. injected from a test fixture).
+//
+// The parsing rule lives in the slm package so any future tweak
+// (escape rules, alternative separators, etc.) lands in one place
+// instead of drifting between config and slm. This thin shim is
+// kept so existing config-package callers do not have to learn
+// about slm.
 func ParseProviderOpts(raw string) map[string]string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	out := make(map[string]string)
-	for _, pair := range strings.Split(raw, ",") {
-		pair = strings.TrimSpace(pair)
-		if pair == "" {
-			continue
-		}
-		kv := strings.SplitN(pair, "=", 2)
-		if len(kv) != 2 {
-			continue
-		}
-		k := strings.TrimSpace(kv[0])
-		v := strings.TrimSpace(kv[1])
-		if k == "" {
-			continue
-		}
-		out[k] = v
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	return slm.ParseProviderOpts(raw)
 }
 
 func loadAI() AI {

@@ -734,18 +734,14 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	tierDeciderAdapt := tierDeciderAdapter{decider: tierDecider}
 	weights := evaluate.DefaultWeights()
 
-	// Pre-build the shared tenantScoringConfig cache so NewEvaluator
-	// and NewBatchOrchestrator capture a non-nil
-	// app.tenantScoringConfig at construction time. buildAgents
-	// (called later, line ~741) reuses the same instance via
-	// buildConfigStore so the tuning agent's writes invalidate the
-	// same cache the evaluator reads from. Before this split,
-	// buildAgents ran AFTER the evaluator block here, so
-	// app.tenantScoringConfig was always nil when the evaluator
-	// captured it — silently collapsing every verdict back onto
-	// the static defaults and defeating the entire per-tenant
-	// scoring config feature.
-	ensureTenantScoringConfigAdapter(app)
+	// app.tenantScoringConfig is already populated at this point —
+	// the slm.Router setup above needs it as its
+	// TenantProviderLoader, so ensureTenantScoringConfigAdapter ran
+	// before buildTier2Client. ensureTenantScoringConfigAdapter is
+	// idempotent (early-returns when app.tenantScoringConfig is
+	// non-nil), so the original buildAgents-ordering protection
+	// described in the historical comment no longer needs a second
+	// call here.
 
 	// tenantScoringConfig is non-nil when score_engine is wired —
 	// in that case the same table the tuning agent writes to is

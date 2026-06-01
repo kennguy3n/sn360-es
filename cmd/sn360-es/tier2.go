@@ -94,6 +94,19 @@ func buildTier2Client(app *application, cfg *config.Config, logger *slog.Logger)
 			slog.Any("error", err))
 		return defaultClient
 	}
+	// Wire adapter -> router invalidation so a write that calls
+	// adapter.Invalidate (today: tuning writes via
+	// postgresConfigStore.invalidate; in the future: any admin
+	// endpoint that updates score_engine.tier2_provider) also clears
+	// the Router's per-tenant client cache. Without this hook the
+	// Router would keep returning the previously-constructed
+	// override client after the underlying provider name flipped.
+	// The hook is installed only when both an adapter and a Loader
+	// are wired — without the Loader the Router has no per-tenant
+	// cache anyway.
+	if app.tenantScoringConfig != nil && routerCfg.Loader != nil {
+		app.tenantScoringConfig.SetOnInvalidate(router.Invalidate)
+	}
 	logger.Info("sn360-es: tier2 client wired",
 		slog.String("provider", providerName),
 		slog.String("url", cfg.AI.URL),
