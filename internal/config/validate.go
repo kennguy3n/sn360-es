@@ -83,22 +83,25 @@ func (c Config) validate() error {
 		if !ok {
 			return fmt.Errorf("PG_REGION_MAP must contain an entry for PG_HOME_REGION=%q; got regions %v", c.Postgres.HomeRegion, sortedRegionKeys(c.Postgres.RegionMap))
 		}
-		// WS-7a: the primary pool (PG_HOST/PG_PORT) doubles as the
-		// home-region pool — internal/docs/MULTI_REGION.md:54-58
-		// documents the contract, but without a code-level check
-		// an operator who pointed the home entry at a different
-		// host would silently get a single pool to the primary
-		// PG_HOST while the home entry's URL was parsed-and-
-		// validated-but-never-dialled. Fail boot if the home
-		// entry's (host, port) tuple does not match (PG_HOST,
-		// PG_PORT). User/database/credentials are intentionally
-		// not compared — sharing a host with distinct DB names
-		// is a legitimate pattern for multi-tenant Postgres
-		// deployments — but a host or port mismatch is always
-		// a misconfig.
-		if homePG.Host != c.Postgres.Host || homePG.Port != c.Postgres.Port {
-			return fmt.Errorf("PG_REGION_MAP[%s] points at %s:%d but PG_HOST/PG_PORT is %s:%d — the home-region entry must reach the same Postgres as the primary pool (see internal/docs/MULTI_REGION.md)",
-				c.Postgres.HomeRegion, homePG.Host, homePG.Port, c.Postgres.Host, c.Postgres.Port)
+		// WS-7a: the primary pool (PG_HOST/PG_PORT/PG_DATABASE)
+		// doubles as the home-region pool —
+		// internal/docs/MULTI_REGION.md:54-58 documents the
+		// contract, but without a code-level check an operator
+		// who pointed the home entry at a different host or
+		// database would silently get a single pool to the
+		// primary PG_HOST/PG_DATABASE while the home entry's URL
+		// was parsed-and-validated-but-never-dialled. Fail boot
+		// if the home entry's (host, port, database) tuple does
+		// not match (PG_HOST, PG_PORT, PG_DATABASE). User and
+		// password are intentionally not compared — operators
+		// commonly omit credentials from DSN strings and supply
+		// them via PG_USER/PG_PASSWORD env vars instead, so a
+		// user mismatch is ambiguous; a database mismatch is
+		// always a misconfig because the primary pool's database
+		// is what the home region actually serves.
+		if homePG.Host != c.Postgres.Host || homePG.Port != c.Postgres.Port || homePG.Database != c.Postgres.Database {
+			return fmt.Errorf("PG_REGION_MAP[%s] points at %s:%d/%s but PG_HOST/PG_PORT/PG_DATABASE is %s:%d/%s — the home-region entry must reach the same Postgres as the primary pool (see internal/docs/MULTI_REGION.md)",
+				c.Postgres.HomeRegion, homePG.Host, homePG.Port, homePG.Database, c.Postgres.Host, c.Postgres.Port, c.Postgres.Database)
 		}
 	}
 	// WS-7a: NATS super-cluster mirrors the PG_REGION_MAP guard

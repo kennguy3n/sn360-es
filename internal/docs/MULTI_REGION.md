@@ -57,6 +57,15 @@ a second pool for it (the primary pool doubles as the home-region
 pool). This avoids burning ~25 extra idle connections on every boot
 just to model the home region uniformly.
 
+The boot-time validator enforces parity on `(host, port, database)`
+between the home-region entry and `PG_HOST` / `PG_PORT` /
+`PG_DATABASE` — a mismatch on any of those three fields means the
+home entry's URL was parsed-and-validated but the actual home-region
+traffic uses the primary pool's settings, which is a silent
+misconfig. User and password are intentionally **not** part of the
+parity check — operators commonly omit credentials from DSN strings
+and supply them via `PG_USER` / `PG_PASSWORD` env vars instead.
+
 ### `NATS_SUPERCLUSTER` shape
 
 ```json

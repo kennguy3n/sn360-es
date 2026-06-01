@@ -318,3 +318,52 @@ func TestValidate_HomeRegionEntryMatches(t *testing.T) {
 		t.Fatalf("validate() rejected canonical home-region wiring: %v", err)
 	}
 }
+
+// TestValidate_HomeRegionEntryMustMatchPrimaryDatabase pins the
+// boot-time guard that the home-region entry's database name must
+// match PG_DATABASE. Devin Review (round 6) flagged that the
+// original (host, port)-only parity check let an operator silently
+// misconfigure a wrong database for the home region — the home
+// entry's URL would be parsed-and-validated but the primary pool's
+// PG_DATABASE is what the home region actually serves, so the
+// home entry's `database` field was parsed-but-never-dialled. The
+// validator now extends the parity check to include database.
+func TestValidate_HomeRegionEntryMustMatchPrimaryDatabase(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Postgres.Host = "primary.local"
+	cfg.Postgres.Port = 5432
+	cfg.Postgres.Database = "sn360_prod"
+	cfg.Postgres.HomeRegion = "ap-southeast-1"
+	cfg.Postgres.RegionMap = map[string]Postgres{
+		"ap-southeast-1": {Host: "primary.local", Port: 5432, Database: "wrong_db", SSLMode: "require"},
+		"us-east-1":      {Host: "us.local", Port: 5432, Database: "sn360_prod", SSLMode: "require"},
+	}
+	err := cfg.validate()
+	if err == nil {
+		t.Fatal("validate() must reject home-region entry whose database disagrees with PG_DATABASE")
+	}
+	if !strings.Contains(err.Error(), "wrong_db") || !strings.Contains(err.Error(), "sn360_prod") {
+		t.Fatalf("error = %q; want both databases named for operator clarity", err.Error())
+	}
+}
+
+// TestValidate_HomeRegionEntryMatchesIncludingDatabase pins the
+// happy path with all three parity fields (host, port, database)
+// populated and matching — guards against a future tightening that
+// might accidentally require fields outside the documented
+// invariant (user/password are intentionally NOT part of the
+// parity check; see the validate() comment).
+func TestValidate_HomeRegionEntryMatchesIncludingDatabase(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Postgres.Host = "primary.local"
+	cfg.Postgres.Port = 5432
+	cfg.Postgres.Database = "sn360_prod"
+	cfg.Postgres.HomeRegion = "ap-southeast-1"
+	cfg.Postgres.RegionMap = map[string]Postgres{
+		"ap-southeast-1": {Host: "primary.local", Port: 5432, Database: "sn360_prod", User: "different_user", Password: "different_password", SSLMode: "require"},
+		"us-east-1":      {Host: "us.local", Port: 5432, Database: "sn360_prod", SSLMode: "require"},
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() rejected canonical home-region wiring (host+port+database match; user/password intentionally exempt): %v", err)
+	}
+}
