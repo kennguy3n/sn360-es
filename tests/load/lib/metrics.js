@@ -20,9 +20,36 @@
 import http from "k6/http";
 
 /**
+ * REQUIRED_FAMILIES lists every metric family WS-6a §6a requires
+ * the result artefact to carry. The shape is stable across runs
+ * regardless of which exporters are reachable: each key always
+ * lands on `snap.families`, either with a captured object or
+ * null. This is what lets the CI artefact validation, the
+ * Grafana dashboard, and release-over-release diffs all assume
+ * a fixed schema.
+ */
+export const REQUIRED_FAMILIES = [
+  "e2e_latency_expected_p99_ms",
+  "nats_consumer_lag",
+  "nats_consumer_lag_bound",
+  "pg_client_connections",
+  "pg_server_connections",
+  "redis_memory_bytes",
+  "tier1_queue_depth",
+  "tier2_queue_depth",
+  "tier2_inflight_requests",
+];
+
+/**
  * captureMetrics runs every captured query, returns a single
  * snapshot object the scenario embeds in the run artefact. Safe
  * to call from teardown(); does not depend on VU state.
+ *
+ * The capture is *best-effort*: any unreachable exporter records
+ * null for the affected family rather than failing the run. The
+ * outer status field (`prometheus_status`) summarises what got
+ * captured so a downstream consumer (CI validation, soak runner)
+ * can branch on it.
  *
  * @param {object} cfg  loadConfig() output
  * @returns {object}
@@ -34,7 +61,16 @@ export function captureMetrics(cfg) {
     nats_mon_url: cfg.natsMonURL,
     families: {},
     errors: [],
+    // Pre-populate every required key with null so the artefact
+    // schema is stable even when every exporter is down (e.g. CI
+    // smoke runs without Prometheus). Real values overwrite these
+    // below.
+    prom_query_attempts: 0,
+    prom_query_successes: 0,
   };
+  for (const key of REQUIRED_FAMILIES) {
+    snap.families[key] = null;
+  }
 
   // 1. End-to-end latency (already collected by k6 client-side
   //    via http_req_duration; we record the configured expected
@@ -120,7 +156,32 @@ export function captureMetrics(cfg) {
     "prometheus.sn360_es_tier2_inflight_requests",
   );
 
+  // Summarise Prometheus reachability so callers don't have to
+  // walk snap.errors. Three states:
+  //   - "available"   every Prom query returned a usable response
+  //   - "partial"     some queries succeeded, some failed
+  //   - "unreachable" zero Prom queries succeeded; usually means
+  //                   $LOAD_PROM_URL is offline (CI smoke runs
+  //                   without Prom by design)
+  // The NATS /jsz fallback for nats_consumer_lag is *not* counted
+  // as a Prom success — `prometheus_status` exclusively tracks
+  // Prometheus reachability.
+  snap.prometheus_status = summarisePromStatus(snap);
+
   return snap;
+}
+
+function summarisePromStatus(snap) {
+  if (snap.prom_query_attempts === 0) {
+    return "unreachable";
+  }
+  if (snap.prom_query_successes === 0) {
+    return "unreachable";
+  }
+  if (snap.prom_query_successes < snap.prom_query_attempts) {
+    return "partial";
+  }
+  return "available";
 }
 
 /**
@@ -129,6 +190,7 @@ export function captureMetrics(cfg) {
  * Errors are recorded in snap.errors for the result artefact.
  */
 function readPromVector(snap, promURL, query, label) {
+  snap.prom_query_attempts += 1;
   const url = `${promURL}/api/v1/query?query=${encodeURIComponent(query)}`;
   let res;
   try {
@@ -155,6 +217,9 @@ function readPromVector(snap, promURL, query, label) {
     });
     return null;
   }
+  // From here down, Prometheus answered cleanly — even an empty
+  // vector counts as a success for the reachability tally.
+  snap.prom_query_successes += 1;
   const result = (body.data && body.data.result) || [];
   if (result.length === 0) {
     // Empty result is a real signal — "no series matched". Record

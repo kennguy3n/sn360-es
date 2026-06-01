@@ -31,6 +31,24 @@ export function handleSummary(data) {
   const out = scenario.summary(data);
   const ts = Math.floor(Date.now() / 1000);
   const path = `tests/load/results/soak-${ts}.json`;
+  // Soak targets a real environment with a real metrics backend.
+  // If Prometheus is unreachable, the run is not useful — abort
+  // with a non-zero exit so the operator notices immediately
+  // instead of silently producing a soak artefact with all-null
+  // families. Smoke deliberately tolerates this; soak does not.
+  // Set LOAD_SOAK_ALLOW_NO_PROM=1 only as an escape hatch when
+  // intentionally exercising the harness without Prometheus.
+  if (
+    out.metrics_collection_status === "unreachable" &&
+    __ENV.LOAD_SOAK_ALLOW_NO_PROM !== "1"
+  ) {
+    throw new Error(
+      `soak: Prometheus at ${out.config.prom_url} was unreachable for ` +
+        `every captured metric; soak runs require a populated metrics ` +
+        `backend. Set LOAD_PROM_URL to a reachable Prometheus, or pass ` +
+        `LOAD_SOAK_ALLOW_NO_PROM=1 to suppress this check.`,
+    );
+  }
   return {
     [path]: JSON.stringify(out, null, 2),
     stdout: JSON.stringify(out.k6_summary, null, 2),

@@ -18,7 +18,7 @@ import { check } from "k6";
 import { Counter, Trend } from "k6/metrics";
 import { loadConfig, SCENARIOS } from "./config.js";
 import { loadCorpus, pickEmail, buildPayload, verifyCorpus } from "./corpus.js";
-import { captureMetrics } from "./metrics.js";
+import { captureMetrics, REQUIRED_FAMILIES } from "./metrics.js";
 import { mulberry32 } from "./seed.js";
 
 // Custom k6 metrics. We track these in addition to the default
@@ -240,6 +240,14 @@ export function summarise(cfg, data) {
   return {
     scenario: cfg.scenario,
     cost_model_profile: cfg.costModelProfile,
+    // Hoist the snapshot's prom-reachability status to the top of
+    // the artefact so downstream consumers (CI jq validation,
+    // soak runner, dashboards) can branch on it without having
+    // to walk into metrics_snapshot first. Values are the same as
+    // `metrics_snapshot.prometheus_status` (available / partial /
+    // unreachable) — kept in sync below.
+    metrics_collection_status:
+      (metricsSnap && metricsSnap.prometheus_status) || "unreachable",
     harness_notes: (cfg.harnessNotes || []).filter(
       (n) => n !== "corpus-fallback" && n !== "tenants-fallback",
     ),
@@ -312,10 +320,23 @@ function safeCaptureMetrics(cfg) {
   try {
     return captureMetrics(cfg);
   } catch (e) {
+    // Preserve the artefact schema even when captureMetrics blows
+    // up before populating snap.families — every REQUIRED key is
+    // present (set to null) and the status is explicit so the
+    // jq validation can still pass shape checks.
+    const families = {};
+    for (const key of REQUIRED_FAMILIES) {
+      families[key] = null;
+    }
     return {
       captured_at: new Date().toISOString(),
+      prom_url: cfg && cfg.promURL,
+      nats_mon_url: cfg && cfg.natsMonURL,
       errors: [{ metric: "captureMetrics", error: String(e) }],
-      families: {},
+      families,
+      prom_query_attempts: 0,
+      prom_query_successes: 0,
+      prometheus_status: "unreachable",
     };
   }
 }

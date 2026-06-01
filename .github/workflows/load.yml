@@ -164,35 +164,49 @@ jobs:
       - name: Validate artefact
         # The artefact contract is documented in
         # tests/load/README.md §Release-over-release. Each file
-        # must carry all six captured metric families plus a
+        # must carry the six captured metric families plus a
         # k6_summary block so a reviewer can diff against an
         # earlier release.
         #
-        # The `has(...)` check below asserts shape only — the
-        # smoke CI runs without Prometheus, so readPromVector in
-        # tests/load/lib/metrics.js sets each family value to
-        # null. That's intentional: smoke validates that the
-        # capture path runs end-to-end, while the full scenarios
-        # (baseline / typical / peak), the soak job, and the
-        # Grafana dashboard validate the values themselves
-        # against a real metrics backend.
+        # Smoke runs in CI *without* Prometheus on purpose — the
+        # job exists to prove the harness wiring is alive, not to
+        # validate metric values. The harness records
+        # `metrics_collection_status` ("available" / "partial" /
+        # "unreachable") so this step can pass on a Prom-less
+        # smoke run while the soak / scenario jobs (which target a
+        # real environment with a real metrics backend) get the
+        # populated values they expect.
         run: |
           set -euo pipefail
           latest=$(ls -1t tests/load/results/smoke-*.json | head -n1)
           test -n "$latest" || { echo "no smoke artefact written"; exit 1; }
           echo "validating $latest"
+          status=$(jq -r '.metrics_collection_status // "missing"' "$latest")
+          echo "metrics_collection_status=$status"
+          if [ "$status" = "unreachable" ]; then
+            echo "note: Prometheus was not reachable in this smoke run; metric values are null but artefact schema is still validated below."
+          fi
           # Capture the root object as $root before the `all(...)`
           # pipeline. Inside `all(. as $k | ...)`, `.` is bound to
           # each array element (a string like "nats_consumer_lag"),
           # so `.metrics_snapshot.families` would error with "Cannot
           # index string with string". Threading the root through
           # $root keeps the lookup against the document.
+          #
+          # The check asserts shape only — every required family
+          # key must be *present* on metrics_snapshot.families, but
+          # values are allowed to be null (the no-Prom smoke case).
+          # The `// {}` fallback further hardens the expression
+          # against a captureMetrics blow-up that left families
+          # undefined.
           jq -e '
             . as $root
             | .scenario == "baseline"
             and .config.msgs_per_sec != null
             and .k6_summary.loadgen_publish_latency_ms != null
-            and (.metrics_snapshot.families | type == "object")
+            and (.metrics_collection_status | type == "string")
+            and ((.metrics_snapshot // {}) | type == "object")
+            and ((.metrics_snapshot.families // {}) | type == "object")
             and (
               [
                 "nats_consumer_lag",
@@ -201,7 +215,7 @@ jobs:
                 "tier1_queue_depth",
                 "tier2_queue_depth",
                 "tier2_inflight_requests"
-              ] | all(. as $k | ($root.metrics_snapshot.families | has($k)))
+              ] | all(. as $k | (($root.metrics_snapshot.families // {}) | has($k)))
             )
           ' "$latest"
 

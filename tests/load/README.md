@@ -50,6 +50,29 @@ fallback URL), and series count, so a reader can tell "no data" from
 "actually zero". Missing infrastructure is recorded as `value: null` plus an
 entry in `metrics_snapshot.errors`.
 
+### Prometheus reachability is best-effort
+
+Every artefact carries a top-level `metrics_collection_status` field
+(mirrored on `metrics_snapshot.prometheus_status`) with one of three values:
+
+* `available` — every Prometheus query returned a usable response.
+* `partial` — some Prometheus queries succeeded, some did not.
+* `unreachable` — zero Prometheus queries succeeded; usually means
+  `$LOAD_PROM_URL` is offline.
+
+The schema is stable in all three cases: every family key is present on
+`metrics_snapshot.families`, either with a captured object or with `null`.
+This is what lets CI smoke (which intentionally runs without a Prometheus
+backend) still produce a valid artefact and pass the workflow's shape
+check.
+
+The `soak` target treats `unreachable` as an error and aborts the run, since
+soaks only make sense against a real metrics backend. Set
+`LOAD_SOAK_ALLOW_NO_PROM=1` as an escape hatch when intentionally exercising
+the harness without Prometheus. `smoke`, `baseline`, `typical`, and `peak`
+do not enforce this — they record the status for diagnostic purposes and
+otherwise continue.
+
 ## How to run a scenario
 
 ### Prerequisites
