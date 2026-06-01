@@ -250,8 +250,15 @@ type WebhookSinkRepository interface {
 	// no live row matches.
 	Update(ctx context.Context, tenantID, id string, upd WebhookSinkUpdate) (*WebhookSink, error)
 	// SoftDelete flips deleted_at = NOW() and enabled = FALSE on
-	// (tenant, id). Returns ErrNotFound when no live row matches.
-	SoftDelete(ctx context.Context, tenantID, id string) error
+	// (tenant, id) and returns a snapshot of the row as it stood
+	// just before the soft-delete (name, URL, format, filters,
+	// timestamps) so callers can write an audit row without a
+	// separate GetByID lookup — that lookup would otherwise race
+	// against the soft-delete itself, opening a TOCTOU window
+	// where a concurrent Update would change the values the
+	// audit row records. Returns ErrNotFound when no live row
+	// matches; the returned sink is non-nil only on success.
+	SoftDelete(ctx context.Context, tenantID, id string) (*WebhookSink, error)
 
 	// AppendAudit inserts an audit row. INSERT-ON-CONFLICT on
 	// (tenant_id, dedup_id) makes the call idempotent under
@@ -421,20 +428,30 @@ func (p *pgWebhookSinks) Update(ctx context.Context, tenantID, id string, upd We
 	return p.GetByID(ctx, tenantID, id)
 }
 
-func (p *pgWebhookSinks) SoftDelete(ctx context.Context, tenantID, id string) error {
-	res, err := p.db.ExecContext(ctx, `
+func (p *pgWebhookSinks) SoftDelete(ctx context.Context, tenantID, id string) (*WebhookSink, error) {
+	// RETURNING the full row in the same statement that performs
+	// the soft-delete: the audit caller gets a consistent
+	// snapshot atomically with the delete, eliminating any
+	// TOCTOU window between a pre-delete GetByID and the
+	// UPDATE. We expose the POST-update timestamps (updated_at /
+	// deleted_at reflect this transaction) but every other
+	// column is by definition the pre-delete value because the
+	// UPDATE only touches the three fields below.
+	rows, err := p.queryAndScan(ctx, `
 UPDATE tenant_webhook_sinks
    SET deleted_at = NOW(), enabled = FALSE, updated_at = NOW()
  WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
+RETURNING id, tenant_id, name, url, hmac_secret, format, event_filters, enabled,
+          created_at, updated_at, deleted_at
 `, tenantID, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return ErrNotFound
+	if len(rows) == 0 {
+		return nil, ErrNotFound
 	}
-	return nil
+	cp := rows[0]
+	return &cp, nil
 }
 
 func (p *pgWebhookSinks) AppendAudit(ctx context.Context, e WebhookSinkAuditEntry) error {
@@ -654,19 +671,20 @@ func (m *memoryWebhookSinks) Update(_ context.Context, tenantID, id string, upd 
 	return &cp, nil
 }
 
-func (m *memoryWebhookSinks) SoftDelete(_ context.Context, tenantID, id string) error {
+func (m *memoryWebhookSinks) SoftDelete(_ context.Context, tenantID, id string) (*WebhookSink, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s, ok := m.sinks[id]
 	if !ok || s.TenantID != tenantID || s.DeletedAt != nil {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
 	now := time.Now().UTC()
 	s.DeletedAt = &now
 	s.Enabled = false
 	s.UpdatedAt = now
 	m.sinks[id] = s
-	return nil
+	cp := s
+	return &cp, nil
 }
 
 func (m *memoryWebhookSinks) AppendAudit(_ context.Context, e WebhookSinkAuditEntry) error {

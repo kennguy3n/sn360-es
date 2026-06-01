@@ -71,6 +71,20 @@ func (a *application) startWebhookDLQConsumer(ctx context.Context) error {
 		a.logger.InfoContext(ctx, "sn360-es: startWebhookDLQConsumer: WebhookSinks repo not wired — skipping subscription")
 		return nil
 	}
+	// Defensive: in current wiring (app.go) the publisher and
+	// encryptor are always set together with the dispatcher, but
+	// the DLQ handler dereferences both directly. An explicit
+	// nil-check here keeps a future wiring refactor from
+	// turning the first DLQ message into a NPE panic on the
+	// JetStream callback goroutine.
+	if a.webhookPublisher == nil {
+		a.logger.InfoContext(ctx, "sn360-es: startWebhookDLQConsumer: webhook publisher not wired — skipping subscription")
+		return nil
+	}
+	if a.encryptor == nil {
+		a.logger.InfoContext(ctx, "sn360-es: startWebhookDLQConsumer: secret encryptor not wired — skipping subscription")
+		return nil
+	}
 	// Wrap with tenantBoundMessageHandler so handleWebhookDLQ
 	// runs against a Postgres connection with the
 	// `sn360.tenant_id` GUC pinned to the message's tenant.
@@ -108,10 +122,12 @@ func (a *application) startWebhookDLQConsumer(ctx context.Context) error {
 //     sink stops receiving retries even if its envelope is in
 //     flight). If lookup fails or sink is gone: Ack + drop;
 //     audit reason "sink missing".
-//  3. Re-format + re-sign so a sink config change between attempts
-//     (format / secret rotation) is honoured. The original
-//     envelope body is used only as a last-resort fallback when
-//     re-formatting fails.
+//  3. Re-sign the original envelope body if the sink rotated its
+//     HMAC secret between attempts; the body itself is always
+//     replayed verbatim in its original format (a format change
+//     on the live sink does NOT cause the in-flight envelope to
+//     be re-encoded — round-tripping a formatted body back to
+//     an Event is format-specific and brittle, see resignDLQEnvelope).
 //  4. POST. Success: Ack. PermanentFailure: audit + Ack. Retriable:
 //     Nak with the backoff matching the current attempt number.
 //  5. On the last delivery (NumDelivered >= MaxDeliver): audit
@@ -172,17 +188,22 @@ func (a *application) handleWebhookDLQ(ctx context.Context, msg events.Message) 
 		return nil
 	}
 
-	// Re-format + re-sign. If that fails, fall back to the
-	// original signed bytes from the envelope so the customer
-	// gets at least the original payload.
+	// Re-sign the original body if the HMAC secret rotated
+	// between the initial publish and this retry. The body
+	// itself is ALWAYS the original envelope bytes — we never
+	// re-encode (see resignDLQEnvelope for rationale) — so the
+	// Content-Type / Format must track env.Format, NOT
+	// sink.Format. If the operator changed the live sink format
+	// between attempts, the in-flight envelope retries in its
+	// original format until JetStream gives up; new evaluations
+	// pick up the new format on first publish.
 	body := env.Body
 	signature := env.Signature
-	reformatted, resigned, fmtErr := a.reformatDLQEnvelope(ctx, sink, env)
-	if fmtErr != nil {
-		logger.WarnContext(ctx, "webhook-dlq: re-format failed; replaying original body",
-			slog.Any("error", fmtErr))
-	} else if reformatted != nil {
-		body = reformatted
+	resigned, signErr := a.resignDLQEnvelope(ctx, sink, env)
+	if signErr != nil {
+		logger.WarnContext(ctx, "webhook-dlq: re-sign failed; replaying original signature",
+			slog.Any("error", signErr))
+	} else if resigned != "" {
 		signature = resigned
 	}
 
@@ -194,7 +215,7 @@ func (a *application) handleWebhookDLQ(ctx context.Context, msg events.Message) 
 		TenantID:   sink.TenantID,
 		SinkName:   sink.Name,
 		URL:        sink.URL,
-		Format:     sink.Format,
+		Format:     env.Format, // mirrors env.Body bytes — NOT sink.Format (see comment above)
 		Body:       body,
 		Signature:  signature,
 		EventType:  env.EventType,
@@ -245,43 +266,43 @@ func (a *application) handleWebhookDLQ(ctx context.Context, msg events.Message) 
 	}
 }
 
-// reformatDLQEnvelope re-runs the format + sign pass against the
-// current sink config. Returns (nil, "", nil) when the envelope
-// already represents the current config (same format + same hex-
-// hash secret) and we should reuse the original body.
+// resignDLQEnvelope re-signs the envelope's body against the
+// CURRENT per-sink HMAC secret and returns the new hex signature
+// when it differs from env.Signature (i.e. the operator rotated
+// the secret between attempts). Returns ("", nil) when the
+// signature is unchanged — the caller then replays env.Signature
+// verbatim.
 //
-// We can't directly compare the secret bytes — the envelope carries
-// signed-and-discarded plaintext, not the key. So we re-format and
-// re-sign unconditionally; only when re-format fails do we fall
-// back to the envelope-side body.
-func (a *application) reformatDLQEnvelope(ctx context.Context, sink *repository.WebhookSink, env *webhook.DLQEnvelope) ([]byte, string, error) {
-	// We don't have the original Event object — we have the
-	// already-formatted body. To re-format we'd need to round-
-	// trip the body back to an Event, which is format-specific
-	// and brittle. For DLQ retries the safe path is to use the
-	// pre-signed body verbatim — the customer endpoint sees an
-	// idempotent payload, and a customer-side dedup key (e.g.
-	// X-SN360-Event-Id) lets them collapse duplicates.
-	//
-	// The one exception: if the sink rotated its HMAC secret
-	// between the initial publish and this retry, the existing
-	// signature is invalid. We re-sign in that case. We
-	// detect rotation by re-signing the body and checking whether
-	// the result differs from env.Signature.
+// Despite the historical "reformat" name (now retired), we DO NOT
+// re-encode the body: we only ever have the post-format bytes
+// (ECS JSON or CEF pipe-delimited string), not the original Event,
+// so round-tripping back to an Event would be format-specific and
+// brittle. A live sink-format change between attempts is therefore
+// not honoured for in-flight envelopes — they replay in their
+// original format until JetStream exhausts MaxDeliver; new
+// evaluations pick up the new format on first publish. The
+// dispatcher's Content-Type header must always match the bytes on
+// the wire, so the caller sets Request.Format = env.Format.
+//
+// We can't compare secret bytes against the envelope — the
+// plaintext key is not carried in the envelope — so we re-sign
+// unconditionally and compare the resulting hex against
+// env.Signature.
+func (a *application) resignDLQEnvelope(ctx context.Context, sink *repository.WebhookSink, env *webhook.DLQEnvelope) (string, error) {
 	secret, err := a.encryptor.Decrypt(ctx, sink.TenantID, sink.HMACSecretCiphertext)
 	if err != nil {
-		return nil, "", fmt.Errorf("decrypt secret: %w", err)
+		return "", fmt.Errorf("decrypt secret: %w", err)
 	}
 	defer zeroBytes(secret)
 	resigned, err := webhook.Sign(secret, env.Body)
 	if err != nil {
-		return nil, "", fmt.Errorf("sign: %w", err)
+		return "", fmt.Errorf("sign: %w", err)
 	}
 	if resigned == env.Signature {
-		// No secret rotation; reuse envelope contents.
-		return nil, "", nil
+		// No secret rotation; caller reuses env.Signature.
+		return "", nil
 	}
-	return env.Body, resigned, nil
+	return resigned, nil
 }
 
 // appendDLQAudit writes a dispatch_failed audit row for the

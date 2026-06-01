@@ -347,6 +347,10 @@ func (h *WebhookSinksHandler) serveCreate(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	// Safety net: any early-return below leaves the raw secret
+	// in memory until GC. The happy path scrubs it inline
+	// immediately after b64-encoding (see below), so this defer
+	// is a no-op on success and a backstop on error paths.
 	defer zeroSecret(secret)
 	cipher, err := h.encryptor.Encrypt(r.Context(), tenantID, secret)
 	if err != nil {
@@ -377,9 +381,18 @@ func (h *WebhookSinksHandler) serveCreate(w http.ResponseWriter, r *http.Request
 		return
 	}
 	h.appendAudit(r.Context(), sink, repository.WebhookSinkAuditActionCreated, "")
+	// Encode into the response struct, then immediately scrub
+	// the raw secret buffer. The encoded string is a fresh copy
+	// owned by `resp` — we no longer need the []byte and want
+	// to minimise the window during which the plaintext key
+	// sits in resident memory (defense-in-depth against a
+	// post-response panic / log dump). The deferred zeroSecret
+	// above is idempotent against already-zero bytes.
+	encoded := base64.StdEncoding.EncodeToString(secret)
+	zeroSecret(secret)
 	resp := webhookSinkCreateResponse{
 		webhookSinkResponse: toWebhookSinkResponse(sink),
-		HMACSecretBase64:    base64.StdEncoding.EncodeToString(secret),
+		HMACSecretBase64:    encoded,
 	}
 	writeJSON(w, http.StatusCreated, resp)
 }
@@ -436,20 +449,13 @@ func (h *WebhookSinksHandler) serveUpdate(w http.ResponseWriter, r *http.Request
 }
 
 func (h *WebhookSinksHandler) serveDelete(w http.ResponseWriter, r *http.Request, tenantID, id string) {
-	sink, err := h.repo.GetByID(r.Context(), tenantID, id)
+	// Single-statement soft-delete-and-return. We rely on the
+	// repo to return the row snapshot atomically with the delete
+	// so the audit row records the pre-delete name/URL/format
+	// values without a TOCTOU window against a concurrent
+	// Update or a competing soft-delete from another admin.
+	sink, err := h.repo.SoftDelete(r.Context(), tenantID, id)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not found")
-			return
-		}
-		h.logger.ErrorContext(r.Context(), "webhook_sinks: delete-lookup failed",
-			slog.String("tenant_id", tenantID),
-			slog.String("sink_id", id),
-			slog.Any("error", err))
-		writeError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	if err := h.repo.SoftDelete(r.Context(), tenantID, id); err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "not found")
 			return

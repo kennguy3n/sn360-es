@@ -12,15 +12,17 @@ import (
 // `sn360.dlq.webhook.<tenant>.<sink>` when a publish fails with a
 // retriable outcome. The DLQ consumer
 // (cmd/sn360-es/consumers_webhook_dlq.go) deserialises this, looks
-// up the sink to re-derive the HMAC key, re-formats the event (so
-// a sink-format change between attempts is honoured), and retries
-// the POST.
+// up the sink to re-derive the HMAC key, and retries the POST.
 //
-// We carry the formatted Body verbatim so a one-off retry on a
-// transient network blip is exact-replay (same signature, same
-// bytes). Re-formatting only kicks in if the dispatcher's
-// re-decryption path detects the sink config changed between
-// attempts (Format / Secret rotation).
+// Wire contract: Body is replayed VERBATIM in its captured Format
+// for every retry. The DLQ consumer never re-encodes the body, so
+// a sink-format flip on the live row between attempts does NOT
+// change the in-flight envelope — that retry stream rides out its
+// captured format until MaxDeliver. Only the HMAC signature may
+// change between attempts (when the operator rotates hmac_secret);
+// the consumer re-signs the original Body bytes with the current
+// per-sink key and Content-Type on the wire continues to track
+// envelope.Format. See resignDLQEnvelope for rationale.
 type DLQEnvelope struct {
 	SchemaVersion int                          `json:"schema_version"`
 	SinkID        string                       `json:"sink_id"`
