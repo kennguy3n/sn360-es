@@ -357,9 +357,13 @@ paths:
         fan-out across the tenant, and a small aggregate envelope
         for the dashboard headline metrics.
 
-        sender_hash is base64url-encoded (no padding) so it fits
-        cleanly into a URL path. base64-standard with padding is
-        also accepted as a defense-in-depth fallback.
+        sender_hash is base64url-encoded with no padding (the
+        canonical wire shape the dashboard emits — URL-safe). The
+        endpoint additionally accepts base64url-with-padding,
+        base64-standard-no-padding, and base64-standard-with-padding
+        as defense-in-depth fallbacks; '/' is rejected at the path
+        validation gate so standard-encoded inputs containing '/'
+        must be reshaped to url-safe before transit.
 
         The look-back is bounded server-side: the optional
         `since_hours` parameter caps at 720 (30 days), matching the

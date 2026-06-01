@@ -152,17 +152,23 @@ func (h *InvestigationHandler) ServeSender(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "sender_hash is required")
 		return
 	}
-	// Accept both base64url (the canonical encoding the
-	// dashboard uses — URL-safe, no padding) and base64-standard
-	// with padding (defense-in-depth for clients that may not
-	// strip padding). RawURLEncoding rejects '+' / '/' / '='
-	// so this fallback chain cannot accept ambiguous input.
-	senderHash, err := base64.RawURLEncoding.DecodeString(rawHash)
+	// Accept the four interchangeable wire shapes the spec
+	// documents (api/openapi.yaml — sender_hash parameter):
+	//   * base64url, no padding       (canonical — dashboard emits this)
+	//   * base64url, padded
+	//   * base64-standard, no padding (defense-in-depth)
+	//   * base64-standard, padded     (defense-in-depth — matches '+' bytes)
+	// The four alphabets share A-Za-z0-9; standard uses '+/' and
+	// url-safe uses '-_'. The two alphabets are disjoint on the
+	// non-shared characters so an input that decodes under more
+	// than one mode decodes to the same bytes either way — no
+	// ambiguity. We already reject '/' at the path-validation
+	// gate above so a standard-with-'/' value 400s before reaching
+	// the decoder; '+' is permitted because the path framework
+	// URL-decodes %2B cleanly back to '+'.
+	senderHash, err := decodeSenderHash(rawHash)
 	if err != nil {
-		senderHash, err = base64.URLEncoding.DecodeString(rawHash)
-	}
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "sender_hash must be base64url-encoded bytes")
+		writeError(w, http.StatusBadRequest, "sender_hash must be base64url- or base64-standard-encoded bytes")
 		return
 	}
 	if len(senderHash) == 0 {
@@ -189,6 +195,34 @@ func (h *InvestigationHandler) ServeSender(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, newSenderTrailResponse(trail))
+}
+
+// decodeSenderHash tries the four base64 variants the public spec
+// promises (url-safe / standard × padded / unpadded), in the order
+// most likely to succeed for the canonical dashboard wire shape
+// first. Returns the first successful decode, or the last error if
+// none match. The four variants are non-ambiguous on the shared
+// A-Za-z0-9 alphabet and the rejected-'/' path-validation gate above
+// keeps base64-standard inputs with the disjoint '/' character from
+// ever reaching here, so there is no input that decodes to two
+// different byte slices.
+func decodeSenderHash(raw string) ([]byte, error) {
+	var (
+		out []byte
+		err error
+	)
+	for _, enc := range []*base64.Encoding{
+		base64.RawURLEncoding,
+		base64.URLEncoding,
+		base64.RawStdEncoding,
+		base64.StdEncoding,
+	} {
+		out, err = enc.DecodeString(raw)
+		if err == nil {
+			return out, nil
+		}
+	}
+	return nil, err
 }
 
 // parseSenderTrailOptions validates the optional query parameters

@@ -59,11 +59,36 @@
 --   ADD COLUMN on a partitioned table cascades through every child
 --   partition transparently; PG does not rewrite the heap when the
 --   added column is nullable with no DEFAULT, so this is an
---   instantaneous metadata change. CREATE INDEX without
---   CONCURRENTLY is acceptable here because both the column and
---   the index are new — there are no live SELECTs that could be
---   blocked on the partitioned parent, only the migration's
---   exclusive lock.
+--   instantaneous metadata change. The CREATE INDEX runs against a
+--   brand-new column with a partial-WHERE that matches zero rows,
+--   so the index *build* itself is effectively instantaneous on
+--   every partition.
+--
+--   The remaining production risk is *lock acquisition*: both DDL
+--   operations need ACCESS EXCLUSIVE locks on the parent and every
+--   partition, and on a busy table that lock can queue behind a
+--   long-running transaction (and in turn block every later reader
+--   queued behind it — the "lock queue jam"). PostgreSQL does not
+--   support CREATE INDEX CONCURRENTLY directly on a partitioned
+--   parent (only on partition leaves with a manual ATTACH dance),
+--   so we cap the worst-case wait with lock_timeout + statement_timeout
+--   instead of splitting this into a multi-step operator runbook.
+--   If either bound trips, the migration aborts cleanly and ops
+--   re-runs it from the next quieter deploy window with no half-applied
+--   state (both ADD COLUMN and CREATE INDEX are idempotent via
+--   IF NOT EXISTS).
+--
+--   Tuning rationale:
+--     lock_timeout = 5s  — long enough to outwait normal OLTP
+--       transactions (per the 1s p99 budget on evaluation writes),
+--       short enough that a stuck statement aborts within one
+--       deployment health-check interval.
+--     statement_timeout = 60s — generous cap on the index build
+--       itself; on an empty partial subset the build is sub-second,
+--       but the bound protects against unexpected planner regressions.
+
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '60s';
 
 ALTER TABLE evaluation_results
     ADD COLUMN IF NOT EXISTS sender_hash    BYTEA,

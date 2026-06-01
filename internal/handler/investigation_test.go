@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -206,6 +207,85 @@ func TestInvestigationHandler_ServeSender_InvalidBase64Is400(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
+}
+
+// TestInvestigationHandler_ServeSender_AcceptsAllFourBase64Variants
+// pins the four-way contract documented in the OpenAPI spec — the
+// endpoint accepts url-safe and standard alphabets, padded or
+// unpadded, and all four must decode to the same bytes and reach
+// the service layer (verdict shape is asserted elsewhere). Without
+// this test the spec/handler can silently drift back to a
+// single-variant decoder (the originally-shipped shape, per Devin
+// Review BUG_0001 on PR #62).
+func TestInvestigationHandler_ServeSender_AcceptsAllFourBase64Variants(t *testing.T) {
+	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	// Pick raw bytes whose canonical (non-padded) base64url
+	// encoding contains a '-' (url-safe-only character) and whose
+	// standard-alphabet encoding contains a '+' (standard-only
+	// character), so the alphabets are genuinely exercised against
+	// the same input. 0xfb 0xef 0x3e → "++8+" (std) / "--8-" (url).
+	raw := []byte{0xfb, 0xef, 0x3e}
+	if u := base64.RawURLEncoding.EncodeToString(raw); !strings.Contains(u, "-") {
+		t.Fatalf("test fixture invariant: rawurl encoding %q missing '-' character", u)
+	}
+	if s := base64.RawStdEncoding.EncodeToString(raw); !strings.Contains(s, "+") {
+		t.Fatalf("test fixture invariant: rawstd encoding %q missing '+' character", s)
+	}
+	h := NewInvestigationHandler(nil, newServiceSeededWithSender(t, now, "acme", raw))
+	cases := map[string]string{
+		"rawurl": base64.RawURLEncoding.EncodeToString(raw),
+		"url":    base64.URLEncoding.EncodeToString(raw),
+		"rawstd": base64.RawStdEncoding.EncodeToString(raw),
+		"std":    base64.StdEncoding.EncodeToString(raw),
+	}
+	for name, enc := range cases {
+		t.Run(name, func(t *testing.T) {
+			req := withTenant(
+				httptest.NewRequest(http.MethodGet, "/v1/investigation/sender/"+enc, nil),
+				"acme",
+			)
+			rec := httptest.NewRecorder()
+			h.ServeSender(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("variant %s: status=%d body=%s", name, rec.Code, rec.Body.String())
+			}
+			var resp senderTrailResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("variant %s: decode: %v", name, err)
+			}
+			if len(resp.Verdicts) == 0 {
+				t.Errorf("variant %s: no verdicts returned for seeded sender", name)
+			}
+		})
+	}
+}
+
+// newServiceSeededWithSender builds an investigation.Service with a
+// single seeded verdict against (tenant, senderHash). Used by the
+// four-variant base64 acceptance test so the raw bytes the path
+// decodes to actually match a service-layer row.
+func newServiceSeededWithSender(t *testing.T, now time.Time, tenant string, senderHash []byte) *investigation.Service {
+	t.Helper()
+	r := repository.NewInMemoryRegistry()
+	ctx := context.Background()
+	if err := r.EvaluationResults.Create(ctx, &repository.EvaluationResult{
+		TenantID: tenant, MessageIDHash: []byte("m-base64-variant"),
+		SenderHash: senderHash, RecipientHash: []byte("r-base64-variant"),
+		Score: 88, Tier: "high",
+		EvaluatedAt: now.Add(-1 * time.Hour),
+	}); err != nil {
+		t.Fatalf("seed eval: %v", err)
+	}
+	svc, err := investigation.NewService(investigation.ServiceConfig{
+		EvaluationResults:      r.EvaluationResults,
+		CommunicationHistories: r.CommunicationHistories,
+		Logger:                 slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:                  func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	return svc
 }
 
 func TestInvestigationHandler_ServeSender_CrossTenantIsolation(t *testing.T) {
