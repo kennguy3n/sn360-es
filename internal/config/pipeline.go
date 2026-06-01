@@ -153,7 +153,7 @@ type Worker struct {
 	PartitionRetentionMonths int
 
 	// IntelEnabled gates the threat-intel feed-consumption worker
-	// (migrations/0023_threat_intel_feeds.up.sql). When false the
+	// (migrations/0024_threat_intel_feeds.up.sql). When false the
 	// scheduler does not start; the Tier 0 ti_match reason code
 	// still works against any rows already in intel_indicators
 	// because the gate consults the table directly.

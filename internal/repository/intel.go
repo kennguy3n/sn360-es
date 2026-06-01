@@ -25,7 +25,7 @@ import (
 // outcome under the project's tenant-isolation policy and the
 // worker would observe an empty feeds list every cycle.
 //
-// See the migration 0023 down-script for the documented exemption
+// See the migration 0024 down-script for the documented exemption
 // in cmd/sn360-es-tenant-lint/main.go.
 type PgIntelStore struct {
 	db  *postgres.DB

@@ -105,7 +105,7 @@ import (
 // RLS policy, and queries against them do NOT need a `WHERE
 // tenant_id = $N` clause. Current deployment-scoped tables:
 //
-//   - intel_feeds, intel_indicators (migration 0023) — global
+//   - intel_feeds, intel_indicators (migration 0024) — global
 //     threat-intel IOC corpus shared across tenants. The
 //     reverse-drift guard in main_test.go correctly does NOT flag
 //     these because the migration does not call

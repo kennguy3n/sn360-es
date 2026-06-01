@@ -68,7 +68,7 @@ func NewIntelFeedsHandler(logger *slog.Logger, store intel.IntelStore, refresher
 // will therefore actually poll once the feed is created). Without
 // this guard, MemoryIntelStore would silently accept an unknown
 // provider name — a divergence from the Postgres CHECK constraint
-// (migrations/0023_threat_intel_feeds.up.sql) that the dev/test
+// (migrations/0024_threat_intel_feeds.up.sql) that the dev/test
 // backend used to share.
 //
 // Returns the receiver so the call composes naturally at wiring time:

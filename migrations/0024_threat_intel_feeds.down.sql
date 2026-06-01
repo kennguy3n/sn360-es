@@ -1,6 +1,6 @@
--- 0023_threat_intel_feeds.down.sql
+-- 0024_threat_intel_feeds.down.sql
 --
--- Reverses 0023 by dropping the two tables. DROP TABLE on
+-- Reverses 0024 by dropping the two tables. DROP TABLE on
 -- intel_feeds cascades through the `feed_id` FK so every row in
 -- intel_indicators that referenced a dropped feed disappears
 -- in the same transaction — there are no orphan rows to clean

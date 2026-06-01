@@ -24,7 +24,7 @@ package main
 // Keep this list aligned with the OpenAPI `provider` enum and the
 // migration's `CHECK (provider IN (...))` constraint:
 //   - api/openapi.yaml (provider enum on createFeedRequest)
-//   - migrations/0023_threat_intel_feeds.up.sql:83
+//   - migrations/0024_threat_intel_feeds.up.sql:83
 //
 // To add a new provider, write the package under pkg/intel/<key>
 // with an init() that registers itself, then add the blank import

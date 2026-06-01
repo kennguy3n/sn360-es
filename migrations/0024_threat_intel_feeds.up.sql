@@ -1,4 +1,4 @@
--- 0023_threat_intel_feeds.up.sql
+-- 0024_threat_intel_feeds.up.sql
 --
 -- WS-5B.3 Threat-intel feed consumption.
 --
