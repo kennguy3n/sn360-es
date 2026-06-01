@@ -181,8 +181,15 @@ jobs:
           latest=$(ls -1t tests/load/results/smoke-*.json | head -n1)
           test -n "$latest" || { echo "no smoke artefact written"; exit 1; }
           echo "validating $latest"
+          # Capture the root object as $root before the `all(...)`
+          # pipeline. Inside `all(. as $k | ...)`, `.` is bound to
+          # each array element (a string like "nats_consumer_lag"),
+          # so `.metrics_snapshot.families` would error with "Cannot
+          # index string with string". Threading the root through
+          # $root keeps the lookup against the document.
           jq -e '
-            .scenario == "baseline"
+            . as $root
+            | .scenario == "baseline"
             and .config.msgs_per_sec != null
             and .k6_summary.loadgen_publish_latency_ms != null
             and (.metrics_snapshot.families | type == "object")
@@ -194,7 +201,7 @@ jobs:
                 "tier1_queue_depth",
                 "tier2_queue_depth",
                 "tier2_inflight_requests"
-              ] | all(. as $k | (.metrics_snapshot.families | has($k)))
+              ] | all(. as $k | ($root.metrics_snapshot.families | has($k)))
             )
           ' "$latest"
 

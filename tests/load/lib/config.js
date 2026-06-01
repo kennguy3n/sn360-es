@@ -129,10 +129,12 @@ export function loadConfig(scenarioKey, overrides = {}) {
     seed: numEnv("LOAD_SEED", overrides.seed ?? 42),
     batchSize: numEnv("LOAD_BATCH_SIZE", overrides.batchSize ?? 1),
     publisherURL: __ENV.LOADGEN_PUBLISHER_URL || "http://127.0.0.1:9099",
-    // Paths are resolved by k6 relative to the open()-calling
-    // module file (tests/load/lib/scenario.js + corpus.js), so
-    // the defaults walk up two directories to the repo root.
-    // Absolute paths from the env override are honoured as-is.
+    // Paths are resolved by k6 relative to the *entry-point
+    // script* (tests/load/{smoke,baseline,typical,peak,soak}.js),
+    // not relative to the imported lib file that physically calls
+    // open(). From tests/load/, two `../` reaches the repo root —
+    // which is why these defaults work. Absolute paths from the
+    // env override are honoured as-is.
     tenantsPath:
       __ENV.LOAD_TENANTS_PATH || "../../tests/load/results/tenants.json",
     corpusPath:
