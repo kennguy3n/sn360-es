@@ -63,8 +63,15 @@ type CircuitBreakerConfig struct {
 	// primarily for metrics emission (operators alert on a
 	// sustained non-zero rate as the open-state signal).
 	//
-	// Same locking contract as OnStateChange: the callback runs
-	// under cb.mu and MUST NOT call back into the breaker.
+	// Unlike OnStateChange, this callback runs OUTSIDE cb.mu —
+	// Do invokes it after allow() has released the lock and
+	// returned false (see circuit_breaker.go::Do). It may
+	// therefore be called concurrently from multiple goroutines,
+	// and MUST use only thread-safe, non-blocking sinks such as
+	// Prometheus counters and structured-log writers. The
+	// callback IS allowed to call back into the breaker (State(),
+	// Do(), etc.) because no lock is held — but doing so is still
+	// poor taste and should be avoided.
 	OnShortCircuit func()
 }
 
