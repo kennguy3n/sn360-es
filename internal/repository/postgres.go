@@ -37,6 +37,8 @@ func NewPostgresRegistry(db *postgres.DB) *Registry {
 		SyncCheckpoints:        &pgSyncCheckpoints{db: db},
 		BehavioralBaselines:    &pgBehavioralBaselines{db: db},
 		OrgGraphs:              &pgOrgGraphs{db: db},
+		QuarantineReleaseAudit: NewPgQuarantineReleaseAudit(db),
+		TenantReleasePolicies:  NewPgTenantReleasePolicy(db),
 		EmailVerdictAudits:     &pgEmailVerdictAudits{db: db},
 		BannerStates:           &pgBannerStates{db: db},
 	}

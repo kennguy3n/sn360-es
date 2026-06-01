@@ -102,6 +102,16 @@ type QuarantineRecord struct {
 	OriginalTier constant.Tier     `json:"original_tier"`
 	Primary      constant.Category `json:"primary"`
 	QuarantineAt time.Time         `json:"quarantined_at"`
+	// Tier2Malicious is the privacy-safe “tier-2 said malicious”
+	// bit captured at quarantine time. The WS-3a self-service
+	// release flow refuses self-release when this is true (any
+	// tier-2 SLM verdict landing on a high-severity category
+	// blocks the recipient-driven release path; SOC operators
+	// still have the override). False for legacy records written
+	// before WS-3a landed, which the self-release service treats
+	// as "not known malicious" — see
+	// `selfrelease.Service.tier2BlockedFromRecord`.
+	Tier2Malicious bool `json:"tier2_malicious,omitempty"`
 }
 
 // QuarantinePublisher is the minimal contract the quarantine service
@@ -192,6 +202,13 @@ type QuarantineRequest struct {
 	MessageID            string
 	Tier                 constant.Tier
 	Primary              constant.Category
+	// Tier2Malicious is the privacy-safe "tier-2 SLM classified
+	// this as malicious" bit derived at evaluation time (see
+	// dto.Tier2Outcome.IsMalicious). Persisted onto the
+	// QuarantineRecord so the WS-3a self-service release flow can
+	// unconditionally refuse one-click release for tier-2
+	// malicious verdicts without re-evaluating.
+	Tier2Malicious bool
 }
 
 // Quarantine moves a message into the hidden quarantine label and
@@ -246,14 +263,15 @@ func (s *QuarantineService) Quarantine(ctx context.Context, req QuarantineReques
 	}
 
 	rec := QuarantineRecord{
-		Provider:     req.Provider,
-		Email:        req.Email,
-		MessageID:    storedMessageID,
-		Tenant:       req.Tenant,
-		LabelID:      labelID,
-		OriginalTier: req.Tier,
-		Primary:      req.Primary,
-		QuarantineAt: time.Now().UTC(),
+		Provider:       req.Provider,
+		Email:          req.Email,
+		MessageID:      storedMessageID,
+		Tenant:         req.Tenant,
+		LabelID:        labelID,
+		OriginalTier:   req.Tier,
+		Primary:        req.Primary,
+		QuarantineAt:   time.Now().UTC(),
+		Tier2Malicious: req.Tier2Malicious,
 	}
 	if err := s.persist(ctx, req.Tenant, req.PseudonymizedMessage, rec); err != nil {
 		// If we already had a partial-failure error from the move

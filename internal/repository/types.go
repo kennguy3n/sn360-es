@@ -846,6 +846,15 @@ type Registry struct {
 	SyncCheckpoints        SyncCheckpointRepository
 	BehavioralBaselines    UserBehavioralBaselineRepository
 	OrgGraphs              OrgGraphRepository
+	// QuarantineReleaseAudit is the WS-3a self-service release audit
+	// trail. Optional in test fixtures that don't exercise the
+	// self-release flow; production wiring (NewPostgresRegistry)
+	// always populates it.
+	QuarantineReleaseAudit QuarantineReleaseAuditRepository
+	// TenantReleasePolicies carries the per-tenant self-service
+	// policy knobs (quarantine_self_release_per_hour today). Same
+	// optionality semantics as QuarantineReleaseAudit.
+	TenantReleasePolicies TenantReleasePolicyRepository
 	// EmailVerdictAudits backs the WS-5A.6 cross-repo
 	// escalation consumer (cmd/sn360-es/consumers_soc_resolution.go).
 	EmailVerdictAudits EmailVerdictAuditRepository

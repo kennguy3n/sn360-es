@@ -211,6 +211,27 @@ type Tier2Outcome struct {
 	LatencyMs   int64               `json:"latency_ms"`
 }
 
+// IsMalicious reports whether the tier-2 SLM verdict landed on a
+// high-severity (phishing / BEC / credential-harvesting / etc.)
+// category. The WS-3a self-service release flow blocks releases on
+// messages whose tier-2 outcome IsMalicious() is true — even if a
+// tenant policy would otherwise permit self-service — because tier
+// 2 is the deepest classifier in the stack and a one-click recipient
+// release on a tier-2-malicious verdict would defeat the safety
+// stack.
+//
+// Returns false when Categories is empty (tier 2 ran but did not
+// produce a classification) so that "no classification" never
+// implies malicious by accident.
+func (t Tier2Outcome) IsMalicious() bool {
+	for _, c := range t.Categories {
+		if c.IsHighSeverity() {
+			return true
+		}
+	}
+	return false
+}
+
 // RspamdOutcome captures the Rspamd response.
 type RspamdOutcome struct {
 	Score     float64            `json:"score"`

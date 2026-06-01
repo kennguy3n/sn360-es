@@ -44,6 +44,15 @@ type BannerInput struct {
 
 // rtlLocales is the set of BCP-47 language codes that render right-to-left.
 // Used to inject dir="rtl" on the banner root for accessibility.
+//
+// Exported (via IsRTLLocale) so sibling renderers — currently the
+// WS-3a quarantine self-release banner in
+// internal/service/selfrelease — share a single source of truth
+// for the RTL language set. Previously each renderer carried its
+// own duplicate map kept in sync by a comment, which silently
+// diverged whenever the set grew. Keep this list as the canonical
+// definition; new RTL languages (e.g. "yi" for Yiddish) go here
+// once and propagate to every consumer.
 var rtlLocales = map[string]struct{}{
 	"ar": {},
 	"he": {},
@@ -51,9 +60,11 @@ var rtlLocales = map[string]struct{}{
 	"ur": {},
 }
 
-// isRTLLocale reports whether locale renders right-to-left. The
-// language-only prefix is consulted (e.g. "ar-EG" -> "ar").
-func isRTLLocale(locale string) bool {
+// IsRTLLocale reports whether locale renders right-to-left. The
+// language-only prefix is consulted (e.g. "ar-EG" -> "ar"). Exported
+// for reuse by other banner renderers in the same service tree (see
+// the rtlLocales doc above for the rationale).
+func IsRTLLocale(locale string) bool {
 	if locale == "" {
 		return false
 	}
@@ -288,7 +299,7 @@ func (r *BannerRenderer) Render(in BannerInput) ([]byte, error) {
 	// The micro-lesson link is unrelated to feedback and stays visible.
 	hasToken := in.ActionToken != ""
 	colors := tierColorsFor(in.Tier)
-	rtl := isRTLLocale(locale)
+	rtl := IsRTLLocale(locale)
 	view := bannerView{
 		Tier:           in.Tier,
 		TierClass:      tierClassFor(in.Tier),
@@ -470,7 +481,7 @@ func buttonInlineStyle(c tierColors, mso bool) template.CSS {
 // emits an explicit direction so screen readers and CSS layout do not
 // need to infer from content.
 func dirFor(locale string) string {
-	if isRTLLocale(locale) {
+	if IsRTLLocale(locale) {
 		return "rtl"
 	}
 	return "ltr"

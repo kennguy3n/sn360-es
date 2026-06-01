@@ -62,6 +62,15 @@ type actionQuarantineEnvelope struct {
 	Primary       constant.Category `json:"primary"`
 	Score         int               `json:"score"`
 	Email         string            `json:"email"`
+	// Tier2Malicious is the privacy-safe "tier-2 SLM classified
+	// this as malicious" bit derived at evaluation time. It is
+	// emitted by handleIngestionAction (this file, below) from
+	// res.Tier2.IsMalicious() and persisted onto the
+	// QuarantineRecord so the WS-3a self-release flow can refuse
+	// recipient-driven release on tier-2 malicious verdicts
+	// without re-evaluating. Defaults to false (omitempty) for
+	// backward compatibility with envelopes minted before WS-3a.
+	Tier2Malicious bool `json:"tier2_malicious,omitempty"`
 }
 
 // handleActionLabel applies the tier (and optional category) native
@@ -266,6 +275,7 @@ func (a *application) handleActionQuarantine(ctx context.Context, msg events.Mes
 		MessageID:            env.MessageID,
 		Tier:                 env.Tier,
 		Primary:              env.Primary,
+		Tier2Malicious:       env.Tier2Malicious,
 	}); err != nil {
 		a.logger.WarnContext(ctx, "sn360-es: action.quarantine: quarantine failed",
 			slog.String("tenant_id", env.TenantID),
@@ -395,14 +405,26 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 
 	// 3. Quarantine
 	if res.Tier == constant.TierBlocked {
+		// Capture the privacy-safe "tier-2 said malicious" bit
+		// at publish time so the downstream quarantine consumer
+		// can persist it onto the QuarantineRecord without
+		// re-deriving from the full Tier2Outcome (which is not
+		// included on the wire envelope to keep the bus payload
+		// PII-minimal). When Tier 2 did not run (Tier2 == nil)
+		// the bit is false; the WS-3a self-release service
+		// treats a false bit on a legacy record as "unknown
+		// malicious" — it does not block on absence, so this
+		// degrades correctly when Tier 2 is degraded/unavailable.
+		tier2Malicious := res.Tier2 != nil && res.Tier2.IsMalicious()
 		signal := map[string]any{
-			"tenant_id":      res.TenantID,
-			"message_id":     res.MessageID,
-			"correlation_id": res.CorrelationID,
-			"tier":           res.Tier,
-			"primary":        res.Primary,
-			"score":          res.Score,
-			"email":          res.Recipient,
+			"tenant_id":       res.TenantID,
+			"message_id":      res.MessageID,
+			"correlation_id":  res.CorrelationID,
+			"tier":            res.Tier,
+			"primary":         res.Primary,
+			"score":           res.Score,
+			"email":           res.Recipient,
+			"tier2_malicious": tier2Malicious,
 		}
 		if blob, merr := json.Marshal(signal); merr == nil {
 			if perr := a.eventBus.Publish(ctx, "es.action.quarantine", blob,

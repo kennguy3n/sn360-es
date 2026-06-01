@@ -29,16 +29,66 @@ type JWTConfig struct {
 	TTL time.Duration
 }
 
+// Scope constants define the closed set of permitted `scp` claim
+// values. A token issued for one scope MUST NOT be accepted by a
+// handler that checks for a different scope — the scope check is
+// the only thing that prevents a leaked banner token (Report
+// Phishing) from being replayed against the self-release endpoint.
+const (
+	// ScopeBannerAction is the implicit scope for legacy banner
+	// action tokens (Report Phishing / Mark Safe / Trust Sender /
+	// URL interstitial). A token with no `scp` claim is treated
+	// as having ScopeBannerAction for backward compatibility with
+	// tokens minted before WS-3a landed.
+	ScopeBannerAction = "banner_action"
+	// ScopeQuarantineRelease is the WS-3a self-service release
+	// scope. The release handler refuses any token whose `scp` is
+	// not exactly this value (uniform 401).
+	ScopeQuarantineRelease = "quarantine_release"
+)
+
 // ActionClaims is the canonical claim shape for banner / interstitial
-// tokens. The intent is to carry zero PII so a leaked token cannot be
-// used to enumerate users or messages from a third party.
+// and self-release tokens. The intent is to carry zero PII so a
+// leaked token cannot be used to enumerate users or messages from a
+// third party.
+//
+// Scope is the cross-handler isolation primitive (see Scope*
+// constants). RecipientUserHash is populated only for
+// ScopeQuarantineRelease tokens; it is the BLAKE2b-256 hex digest
+// of the recipient mailbox the token authorises — the same shape
+// `users.email_hash` carries — so the release handler can
+// rate-limit per recipient without trusting any header.
 type ActionClaims struct {
 	TenantID             string `json:"tid"`
 	PseudonymizedMessage string `json:"pmid"`
 	Tier                 string `json:"tier,omitempty"`
 	Action               string `json:"act,omitempty"`
 	OriginalURLHash      string `json:"urlh,omitempty"`
+	// Scope is the closed-set claim that prevents cross-scope
+	// token replay. Empty is treated as ScopeBannerAction for
+	// backward compatibility — never blank-equivalent to
+	// ScopeQuarantineRelease.
+	Scope string `json:"scp,omitempty"`
+	// RecipientUserHash is the hex-encoded BLAKE2b-256 pseudonym
+	// of the recipient mailbox the token authorises. Populated
+	// only for ScopeQuarantineRelease.
+	RecipientUserHash string `json:"ruh,omitempty"`
 	jwt.RegisteredClaims
+}
+
+// VerifyResult is the verifier's return type when the caller needs
+// to distinguish "expired token" from "invalid signature" for audit
+// purposes WITHOUT differentiating them on the wire. The handler
+// always returns the same 401 body to the client, but writes
+// different audit outcomes (`token_expired` vs `invalid_token`)
+// based on Expired.
+type VerifyResult struct {
+	Claims *ActionClaims
+	// Expired is true when the token parsed and the signature
+	// validated but `exp` was in the past. False when the token
+	// was rejected for any other reason (signature, malformed,
+	// missing claim).
+	Expired bool
 }
 
 // NewJWTIssuer constructs an issuer. Secrets shorter than 32 bytes are
@@ -62,6 +112,14 @@ type IssueOptions struct {
 	Tier    string
 	Action  string
 	URLHash string
+	// Scope is the value the issued token carries in its `scp`
+	// claim. When empty, the token is minted without a `scp`
+	// claim and Verify treats it as ScopeBannerAction. Set
+	// explicitly for new flows (e.g. ScopeQuarantineRelease).
+	Scope string
+	// RecipientUserHash is hex-encoded into the `ruh` claim.
+	// Populated only for ScopeQuarantineRelease tokens.
+	RecipientUserHash string
 }
 
 // Issue signs a fresh ActionClaims token for tenantID + pseudoMessageID.
@@ -86,6 +144,8 @@ func (i *JWTIssuer) Issue(tenantID, pseudoMessageID string, opts IssueOptions) (
 		Tier:                 opts.Tier,
 		Action:               opts.Action,
 		OriginalURLHash:      opts.URLHash,
+		Scope:                opts.Scope,
+		RecipientUserHash:    opts.RecipientUserHash,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    i.issuer,
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
@@ -104,8 +164,22 @@ func (i *JWTIssuer) Issue(tenantID, pseudoMessageID string, opts IssueOptions) (
 // Verify parses and validates a token previously issued by Issue. It
 // returns the embedded claims on success.
 func (i *JWTIssuer) Verify(token string) (*ActionClaims, error) {
+	res, err := i.VerifyDetail(token)
+	if err != nil {
+		return nil, err
+	}
+	return res.Claims, nil
+}
+
+// VerifyDetail is like Verify but distinguishes "expired token" from
+// "other invalid" via the returned VerifyResult.Expired flag. Both
+// cases still return a non-nil error so callers that don't need the
+// distinction can keep using Verify. Use this from handlers that
+// need to audit expired-vs-tampered separately while emitting the
+// same wire response.
+func (i *JWTIssuer) VerifyDetail(token string) (VerifyResult, error) {
 	if token == "" {
-		return nil, errors.New("privacy/jwt: token is required")
+		return VerifyResult{}, errors.New("privacy/jwt: token is required")
 	}
 	parsed, err := jwt.ParseWithClaims(token, &ActionClaims{},
 		func(t *jwt.Token) (interface{}, error) {
@@ -118,11 +192,25 @@ func (i *JWTIssuer) Verify(token string) (*ActionClaims, error) {
 		jwt.WithValidMethods([]string{"HS256"}),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("privacy/jwt: parse: %w", err)
+		// jwt-go signals expiry via errors.Is(err,
+		// jwt.ErrTokenExpired). Capture that distinction so the
+		// handler can pick the right audit outcome — but keep the
+		// wrapped error path identical so the wire response is
+		// uniform 401 regardless of which underlying validation
+		// failed.
+		expired := errors.Is(err, jwt.ErrTokenExpired)
+		var claims *ActionClaims
+		if parsed != nil {
+			if c, ok := parsed.Claims.(*ActionClaims); ok {
+				claims = c
+			}
+		}
+		return VerifyResult{Claims: claims, Expired: expired},
+			fmt.Errorf("privacy/jwt: parse: %w", err)
 	}
 	claims, ok := parsed.Claims.(*ActionClaims)
 	if !ok || !parsed.Valid {
-		return nil, errors.New("privacy/jwt: invalid token")
+		return VerifyResult{}, errors.New("privacy/jwt: invalid token")
 	}
-	return claims, nil
+	return VerifyResult{Claims: claims}, nil
 }
