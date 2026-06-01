@@ -191,10 +191,38 @@ CREATE POLICY tenant_isolation ON quarantine_release_audit
     );
 
 -- ----------------------------------------------------------------------
--- 4. sn360_app grants — read/write for the app role established in 0018.
+-- 4. sn360_app grants — least-privilege per table.
+--
+-- 0018 granted full CRUD on every tenant-scoped table to sn360_app,
+-- which is the right shape for general business tables that the app
+-- mutates freely (users, vendors, scores, …). The two tables added
+-- here intentionally narrow that pattern:
+--
+--   * tenant_release_policies — SELECT, INSERT, UPDATE. The
+--     repository upserts via `INSERT … ON CONFLICT DO UPDATE`
+--     (see internal/repository/tenant_release_policy.go) and never
+--     issues a DELETE; revoking DELETE eliminates an entire
+--     code path the app does not exercise.
+--
+--   * quarantine_release_audit — SELECT, INSERT only. The audit
+--     table is documented as append-only and the repository
+--     interface (Record / CountRecentByRecipient / ListByMessage)
+--     exposes no update or delete entry point. Withholding UPDATE
+--     and DELETE means a future bug, accidental EXEC, or
+--     compromised app session cannot rewrite or erase audit rows
+--     — exactly the defense-in-depth shape a security audit trail
+--     needs. Tenant deletion (which would cascade-clean these
+--     rows via the FK ON DELETE CASCADE) happens via a separate
+--     admin role, not sn360_app, so the cascade path is
+--     unaffected.
+--
+-- If the application ever genuinely needs to rewrite or expire
+-- audit rows (e.g. a retention sweep), that operation should live
+-- under a distinct role with explicit DELETE, not by widening the
+-- production app's grants.
 -- ----------------------------------------------------------------------
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON tenant_release_policies     TO sn360_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON quarantine_release_audit    TO sn360_app;
+GRANT SELECT, INSERT, UPDATE         ON tenant_release_policies     TO sn360_app;
+GRANT SELECT, INSERT                 ON quarantine_release_audit    TO sn360_app;
 
 COMMIT;

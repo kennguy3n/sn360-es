@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"html/template"
 	"net/url"
-	"strings"
 	"time"
 
+	"github.com/kennguy3n/sn360-es/internal/service/action"
 	"github.com/kennguy3n/sn360-es/pkg/privacy"
 )
 
@@ -165,28 +165,15 @@ func hexEncode(b []byte) string {
 	return string(out)
 }
 
-// rtlLocales mirrors the language list in the canonical banner
-// renderer (internal/service/action/banner_renderer.go). Kept in
-// sync by hand because the upstream var is package-private; if it
-// ever grows we mirror the change here.
-var rtlLocales = map[string]struct{}{
-	"ar": {},
-	"he": {},
-	"fa": {},
-	"ur": {},
-}
-
-func isRTLLocale(locale string) bool {
-	if locale == "" {
-		return false
-	}
-	lang := locale
-	if dash := strings.IndexByte(locale, '-'); dash > 0 {
-		lang = locale[:dash]
-	}
-	_, ok := rtlLocales[strings.ToLower(lang)]
-	return ok
-}
+// isRTLLocale defers to the canonical RTL-locale list maintained by
+// internal/service/action.IsRTLLocale so adding a new RTL language
+// (e.g. "yi") in one place propagates here automatically. Previously
+// this file carried a hand-mirrored copy of the locale map kept in
+// sync by a comment, which is exactly the silent-divergence shape
+// Devin Review flagged in WS-3a round 4 — promoted from a comment-
+// kept-in-sync arrangement to an actual code-level shared
+// definition.
+func isRTLLocale(locale string) bool { return action.IsRTLLocale(locale) }
 
 // bannerTemplate is the self-contained HTML for the self-service
 // release banner. It renders as a single <div> with inline styles
