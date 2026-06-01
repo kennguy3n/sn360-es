@@ -271,3 +271,50 @@ func TestValidate_NATSSuperclusterEmptyIsOK(t *testing.T) {
 		t.Fatalf("validate() must accept empty NATS_SUPERCLUSTER; got %v", err)
 	}
 }
+
+// TestValidate_HomeRegionEntryMustMatchPrimaryHost pins the
+// boot-time guard that the home region's PG_REGION_MAP entry must
+// reach the same Postgres as the primary PG_HOST/PG_PORT — the
+// primary pool doubles as the home-region pool, so a mismatch
+// would silently leave the home entry's URL parsed-but-unused. Doc
+// invariant in internal/docs/MULTI_REGION.md:54-58 is now enforced
+// in code.
+func TestValidate_HomeRegionEntryMustMatchPrimaryHost(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Postgres.Host = "primary.local"
+	cfg.Postgres.Port = 5432
+	cfg.Postgres.HomeRegion = "ap-southeast-1"
+	cfg.Postgres.RegionMap = map[string]Postgres{
+		"ap-southeast-1": {Host: "wrong.local", Port: 5432, SSLMode: "require"},
+		"us-east-1":      {Host: "us.local", Port: 5432, SSLMode: "require"},
+	}
+	err := cfg.validate()
+	if err == nil {
+		t.Fatal("validate() must reject home-region entry whose host disagrees with PG_HOST")
+	}
+	if !strings.Contains(err.Error(), "PG_REGION_MAP[ap-southeast-1]") {
+		t.Fatalf("error = %q; want mention of home-region entry", err.Error())
+	}
+	if !strings.Contains(err.Error(), "wrong.local") || !strings.Contains(err.Error(), "primary.local") {
+		t.Fatalf("error = %q; want both hosts named for operator clarity", err.Error())
+	}
+}
+
+// TestValidate_HomeRegionEntryMatches confirms the happy path: a
+// home-region entry pointing at the primary host (the documented
+// canonical wiring) passes validation. Without this test a future
+// tightening could accidentally make the matcher stricter than
+// the doc contract.
+func TestValidate_HomeRegionEntryMatches(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Postgres.Host = "primary.local"
+	cfg.Postgres.Port = 5432
+	cfg.Postgres.HomeRegion = "ap-southeast-1"
+	cfg.Postgres.RegionMap = map[string]Postgres{
+		"ap-southeast-1": {Host: "primary.local", Port: 5432, SSLMode: "require"},
+		"us-east-1":      {Host: "us.local", Port: 5432, SSLMode: "require"},
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() rejected canonical home-region wiring: %v", err)
+	}
+}

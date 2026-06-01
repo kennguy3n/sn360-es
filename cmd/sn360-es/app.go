@@ -572,7 +572,11 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		// mux for the HTTP path — both bindings consult the
 		// same regional+resolver pair so behaviour is
 		// identical between HTTP and NATS entrypoints.
-		app.tenantBinder = middleware.NewTenantConnBinder(noopHandler{}, binderCfg)
+		binder, berr := middleware.NewTenantConnBinder(noopHandler{}, binderCfg)
+		if berr != nil {
+			return nil, fmt.Errorf("tenant conn binder: %w", berr)
+		}
+		app.tenantBinder = binder
 	}
 
 	// Redis.

@@ -85,8 +85,16 @@ type TenantConnBinder struct {
 	prefix   []string
 }
 
-// NewTenantConnBinder wraps next.
-func NewTenantConnBinder(next http.Handler, cfg TenantConnConfig) *TenantConnBinder {
+// NewTenantConnBinder wraps next. Returns an error when the
+// multi-region inputs are partially wired (Regional != nil with
+// Resolver == nil, or the inverse) — a wiring-layer mistake that
+// would otherwise silently fall back to the home-region pool for
+// every tenant and violate data residency. Both fields must be
+// supplied together or both must be nil (single-region mode).
+func NewTenantConnBinder(next http.Handler, cfg TenantConnConfig) (*TenantConnBinder, error) {
+	if (cfg.Regional == nil) != (cfg.Resolver == nil) {
+		return nil, errors.New("middleware: TenantConnConfig.Regional and TenantConnConfig.Resolver must be set together (partial multi-region wiring would silently fall back to the home-region pool and violate data residency)")
+	}
 	skip := map[string]bool{}
 	var prefixes []string
 	for _, p := range cfg.SkipPaths {
@@ -110,7 +118,7 @@ func NewTenantConnBinder(next http.Handler, cfg TenantConnConfig) *TenantConnBin
 		logger:   logger,
 		skip:     skip,
 		prefix:   prefixes,
-	}
+	}, nil
 }
 
 // ServeHTTP implements http.Handler.

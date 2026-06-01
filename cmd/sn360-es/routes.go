@@ -305,13 +305,17 @@ func wrapMiddleware(mux http.Handler, app *application) (http.Handler, error) {
 			regional = app.regional
 			resolver = app.tenantBinder.Resolver()
 		}
-		h = middleware.NewTenantConnBinder(h, middleware.TenantConnConfig{
+		binder, berr := middleware.NewTenantConnBinder(h, middleware.TenantConnConfig{
 			DB:        app.pgDB,
 			Regional:  regional,
 			Resolver:  resolver,
 			Logger:    logger,
 			SkipPaths: defaultAuthSkipPaths(),
 		})
+		if berr != nil {
+			return nil, fmt.Errorf("wrap middleware: %w", berr)
+		}
+		h = binder
 	}
 
 	// JWT auth: optional. Skipped when no issuer is configured (dev

@@ -3,7 +3,25 @@ package middleware
 import (
 	"context"
 	"testing"
+
+	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
 )
+
+// stubResolver satisfies RegionResolver for the constructor-level
+// wiring guard tests; the partial-wiring check fires before any
+// resolve call so a zero-value implementation is sufficient.
+type stubResolver struct{}
+
+func (stubResolver) ResolveRegion(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
+// stubRegionalDB returns a non-nil *postgres.RegionalDB pointer for
+// the wiring-guard check (which only does nil comparison). We can't
+// reach the full NewRegionalDB constructor without standing up real
+// *postgres.DB pools, so a zero-value sentinel is the right shape
+// for a pure boot-time validation test.
+func stubRegionalDB() *postgres.RegionalDB { return &postgres.RegionalDB{} }
 
 // TestBindTenant_NilReceiverReturnsNoopRelease pins the contract that
 // (*TenantConnBinder).BindTenant returns a non-nil ReleaseFunc on
@@ -38,5 +56,65 @@ func TestBindTenant_NilReceiverReturnsNoopRelease(t *testing.T) {
 	}
 	if relErr := release(); relErr != nil {
 		t.Fatalf("noop release() returned err=%v, want nil", relErr)
+	}
+}
+
+// TestNewTenantConnBinder_RejectsPartialMultiRegionWiring pins the
+// boot-time guard: Regional and Resolver must be wired together or
+// both nil. A wiring-layer mistake that supplied one without the
+// other would silently fall back to the home-region pool for every
+// tenant — a data-residency violation. validate-at-construction
+// surfaces the error during newApplication, not as a stream of
+// misrouted requests at runtime.
+func TestNewTenantConnBinder_RejectsPartialMultiRegionWiring(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		cfg  TenantConnConfig
+	}{
+		{
+			name: "Regional set without Resolver",
+			cfg: TenantConnConfig{
+				Regional: stubRegionalDB(),
+				Resolver: nil,
+			},
+		},
+		{
+			name: "Resolver set without Regional",
+			cfg: TenantConnConfig{
+				Regional: nil,
+				Resolver: stubResolver{},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewTenantConnBinder(nil, tc.cfg)
+			if err == nil {
+				t.Fatalf("NewTenantConnBinder accepted partial multi-region wiring (%s) — must reject to prevent silent fallback to home-region pool", tc.name)
+			}
+		})
+	}
+}
+
+// TestNewTenantConnBinder_AcceptsSingleRegion and
+// TestNewTenantConnBinder_AcceptsBothSet document the inverse
+// contract: a binder with NEITHER multi-region field, or BOTH,
+// must construct cleanly.
+func TestNewTenantConnBinder_AcceptsSingleRegion(t *testing.T) {
+	t.Parallel()
+	if _, err := NewTenantConnBinder(nil, TenantConnConfig{}); err != nil {
+		t.Fatalf("single-region binder rejected: %v", err)
+	}
+}
+
+func TestNewTenantConnBinder_AcceptsBothSet(t *testing.T) {
+	t.Parallel()
+	if _, err := NewTenantConnBinder(nil, TenantConnConfig{
+		Regional: stubRegionalDB(),
+		Resolver: stubResolver{},
+	}); err != nil {
+		t.Fatalf("multi-region binder rejected: %v", err)
 	}
 }
