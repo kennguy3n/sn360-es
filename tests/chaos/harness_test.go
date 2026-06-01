@@ -249,12 +249,21 @@ func startNATSWithOptions(ctx context.Context, t *testing.T, hostPort int) (*tcn
 	opts := []testcontainers.ContainerCustomizer{}
 	if hostPort > 0 {
 		opts = append(opts, testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
-			hc.PortBindings = network.PortMap{
-				network.MustParsePort("4222/tcp"): []network.PortBinding{{
-					HostIP:   netip.MustParseAddr("127.0.0.1"),
-					HostPort: strconv.Itoa(hostPort),
-				}},
+			// MERGE the 4222/tcp binding into any existing
+			// PortBindings rather than replacing the whole
+			// map. The testcontainers NATS module today only
+			// exposes 4222/tcp, but a future module version
+			// may add 8222 (monitoring) or 6222 (clustering);
+			// replacing the map would silently drop those.
+			// Initialise the map if the module has not set
+			// any bindings yet.
+			if hc.PortBindings == nil {
+				hc.PortBindings = network.PortMap{}
 			}
+			hc.PortBindings[network.MustParsePort("4222/tcp")] = []network.PortBinding{{
+				HostIP:   netip.MustParseAddr("127.0.0.1"),
+				HostPort: strconv.Itoa(hostPort),
+			}}
 		}))
 	}
 	c, err := tcnats.Run(ctx, "nats:2.10-alpine", opts...)
