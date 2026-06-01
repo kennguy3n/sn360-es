@@ -724,16 +724,31 @@ in a single PR.
   `EvaluateRequest` migration documented in
   [`ARCHITECTURE.md`](./ARCHITECTURE.md) §3 ("NATS subject layout").
 
-### 7d — CSP Headers on Interstitial  *(TODO)*
+### 7d — CSP Headers on Interstitial  *(DONE — PR #71)*
 
-The `/l/{token}` handler (interstitial / safe-click landing page)
-should add:
+`internal/handler/interstitial.go::setInterstitialSecurityHeaders`
+stamps the WS-7d defense-in-depth header set on every response from
+the `/l/{token}` handler (mounted at `cmd/sn360-es/routes.go:156`)
+before any branch, so the redirect path, the threat-intel block,
+the link-expired / malformed-URL block, the missing-token 400, and
+the wrong-method 405 all carry them:
 
 ```
 Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'
 X-Frame-Options: DENY
 X-Content-Type-Options: nosniff
 ```
+
+`style-src 'unsafe-inline'` is required because `blockHTML` keeps
+its CSS in an inline `<style>` block to stay a self-contained
+document with no external asset hosting; the comment on the helper
+flags this for the next security review. The headers live in the
+handler itself (not a generic middleware) so the dashboard plugin's
+iframe-embedded views and the action-token banner endpoints keep
+their looser CSP / framing rules.
+`internal/handler/interstitial_test.go::TestInterstitialHandler_SecurityHeaders`
+is the table-driven test that pins the exact values across all six
+exit paths.
 
 ---
 

@@ -252,6 +252,100 @@ func TestInterstitialHandler_WrongMethod(t *testing.T) {
 	}
 }
 
+// TestInterstitialHandler_SecurityHeaders pins the WS-7d defense-in-
+// depth headers. They must be present on every response shape the
+// handler can produce — success redirect, threat-intel block, expired/
+// invalid token block, missing token 400, and method-not-allowed 405
+// — so older / non-CSP-aware clients still get X-Frame-Options /
+// nosniff on the error path.
+func TestInterstitialHandler_SecurityHeaders(t *testing.T) {
+	const (
+		wantCSP  = "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"
+		wantXFO  = "DENY"
+		wantXCTO = "nosniff"
+	)
+
+	fx := newInterstitialFixture(t)
+	safeToken := fx.rewriteFor(t, "https://example.com/safe")
+	blockedToken := fx.rewriteFor(t, "https://malicious.example/login")
+	qpToken := fx.rewriteFor(t, "https://example.com/qp")
+
+	safeIntel := stubThreatIntel{safe: true}
+	dangerIntel := stubThreatIntel{safe: false, reason: "credential phishing"}
+
+	cases := []struct {
+		name       string
+		intel      ThreatIntel
+		method     string
+		target     string
+		wantStatus int
+	}{
+		{
+			name:       "safe_redirect",
+			intel:      safeIntel,
+			method:     http.MethodGet,
+			target:     "/l/" + safeToken,
+			wantStatus: http.StatusFound,
+		},
+		{
+			name:       "threat_intel_block",
+			intel:      dangerIntel,
+			method:     http.MethodGet,
+			target:     "/l/" + blockedToken,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "invalid_token_block",
+			intel:      nil,
+			method:     http.MethodGet,
+			target:     "/l/not-a-real-token",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "missing_token_bad_request",
+			intel:      nil,
+			method:     http.MethodGet,
+			target:     "/",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "wrong_method",
+			intel:      nil,
+			method:     http.MethodPost,
+			target:     "/l/abc",
+			wantStatus: http.StatusMethodNotAllowed,
+		},
+		{
+			name:       "token_query_param_redirect",
+			intel:      safeIntel,
+			method:     http.MethodGet,
+			target:     "/l?token=" + qpToken,
+			wantStatus: http.StatusFound,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewInterstitialHandler(nil, fx.rewriter, tc.intel, nil, InterstitialConfig{})
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.target, nil))
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status=%d want=%d body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if got := rec.Header().Get("Content-Security-Policy"); got != wantCSP {
+				t.Fatalf("CSP=%q want %q", got, wantCSP)
+			}
+			if got := rec.Header().Get("X-Frame-Options"); got != wantXFO {
+				t.Fatalf("X-Frame-Options=%q want %q", got, wantXFO)
+			}
+			if got := rec.Header().Get("X-Content-Type-Options"); got != wantXCTO {
+				t.Fatalf("X-Content-Type-Options=%q want %q", got, wantXCTO)
+			}
+		})
+	}
+}
+
 func TestInterstitialHandler_TokenQueryParamFallback(t *testing.T) {
 	fx := newInterstitialFixture(t)
 	h := NewInterstitialHandler(nil, fx.rewriter, stubThreatIntel{safe: true}, nil, InterstitialConfig{})
