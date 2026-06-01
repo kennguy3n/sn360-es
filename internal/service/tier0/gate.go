@@ -1,6 +1,9 @@
 package tier0
 
 import (
+	"context"
+	"log/slog"
+
 	"github.com/kennguy3n/sn360-es/internal/constant"
 	"github.com/kennguy3n/sn360-es/internal/dto"
 )
@@ -38,6 +41,28 @@ type Gate struct {
 	cfg       GateConfig
 	recurring *RecurringDetector
 	ato       *ATOHeuristic
+	// ti is the optional threat-intel lookup hook. nil means
+	// "no ti_match path"; callers can also set TIChecker to
+	// NoopTIChecker to render the field non-nil without paying
+	// the cost of a real lookup.
+	ti TIChecker
+	// metrics is the optional metrics observer for the ti_match
+	// path. nil means "do not emit ti_match counters".
+	metrics TIObserver
+	logger  *slog.Logger
+}
+
+// TIObserver is the slim metrics surface the gate uses to record
+// ti_match observations. The cmd/sn360-es wiring layer adapts
+// pkg/telemetry into this interface so the tier0 package stays
+// telemetry-free.
+type TIObserver interface {
+	// ObserveLookup records a lookup outcome: "hit", "miss",
+	// "skipped", "error".
+	ObserveLookup(outcome string)
+	// ObserveMatch records a match's severity tier: "block",
+	// "quarantine", "flag".
+	ObserveMatch(tier string)
 }
 
 // NewGate constructs a Gate with the given configuration. A nil recurring
@@ -63,6 +88,27 @@ func NewGateWithATO(cfg GateConfig, recurring *RecurringDetector, ato *ATOHeuris
 	return g
 }
 
+// WithTIChecker installs the threat-intel lookup hook. Optional —
+// the gate works without it (no ti_match reason code emitted).
+// Returns the receiver for chaining.
+func (g *Gate) WithTIChecker(ti TIChecker) *Gate {
+	g.ti = ti
+	return g
+}
+
+// WithTIObserver installs the metrics observer for the ti_match path.
+// Optional. Returns the receiver for chaining.
+func (g *Gate) WithTIObserver(o TIObserver) *Gate {
+	g.metrics = o
+	return g
+}
+
+// WithLogger overrides the logger used for ti_match diagnostics.
+func (g *Gate) WithLogger(l *slog.Logger) *Gate {
+	g.logger = l
+	return g
+}
+
 // Apply runs the gate on req using the supplied signals and returns
 // the structured Tier0Outcome. It does not mutate req. The outcome's
 // Bypass field is the canonical signal to skip downstream ML.
@@ -76,7 +122,27 @@ func NewGateWithATO(cfg GateConfig, recurring *RecurringDetector, ato *ATOHeuris
 // adapter pair, whose only job was to mutate req.Signals before
 // calling the gate.
 func (g *Gate) Apply(req dto.EvaluateRequest, signals dto.RiskSignals) dto.Tier0Outcome {
+	return g.ApplyWithContext(context.Background(), req, signals)
+}
+
+// ApplyWithContext is Apply with an explicit context. The ti_match
+// path uses the context for its DB / cache lookup; the existing
+// reason-code paths do not.
+func (g *Gate) ApplyWithContext(ctx context.Context, req dto.EvaluateRequest, signals dto.RiskSignals) dto.Tier0Outcome {
 	out := dto.Tier0Outcome{}
+
+	// 0. Threat-intel lookup runs FIRST so a high-severity IOC hit
+	//    overrides every relationship-based bypass below. A vendor
+	//    whose domain just landed on URLhaus should NOT be bypassed
+	//    as "vendor_trusted" — they should be quarantined.
+	//
+	//    The lookup is best-effort: if the store / cache fails the
+	//    gate logs and falls through to the heuristic path. The
+	//    fallthrough is required because Tier 0 is hot — a DB
+	//    outage cannot block evaluation entirely.
+	if tiOut, applied := g.applyTIMatch(ctx, req, signals); applied {
+		return tiOut
+	}
 
 	// 1. Internal-trusted bypass — guarded by ATO heuristic.
 	if g.cfg.SkipInternal && signals.IsInternal {
@@ -148,4 +214,101 @@ func (g *Gate) Apply(req dto.EvaluateRequest, signals dto.RiskSignals) dto.Tier0
 		}
 	}
 	return out
+}
+
+// applyTIMatch issues a threat-intel lookup and returns
+// (outcome, applied) describing the gate's action. applied=true
+// is returned for EVERY match — including flag-only matches with
+// severity <50 — because once we have evidence that an IOC is on
+// the message we must skip the heuristic-bypass paths
+// (vendor_trusted, internal_trusted, recurring_service, relationship
+// modifiers) that would otherwise classify the message as benign.
+// Bypassing those paths is the whole point of having Tier 0 honour
+// threat intel: a flagged sender on a trusted-vendor list should
+// still get a ti_match reason code and forced escalation, not be
+// rubber-stamped through.
+//
+// applied=false is reserved for the no-evidence cases: the checker
+// is not wired, the lookup errored (soft-fail), or no IOC matched.
+// In those cases ApplyWithContext falls through to the existing
+// heuristic + relationship paths exactly as before.
+//
+// Severity tiering when applied=true:
+//
+//	>=75: Bypass + SkipML + ForcedCategory=LikelyPhishing  (block)
+//	50-74: Bypass + SkipML + ForcedCategory=SuspiciousURL  (quarantine)
+//	<50:  ForceEscalate (Tier 2 corroboration)             (flag)
+func (g *Gate) applyTIMatch(ctx context.Context, req dto.EvaluateRequest, signals dto.RiskSignals) (dto.Tier0Outcome, bool) {
+	if g.ti == nil {
+		return dto.Tier0Outcome{}, false
+	}
+	matches, err := g.ti.Check(ctx, req, signals)
+	if err != nil {
+		// Soft-fail: log, count "error", do not affect outcome.
+		if g.logger != nil {
+			g.logger.Warn("tier0: ti_match lookup failed",
+				slog.Any("error", err),
+				slog.String("message_id", req.MessageID))
+		}
+		if g.metrics != nil {
+			g.metrics.ObserveLookup("error")
+		}
+		return dto.Tier0Outcome{}, false
+	}
+	if len(matches) == 0 {
+		if g.metrics != nil {
+			g.metrics.ObserveLookup("miss")
+		}
+		return dto.Tier0Outcome{}, false
+	}
+	if g.metrics != nil {
+		g.metrics.ObserveLookup("hit")
+	}
+
+	strongest, otherFeeds := PickStrongest(matches)
+	tim := &dto.TIMatch{
+		Indicator:       strongest.Indicator,
+		IndicatorType:   string(strongest.IndicatorType),
+		FeedID:          strongest.FeedID,
+		FeedName:        strongest.FeedName,
+		Severity:        strongest.Severity,
+		Tags:            strongest.Tags,
+		AdditionalFeeds: otherFeeds,
+	}
+	cat, bypass := SeverityTier(strongest.Severity)
+	out := dto.Tier0Outcome{
+		Reason:  "ti_match",
+		TIMatch: tim,
+	}
+	switch {
+	case bypass && (cat == constant.CategoryLikelyPhishing):
+		// >=75: block-equivalent. Bypass ML; the action layer
+		// maps LikelyPhishing to a block disposition.
+		out.Bypass = true
+		out.SkipML = true
+		out.ForcedCategory = cat
+		if g.metrics != nil {
+			g.metrics.ObserveMatch("block")
+		}
+		return out, true
+	case bypass:
+		// 50-74: quarantine-equivalent. Bypass ML and force
+		// the SuspiciousURL category which the downstream
+		// provider integration maps to a quarantine action.
+		out.Bypass = true
+		out.SkipML = true
+		out.ForcedCategory = cat
+		if g.metrics != nil {
+			g.metrics.ObserveMatch("quarantine")
+		}
+		return out, true
+	default:
+		// <50: flag-only. Force escalation to Tier 2 so the
+		// LLM can corroborate, but keep the ML pipeline live.
+		out.ForceEscalate = true
+		if g.metrics != nil {
+			g.metrics.ObserveMatch("flag")
+		}
+		return out, true
+	}
 }

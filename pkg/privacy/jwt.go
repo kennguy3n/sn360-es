@@ -45,6 +45,14 @@ const (
 	// scope. The release handler refuses any token whose `scp` is
 	// not exactly this value (uniform 401).
 	ScopeQuarantineRelease = "quarantine_release"
+	// ScopeAdminAPI is the operator-grade scope required by
+	// /v1/intel/* endpoints (threat-intel feed CRUD + indicator
+	// debug lookup). It is intentionally distinct from
+	// ScopeBannerAction so a leaked recipient/operator token
+	// can't be replayed against the admin surface. Tokens with
+	// this scope MAY be issued only by the internal admin
+	// console — no public-facing endpoint mints them.
+	ScopeAdminAPI = "admin_api"
 )
 
 // ActionClaims is the canonical claim shape for banner / interstitial

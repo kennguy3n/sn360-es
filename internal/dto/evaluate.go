@@ -180,6 +180,36 @@ type Tier0Outcome struct {
 	// Tier1ThresholdOverride is set when Tier 1 thresholds should be
 	// lowered for this message (Partner / Customer relationships).
 	Tier1ThresholdOverride int `json:"tier1_threshold_override,omitempty"`
+
+	// TIMatch carries the threat-intel match metadata when the gate
+	// detected one or more indicators in intel_indicators. nil when
+	// no match. The detection itself emits the canonical
+	// "ti_match" reason code.
+	TIMatch *TIMatch `json:"ti_match,omitempty"`
+}
+
+// TIMatch records the strongest threat-intel hit (by severity) that
+// the Tier 0 gate detected on this message. Multiple hits are
+// possible — the gate keeps the highest-severity match and lists the
+// rest under AdditionalFeeds so dashboards can show "URLhaus,
+// MISP-CIRCL" without a separate query.
+type TIMatch struct {
+	// Indicator is the canonical indicator value that matched.
+	Indicator string `json:"indicator"`
+	// IndicatorType is one of "domain", "url", "ip", "sha256".
+	IndicatorType string `json:"indicator_type"`
+	// FeedID and FeedName identify the source feed.
+	FeedID   string `json:"feed_id"`
+	FeedName string `json:"feed_name"`
+	// Severity is the [0,100] severity of the worst match.
+	Severity int `json:"severity"`
+	// Tags is the union of tags across all matched rows for the
+	// strongest indicator. Useful for categoriser routing
+	// downstream (e.g. "credential-harvesting", "malware").
+	Tags []string `json:"tags,omitempty"`
+	// AdditionalFeeds names other feeds that also matched a
+	// (possibly different) indicator in the same message.
+	AdditionalFeeds []string `json:"additional_feeds,omitempty"`
 }
 
 // Tier1Outcome is the encoder's structured output.

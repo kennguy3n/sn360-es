@@ -54,6 +54,27 @@ func ContextWithTenantID(ctx context.Context, tenantID string) context.Context {
 	return context.WithValue(ctx, ctxKeyTenantID, tenantID)
 }
 
+// ContextWithClaims returns ctx augmented with the supplied JWT
+// claims under the same key JWTAuth uses. The same authentication
+// caveats as ContextWithTenantID apply — production callers MUST
+// have already verified the claims (e.g. via a signed event-bus
+// envelope); tests use this helper to seed an authenticated request
+// context without standing up an issuer.
+//
+// When non-nil, the function also seeds the tenant_id context key
+// from claims.TenantID so handler-level helpers (which read
+// TenantIDFromContext) keep working without a second call.
+func ContextWithClaims(ctx context.Context, claims *privacy.ActionClaims) context.Context {
+	if claims == nil {
+		return ctx
+	}
+	ctx = context.WithValue(ctx, ctxKeyClaims, claims)
+	if claims.TenantID != "" {
+		ctx = context.WithValue(ctx, ctxKeyTenantID, claims.TenantID)
+	}
+	return ctx
+}
+
 // ClaimsFromContext returns the full JWT claims if the request was
 // authenticated, or nil otherwise.
 func ClaimsFromContext(ctx context.Context) *privacy.ActionClaims {

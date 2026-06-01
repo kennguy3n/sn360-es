@@ -98,6 +98,22 @@ import (
 // derived from `migrations/0001_init.up.sql` + subsequent ALTERs at
 // schema HEAD. Update this list when a new tenant-scoped table is
 // added in a migration.
+//
+// Deployment-scoped tables (rows are SHARED across every tenant in
+// the deployment, not isolated per tenant) are deliberately
+// excluded — they have no `tenant_id` column to predicate on, no
+// RLS policy, and queries against them do NOT need a `WHERE
+// tenant_id = $N` clause. Current deployment-scoped tables:
+//
+//   - intel_feeds, intel_indicators (migration 0024) — global
+//     threat-intel IOC corpus shared across tenants. The
+//     reverse-drift guard in main_test.go correctly does NOT flag
+//     these because the migration does not call
+//     ALTER TABLE ... ENABLE ROW LEVEL SECURITY on them.
+//
+// If you add another deployment-scoped table, document it in the
+// list above and ensure the migration omits the ENABLE ROW LEVEL
+// SECURITY statement so the reverse-drift guard stays clean.
 var tenantScopedTables = map[string]struct{}{
 	"users":                     {},
 	"groups":                    {},

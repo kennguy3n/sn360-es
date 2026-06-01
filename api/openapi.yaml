@@ -755,6 +755,161 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
 
+  /v1/intel/feeds:
+    get:
+      tags: [intel]
+      summary: List threat-intel feeds (admin only)
+      description: |
+        Returns every configured intel feed. Requires a JWT with
+        `scp=admin_api`.
+      responses:
+        "200":
+          description: Feed list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntelFeedList"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [intel]
+      summary: Register a new threat-intel feed (admin only)
+      description: |
+        Creates a new feed. The `provider` MUST be one of `urlhaus`,
+        `misp`, `stix-taxii`, or `csv`. Requires `scp=admin_api`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IntelFeedCreate"
+      responses:
+        "201":
+          description: Feed created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntelFeed"
+        "400":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+
+  /v1/intel/feeds/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [intel]
+      summary: Get a single feed by ID (admin only)
+      responses:
+        "200":
+          description: Feed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntelFeed"
+        "404":
+          $ref: "#/components/responses/Error"
+    patch:
+      tags: [intel]
+      summary: Update a feed (admin only)
+      description: |
+        Mutates the URL, fetch interval, or enabled flag of an existing
+        feed. Fields omitted from the payload are left unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IntelFeedPatch"
+      responses:
+        "200":
+          description: Feed updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntelFeed"
+        "404":
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [intel]
+      summary: Delete a feed and all its indicators (admin only)
+      description: |
+        Cascades to intel_indicators rows owned by this feed.
+      responses:
+        "204":
+          description: Feed deleted
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /v1/intel/feeds/{id}/refresh:
+    post:
+      tags: [intel]
+      summary: Force-fetch a feed now (admin only)
+      description: |
+        Runs a single poll outside the worker's normal schedule. The
+        same bookkeeping/upsert/alert path as the scheduled loop is
+        followed, so a refresh failure still bumps
+        `consecutive_failures`. Returns the number of indicators
+        inserted or updated by the upsert.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Refresh complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntelRefreshResponse"
+        "404":
+          $ref: "#/components/responses/Error"
+        "501":
+          description: Refresher not wired in this deployment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: Upstream feed fetch failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/intel/indicators:
+    get:
+      tags: [intel]
+      summary: Debug lookup by raw indicator (admin only)
+      description: |
+        Canonicalises and SHA-256-hashes the supplied indicator, then
+        returns every intel_indicators row that matched. Used by
+        operators to confirm whether an IOC is currently in any feed.
+      parameters:
+        - in: query
+          name: indicator
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Lookup result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntelIndicatorLookup"
+        "400":
+          $ref: "#/components/responses/Error"
+
   /v1/org-graph:
     get:
       tags: [directory]
@@ -1275,3 +1430,122 @@ components:
           type: integer
         group_count:
           type: integer
+
+    IntelFeed:
+      type: object
+      required: [id, name, provider, url, fetch_interval_sec, enabled, consecutive_failures, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        provider:
+          type: string
+          enum: [urlhaus, misp, stix-taxii, csv]
+        url:
+          type: string
+          format: uri
+        fetch_interval_sec:
+          type: integer
+          minimum: 60
+        enabled:
+          type: boolean
+        last_fetched_at:
+          type: string
+          format: date-time
+        last_ok:
+          type: boolean
+        last_error:
+          type: string
+        consecutive_failures:
+          type: integer
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+
+    IntelFeedList:
+      type: object
+      required: [feeds]
+      properties:
+        feeds:
+          type: array
+          items:
+            $ref: "#/components/schemas/IntelFeed"
+
+    IntelFeedCreate:
+      type: object
+      required: [name, provider, url]
+      properties:
+        name:
+          type: string
+        provider:
+          type: string
+          enum: [urlhaus, misp, stix-taxii, csv]
+        url:
+          type: string
+          format: uri
+        fetch_interval_sec:
+          type: integer
+          minimum: 60
+        enabled:
+          type: boolean
+
+    IntelFeedPatch:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+        fetch_interval_sec:
+          type: integer
+          minimum: 60
+        enabled:
+          type: boolean
+
+    IntelRefreshResponse:
+      type: object
+      required: [indicators_upserted]
+      properties:
+        indicators_upserted:
+          type: integer
+          minimum: 0
+
+    IntelIndicatorMatch:
+      type: object
+      required: [hash_hex, indicator, indicator_type, feed_id, feed_name, severity, last_seen]
+      properties:
+        hash_hex:
+          type: string
+        indicator:
+          type: string
+        indicator_type:
+          type: string
+          enum: [domain, url, ip, sha256]
+        feed_id:
+          type: string
+        feed_name:
+          type: string
+        severity:
+          type: integer
+          minimum: 0
+          maximum: 100
+        tags:
+          type: array
+          items:
+            type: string
+        last_seen:
+          type: string
+          format: date-time
+
+    IntelIndicatorLookup:
+      type: object
+      required: [indicator, matches]
+      properties:
+        indicator:
+          type: string
+        matches:
+          type: array
+          items:
+            $ref: "#/components/schemas/IntelIndicatorMatch"

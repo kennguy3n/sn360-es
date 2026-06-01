@@ -185,6 +185,12 @@ spec:
             (
               label_replace(absent_over_time(sn360_es_worker_cycle_completed_total{worker="vendor-discovery"}[30m]),         "worker", "vendor-discovery",         "", "") == 1
             )
+            {{- if .Values.worker.intel.enabled }}
+            or
+            (
+              label_replace(absent_over_time(sn360_es_worker_cycle_completed_total{worker="intel"}[30m]),                    "worker", "intel",                    "", "") == 1
+            )
+            {{- end }}
           for: 30m
           labels:
             severity: critical
@@ -194,11 +200,21 @@ spec:
             description: |
               The cleanup, directory-sync, partition_maintenance,
               relationship-aggregation, and vendor-discovery workers
-              each emit a counter on
-              cycle completion. A flatline (rate==0) indicates the
-              Run() loop is stuck; an absent metric indicates the
-              worker never started. Either case warrants a pod
-              inspection and a rollout-restart.
+              each emit a counter on cycle completion. A flatline
+              (rate==0) indicates the Run() loop is stuck; an absent
+              metric indicates the worker never started. Either case
+              warrants a pod inspection and a rollout-restart.
+              {{- if .Values.worker.intel.enabled }}
+              The intel worker (WS-5B.3) is gated on
+              .Values.worker.intel.enabled in this chart AND on
+              WORKER_INTEL_ENABLED=true on the workers pod; both
+              are set, so the same flatline/absent semantics apply.
+              {{- else }}
+              The intel worker (WS-5B.3) is NOT included in this
+              alert because .Values.worker.intel.enabled=false (the
+              default) — set it to true alongside
+              WORKER_INTEL_ENABLED=true on the workers pod to opt in.
+              {{- end }}
 
     - name: ingestion
       interval: 30s

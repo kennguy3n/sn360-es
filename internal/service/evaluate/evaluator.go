@@ -25,6 +25,11 @@ import (
 // visible at every call site.
 type Tier0Gate interface {
 	Apply(req dto.EvaluateRequest, signals dto.RiskSignals) dto.Tier0Outcome
+	// ApplyWithContext is the context-aware variant used by the
+	// ti_match threat-intel hook. Implementations that don't
+	// need a context (e.g. the in-memory fake used in tests)
+	// MAY forward to Apply, discarding ctx.
+	ApplyWithContext(ctx context.Context, req dto.EvaluateRequest, signals dto.RiskSignals) dto.Tier0Outcome
 }
 
 // Tier1Client invokes the Tier 1 (encoder) inference service. The actual
@@ -285,7 +290,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest, signa
 	if e.cfg.Tier0 == nil {
 		return res, errors.New("evaluate: Tier0 gate is required")
 	}
-	tier0 := e.cfg.Tier0.Apply(req, signals)
+	tier0 := e.cfg.Tier0.ApplyWithContext(ctx, req, signals)
 	res.Tier0 = &tier0
 	if tier0.Bypass || tier0.SkipML || tier0.RspamdOnly {
 		reason := tier0.Reason
@@ -605,12 +610,46 @@ func (e *Evaluator) resolveTenantConfig(ctx context.Context, tenantID string) (W
 // the matching tier label. Exported so the batch-orchestrator wiring
 // in cmd/sn360-es/main.go can reuse the same mapping without
 // maintaining a hand-synced duplicate.
+//
+// The mapping must stay aligned with every Tier 0 path that sets
+// ForcedCategory + Bypass:
+//
+//   - Trusted gates (sender_internal, vendor_trusted) → TierTrusted.
+//   - Newsletter gate                                 → TierInformational.
+//   - Threat-intel gate (WS-5B.3, see
+//     tier0.applyTIMatch / tier0.SeverityTier):
+//   - LikelyPhishing (severity ≥ 75, block-equivalent) → TierBlocked.
+//   - SuspiciousURL  (severity 50-74, quarantine)      → TierHighRisk.
+//
+// Returning TierTrusted by default would be catastrophic for the
+// threat-intel path: applyTIMatch bypasses the ML stages and short-
+// circuits straight to the verdict, so a missing case here means an
+// IOC-confirmed phishing domain ends up tagged Trusted and the action
+// layer delivers it as safe. Keep this switch exhaustive over the
+// ForcedCategory values that any Tier 0 gate emits, and add a new
+// case (rather than falling through to the default) whenever a new
+// forced category is introduced.
 func ForcedTierFor(c constant.Category) constant.Tier {
 	switch c {
 	case constant.CategoryInternalTrusted, constant.CategoryVendorTrusted:
 		return constant.TierTrusted
 	case constant.CategoryNewsletter:
 		return constant.TierInformational
+	case constant.CategoryLikelyPhishing:
+		// Tier 0 only forces LIKELY_PHISHING from the threat-
+		// intel block-equivalent path (severity ≥ 75). The ML
+		// stages can also emit this category, but they route
+		// through the score-based threshold path and never call
+		// ForcedTierFor — so this branch is unambiguous.
+		return constant.TierBlocked
+	case constant.CategorySuspiciousURL:
+		// Tier 0 only forces SUSPICIOUS_URL from the threat-
+		// intel quarantine-equivalent path (severity 50-74).
+		// HighRisk is a terminal tier (see
+		// bridge.isTerminalTier) so the downstream label
+		// applier / quarantine service routes the message off
+		// the inbox, matching the intended action.
+		return constant.TierHighRisk
 	default:
 		return constant.TierTrusted
 	}

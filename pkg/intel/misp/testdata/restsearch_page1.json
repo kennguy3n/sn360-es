@@ -1,0 +1,49 @@
+{
+  "response": [
+    {
+      "Event": {
+        "uuid": "5b18d3a7-8c14-4f5e-bd1d-1f9c19a3a201",
+        "threat_level_id": "1",
+        "Attribute": [
+          {
+            "type": "url",
+            "value": "http://Bad.Example.COM/dropper",
+            "to_ids": true,
+            "Tag": [{"name": "malware_classification:type=ransomware"}]
+          },
+          {
+            "type": "domain",
+            "value": "bad.example.com",
+            "to_ids": true,
+            "Tag": []
+          },
+          {
+            "type": "ip-src",
+            "value": "203.0.113.42",
+            "to_ids": "1",
+            "Tag": []
+          },
+          {
+            "type": "sha256",
+            "value": "1111111111111111111111111111111111111111111111111111111111111111",
+            "to_ids": true,
+            "Tag": []
+          },
+          {
+            "type": "mutex",
+            "value": "Global\\IgnoreMe",
+            "to_ids": true,
+            "Tag": []
+          },
+          {
+            "type": "url",
+            "value": "http://informational.example.org/x",
+            "to_ids": false,
+            "Tag": []
+          }
+        ],
+        "Tag": [{"name": "tlp:amber"}]
+      }
+    }
+  ]
+}

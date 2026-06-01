@@ -1,0 +1,34 @@
+{
+  "more": true,
+  "next": "cursor-page-2",
+  "objects": [
+    {
+      "type": "indicator",
+      "id": "indicator--1",
+      "pattern": "[domain-name:value = 'EvilTAXII.example']",
+      "confidence": 85,
+      "labels": ["malicious-activity"]
+    },
+    {
+      "type": "indicator",
+      "id": "indicator--2",
+      "pattern": "[url:value = 'http://taxii-malware.example/dropper'] AND [domain-name:value = 'taxii-malware.example']",
+      "confidence": 70
+    },
+    {
+      "type": "indicator",
+      "id": "indicator--3",
+      "pattern": "[ipv4-addr:value = '198.51.100.7']"
+    },
+    {
+      "type": "indicator",
+      "id": "indicator--4",
+      "pattern": "[file:hashes.'SHA-256' = '2222222222222222222222222222222222222222222222222222222222222222']"
+    },
+    {
+      "type": "malware",
+      "id": "malware--1",
+      "name": "irrelevant-non-indicator"
+    }
+  ]
+}
