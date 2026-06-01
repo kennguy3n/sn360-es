@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -414,17 +415,43 @@ func TestCollectExemptionLines_RequiresJustification(t *testing.T) {
 }
 
 // TestTenantScopedTables_CoveredByRLSMigration is a drift guard. The
-// tenantScopedTables map and migrations/0018_row_level_security.up.sql
-// MUST stay in sync — every RLS-protected table is exactly the set
-// of tables this lint refuses to query without a tenant_id predicate.
-// If someone adds a new tenant-scoped table they must update both
-// places, and this test fails loudly if they only update one.
+// tenantScopedTables map and the RLS migrations MUST stay in sync —
+// every RLS-protected table is exactly the set of tables this lint
+// refuses to query without a tenant_id predicate. If someone adds a
+// new tenant-scoped table they must update both places, and this test
+// fails loudly if they only update one.
+//
+// Why we concatenate every *.up.sql under migrations/ instead of
+// reading just 0018: when a later migration introduces a new
+// tenant-scoped table (e.g. 0021 `quarantine_release_audit`), the
+// RLS hookup lives in THAT migration, not in 0018. A test that only
+// reads 0018 would force every new-table migration to also patch
+// 0018, which would inflate the diff and re-issue ALTER statements
+// that the migration runner has already executed. Concatenation
+// keeps each new tenant table responsible for its own RLS rather
+// than time-coupling the schema to one historical migration file.
 func TestTenantScopedTables_CoveredByRLSMigration(t *testing.T) {
-	mig, err := os.ReadFile(filepath.Join("..", "..", "migrations", "0018_row_level_security.up.sql"))
+	matches, err := filepath.Glob(filepath.Join("..", "..", "migrations", "*.up.sql"))
 	if err != nil {
-		t.Fatalf("read migration: %v", err)
+		t.Fatalf("glob migrations: %v", err)
 	}
-	migText := string(mig)
+	if len(matches) == 0 {
+		t.Fatal("no migrations matched; running from wrong cwd?")
+	}
+	// Sort for stable ordering so the failure messages reference
+	// the migration file that introduced the violating table.
+	sort.Strings(matches)
+	var migText string
+	for _, p := range matches {
+		body, readErr := os.ReadFile(p)
+		if readErr != nil {
+			t.Fatalf("read migration %s: %v", p, readErr)
+		}
+		// Newline-separate so a regex anchored on
+		// start-of-line still matches the first line of every
+		// concatenated file.
+		migText += "\n" + string(body)
+	}
 	// Build a single normalised view of the migration with consecutive
 	// whitespace collapsed to single spaces. The migration's
 	// "ALTER TABLE <t> ENABLE ROW LEVEL SECURITY;" statements are
@@ -445,43 +472,34 @@ func TestTenantScopedTables_CoveredByRLSMigration(t *testing.T) {
 		enableMarker := "ALTER TABLE " + tbl + " ENABLE ROW LEVEL SECURITY"
 		forceMarker := "ALTER TABLE " + tbl + " FORCE ROW LEVEL SECURITY"
 		if !strings.Contains(collapsed, enableMarker) {
-			t.Errorf("migration 0018 missing %q for tenant-scoped table %q", enableMarker, tbl)
+			t.Errorf("migrations missing %q for tenant-scoped table %q", enableMarker, tbl)
 		}
 		if !strings.Contains(collapsed, forceMarker) {
-			t.Errorf("migration 0018 missing %q for tenant-scoped table %q (FORCE is required so the table owner does not bypass the policy)", forceMarker, tbl)
+			t.Errorf("migrations missing %q for tenant-scoped table %q (FORCE is required so the table owner does not bypass the policy)", forceMarker, tbl)
 		}
 		// The policy block is also per-table; check for the
 		// CREATE POLICY line so a half-applied edit (ALTER but
 		// no policy) is caught.
 		policyMarker := "CREATE POLICY tenant_isolation ON " + tbl
 		if !strings.Contains(migText, policyMarker) {
-			t.Errorf("migration 0018 missing CREATE POLICY tenant_isolation for tenant-scoped table %q", tbl)
+			t.Errorf("migrations missing CREATE POLICY tenant_isolation for tenant-scoped table %q", tbl)
 		}
 	}
 
-	// Reverse drift guard: every table that migration 0018 has
-	// turned on RLS for MUST also appear in `tenantScopedTables`,
+	// Reverse drift guard: every table the migrations have turned
+	// on RLS for MUST also appear in `tenantScopedTables`,
 	// otherwise the tenant-lint analyser will silently fail to
-	// enforce `WHERE tenant_id = $N` on it. The forward check above
-	// catches "added to lint but forgot the migration"; this reverse
-	// check catches the equally-bad inverse — "added the RLS
-	// migration but forgot the lint" — which would let unscoped SQL
-	// against that table compile cleanly and only fail at runtime
-	// against a real Postgres (and only if the test environment
-	// happens to seed the right multi-tenant data).
-	//
-	// Parsing strategy: scan the migration for every
-	//   `ALTER TABLE <tbl> ENABLE ROW LEVEL SECURITY`
-	// occurrence and assert each <tbl> is in `tenantScopedTables`.
-	// We use ENABLE rather than FORCE because the up migration
-	// always lands ENABLE first; if both are present the check
-	// passes once on ENABLE (which is the gate that activates the
-	// policy at all — FORCE without ENABLE is a no-op).
+	// enforce `WHERE tenant_id = $N` on it. The forward check
+	// above catches "added to lint but forgot the migration";
+	// this reverse check catches the equally-bad inverse — "added
+	// the RLS migration but forgot the lint" — which would let
+	// unscoped SQL against that table compile cleanly and only
+	// fail at runtime against a real Postgres.
 	enableRE := regexp.MustCompile(`(?m)^\s*ALTER\s+TABLE\s+(\w+)\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY\s*;`)
 	for _, m := range enableRE.FindAllStringSubmatch(migText, -1) {
 		tbl := m[1]
 		if _, ok := tenantScopedTables[tbl]; !ok {
-			t.Errorf("migration 0018 enables RLS on table %q but it is NOT in tenantScopedTables "+
+			t.Errorf("a migration enables RLS on table %q but it is NOT in tenantScopedTables "+
 				"in cmd/sn360-es-tenant-lint/main.go — the lint analyser will fail to enforce "+
 				"WHERE tenant_id predicates for it; add %q to the tenantScopedTables map", tbl, tbl)
 		}

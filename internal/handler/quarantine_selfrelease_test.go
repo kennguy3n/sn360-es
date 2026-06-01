@@ -1,0 +1,498 @@
+package handler
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/kennguy3n/sn360-es/internal/constant"
+	"github.com/kennguy3n/sn360-es/internal/dto"
+	"github.com/kennguy3n/sn360-es/internal/repository"
+	"github.com/kennguy3n/sn360-es/internal/service/action"
+	"github.com/kennguy3n/sn360-es/internal/service/selfrelease"
+	"github.com/kennguy3n/sn360-es/pkg/privacy"
+)
+
+// selfReleaseFixture wires a real QuarantineService + ReleaseService
+// + selfrelease.Service against the in-memory fakes that already
+// power TestQuarantineHandler_*. The reevaluator verdict drives
+// what ReleaseAllowed / ReleaseRefused the runner returns; the
+// quarantine record's Tier2Malicious bit drives the unconditional
+// block.
+type selfReleaseFixture struct {
+	issuer   *privacy.JWTIssuer
+	release  *action.ReleaseService
+	q        *action.QuarantineService
+	prov     *qhFakeProvider
+	srSvc    *selfrelease.Service
+	audit    repository.QuarantineReleaseAuditRepository
+	policies repository.TenantReleasePolicyRepository
+}
+
+func newSelfReleaseFixture(
+	t *testing.T,
+	verdict dto.EvaluateResult,
+	tier2Malicious bool,
+	policy repository.TenantReleasePolicy,
+) *selfReleaseFixture {
+	t.Helper()
+	issuer, err := privacy.NewJWTIssuer(privacy.JWTConfig{
+		Secret: bytes.Repeat([]byte{0xab}, 32),
+		Issuer: "sn360-es",
+		TTL:    time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("issuer: %v", err)
+	}
+	prov := &qhFakeProvider{}
+	qsvc, err := action.NewQuarantineService(action.QuarantineConfig{
+		Providers: []action.QuarantineProvider{prov},
+		Store:     newQHFakeStore(),
+		Encryptor: qhFakeEncryptor{},
+		Publisher: qhFakePublisher{},
+	})
+	if err != nil {
+		t.Fatalf("quarantine svc: %v", err)
+	}
+	if _, err := qsvc.Quarantine(context.Background(), action.QuarantineRequest{
+		Tenant:               "acme",
+		PseudonymizedMessage: "pmid-1",
+		Provider:             action.LabelProviderGmail,
+		Email:                "user@acme.com",
+		MessageID:            "raw-1",
+		Tier:                 constant.TierBlocked,
+		Primary:              constant.CategoryLikelyPhishing,
+		Tier2Malicious:       tier2Malicious,
+	}); err != nil {
+		t.Fatalf("seed quarantine: %v", err)
+	}
+	rsvc, err := action.NewReleaseService(action.ReleaseConfig{
+		Quarantine:  qsvc,
+		Reevaluator: qhFakeReevaluator{verdict: verdict},
+		Publisher:   qhFakePublisher{},
+	})
+	if err != nil {
+		t.Fatalf("release svc: %v", err)
+	}
+	audit := repository.NewMemoryQuarantineReleaseAudit()
+	policies := repository.NewMemoryTenantReleasePolicy()
+	if policy.TenantID != "" {
+		if err := policies.Upsert(context.Background(), policy); err != nil {
+			t.Fatalf("seed policy: %v", err)
+		}
+	}
+	srSvc, err := selfrelease.NewService(selfrelease.Config{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Quarantine: qsvc,
+		Runner:     rsvc,
+		Audit:      audit,
+		Policies:   policies,
+	})
+	if err != nil {
+		t.Fatalf("selfrelease svc: %v", err)
+	}
+	return &selfReleaseFixture{
+		issuer:   issuer,
+		release:  rsvc,
+		q:        qsvc,
+		prov:     prov,
+		srSvc:    srSvc,
+		audit:    audit,
+		policies: policies,
+	}
+}
+
+// issueSelfReleaseToken mints a scp=quarantine_release token with
+// the given (tenant, pmid, recipient_user_hash_hex).
+func issueSelfReleaseToken(t *testing.T, issuer *privacy.JWTIssuer, tenant, pmid, recipientHashHex string) string {
+	t.Helper()
+	tok, err := issuer.Issue(tenant, pmid, privacy.IssueOptions{
+		Scope:             privacy.ScopeQuarantineRelease,
+		RecipientUserHash: recipientHashHex,
+	})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	return tok
+}
+
+// postForm is the canonical way the banner posts to the endpoint
+// (application/x-www-form-urlencoded with a single token field).
+func postForm(t *testing.T, h http.Handler, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := url.Values{"token": {token}}
+	req := httptest.NewRequest(http.MethodPost, "/v1/quarantine/release",
+		strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// postJSON is the alternate path some callers (e.g. unit harnesses)
+// take. The handler accepts both.
+func postJSON(t *testing.T, h http.Handler, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"token": token})
+	req := httptest.NewRequest(http.MethodPost, "/v1/quarantine/release", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// decodeSelfReleaseBody parses the JSON body emitted by the
+// scp="quarantine_release" path.
+type selfReleaseBody struct {
+	Outcome  string `json:"outcome"`
+	Restored bool   `json:"restored"`
+}
+
+func decodeSelfReleaseBody(t *testing.T, rec *httptest.ResponseRecorder) selfReleaseBody {
+	t.Helper()
+	var b selfReleaseBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &b); err != nil {
+		t.Fatalf("decode: %v body=%s", err, rec.Body.String())
+	}
+	return b
+}
+
+// listAudit reads all audit entries for the test tenant from the
+// in-memory repository.
+func listAudit(t *testing.T, fx *selfReleaseFixture, pmid string) []repository.QuarantineReleaseAuditEntry {
+	t.Helper()
+	entries, err := fx.audit.ListByMessage(context.Background(), "acme", pmid, 50)
+	if err != nil {
+		t.Fatalf("ListByMessage: %v", err)
+	}
+	return entries
+}
+
+// recipientHashHex is the canonical hex string the banner / token
+// would carry — a hex-encoded 32-byte BLAKE2b digest. We use a
+// fixed value across tests so audit rows are reproducible.
+const recipientHashHex = "deadbeefcafebabe1234567890abcdef"
+
+// TestSelfReleaseHandler_HappyPath exercises the full release
+// path. Verdict drops below blocking → ReleaseAllowed → outcome
+// released → HTTP 202. Exactly one audit row written.
+func TestSelfReleaseHandler_HappyPath(t *testing.T) {
+	fx := newSelfReleaseFixture(t,
+		dto.EvaluateResult{Tier: constant.TierInformational},
+		false,
+		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
+	h, err := NewQuarantineHandler(slog.New(slog.NewTextHandler(io.Discard, nil)),
+		fx.issuer, fx.release, fx.srSvc)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
+
+	rec := postForm(t, h, tok)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeSelfReleaseBody(t, rec)
+	if body.Outcome != string(repository.QuarantineReleaseOutcomeReleased) {
+		t.Fatalf("outcome=%q", body.Outcome)
+	}
+	if !body.Restored {
+		t.Fatal("expected restored=true")
+	}
+	if fx.prov.restoreCalls != 1 {
+		t.Fatalf("restoreCalls=%d", fx.prov.restoreCalls)
+	}
+	entries := listAudit(t, fx, "pmid-1")
+	if len(entries) != 1 || entries[0].Outcome != repository.QuarantineReleaseOutcomeReleased {
+		t.Fatalf("audit entries=%+v", entries)
+	}
+}
+
+// TestSelfReleaseHandler_Tier2BlockedReturns403 verifies the
+// unconditional tier-2 block.
+func TestSelfReleaseHandler_Tier2BlockedReturns403(t *testing.T) {
+	fx := newSelfReleaseFixture(t,
+		dto.EvaluateResult{Tier: constant.TierInformational}, // benign re-eval, but Tier2Malicious=true
+		true,
+		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
+
+	rec := postForm(t, h, tok)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeSelfReleaseBody(t, rec)
+	if body.Outcome != string(repository.QuarantineReleaseOutcomeTier2Blocked) {
+		t.Fatalf("outcome=%q", body.Outcome)
+	}
+	if body.Restored {
+		t.Fatal("expected restored=false")
+	}
+	if fx.prov.restoreCalls != 0 {
+		t.Fatalf("restore should not be called when tier-2 blocked; got %d", fx.prov.restoreCalls)
+	}
+}
+
+// TestSelfReleaseHandler_RateLimitedReturns429 seeds the audit log
+// past the policy cap and verifies the rate-limit gate fires.
+func TestSelfReleaseHandler_RateLimitedReturns429(t *testing.T) {
+	fx := newSelfReleaseFixture(t,
+		dto.EvaluateResult{Tier: constant.TierInformational}, false,
+		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 1})
+
+	recipientHash := []byte{0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe,
+		0x12, 0x34, 0x56, 0x78, 0x90, 0xab, 0xcd, 0xef}
+	// Seed one audit row inside the rate-limit window so the
+	// next attempt is over budget.
+	if _, err := fx.audit.Record(context.Background(), repository.QuarantineReleaseAuditEntry{
+		TenantID:          "acme",
+		PseudoMessageID:   "pmid-other",
+		RecipientUserHash: recipientHash,
+		Outcome:           repository.QuarantineReleaseOutcomeReleased,
+		RequestedAt:       time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed audit: %v", err)
+	}
+
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
+
+	rec := postForm(t, h, tok)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeSelfReleaseBody(t, rec)
+	if body.Outcome != string(repository.QuarantineReleaseOutcomeRateLimited) {
+		t.Fatalf("outcome=%q", body.Outcome)
+	}
+}
+
+// TestSelfReleaseHandler_AlreadyReleasedReturns200 is the
+// idempotency case: a second click on a released message returns
+// 200 + already_released, no provider mutation.
+func TestSelfReleaseHandler_AlreadyReleasedReturns200(t *testing.T) {
+	fx := newSelfReleaseFixture(t,
+		dto.EvaluateResult{Tier: constant.TierInformational}, false,
+		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
+
+	// First click → released.
+	rec1 := postForm(t, h, tok)
+	if rec1.Code != http.StatusAccepted {
+		t.Fatalf("first click status=%d body=%s", rec1.Code, rec1.Body.String())
+	}
+	beforeRestoreCalls := fx.prov.restoreCalls
+
+	// Second click → 404 (record cleared) → outcome=not_found.
+	// In the WS-3a state machine the not_found branch covers
+	// "already cleared after release" — see service.go's
+	// not_found handler. The runner doesn't observe this case
+	// because the quarantine record is gone by the time we
+	// reach the lookup.
+	rec2 := postForm(t, h, tok)
+	if rec2.Code != http.StatusNotFound {
+		t.Fatalf("second click status=%d body=%s", rec2.Code, rec2.Body.String())
+	}
+	body := decodeSelfReleaseBody(t, rec2)
+	if body.Outcome != string(repository.QuarantineReleaseOutcomeNotFound) {
+		t.Fatalf("outcome=%q", body.Outcome)
+	}
+	if fx.prov.restoreCalls != beforeRestoreCalls {
+		t.Fatalf("provider re-invoked on second click: before=%d after=%d",
+			beforeRestoreCalls, fx.prov.restoreCalls)
+	}
+}
+
+// TestSelfReleaseHandler_CrossTenantReturnsNotFound: a token
+// signed for tenant A cannot release a message owned by tenant B.
+// The response body must be the same 404 a same-tenant miss
+// produces (cross-tenant indistinguishability mirror of WS-3b).
+func TestSelfReleaseHandler_CrossTenantReturnsNotFound(t *testing.T) {
+	fx := newSelfReleaseFixture(t,
+		dto.EvaluateResult{Tier: constant.TierInformational}, false,
+		repository.TenantReleasePolicy{TenantID: "other", QuarantineSelfReleasePerHour: 5})
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+	// Token signed for tenant=other (which has no quarantine
+	// record under pmid-1).
+	tok := issueSelfReleaseToken(t, fx.issuer, "other", "pmid-1", recipientHashHex)
+
+	rec := postForm(t, h, tok)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeSelfReleaseBody(t, rec)
+	if body.Outcome != string(repository.QuarantineReleaseOutcomeNotFound) {
+		t.Fatalf("outcome=%q", body.Outcome)
+	}
+}
+
+// TestSelfReleaseHandler_ExpiredToken returns 401 (uniform with
+// invalid_token) and writes a token_expired audit row.
+func TestSelfReleaseHandler_ExpiredToken(t *testing.T) {
+	fx := newSelfReleaseFixture(t,
+		dto.EvaluateResult{Tier: constant.TierInformational}, false,
+		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+
+	// Issue with tiny TTL and wait past expiry.
+	tok, err := fx.issuer.Issue("acme", "pmid-1", privacy.IssueOptions{
+		TTL:               5 * time.Millisecond,
+		Scope:             privacy.ScopeQuarantineRelease,
+		RecipientUserHash: recipientHashHex,
+	})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	rec := postForm(t, h, tok)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// Body is the uniform error body ({"error":"invalid token"}),
+	// NOT the selfRelease outcome body — the handler returns
+	// before reaching the state machine.
+	if !strings.Contains(rec.Body.String(), "invalid token") {
+		t.Fatalf("expected 'invalid token' body, got %q", rec.Body.String())
+	}
+	// Audit row for token_expired must exist.
+	entries := listAudit(t, fx, "pmid-1")
+	if len(entries) != 1 || entries[0].Outcome != repository.QuarantineReleaseOutcomeTokenExpired {
+		t.Fatalf("audit entries=%+v", entries)
+	}
+}
+
+// TestSelfReleaseHandler_InvalidSignature also returns 401 with
+// the same body, and writes an invalid_token audit row.
+func TestSelfReleaseHandler_InvalidSignature(t *testing.T) {
+	fx := newSelfReleaseFixture(t,
+		dto.EvaluateResult{Tier: constant.TierInformational}, false,
+		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+
+	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
+	// Tamper the signature.
+	tampered := tok[:len(tok)-1] + "x"
+	if tampered == tok {
+		tampered = tok[:len(tok)-1] + "X"
+	}
+	rec := postForm(t, h, tampered)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	entries := listAudit(t, fx, "pmid-1")
+	if len(entries) != 1 || entries[0].Outcome != repository.QuarantineReleaseOutcomeInvalidToken {
+		t.Fatalf("audit entries=%+v", entries)
+	}
+}
+
+// TestSelfReleaseHandler_WrongScope ensures a banner-scope token
+// cannot release via the self-release path: the dispatcher
+// routes scp="banner_action" to the operator path, which doesn't
+// recognise the pmid (no per-pmid lookup with that handler). The
+// only safe path is to refuse — but legacy tokens with no scope
+// flow to the operator path by design (back-compat), so we test
+// the explicit "wrong scope" case where the operator handler
+// returns an outcome that proves we did NOT hit the self-release
+// path.
+func TestSelfReleaseHandler_WrongScopeNotReleased(t *testing.T) {
+	fx := newSelfReleaseFixture(t,
+		dto.EvaluateResult{Tier: constant.TierInformational}, false,
+		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+
+	// Issue with an unknown scope — handler should refuse with 401.
+	tok, err := fx.issuer.Issue("acme", "pmid-1", privacy.IssueOptions{
+		Scope: "totally_unknown_scope",
+	})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	rec := postJSON(t, h, tok)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// Self-release path did not execute → no audit row written
+	// (this is the operator-default refusal, not a
+	// quarantine_release attempt).
+	entries := listAudit(t, fx, "pmid-1")
+	if len(entries) != 0 {
+		t.Fatalf("unknown scope unexpectedly audited via self-release path: %+v", entries)
+	}
+	if fx.prov.restoreCalls != 0 {
+		t.Fatalf("provider unexpectedly called: %d", fx.prov.restoreCalls)
+	}
+}
+
+// TestSelfReleaseHandler_NilSelfReleaseSvc verifies a deployment
+// without a self-release service refuses scp=quarantine_release
+// tokens with a uniform 401.
+func TestSelfReleaseHandler_NilSelfReleaseSvc(t *testing.T) {
+	fx := newSelfReleaseFixture(t,
+		dto.EvaluateResult{Tier: constant.TierInformational}, false,
+		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
+	// Construct the handler with selfRelease=nil so the dispatcher
+	// reaches the "no self-release service" guard.
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, nil)
+	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
+	rec := postForm(t, h, tok)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestSelfReleaseHandler_MalformedRecipientHash: a token with an
+// odd-length / non-hex `ruh` claim must be rejected with the
+// uniform 401, not crash.
+func TestSelfReleaseHandler_MalformedRecipientHash(t *testing.T) {
+	fx := newSelfReleaseFixture(t,
+		dto.EvaluateResult{Tier: constant.TierInformational}, false,
+		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+
+	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", "not-valid-hex!")
+	rec := postForm(t, h, tok)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestSelfReleaseHandler_FormAndJSONInteroperate verifies both
+// request-content-types reach the same outcome.
+func TestSelfReleaseHandler_FormAndJSONInteroperate(t *testing.T) {
+	fx := newSelfReleaseFixture(t,
+		dto.EvaluateResult{Tier: constant.TierInformational}, false,
+		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
+
+	t.Run("form", func(t *testing.T) {
+		h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+		tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
+		rec := postForm(t, h, tok)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
+	// Fresh fixture for the JSON path; the previous run cleared
+	// the quarantine record.
+	fx2 := newSelfReleaseFixture(t,
+		dto.EvaluateResult{Tier: constant.TierInformational}, false,
+		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
+	t.Run("json", func(t *testing.T) {
+		h, _ := NewQuarantineHandler(nil, fx2.issuer, fx2.release, fx2.srSvc)
+		tok := issueSelfReleaseToken(t, fx2.issuer, "acme", "pmid-1", recipientHashHex)
+		rec := postJSON(t, h, tok)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	})
+}

@@ -120,3 +120,123 @@ func TestJWTVerifyEnforcesIssuer(t *testing.T) {
 		t.Error("token should not verify under a different issuer string")
 	}
 }
+
+// TestJWTIssueWithScopeAndRecipient covers the WS-3a additions:
+// the `scp` and `ruh` claims round-trip through Issue → Verify.
+func TestJWTIssueWithScopeAndRecipient(t *testing.T) {
+	iss := mustIssuer(t, time.Hour)
+	tok, err := iss.Issue("tenant-1", "pmid-9", IssueOptions{
+		Scope:             ScopeQuarantineRelease,
+		RecipientUserHash: "deadbeefcafebabe",
+	})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	claims, err := iss.Verify(tok)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if claims.Scope != ScopeQuarantineRelease {
+		t.Errorf("scope=%q want=%q", claims.Scope, ScopeQuarantineRelease)
+	}
+	if claims.RecipientUserHash != "deadbeefcafebabe" {
+		t.Errorf("ruh=%q want deadbeefcafebabe", claims.RecipientUserHash)
+	}
+}
+
+// TestJWTVerifyDetail_DistinguishesExpiredFromInvalid is the key
+// invariant for the WS-3a audit layer: an expired token surfaces
+// Expired=true so the handler can write outcome=token_expired,
+// while signature-invalid / malformed tokens surface Expired=false
+// so the handler writes outcome=invalid_token. Both still return
+// a non-nil error so callers can keep using Verify when they
+// don't need the distinction.
+func TestJWTVerifyDetail_DistinguishesExpiredFromInvalid(t *testing.T) {
+	iss := mustIssuer(t, time.Hour)
+
+	t.Run("expired flag set on expired token", func(t *testing.T) {
+		// Mint with a 1ms TTL then wait past expiry. Issue's
+		// ttl<=0 branch falls through to the issuer default,
+		// so we cannot pass a negative TTL through the public
+		// API — a tiny positive TTL + sleep is the canonical
+		// way to test expiry without reaching into internals.
+		tok, err := iss.Issue("t", "m", IssueOptions{TTL: 5 * time.Millisecond})
+		if err != nil {
+			t.Fatalf("issue: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+		res, err := iss.VerifyDetail(tok)
+		if err == nil {
+			t.Fatal("expired token should produce a non-nil error")
+		}
+		if !res.Expired {
+			t.Fatal("Expired must be true for past-exp tokens")
+		}
+	})
+
+	t.Run("invalid signature surfaces Expired=false", func(t *testing.T) {
+		tok, err := iss.Issue("t", "m", IssueOptions{})
+		if err != nil {
+			t.Fatalf("issue: %v", err)
+		}
+		// Tamper with the signature by replacing the trailing
+		// 8 chars wholesale. A single-byte swap is not enough
+		// because base64url decoding may absorb a one-bit
+		// difference without changing the decoded signature
+		// bytes (different base64 chars can map to the same
+		// bits when one ends in padding-equivalent bits).
+		// Eight chars guarantees ≥6 decoded bytes change.
+		if len(tok) < 16 {
+			t.Fatalf("token too short to tamper: %q", tok)
+		}
+		tampered := tok[:len(tok)-8] + "AAAAAAAA"
+		if tampered == tok {
+			tampered = tok[:len(tok)-8] + "BBBBBBBB"
+		}
+		res, err := iss.VerifyDetail(tampered)
+		if err == nil {
+			t.Fatal("tampered token must error")
+		}
+		if res.Expired {
+			t.Fatal("Expired must be false for signature failures")
+		}
+	})
+
+	t.Run("malformed surfaces Expired=false", func(t *testing.T) {
+		res, err := iss.VerifyDetail("not-a-jwt")
+		if err == nil {
+			t.Fatal("malformed token must error")
+		}
+		if res.Expired {
+			t.Fatal("Expired must be false for malformed tokens")
+		}
+	})
+
+	t.Run("empty token rejected uniformly", func(t *testing.T) {
+		_, err := iss.VerifyDetail("")
+		if err == nil {
+			t.Fatal("empty token must error")
+		}
+	})
+}
+
+// TestJWTUnsetScopeDoesNotEqualQuarantineRelease verifies that a
+// missing `scp` claim is treated as ScopeBannerAction in upstream
+// handlers (we check the claim string here; the dispatcher in
+// internal/handler/quarantine.go applies the default). This is the
+// scope-confusion guard that prevents a leaked banner token from
+// being replayed against the self-release endpoint.
+func TestJWTUnsetScopeDoesNotEqualQuarantineRelease(t *testing.T) {
+	iss := mustIssuer(t, time.Hour)
+	tok, err := iss.Issue("t", "m", IssueOptions{}) // no scope
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	claims, err := iss.Verify(tok)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if claims.Scope == ScopeQuarantineRelease {
+		t.Fatal("unset scope must not equal ScopeQuarantineRelease")
+	}
+}

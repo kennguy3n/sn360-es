@@ -32,6 +32,8 @@ func NewInMemoryRegistry() *Registry {
 		SyncCheckpoints:        newMemorySyncCheckpoints(),
 		BehavioralBaselines:    newMemoryBehavioralBaselines(),
 		OrgGraphs:              newMemoryOrgGraphs(),
+		QuarantineReleaseAudit: NewMemoryQuarantineReleaseAudit(),
+		TenantReleasePolicies:  NewMemoryTenantReleasePolicy(),
 	}
 }
 

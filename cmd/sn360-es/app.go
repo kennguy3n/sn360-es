@@ -27,6 +27,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/investigation"
 	"github.com/kennguy3n/sn360-es/internal/service/onboarding"
 	"github.com/kennguy3n/sn360-es/internal/service/predict"
+	"github.com/kennguy3n/sn360-es/internal/service/selfrelease"
 	"github.com/kennguy3n/sn360-es/internal/service/tier0"
 	"github.com/kennguy3n/sn360-es/internal/service/tier1"
 	"github.com/kennguy3n/sn360-es/internal/service/worker"
@@ -81,6 +82,7 @@ type application struct {
 	bannerRenderer    *action.BannerRenderer
 	feedbackSvc       *action.FeedbackService
 	releaseSvc        *action.ReleaseService
+	selfReleaseSvc    *selfrelease.Service
 	urlRewriter       *action.URLRewriter
 	microLessonSvc    *education.MicroLessonService
 	simulationEng     *education.SimulationEngine
@@ -848,6 +850,34 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 			})
 			if rerr == nil {
 				app.releaseSvc = rsvc
+				// Wire the WS-3a self-service release
+				// coordinator on top of the same
+				// ReleaseService used by the SOC-operator
+				// flow. Only register when the audit /
+				// policy repos are available — a
+				// deployment without a durable repository
+				// must NOT accept self-release tokens,
+				// because there is nowhere to record
+				// audit rows and rate-limit counters.
+				if app.repos != nil &&
+					app.repos.QuarantineReleaseAudit != nil &&
+					app.repos.TenantReleasePolicies != nil {
+					selfSvc, srErr := selfrelease.NewService(selfrelease.Config{
+						Logger:     logger,
+						Quarantine: qsvc,
+						Runner:     rsvc,
+						Audit:      app.repos.QuarantineReleaseAudit,
+						Policies:   app.repos.TenantReleasePolicies,
+					})
+					if srErr == nil {
+						app.selfReleaseSvc = selfSvc
+					} else {
+						logger.Warn("sn360-es: self-release service init failed",
+							slog.Any("error", srErr))
+					}
+				} else {
+					logger.Info("sn360-es: self-release service skipped (audit / policy repository not configured)")
+				}
 			} else {
 				logger.Warn("sn360-es: release service init failed", slog.Any("error", rerr))
 			}

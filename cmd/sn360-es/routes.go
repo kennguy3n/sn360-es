@@ -73,9 +73,16 @@ func buildMux(app *application) (http.Handler, error) {
 	mux.HandleFunc("/v1/predict/recipient", predictH.ServeRecipient)
 	mux.HandleFunc("/v1/predict/open", predictH.ServeOpen)
 
-	// Quarantine release.
+	// Quarantine release. The handler dispatches on the token's
+	// `scp` claim: the legacy scp="banner_action" (or unset)
+	// scope routes to the SOC-operator ReleaseService; the WS-3a
+	// scp="quarantine_release" scope routes to the recipient
+	// self-service coordinator. selfReleaseSvc may be nil in
+	// deployments without a durable audit / policy repository;
+	// the handler refuses self-release tokens with a uniform
+	// 401 in that case so no audit-less code path is reachable.
 	if app.jwtIssuer != nil {
-		if qh, qerr := handler.NewQuarantineHandler(logger, app.jwtIssuer, app.releaseSvc); qerr == nil {
+		if qh, qerr := handler.NewQuarantineHandler(logger, app.jwtIssuer, app.releaseSvc, app.selfReleaseSvc); qerr == nil {
 			mux.Handle("/v1/quarantine/release", qh)
 		} else {
 			logger.Warn("sn360-es: quarantine handler init failed", slog.Any("error", qerr))

@@ -216,7 +216,7 @@ func TestQuarantineHandler_ReleaseAllowed(t *testing.T) {
 		Tier:    constant.TierInformational,
 		Primary: constant.CategoryFirstContactExternal,
 	})
-	h, err := NewQuarantineHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), fx.issuer, fx.release)
+	h, err := NewQuarantineHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), fx.issuer, fx.release, nil)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestQuarantineHandler_ReleaseRefused(t *testing.T) {
 		Tier:    constant.TierBlocked,
 		Primary: constant.CategoryBECImpersonation,
 	})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, nil)
 	tok := issueQuarantineToken(t, fx.issuer, "acme", "pmid-1")
 	body, _ := json.Marshal(map[string]string{"token": tok})
 
@@ -274,7 +274,7 @@ func TestQuarantineHandler_ReleaseRefused(t *testing.T) {
 
 func TestQuarantineHandler_NotFound(t *testing.T) {
 	fx := newQuarantineFixture(t, dto.EvaluateResult{Tier: constant.TierInformational})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, nil)
 	// Issue a token for an unknown pseudonymised message id so the
 	// release service returns NotFound.
 	tok := issueQuarantineToken(t, fx.issuer, "acme", "missing")
@@ -290,7 +290,7 @@ func TestQuarantineHandler_NotFound(t *testing.T) {
 
 func TestQuarantineHandler_Rejections(t *testing.T) {
 	fx := newQuarantineFixture(t, dto.EvaluateResult{Tier: constant.TierInformational})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, nil)
 
 	cases := []struct {
 		name   string
@@ -374,7 +374,7 @@ func TestQuarantineHandler_PropagatesCorrelationID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("release svc: %v", err)
 	}
-	h, err := NewQuarantineHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), issuer, rsvc)
+	h, err := NewQuarantineHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), issuer, rsvc, nil)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -411,11 +411,11 @@ func TestQuarantineHandler_PropagatesCorrelationID(t *testing.T) {
 }
 
 func TestQuarantineHandler_RequiresDeps(t *testing.T) {
-	if _, err := NewQuarantineHandler(nil, nil, nil); err == nil {
+	if _, err := NewQuarantineHandler(nil, nil, nil, nil); err == nil {
 		t.Fatal("expected error when verifier is nil")
 	}
 	issuer, _ := privacy.NewJWTIssuer(privacy.JWTConfig{Secret: bytes.Repeat([]byte{1}, 32)})
-	if _, err := NewQuarantineHandler(nil, issuer, nil); err == nil {
+	if _, err := NewQuarantineHandler(nil, issuer, nil, nil); err == nil {
 		t.Fatal("expected error when release service is nil")
 	}
 }
