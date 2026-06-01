@@ -340,7 +340,12 @@ func writeSelfReleaseOutcome(w http.ResponseWriter, outcome repository.Quarantin
 		status = http.StatusOK
 	case repository.QuarantineReleaseOutcomeRateLimited:
 		status = http.StatusTooManyRequests
-	case repository.QuarantineReleaseOutcomeTier2Blocked:
+	case repository.QuarantineReleaseOutcomeTier2Blocked,
+		repository.QuarantineReleaseOutcomeReleaseRefused:
+		// Both safety-stack refusals surface as 403. The
+		// audit row distinguishes them (persisted-bit gate
+		// vs. runner re-eval) for SOC review while the wire
+		// remains uniform.
 		status = http.StatusForbidden
 	case repository.QuarantineReleaseOutcomeNotFound,
 		repository.QuarantineReleaseOutcomeTokenExpired,

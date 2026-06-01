@@ -241,6 +241,52 @@ func TestSelfReleaseHandler_Tier2BlockedReturns403(t *testing.T) {
 	}
 }
 
+// TestSelfReleaseHandler_RunnerRefusedReturns403ReleaseRefused
+// covers the case where Tier2Malicious=false at lookup (so the
+// persisted-bit gate doesn't fire) but the runner's re-evaluation
+// returns ReleaseRefused (verdict still at/above MinReleaseTier).
+// The wire response must be 403 (same as Tier2Blocked) but the
+// audit row MUST be `release_refused`, NOT `tier2_blocked` — the
+// audit column distinguishes the two safety-stack refusal paths
+// for SOC drill-down without leaking which classifier said no to
+// the recipient.
+func TestSelfReleaseHandler_RunnerRefusedReturns403ReleaseRefused(t *testing.T) {
+	fx := newSelfReleaseFixture(t,
+		// Re-eval comes back still at TierBlocked (>=
+		// default MinReleaseTier=TierBlocked → refused).
+		dto.EvaluateResult{Tier: constant.TierBlocked},
+		// Persisted Tier2Malicious is FALSE: the persisted
+		// gate at lookup time would have let us through.
+		false,
+		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
+
+	rec := postForm(t, h, tok)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeSelfReleaseBody(t, rec)
+	if body.Outcome != string(repository.QuarantineReleaseOutcomeReleaseRefused) {
+		t.Fatalf("outcome=%q want=%q (audit must distinguish runner refusal from persisted tier-2 block)",
+			body.Outcome, repository.QuarantineReleaseOutcomeReleaseRefused)
+	}
+	if body.Restored {
+		t.Fatal("expected restored=false on runner refusal")
+	}
+	if fx.prov.restoreCalls != 0 {
+		t.Fatalf("restore must not run when the runner refused; got %d", fx.prov.restoreCalls)
+	}
+	entries := listAudit(t, fx, "pmid-1")
+	if len(entries) != 1 {
+		t.Fatalf("audit entries=%+v want exactly one row", entries)
+	}
+	if entries[0].Outcome != repository.QuarantineReleaseOutcomeReleaseRefused {
+		t.Fatalf("audit outcome=%q want=%q (regression guard: do NOT collapse onto tier2_blocked)",
+			entries[0].Outcome, repository.QuarantineReleaseOutcomeReleaseRefused)
+	}
+}
+
 // TestSelfReleaseHandler_RateLimitedReturns429 seeds the audit log
 // past the policy cap and verifies the rate-limit gate fires.
 func TestSelfReleaseHandler_RateLimitedReturns429(t *testing.T) {

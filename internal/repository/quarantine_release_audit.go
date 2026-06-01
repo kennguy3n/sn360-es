@@ -31,9 +31,29 @@ const (
 	// per tenant policy).
 	QuarantineReleaseOutcomeRateLimited QuarantineReleaseOutcome = "rate_limited"
 	// QuarantineReleaseOutcomeTier2Blocked records an attempt
-	// against a message the tier-2 SLM classified as malicious.
-	// Unconditional — no tenant policy overrides this gate.
+	// against a message that the persisted tier-2 SLM verdict
+	// (`QuarantineRecord.Tier2Malicious=true`) classified as
+	// malicious at quarantine time. Unconditional — no tenant
+	// policy overrides this gate. Reserved exclusively for the
+	// persisted-bit gate caught at lookup time; for any
+	// safety-stack refusal that surfaces from the runner's
+	// re-evaluation (tier-1 still over threshold, fresh tier-2
+	// verdict, policy gate, …) use
+	// QuarantineReleaseOutcomeReleaseRefused instead so SOC
+	// queries `WHERE outcome = 'tier2_blocked'` get only true
+	// tier-2 verdicts.
 	QuarantineReleaseOutcomeTier2Blocked QuarantineReleaseOutcome = "tier2_blocked"
+	// QuarantineReleaseOutcomeReleaseRefused records an attempt
+	// the shared release runner refused at re-evaluation time
+	// for a reason OTHER than the persisted Tier2Malicious bit
+	// (e.g. tier-1 score still above threshold, fresh tier-2
+	// verdict differing from the persisted bit, policy gate).
+	// Distinct from Tier2Blocked so the audit column accurately
+	// reflects which classifier said no; the wire response is
+	// the same 403 in both cases (cross-tenant
+	// indistinguishability is preserved by the handler's
+	// outcome→status mapping).
+	QuarantineReleaseOutcomeReleaseRefused QuarantineReleaseOutcome = "release_refused"
 	// QuarantineReleaseOutcomeTokenExpired records a 401 caused by
 	// an `exp`-claim violation. The client-visible response body is
 	// the same as for InvalidToken — only the audit row
@@ -66,6 +86,7 @@ var AllQuarantineReleaseOutcomes = []QuarantineReleaseOutcome{
 	QuarantineReleaseOutcomeReleased,
 	QuarantineReleaseOutcomeRateLimited,
 	QuarantineReleaseOutcomeTier2Blocked,
+	QuarantineReleaseOutcomeReleaseRefused,
 	QuarantineReleaseOutcomeTokenExpired,
 	QuarantineReleaseOutcomeInvalidToken,
 	QuarantineReleaseOutcomeAlreadyReleased,

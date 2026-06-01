@@ -2,9 +2,61 @@ package repository
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
+
+// TestQuarantineReleaseOutcome_EnumMatchesMigrationCheckConstraint
+// is a drift guard: the Go enum and the SQL `CHECK (outcome IN
+// (...))` literal in `migrations/0021_quarantine_release_audit.up.sql`
+// must list the same set of outcomes, in either order. Any addition
+// to one without the other will fail this test and prevent a half-
+// landed enum extension from sneaking into a release.
+func TestQuarantineReleaseOutcome_EnumMatchesMigrationCheckConstraint(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+	body, err := os.ReadFile(filepath.Join(migrationsDir, "0021_quarantine_release_audit.up.sql"))
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	src := string(body)
+	const marker = "CHECK (outcome IN ("
+	idx := strings.Index(src, marker)
+	if idx < 0 {
+		t.Fatalf("CHECK clause marker %q not found in migration", marker)
+	}
+	tail := src[idx+len(marker):]
+	endIdx := strings.Index(tail, "))")
+	if endIdx < 0 {
+		t.Fatalf("CHECK clause closing %q not found in migration", "))")
+	}
+	clause := tail[:endIdx]
+
+	want := make(map[string]bool, len(AllQuarantineReleaseOutcomes))
+	for _, o := range AllQuarantineReleaseOutcomes {
+		want[string(o)] = false
+	}
+	for _, raw := range strings.Split(clause, ",") {
+		v := strings.Trim(strings.TrimSpace(raw), "'")
+		if v == "" {
+			continue
+		}
+		if _, ok := want[v]; !ok {
+			t.Errorf("migration CHECK constraint has %q but Go enum does not", v)
+			continue
+		}
+		want[v] = true
+	}
+	for o, seen := range want {
+		if !seen {
+			t.Errorf("Go enum has %q but migration CHECK constraint does not", o)
+		}
+	}
+}
 
 // TestMemoryQuarantineReleaseAudit_RoundTrip is the in-memory
 // repository's full lifecycle test:

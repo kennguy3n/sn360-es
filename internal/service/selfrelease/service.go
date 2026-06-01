@@ -308,21 +308,25 @@ func (s *Service) fromRunnerOutcome(ctx context.Context, req Request, requestedA
 			"quarantine record disappeared between lookup and claim",
 			false)
 	case action.ReleaseRefused:
-		// Re-evaluation came back still-blocking. From the
-		// recipient's POV this is the tier-2 outcome
-		// catching up: even if the persisted Tier2Malicious
-		// bit was false at quarantine time, the re-eval has
-		// fresh data and refuses release. Audit as
-		// tier2_blocked so the SOC view rolls up consistently
-		// — "the safety stack said no" — regardless of
-		// whether the no came from the persisted bit or the
-		// fresh re-eval.
+		// Re-evaluation came back still-blocking. The
+		// recipient sees a 403 (same as Tier2Blocked) but
+		// the audit row is recorded under
+		// `release_refused`, NOT `tier2_blocked`: the
+		// runner's refusal can be for any reason the safety
+		// stack carries (tier-1 score still above threshold,
+		// fresh tier-2 verdict differing from the persisted
+		// bit, policy gate, …), and tagging all of them as
+		// `tier2_blocked` would overload the column —
+		// operators querying `WHERE outcome =
+		// 'tier2_blocked'` expect ONLY true tier-2 verdicts
+		// caught at lookup time. The `reason` field carries
+		// the runner's explanations for SOC drill-down.
 		reason := "re-evaluation refused release"
 		if len(outcome.Explanations) > 0 {
 			reason = fmt.Sprintf("re-evaluation refused release: %v", outcome.Explanations)
 		}
 		return s.audited(ctx, req, requestedAt,
-			repository.QuarantineReleaseOutcomeTier2Blocked,
+			repository.QuarantineReleaseOutcomeReleaseRefused,
 			reason, false)
 	default:
 		// Unknown reason from the runner is treated as

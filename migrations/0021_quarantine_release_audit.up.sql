@@ -31,9 +31,17 @@
 --   prevented RANGE partitioning on `communication_histories`.
 --
 -- Why a CHECK constraint on outcome.
---   The outcome enum has 7 known values
---   (released | rate_limited | tier2_blocked | token_expired |
---   invalid_token | already_released | not_found). A CHECK
+--   The outcome enum has 8 known values
+--   (released | rate_limited | tier2_blocked | release_refused |
+--   token_expired | invalid_token | already_released | not_found).
+--   `tier2_blocked` is reserved exclusively for the persisted
+--   `Tier2Malicious=true` gate caught at lookup time;
+--   `release_refused` covers the runner's re-evaluation
+--   refusing release for any other reason (tier-1 score still
+--   above threshold, fresh tier-2 verdict, policy gate, …) so
+--   SOC queries `WHERE outcome = 'tier2_blocked'` get only
+--   true tier-2 verdicts and `WHERE outcome = 'release_refused'`
+--   get safety-stack refusals more broadly. A CHECK
 --   constraint locks the wire surface against typos and lets the
 --   planner treat outcome as a low-cardinality discrete column for
 --   any future per-outcome rollup. We use a CHECK rather than a
@@ -99,6 +107,7 @@ CREATE TABLE quarantine_release_audit (
             'released',
             'rate_limited',
             'tier2_blocked',
+            'release_refused',
             'token_expired',
             'invalid_token',
             'already_released',

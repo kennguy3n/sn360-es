@@ -402,9 +402,12 @@ func TestService_RunnerOutcomeMapping(t *testing.T) {
 			want:   repository.QuarantineReleaseOutcomeNotFound,
 		},
 		{
-			name:   "refused -> tier2_blocked",
-			runOut: action.ReleaseOutcome{Reason: action.ReleaseRefused, Explanations: []string{"reeval said no"}},
-			want:   repository.QuarantineReleaseOutcomeTier2Blocked,
+			name: "refused -> release_refused (NOT tier2_blocked: runner refusal can be any safety-stack reason, not just tier-2)",
+			runOut: action.ReleaseOutcome{
+				Reason:       action.ReleaseRefused,
+				Explanations: []string{"reeval said no"},
+			},
+			want: repository.QuarantineReleaseOutcomeReleaseRefused,
 		},
 		{
 			name:   "unknown -> not_found (fallback)",
