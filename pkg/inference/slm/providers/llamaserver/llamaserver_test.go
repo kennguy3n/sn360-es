@@ -13,6 +13,13 @@ import (
 	"github.com/kennguy3n/sn360-es/pkg/inference/slm"
 )
 
+// stringPtr returns a pointer to s; used to populate *string
+// Config fields where the zero value is meaningful (e.g.
+// AuthScheme="" means "send the APIKey verbatim", distinct
+// from AuthScheme=nil = "apply DefaultAuthScheme on the default
+// AuthHeader").
+func stringPtr(s string) *string { return &s }
+
 func TestEvaluate_PathShapedModelNameIsTrimmed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		payload := map[string]any{
@@ -113,7 +120,7 @@ func TestEvaluate_CustomAuthHeader(t *testing.T) {
 		URL:        srv.URL,
 		APIKey:     apiKey,
 		AuthHeader: "X-API-Key",
-		AuthScheme: "",
+		AuthScheme: stringPtr(""),
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -161,6 +168,145 @@ func TestFactory_HonoursAuthHeaderOpts(t *testing.T) {
 	}
 	if c == nil {
 		t.Fatal("slm.New returned nil")
+	}
+}
+
+// TestEvaluate_AuthSchemeExplicitEmptyOnDefaultHeader pins the
+// *string sentinel contract: a caller saying AuthScheme: stringPtr("")
+// on the default Authorization header gets the APIKey verbatim
+// (no "Bearer " prefix). The plain-string previous generation
+// silently coerced this to "Bearer " because it could not
+// distinguish nil from "".
+func TestEvaluate_AuthSchemeExplicitEmptyOnDefaultHeader(t *testing.T) {
+	const apiKey = "abcd1234"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != apiKey {
+			t.Errorf("Authorization = %q, want %q (no Bearer prefix)", got, apiKey)
+		}
+		payload := map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"role": "assistant", "content": `{"score": 1}`}},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(Config{
+		URL:        srv.URL,
+		APIKey:     apiKey,
+		AuthScheme: stringPtr(""),
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if _, err := c.Evaluate(context.Background(), dto.EvaluateRequest{}, dto.Tier1Outcome{}); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+}
+
+// TestEvaluate_AuthSchemeNilOnDefaultHeader pins the historical
+// ergonomics: unset AuthScheme + default AuthHeader → "Bearer "
+// prefix. This is the path the vast majority of deployments hit.
+func TestEvaluate_AuthSchemeNilOnDefaultHeader(t *testing.T) {
+	const apiKey = "abcd1234"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+apiKey {
+			t.Errorf("Authorization = %q, want %q", got, "Bearer "+apiKey)
+		}
+		payload := map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"role": "assistant", "content": `{"score": 1}`}},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(Config{URL: srv.URL, APIKey: apiKey})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if _, err := c.Evaluate(context.Background(), dto.EvaluateRequest{}, dto.Tier1Outcome{}); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+}
+
+// TestEvaluate_AuthSchemeNilOnCustomHeader pins the historical
+// ergonomics for the X-API-Key idiom: unset AuthScheme + custom
+// AuthHeader → "" prefix (verbatim API key on the custom
+// header). Operators expect this without having to also set
+// auth_header_scheme to "".
+func TestEvaluate_AuthSchemeNilOnCustomHeader(t *testing.T) {
+	const apiKey = "abcd1234"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-API-Key"); got != apiKey {
+			t.Errorf("X-API-Key = %q, want %q", got, apiKey)
+		}
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("Authorization = %q, want empty", got)
+		}
+		payload := map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"role": "assistant", "content": `{"score": 1}`}},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(Config{
+		URL:        srv.URL,
+		APIKey:     apiKey,
+		AuthHeader: "X-API-Key",
+		// AuthScheme intentionally nil: contract says default to
+		// "" because AuthHeader is non-default.
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if _, err := c.Evaluate(context.Background(), dto.EvaluateRequest{}, dto.Tier1Outcome{}); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+}
+
+// TestFactory_AuthSchemeOmittedDefaultsByHeader confirms the
+// Factory path: when auth_header_scheme is omitted entirely, the
+// AuthScheme stays nil and NewClient applies the right default
+// based on auth_header_name.
+func TestFactory_AuthSchemeOmittedDefaultsByHeader(t *testing.T) {
+	const apiKey = "abcd1234"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-API-Key"); got != apiKey {
+			t.Errorf("X-API-Key = %q, want %q", got, apiKey)
+		}
+		payload := map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"role": "assistant", "content": `{"score": 1}`}},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer srv.Close()
+
+	c, err := slm.New(slm.ProviderConfig{
+		Name:   Name,
+		URL:    srv.URL,
+		APIKey: apiKey,
+		ProviderOpts: map[string]string{
+			"auth_header_name": "X-API-Key",
+			// auth_header_scheme intentionally omitted.
+		},
+	})
+	if err != nil {
+		t.Fatalf("slm.New: %v", err)
+	}
+	if _, err := c.Evaluate(context.Background(), dto.EvaluateRequest{}, dto.Tier1Outcome{}); err != nil {
+		t.Fatalf("Evaluate: %v", err)
 	}
 }
 

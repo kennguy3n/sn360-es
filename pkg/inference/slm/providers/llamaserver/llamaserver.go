@@ -97,9 +97,28 @@ type Config struct {
 	AuthHeader string
 
 	// AuthScheme is the prefix prepended to APIKey when
-	// constructing the AuthHeader value. Defaults to "Bearer ".
-	// Set to "" to send APIKey verbatim (X-API-Key style).
-	AuthScheme string
+	// constructing the AuthHeader value. It is *string so the
+	// caller can distinguish three states:
+	//   - nil: "unset"; NewClient applies DefaultAuthScheme
+	//     ("Bearer ") iff AuthHeader is also at its default,
+	//     otherwise empty. This preserves the historical
+	//     ergonomics where overriding the header name into an
+	//     X-API-Key style header silently drops the Bearer
+	//     prefix.
+	//   - *string(""): "explicit empty"; the header value is
+	//     just the APIKey verbatim, regardless of AuthHeader.
+	//     Use this when you want X-API-Key style on the default
+	//     Authorization header, or to be explicit on a custom
+	//     header.
+	//   - *string("<scheme> "): explicit non-empty scheme.
+	//
+	// The plain-string previous generation conflated nil and
+	// "" — setting AuthScheme="" on a custom AuthHeader meant
+	// "X-API-Key style" (correct) but setting AuthScheme="" on
+	// the default AuthHeader was silently overridden to
+	// "Bearer " (surprise). Using *string removes the
+	// ambiguity.
+	AuthScheme *string
 }
 
 // Client implements slm.Client against a llama-server instance.
@@ -136,14 +155,21 @@ func NewClient(cfg Config) (*Client, error) {
 	if cfg.AuthHeader == "" {
 		cfg.AuthHeader = DefaultAuthHeader
 	}
-	// AuthScheme is intentionally allowed to be "" so callers can
-	// opt into X-API-Key style auth. We can't distinguish "unset"
-	// from "deliberately empty" with a plain string, so we use a
-	// constant default only when the header is the default too —
-	// callers overriding the header are presumed to have a reason
-	// to also override the scheme.
-	if cfg.AuthScheme == "" && cfg.AuthHeader == DefaultAuthHeader {
-		cfg.AuthScheme = DefaultAuthScheme
+	// AuthScheme resolution (*string sentinel):
+	//
+	// nil  + default AuthHeader  → DefaultAuthScheme ("Bearer ")
+	// nil  + custom  AuthHeader  → "" (X-API-Key style)
+	// *str + any     AuthHeader  → *str (caller explicit)
+	//
+	// The pointer-as-sentinel pattern (same idiom as Temperature
+	// and MaxRetries) means a caller saying AuthScheme: strPtr("")
+	// is honoured even on the default Authorization header — no
+	// silent coercion to "Bearer ".
+	var authScheme string
+	if cfg.AuthScheme != nil {
+		authScheme = *cfg.AuthScheme
+	} else if cfg.AuthHeader == DefaultAuthHeader {
+		authScheme = DefaultAuthScheme
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: cfg.Timeout}
@@ -156,7 +182,7 @@ func NewClient(cfg Config) (*Client, error) {
 		maxTokens:   cfg.MaxTokens,
 		temperature: temperature,
 		authHeader:  cfg.AuthHeader,
-		authScheme:  cfg.AuthScheme,
+		authScheme:  authScheme,
 		http:        cfg.HTTPClient,
 	}, nil
 }
@@ -281,23 +307,33 @@ func pickModelName(responseModel, configured string) string {
 
 // Factory adapts NewClient to the slm.Factory signature. Honours
 // the documented ProviderOpts keys:
-//   - "auth_header_name"  → Config.AuthHeader (default Authorization)
-//   - "auth_header_scheme" → Config.AuthScheme (default "Bearer ")
+//   - "auth_header_name"   → Config.AuthHeader (default Authorization)
+//   - "auth_header_scheme" → Config.AuthScheme (default "Bearer " on
+//     the default header; "" on a custom header).
+//
+// When the operator supplies "auth_header_scheme" the value is
+// forwarded verbatim, so "auth_header_scheme": "" reliably means
+// "X-API-Key style on whatever header is in use" — even on the
+// default Authorization header. Omitting the key leaves
+// AuthScheme nil, which NewClient resolves per the *string
+// sentinel contract documented on Config.AuthScheme.
 //
 // Unknown keys are ignored so a deployment can carry forward
 // future tuning knobs without breaking the boot.
 func Factory(cfg slm.ProviderConfig) (slm.Client, error) {
 	authHeader := DefaultAuthHeader
-	authScheme := DefaultAuthScheme
 	if v, ok := cfg.ProviderOpts["auth_header_name"]; ok && v != "" {
 		authHeader = v
-		// If the caller overrode the header, default scheme is
-		// "" (X-API-Key style) unless they ALSO supply
-		// auth_header_scheme.
-		authScheme = ""
 	}
+	var authScheme *string
 	if v, ok := cfg.ProviderOpts["auth_header_scheme"]; ok {
-		authScheme = v
+		// Pointer is non-nil whenever the operator supplied the
+		// key, including the empty string ("X-API-Key style on
+		// the configured header"). Omitting the key leaves
+		// authScheme nil so NewClient picks the right default
+		// based on AuthHeader.
+		v := v
+		authScheme = &v
 	}
 	return NewClient(Config{
 		URL:         cfg.URL,

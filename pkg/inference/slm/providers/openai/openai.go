@@ -41,7 +41,10 @@ const Name = "openai"
 
 // Defaults match the OpenAI hosted-service operational envelope.
 // MaxRetries is configurable via ProviderOpts["max_retries"]; 1 is
-// the production default — see package doc for the rationale.
+// the production default — see package doc for the rationale. A
+// caller that needs zero retries passes Config.MaxRetries = intPtr(0)
+// (or sets ProviderOpts["max_retries"] = "0"); the previous-generation
+// API used a sentinel int that conflated "unset" with "zero".
 const (
 	DefaultModel       = "gpt-4o-mini"
 	DefaultTimeout     = 30 * time.Second
@@ -71,9 +74,16 @@ type Config struct {
 	HTTPClient  *http.Client
 
 	// MaxRetries caps the number of retries on 429 / 5xx. The
-	// initial attempt is not counted, so MaxRetries=1 means
-	// "one initial try + one retry on failure".
-	MaxRetries int
+	// initial attempt is not counted, so *MaxRetries=1 means
+	// "one initial try + one retry on failure". It is *int so
+	// the caller can distinguish "unset, use DefaultMaxRetries"
+	// (nil) from "explicitly chose 0 retries" (non-nil pointer
+	// to 0). The plain-int previous generation collapsed these
+	// onto the same value and forced the Factory to encode 0 as
+	// -1 to bypass the sentinel; using *int removes that footgun
+	// entirely. See pkg/inference/slm/config.go
+	// ProviderConfig.Temperature for the same idiom.
+	MaxRetries *int
 
 	// Now is the clock used for HTTP-date Retry-After parsing.
 	// Defaults to time.Now; tests override.
@@ -117,10 +127,12 @@ func NewClient(cfg Config) (*Client, error) {
 	if cfg.Temperature != nil {
 		temperature = *cfg.Temperature
 	}
-	if cfg.MaxRetries < 0 {
-		cfg.MaxRetries = 0
-	} else if cfg.MaxRetries == 0 {
-		cfg.MaxRetries = DefaultMaxRetries
+	maxRetries := DefaultMaxRetries
+	if cfg.MaxRetries != nil {
+		if *cfg.MaxRetries < 0 {
+			return nil, fmt.Errorf("openai: MaxRetries must be >= 0, got %d", *cfg.MaxRetries)
+		}
+		maxRetries = *cfg.MaxRetries
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: cfg.Timeout}
@@ -138,7 +150,7 @@ func NewClient(cfg Config) (*Client, error) {
 		timeout:     cfg.Timeout,
 		maxTokens:   cfg.MaxTokens,
 		temperature: temperature,
-		maxRetries:  cfg.MaxRetries,
+		maxRetries:  maxRetries,
 		http:        cfg.HTTPClient,
 		now:         cfg.Now,
 		sleep:       cfg.Sleep,
@@ -368,9 +380,10 @@ func ctxSleep(ctx context.Context, d time.Duration) error {
 
 // Factory adapts NewClient to the slm.Factory signature. Honours
 // the documented ProviderOpts keys:
-//   - "max_retries" → Config.MaxRetries (default DefaultMaxRetries)
+//   - "max_retries" → Config.MaxRetries (default DefaultMaxRetries).
+//     Set to "0" to disable retries; absent means "use default".
 func Factory(cfg slm.ProviderConfig) (slm.Client, error) {
-	maxRetries := 0 // sentinel "use default"
+	var maxRetries *int
 	if v, ok := cfg.ProviderOpts["max_retries"]; ok && v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -379,14 +392,12 @@ func Factory(cfg slm.ProviderConfig) (slm.Client, error) {
 		if n < 0 {
 			return nil, fmt.Errorf("openai: max_retries must be >= 0, got %d", n)
 		}
-		// 0 means "no retries", so we encode it as -1 → 0 below
-		// to avoid colliding with the NewClient "use default"
-		// sentinel.
-		if n == 0 {
-			maxRetries = -1
-		} else {
-			maxRetries = n
-		}
+		// Pointer is non-nil whenever the operator supplied a
+		// value, including 0 ("no retries"). The plain-int
+		// previous generation had to encode 0 as -1 to bypass a
+		// NewClient sentinel; the *int Config field removes that
+		// dance.
+		maxRetries = &n
 	}
 	return NewClient(Config{
 		URL:         cfg.URL,

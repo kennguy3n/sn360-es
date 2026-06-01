@@ -20,6 +20,12 @@ import (
 // retry loop doesn't add wall-clock delay to the unit tests.
 func noSleep(_ context.Context, _ time.Duration) error { return nil }
 
+// intPtr returns a pointer to n; used to populate *int Config
+// fields where the zero value is meaningful (e.g. MaxRetries=0
+// means "no retries", distinct from MaxRetries=nil = "use
+// DefaultMaxRetries").
+func intPtr(n int) *int { return &n }
+
 func writeChoice(w http.ResponseWriter, content string) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -115,7 +121,7 @@ func TestEvaluate_RateLimitedRetriedThenSucceeds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := NewClient(Config{URL: srv.URL, Sleep: noSleep, MaxRetries: 1})
+	c, _ := NewClient(Config{URL: srv.URL, Sleep: noSleep, MaxRetries: intPtr(1)})
 	out, err := c.Evaluate(context.Background(), dto.EvaluateRequest{}, dto.Tier1Outcome{})
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
@@ -137,7 +143,7 @@ func TestEvaluate_RateLimitedExhaustsRetriesReturnsTypedError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := NewClient(Config{URL: srv.URL, Sleep: noSleep, MaxRetries: 1})
+	c, _ := NewClient(Config{URL: srv.URL, Sleep: noSleep, MaxRetries: intPtr(1)})
 	_, err := c.Evaluate(context.Background(), dto.EvaluateRequest{}, dto.Tier1Outcome{})
 	if err == nil {
 		t.Fatal("err = nil, want non-nil")
@@ -163,7 +169,7 @@ func TestEvaluate_5xxThenSuccess(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := NewClient(Config{URL: srv.URL, Sleep: noSleep, MaxRetries: 1})
+	c, _ := NewClient(Config{URL: srv.URL, Sleep: noSleep, MaxRetries: intPtr(1)})
 	out, err := c.Evaluate(context.Background(), dto.EvaluateRequest{}, dto.Tier1Outcome{})
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
@@ -182,7 +188,7 @@ func TestEvaluate_4xxNotRetriedReturnsImmediately(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, _ := NewClient(Config{URL: srv.URL, Sleep: noSleep, MaxRetries: 3})
+	c, _ := NewClient(Config{URL: srv.URL, Sleep: noSleep, MaxRetries: intPtr(3)})
 	_, err := c.Evaluate(context.Background(), dto.EvaluateRequest{}, dto.Tier1Outcome{})
 	if err == nil {
 		t.Fatal("err = nil, want non-nil")
@@ -248,7 +254,7 @@ func TestEvaluate_RetryAfterCappedAtMaxRetryAfter(t *testing.T) {
 			sleeps = append(sleeps, d)
 			return nil
 		},
-		MaxRetries: 1,
+		MaxRetries: intPtr(1),
 	})
 	_, _ = c.Evaluate(context.Background(), dto.EvaluateRequest{}, dto.Tier1Outcome{})
 	if len(sleeps) == 0 {
@@ -294,6 +300,75 @@ func TestFactory_RejectsNegativeMaxRetries(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("err = nil, want non-nil")
+	}
+}
+
+// TestNewClient_MaxRetriesZeroHonoured pins the *int contract: a
+// caller that explicitly sets MaxRetries=0 gets zero retries (not
+// DefaultMaxRetries). The pre-existing int-based API silently
+// remapped 0 → DefaultMaxRetries, forcing the Factory to encode 0
+// as -1 to bypass the sentinel; the *int contract makes the call
+// site mean what it says.
+func TestNewClient_MaxRetriesZeroHonoured(t *testing.T) {
+	var attempts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(Config{URL: srv.URL, Sleep: noSleep, MaxRetries: intPtr(0)})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, err = c.Evaluate(context.Background(), dto.EvaluateRequest{}, dto.Tier1Outcome{})
+	if err == nil {
+		t.Fatal("err = nil, want non-nil")
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Errorf("attempts = %d, want 1 (zero retries, initial only)", got)
+	}
+}
+
+// TestFactory_MaxRetriesZeroHonoured pins the same contract via the
+// Factory: max_retries="0" in ProviderOpts disables retries.
+func TestFactory_MaxRetriesZeroHonoured(t *testing.T) {
+	var attempts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	c, err := slm.New(slm.ProviderConfig{
+		Name:         Name,
+		URL:          srv.URL,
+		ProviderOpts: map[string]string{"max_retries": "0"},
+	})
+	if err != nil {
+		t.Fatalf("slm.New: %v", err)
+	}
+	_, err = c.Evaluate(context.Background(), dto.EvaluateRequest{}, dto.Tier1Outcome{})
+	if err == nil {
+		t.Fatal("err = nil, want non-nil")
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Errorf("attempts = %d, want 1 (zero retries)", got)
+	}
+}
+
+// TestNewClient_NegativeMaxRetriesRejected pins the explicit error
+// path: a direct caller passing MaxRetries=intPtr(-1) gets a typed
+// error rather than silent coercion to 0.
+func TestNewClient_NegativeMaxRetriesRejected(t *testing.T) {
+	_, err := NewClient(Config{URL: "http://stub", MaxRetries: intPtr(-1)})
+	if err == nil {
+		t.Fatal("err = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "MaxRetries must be >= 0") {
+		t.Errorf("err = %q, want substring 'MaxRetries must be >= 0'", err.Error())
 	}
 }
 

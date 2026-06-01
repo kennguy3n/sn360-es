@@ -547,25 +547,41 @@ func (a *tenantScoringConfigAdapter) LoadTenantScoringConfig(ctx context.Context
 	if cached, ok := a.lookup(tenantID); ok {
 		return cached, nil
 	}
+	tc, _, err := a.loadAndCacheTenantRow(ctx, tenantID)
+	return tc, err
+}
+
+// loadAndCacheTenantRow is the single source of truth for hydrating
+// the per-tenant cache from a score_engine row. It is called by both
+// LoadTenantScoringConfig and LoadTenantTier2Provider so the DB-to-
+// cache derivation lives in one place; schema additions (new
+// columns, new derived fields) propagate to both callers
+// automatically and there is no chance of lockstep mutation bugs
+// where one method updates the derivation logic and the other
+// silently keeps the old shape.
+//
+// On ErrNotFound the helper caches a "no row" sentinel (zero config,
+// empty tier2Provider) so we don't hammer Postgres for every
+// evaluation of an unconfigured tenant, and reports no error — the
+// evaluator's static defaults are the documented contract for that
+// state. Other DB errors are surfaced so the caller can decide
+// whether to fail open (Router) or propagate (LoadTenantScoringConfig).
+func (a *tenantScoringConfigAdapter) loadAndCacheTenantRow(
+	ctx context.Context, tenantID string,
+) (evaluate.TenantScoringConfig, string, error) {
 	row, err := a.repo.Get(ctx, tenantID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			// Cache the "no row" sentinel so we don't hammer
-			// Postgres for every evaluation of an unconfigured
-			// tenant. The zero value is what the evaluator wants
-			// in that case, and an empty tier2Provider is the
-			// correct cached state for a tenant that has no
-			// score_engine row at all.
 			a.storeFull(tenantID, evaluate.TenantScoringConfig{}, "")
-			return evaluate.TenantScoringConfig{}, nil
+			return evaluate.TenantScoringConfig{}, "", nil
 		}
-		return evaluate.TenantScoringConfig{}, err
+		return evaluate.TenantScoringConfig{}, "", err
 	}
 	// score_engine columns are NOT NULL so a found row always
-	// carries thresholds; populate the pointers from the row so the
-	// evaluator distinguishes "row exists with PassBelow=0" from
-	// "no row at all" instead of collapsing both onto the static
-	// defaults.
+	// carries thresholds; populate the pointers from the row so
+	// the evaluator distinguishes "row exists with PassBelow=0"
+	// from "no row at all" instead of collapsing both onto the
+	// static defaults.
 	pass := row.ThresholdTier1PassBelow
 	flag := row.ThresholdTier1FlagAbove
 	tc := evaluate.TenantScoringConfig{
@@ -583,7 +599,7 @@ func (a *tenantScoringConfigAdapter) LoadTenantScoringConfig(ctx context.Context
 		tier2Provider = *row.Tier2Provider
 	}
 	a.storeFull(tenantID, tc, tier2Provider)
-	return tc, nil
+	return tc, tier2Provider, nil
 }
 
 // LoadTenantTier2Provider implements slm.TenantProviderLoader. It
@@ -603,32 +619,8 @@ func (a *tenantScoringConfigAdapter) LoadTenantTier2Provider(ctx context.Context
 	if cached, ok := a.lookupTier2Provider(tenantID); ok {
 		return cached, nil
 	}
-	row, err := a.repo.Get(ctx, tenantID)
-	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
-			a.storeFull(tenantID, evaluate.TenantScoringConfig{}, "")
-			return "", nil
-		}
-		return "", err
-	}
-	tier2Provider := ""
-	if row.Tier2Provider != nil {
-		tier2Provider = *row.Tier2Provider
-	}
-	pass := row.ThresholdTier1PassBelow
-	flag := row.ThresholdTier1FlagAbove
-	tc := evaluate.TenantScoringConfig{
-		Weights: evaluate.Weights{
-			AI:          float64(row.WeightAI) / 100.0,
-			Rspamd:      float64(row.WeightRspamd) / 100.0,
-			Attachments: float64(row.WeightAttachments) / 100.0,
-			Links:       float64(row.WeightLinks) / 100.0,
-		},
-		Tier1PassThreshold: &pass,
-		Tier1FlagThreshold: &flag,
-	}
-	a.storeFull(tenantID, tc, tier2Provider)
-	return tier2Provider, nil
+	_, tier2Provider, err := a.loadAndCacheTenantRow(ctx, tenantID)
+	return tier2Provider, err
 }
 
 // lookupTier2Provider returns the cached tier2Provider string for
