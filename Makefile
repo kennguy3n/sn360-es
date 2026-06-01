@@ -29,6 +29,32 @@ test:
 test-integration:
 	$(GO) test $(GOTEST_FLAGS) -tags=integration ./...
 
+# Chaos engineering regression suite (WS-6b).
+#
+# Exercises the four documented degradation paths in
+# internal/docs/DEGRADATION_MODES.md by spinning real
+# testcontainers (NATS, Postgres, Redis) and injecting transient
+# failures mid-stream. Build-tagged so it never runs as part of
+# `make test`; the GitHub Actions workflow `chaos.yml` schedules
+# it nightly (and also exposes a workflow_dispatch trigger).
+#
+# -race is intentionally omitted (and $(GOTEST_FLAGS), which
+# includes it, is not used) because:
+#   1. Each chaos test is driven against the sn360-es BINARY
+#      compiled by buildSn360ES — go test -race only instruments
+#      the in-process test goroutines, not the subprocess under
+#      test, so the cost (~3-5x runtime + extra RAM) buys no
+#      additional coverage for the production code paths the suite
+#      exists to pin.
+#   2. The test code itself has minimal in-process concurrency:
+#      one consumer goroutine per scenario plus the test goroutine,
+#      both well-covered by `make test` under -race already.
+#   3. Container startup time dominates the 600s budget; adding
+#      -race pushes the suite over its budget on cold caches.
+.PHONY: chaos
+chaos:
+	$(GO) test -tags=chaos -timeout 600s ./tests/chaos/...
+
 .PHONY: cover
 cover:
 	$(GO) test $(GOTEST_FLAGS) -coverprofile=coverage.out ./...

@@ -60,6 +60,16 @@ type Metrics struct {
 	EvaluateOutcome  *prometheus.CounterVec
 	EvaluateDegraded *prometheus.CounterVec
 
+	// --- Circuit breakers wrapping Tier 1 / Tier 2 / Rspamd -------
+	//
+	// CircuitBreakerState is a gauge with value 0=closed, 1=open,
+	// 2=half_open. Operators alert when any sample stays at >0 for
+	// longer than the configured OpenTimeout; the WS-6b chaos
+	// regression in tests/chaos/tier2_failure_test.go pins the
+	// transition closed → open under sustained Tier 2 failure.
+	CircuitBreakerState        *prometheus.GaugeVec
+	CircuitBreakerShortCircuit *prometheus.CounterVec
+
 	// --- Education service ----------------------------------------
 	SimulationSent  *prometheus.CounterVec
 	SimulationClick *prometheus.CounterVec
@@ -215,6 +225,19 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		EvaluateDegraded: b.counterVec("evaluate_degraded_total",
 			"Number of evaluations that ran in degraded mode.",
 			[]string{"service"}),
+
+		CircuitBreakerState: b.gaugeVec("circuit_breaker_state",
+			"Circuit breaker state per dependency (0=closed, 1=open, 2=half_open).",
+			[]string{"name"}),
+		CircuitBreakerShortCircuit: b.counterVec("circuit_breaker_short_circuit_total",
+			// Counter fires on EVERY allow() refusal — both StateOpen
+			// rejections AND StateHalfOpen probe-slot losses. The
+			// CircuitBreakerState gauge is the disambiguator for
+			// dashboards that need to tell them apart; see
+			// internal/service/evaluate/circuit_breaker.go OnShortCircuit
+			// doc for the full contract.
+			"Calls short-circuited by the breaker (open OR half-open probe-slot loss), partitioned by breaker name.",
+			[]string{"name"}),
 
 		SimulationSent: b.counterVec("simulation_sent_total",
 			"Phishing simulations sent, partitioned by template.",
@@ -536,7 +559,26 @@ type PipelineObserver interface {
 	// reference to *Metrics — the no-op observer still composes
 	// cleanly in test wiring.
 	ObserveTier2InflightDelta(delta int)
+	// ObserveCircuitBreakerState records the current state of the
+	// named circuit breaker. The numeric mapping is fixed by
+	// pkg/telemetry/metrics.go::CircuitBreakerStateClosed and
+	// friends so dashboards can reference the integer directly.
+	ObserveCircuitBreakerState(name string, state int)
+	// ObserveCircuitBreakerShortCircuit increments the short-circuit
+	// counter for the named breaker. Operators sum this counter
+	// across all replicas to detect a sustained open state.
+	ObserveCircuitBreakerShortCircuit(name string)
 }
+
+// Circuit-breaker state ordinals used by the CircuitBreakerState
+// gauge. The values are the same Closed/Open/HalfOpen constants the
+// evaluate package uses for [evaluate.State]; we mirror them here to
+// keep the telemetry interface independent of the evaluate package.
+const (
+	CircuitBreakerStateClosed   = 0
+	CircuitBreakerStateOpen     = 1
+	CircuitBreakerStateHalfOpen = 2
+)
 
 type metricsPipelineObserver struct{ m *Metrics }
 
@@ -590,6 +632,18 @@ func (p *metricsPipelineObserver) ObserveDegraded(service string) {
 	}
 	p.m.EvaluateDegraded.WithLabelValues(service).Inc()
 }
+func (p *metricsPipelineObserver) ObserveCircuitBreakerState(name string, state int) {
+	if name == "" {
+		name = "unknown"
+	}
+	p.m.CircuitBreakerState.WithLabelValues(name).Set(float64(state))
+}
+func (p *metricsPipelineObserver) ObserveCircuitBreakerShortCircuit(name string) {
+	if name == "" {
+		name = "unknown"
+	}
+	p.m.CircuitBreakerShortCircuit.WithLabelValues(name).Inc()
+}
 
 // NoopPipelineObserver returns a PipelineObserver that does nothing.
 // Useful for tests and bootstrapping when no metric set is wired.
@@ -597,13 +651,15 @@ func NoopPipelineObserver() PipelineObserver { return noopPipelineObserver{} }
 
 type noopPipelineObserver struct{}
 
-func (noopPipelineObserver) ObserveTier0(string)                   {}
-func (noopPipelineObserver) ObserveTier1(string, time.Duration)    {}
-func (noopPipelineObserver) ObserveTier2(string, time.Duration)    {}
-func (noopPipelineObserver) ObserveTier2InflightDelta(int)         {}
-func (noopPipelineObserver) ObserveRspamd(string, time.Duration)   {}
-func (noopPipelineObserver) ObserveEvaluate(string, time.Duration) {}
-func (noopPipelineObserver) ObserveDegraded(string)                {}
+func (noopPipelineObserver) ObserveTier0(string)                      {}
+func (noopPipelineObserver) ObserveTier1(string, time.Duration)       {}
+func (noopPipelineObserver) ObserveTier2(string, time.Duration)       {}
+func (noopPipelineObserver) ObserveTier2InflightDelta(int)            {}
+func (noopPipelineObserver) ObserveRspamd(string, time.Duration)      {}
+func (noopPipelineObserver) ObserveEvaluate(string, time.Duration)    {}
+func (noopPipelineObserver) ObserveDegraded(string)                   {}
+func (noopPipelineObserver) ObserveCircuitBreakerState(string, int)   {}
+func (noopPipelineObserver) ObserveCircuitBreakerShortCircuit(string) {}
 
 // defaultMetrics is a process-wide lazily-instantiated Metrics set
 // shared by code that does not want to thread its own instance through

@@ -1,0 +1,106 @@
+name: Chaos
+
+# WS-6b chaos engineering regressions.
+#
+# This workflow runs the four chaos scenarios documented in
+# internal/docs/DEGRADATION_MODES.md against a real testcontainers
+# environment (NATS, Postgres, Redis). It is intentionally NOT a
+# per-PR trigger:
+#
+#   - `workflow_dispatch` so an on-call engineer can fire a chaos
+#     run on demand against any branch.
+#   - `schedule` (nightly) so the suite catches regressions that
+#     a per-PR run would not — testcontainers spin-up is slow
+#     enough that gating every PR would be a productivity tax.
+#
+# A failure here is investigated against the runbooks linked from
+# the DEGRADATION_MODES.md scenario entries, not silenced.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 02:30 UTC every day. Picked to land after the lint /
+    # unit-test workflows on main settle (they kick off at PR
+    # merge time, peak around 18:00–22:00 UTC), so the chaos
+    # window does not contend with peak CI compute.
+    - cron: "30 2 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  # One chaos run at a time per ref. Cancel queued runs so we
+  # don't pile up nightly invocations on the same branch.
+  group: chaos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.25.x"
+
+jobs:
+  chaos:
+    name: Chaos Regressions
+    runs-on: ubuntu-latest
+    # 30-minute job timeout — the suite itself is bounded to 10
+    # min by the Makefile target (go test -timeout 600s), but
+    # cold container pulls + image extraction add measurable
+    # head-room on a fresh runner. The cap exists so a hung
+    # container can never burn the Actions minute budget on its
+    # own.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Verify Docker is available
+        # testcontainers-go needs a working Docker daemon. The
+        # GitHub-hosted ubuntu-latest runner ships Docker
+        # preinstalled and unprivileged, so we only sanity-check
+        # the socket is reachable.
+        run: |
+          docker version
+          docker info
+
+      - name: Pre-pull container images
+        # Pulling the three images up front cuts the chaos
+        # suite's first-test latency from ~45 s (cold pull
+        # inside the test) to ~5 s (cache hit), and keeps the
+        # 10-minute test-suite timeout from being eaten by
+        # registry traffic. The exact tags MUST match the ones
+        # used inside tests/chaos/harness_test.go and
+        # tests/chaos/redis_eviction_test.go so this step
+        # actually warms the right cache.
+        run: |
+          docker pull postgres:16-alpine
+          docker pull redis:7-alpine
+          docker pull nats:2.10-alpine
+
+      - name: make chaos
+        # Build-tagged via //go:build chaos so this never runs
+        # in the standard `make test` path. The Makefile pins
+        # -timeout 600s so a single hung scenario cannot
+        # consume the whole job slot.
+        run: make chaos
+
+      - name: Upload chaos test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaos-logs
+          # Go test writes nothing to disk by default, but the
+          # chaos scenarios stream binary stdout/stderr to the
+          # test log via t.Logf. The Actions step output
+          # already contains them; this artifact upload exists
+          # so a future enhancement that writes structured logs
+          # (e.g. tier2_failure_test.go capturing /metrics
+          # snapshots) has a place to land them.
+          path: |
+            tests/chaos/*.log
+            tests/chaos/*.json
+          if-no-files-found: ignore
+          retention-days: 14

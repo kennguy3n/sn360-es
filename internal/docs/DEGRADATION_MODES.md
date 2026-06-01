@@ -110,3 +110,158 @@ read the table row above for the data-loss profile:
 
 When you add a new degradation mode, add a corresponding test that
 proves the system still answers correctly with the dependency missing.
+
+## Chaos engineering regressions (WS-6b)
+
+The four scenarios below each have a regression test under
+[`tests/chaos/`](../../tests/chaos) that exercises the documented
+failure mode end-to-end against real `testcontainers`-spun
+dependencies. The suite is build-tagged (`//go:build chaos`) so it
+never runs as part of the standard `go test ./...` path; trigger it
+locally with `make chaos` or via the
+[`chaos.yml`](../../.github/workflows/chaos.yml) workflow
+(`workflow_dispatch` + nightly schedule).
+
+Each entry below pins:
+
+* **Failure** — exactly what fault the chaos test injects;
+* **Expected recovery** — the observable contract the binary must
+  honour while the fault is active and after it clears;
+* **Runbook** — the operator action to take in production when this
+  fault fires for real;
+* **Test pin** — the specific Go test that asserts the contract.
+
+### Tier 2 SLM unreachable
+
+* **Failure.** The chaos test boots a real `httptest.Server` standing
+  in for the Tier 2 endpoint and calls `Close()` on it mid-stream,
+  producing a real TCP-reset on subsequent calls — the same failure
+  mode an operator would see if the SLM pod crash-looped during a
+  rolling restart.
+* **Expected recovery.** Tier 2's verdict on every affected message
+  is `nil`, the result envelope carries `Degraded=true` with
+  `DegradedServices` containing `"tier2"`, and Tier 0 + Tier 1 +
+  Rspamd reasoning continues to gate `Blocked` and `HighRisk`
+  verdicts (no silent downgrade). After the documented
+  `CB_FAILURE_THRESHOLD` consecutive failures the breaker on Tier 2
+  transitions to open and short-circuits subsequent calls
+  (`sn360_es_circuit_breaker_state{name="tier2"}` flips to `1`);
+  the `tier2_escalations_total{outcome="error"}` counter increments
+  while the `outcome="flagged"` counter does NOT — that asymmetry is
+  the canary against a regression that records the short-circuit as
+  a false success.
+* **Runbook.** Page the SLM team via the SLM-OWNERS rotation. While
+  the breaker is open, dashboard verdicts for Blocked / HighRisk are
+  still safe to act on — they continue to be gated by Tier 0 + Tier
+  1 + Rspamd. Resolve the upstream outage, then wait for the breaker
+  to half-open (default 30 s after the last failure) and close
+  itself; no manual intervention is required.
+* **Test pin.**
+  [`tests/chaos/tier2_failure_test.go`](../../tests/chaos/tier2_failure_test.go)
+  → `TestChaos_Tier2SLMFailure`.
+
+### NATS single-node failure
+
+* **Failure.** The chaos test publishes a burst of
+  `es.evaluate.request` messages, then calls
+  `NATSContainer.Stop()` to kill the broker mid-stream — the same
+  failure mode an operator would see if the NATS pod was evicted
+  or its node lost. After a 5 s dwell time the container is
+  restarted so the stream's on-disk JetStream state replays.
+* **Expected recovery.** Every message published before the stop
+  is delivered exactly once as a result on `es.evaluate.result`
+  after the broker returns — no data loss. The work-queue
+  consumer's `NumAckPending` drains to zero post-restart, proving
+  ack-pending replay completed cleanly. Within a single broker
+  lifetime, a re-publish of the same `Nats-Msg-Id` within the
+  configured `DedupWindow` (default 2 min, see
+  [`pkg/events/nats/streams.go`](../../pkg/events/nats/streams.go))
+  is rejected as a duplicate by the broker and must NOT produce a
+  second result. NOTE: the JetStream dedup map is held in memory
+  on the broker and is RESET on server restart (documented
+  upstream behaviour: nats-io/nats-server#2257) — operators MUST
+  NOT rely on cross-restart Nats-Msg-Id dedup. The exactly-once
+  guarantee across restarts comes from the work-queue retention
+  + ack-pending semantics described above, not from
+  `Nats-Msg-Id`.
+* **Runbook.** Check the NATS pod's restart count and node health.
+  The sn360-es client is configured with `MaxReconnects(-1)` so it
+  rebinds automatically on broker recovery; no application restart
+  is required. If `NumAckPending` does not drain within 5 min,
+  inspect the consumer's `MaxAckPending` and ensure the message
+  handler is not stuck on a downstream call.
+* **Test pin.**
+  [`tests/chaos/nats_failover_test.go`](../../tests/chaos/nats_failover_test.go)
+  → `TestChaos_NATSSingleNodeFailure`.
+
+### Postgres primary failover
+
+* **Failure.** The chaos test boots two `postgres:16-alpine`
+  containers — a "primary" and a "replica" — and wires sn360-es's
+  `pkg/storage/postgres.DB` with both pools (`AttachReader`).
+  Both databases are seeded with the same tenant rows to simulate
+  a steady-state streaming replica. The primary container is then
+  stopped mid-test, modelling the loss of a primary node.
+* **Expected recovery.** While the primary is down, the wrapper's
+  unbound `QueryRowContext` continues to serve reads from the
+  replica pool — the WS-2a routing matrix is preserved across the
+  failure. Tenant-bound writes (those wrapped in `WithTenant`)
+  fail fast with a clear database error and are NEVER silently
+  routed elsewhere. After an operator promotion (modelled by
+  closing the wrapper and re-opening it pointing at the replica
+  config) tenant-bound writes resume against the new primary and
+  the connection pool rebinds tenant connections cleanly with no
+  stale GUC state.
+* **Runbook.** Promote the replica via `pg_promote()` (or your
+  cluster-orchestrator equivalent) and roll the sn360-es pods so
+  `PG_HOST` points at the promoted node. While the failover is in
+  progress, dashboard and investigation reads continue to serve
+  off the replica — operators do NOT need to disable any feature.
+  Writes (audit log inserts, evaluation result persistence) will
+  fail and JetStream will retry them once the new primary is up;
+  no message is lost.
+* **Test pin.**
+  [`tests/chaos/postgres_failover_test.go`](../../tests/chaos/postgres_failover_test.go)
+  → `TestChaos_PostgresPrimaryFailover`.
+
+### Redis cache eviction storm
+
+* **Failure.** The chaos test boots Redis with
+  `--maxmemory 16mb --maxmemory-policy allkeys-lru` and floods it
+  with synthetic keys until the LRU eviction policy engages
+  (`evicted_keys` counter advances by ≥ 1000). The flood runs
+  while a fully-configured sn360-es process is serving traffic on
+  the same Redis instance via the rate-limiter and label cache.
+* **Expected recovery.** `assertProductionDurableStores`
+  ([`cmd/sn360-es/app.go`](../../cmd/sn360-es/app.go)) refuses to
+  boot in production when an in-memory store would be the durable
+  backing for escalation tickets, quarantine envelopes, simulation
+  campaign / interaction stores, or the agent config store. While
+  the binary is running, Redis cache misses short-circuit cleanly
+  to the underlying store (Postgres / in-memory map) — there is
+  no cascading failure into the Tier 1 hot path, and `/readyz`
+  stays at 200 for the duration of the storm. The cache hit ratio
+  drops gracefully and is logged.
+* **Runbook.** If the boot guard fires, the operator has shipped a
+  production config that would lose data on the next restart — fix
+  the missing dependency before retrying the deploy; the binary
+  refusing to boot is the safest possible outcome. If Redis is
+  evicting at runtime, raise the `maxmemory` cap or right-size the
+  Redis tier — the application will keep serving while you make
+  the fix, but cache miss ratios will be elevated until eviction
+  pressure drops.
+* **Test pin.**
+  [`tests/chaos/redis_eviction_test.go`](../../tests/chaos/redis_eviction_test.go)
+  → `TestChaos_RedisAssertProductionDurableStores` (boot guard) and
+  `TestChaos_RedisEvictionStorm` (runtime resilience).
+
+### Running the chaos suite
+
+```sh
+make chaos            # runs all four scenarios; ~7 min cold, ~3 min warm cache
+```
+
+The suite is also run nightly by
+[`.github/workflows/chaos.yml`](../../.github/workflows/chaos.yml).
+A failure in CI should be triaged against the matching runbook
+above — do NOT mute the scenario.

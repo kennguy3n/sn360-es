@@ -49,7 +49,47 @@ type CircuitBreakerConfig struct {
 	OpenTimeout      time.Duration
 	// OnStateChange is invoked synchronously whenever the breaker
 	// transitions. Optional; primarily for metrics emission.
+	//
+	// IMPORTANT: this callback runs while the breaker's internal
+	// mutex is held (it is called from transition, which is
+	// reached from onSuccess / onFailure / allow — all of which
+	// take cb.mu). Callbacks MUST NOT call back into the same
+	// breaker (State(), Do(), etc.) or they will deadlock. Use
+	// only thread-safe, non-blocking sinks such as Prometheus
+	// observers and structured-log writers.
 	OnStateChange func(from, to State)
+	// OnShortCircuit is invoked synchronously every time Do skips
+	// the wrapped op because allow() refused. Optional; primarily
+	// for metrics emission (operators alert on a sustained
+	// non-zero rate as the open-state signal).
+	//
+	// Two distinct call sites trigger this callback — the
+	// counter conflates them by design:
+	//
+	//   (a) StateOpen and the open-window has not yet elapsed.
+	//       This is the canonical "breaker is open" rejection.
+	//   (b) StateHalfOpen, halfOpenProbe CAS lost (a concurrent
+	//       caller already claimed the single probe slot for
+	//       this open-cycle). The probe is in flight; this
+	//       caller falls back to the open-state path.
+	//
+	// Dashboards that want to distinguish them should compare
+	// against the CircuitBreakerState gauge (see
+	// pkg/telemetry/metrics.go) — the gauge IS the
+	// disambiguator. The counter alone is intentionally a
+	// "fraction of calls the breaker rejected" signal, not a
+	// state classifier.
+	//
+	// Unlike OnStateChange, this callback runs OUTSIDE cb.mu —
+	// Do invokes it after allow() has released the lock and
+	// returned false (see circuit_breaker.go::Do). It may
+	// therefore be called concurrently from multiple goroutines,
+	// and MUST use only thread-safe, non-blocking sinks such as
+	// Prometheus counters and structured-log writers. The
+	// callback IS allowed to call back into the breaker (State(),
+	// Do(), etc.) because no lock is held — but doing so is still
+	// poor taste and should be avoided.
+	OnShortCircuit func()
 }
 
 // CircuitBreaker is a small failure-isolation primitive used to wrap
@@ -71,6 +111,18 @@ type CircuitBreaker struct {
 	// that just came back from an outage. The slot is released by
 	// onSuccess / onFailure (or by a transition that leaves
 	// StateHalfOpen).
+	//
+	// All current accesses — the CAS in allow(), and the Store in
+	// onSuccess and transition — happen while cb.mu is held, so a
+	// plain bool would be functionally equivalent today. We keep
+	// atomic.Bool deliberately as a future-proofing guarantee: if a
+	// future refactor moves the half-open probe gate to a lock-free
+	// fast path (e.g. an outer atomic check before the mutex
+	// acquire), the CAS semantics already match what that path
+	// would need. The cost is zero — atomic.Bool is a single word
+	// with the same layout as a plain bool — and the contract
+	// invariant ("at most one in-flight probe per half-open cycle")
+	// is preserved either way.
 	halfOpenProbe atomic.Bool
 
 	// totals are atomics so metrics can be sampled without taking the lock.
@@ -96,12 +148,36 @@ func NewCircuitBreaker(cfg CircuitBreakerConfig) *CircuitBreaker {
 
 // Do runs op under the breaker. If the breaker is open and the open-window
 // has not elapsed, op is not called and ErrCircuitOpen is returned.
-func (cb *CircuitBreaker) Do(ctx context.Context, op func(context.Context) error) error {
+//
+// Panic safety. If op panics — or terminates the goroutine via
+// runtime.Goexit (e.g. t.Fatal in a test) — Do treats the abort as a
+// failure for the purpose of breaker accounting. Without this, a panic
+// inside the StateHalfOpen trial request would leave halfOpenProbe == true
+// with no caller to release it and no onFailure to transition back to
+// StateOpen, wedging the breaker permanently. The panic is NOT swallowed:
+// the deferred handler records the failure (which itself releases the
+// probe slot via transition(StateOpen)) and then lets the panic continue
+// unwinding, so callers see the original stack.
+func (cb *CircuitBreaker) Do(ctx context.Context, op func(context.Context) error) (err error) {
 	if !cb.allow() {
 		cb.totalShortCircuit.Add(1)
+		if cb.cfg.OnShortCircuit != nil {
+			cb.cfg.OnShortCircuit()
+		}
 		return ErrCircuitOpen
 	}
-	err := op(ctx)
+	// Sentinel flag rather than recover()/re-panic so the original
+	// panic value and stack trace propagate to the caller unchanged.
+	// The flag stays true through any non-normal exit (panic, Goexit);
+	// only the line right after op(ctx) returning clears it.
+	aborted := true
+	defer func() {
+		if aborted {
+			cb.onFailure()
+		}
+	}()
+	err = op(ctx)
+	aborted = false
 	if err != nil {
 		cb.onFailure()
 	} else {
