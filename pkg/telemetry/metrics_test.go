@@ -57,6 +57,11 @@ func TestMetrics_PipelineObserver(t *testing.T) {
 	obs.ObserveRspamd("ok", 5*time.Millisecond)
 	obs.ObserveEvaluate("Warning", 300*time.Millisecond)
 	obs.ObserveDegraded("tier2")
+	// WS-6a: simulate two in-flight Tier 2 calls and one returning,
+	// which the load harness reads as `sn360_es_tier2_inflight_requests 1`.
+	obs.ObserveTier2InflightDelta(1)
+	obs.ObserveTier2InflightDelta(1)
+	obs.ObserveTier2InflightDelta(-1)
 
 	// Round-trip through the HTTP handler so we exercise the gatherer.
 	srv := httptest.NewServer(m.HTTPHandler())
@@ -74,6 +79,7 @@ func TestMetrics_PipelineObserver(t *testing.T) {
 		`sn360_es_evaluate_outcome_total{tier="Warning"}`,
 		`sn360_es_evaluate_degraded_total{service="tier2"}`,
 		`sn360_es_evaluate_latency_seconds_bucket`,
+		`sn360_es_tier2_inflight_requests 1`,
 	}
 	for _, want := range expect {
 		if !strings.Contains(string(body), want) {
@@ -100,6 +106,8 @@ func TestNoopPipelineObserver(t *testing.T) {
 	NoopPipelineObserver().ObserveRspamd("w", time.Second)
 	NoopPipelineObserver().ObserveEvaluate("Caution", time.Second)
 	NoopPipelineObserver().ObserveDegraded("rspamd")
+	NoopPipelineObserver().ObserveTier2InflightDelta(1)
+	NoopPipelineObserver().ObserveTier2InflightDelta(-1)
 }
 
 func TestDefaultMetricsSingleton(t *testing.T) {

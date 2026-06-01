@@ -1,0 +1,440 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "WS-6a end-to-end load test dashboard. Pin this to compare release-over-release scenarios captured by `make load-{smoke,baseline,typical,peak,soak}`. Every panel reads from a single Prometheus datasource (variable: $datasource) plus a $scenario template variable so a release-train review can flip between 'baseline', 'typical', 'peak' without re-importing the JSON.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "id": 100,
+      "panels": [],
+      "title": "Ingest",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "description": "Client-side publisher round-trip latency reported by k6. This is the `loadgen_publish_latency_ms` Trend metric so it captures the time from k6 issuing the POST until JetStream Publish() returns 200. Threshold lines mark the WS-6a per-scenario expected p99 (baseline 2 s, typical 2.5 s, peak 4 s).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisLabel": "ms", "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2, "pointSize": 5, "spanNulls": false},
+          "thresholds": {"mode": "absolute", "steps": [
+            {"color": "green", "value": null},
+            {"color": "yellow", "value": 1500},
+            {"color": "red", "value": 4000}
+          ]},
+          "unit": "ms"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 1},
+      "id": 1,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(k6_loadgen_publish_latency_ms_bucket{scenario=~\"$scenario\"}[1m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(k6_loadgen_publish_latency_ms_bucket{scenario=~\"$scenario\"}[1m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(k6_loadgen_publish_latency_ms_bucket{scenario=~\"$scenario\"}[1m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "Ingest latency (k6 publisher round-trip)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "description": "HTTP request rate the k6 publisher achieves vs the scenario's nominal msgs/s target. A divergence between 'achieved' and 'target' indicates the publisher is back-pressuring k6 (NATS slow, network saturated, or maxVUs too low).",
+      "fieldConfig": {"defaults": {"unit": "reqps"}},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 1},
+      "id": 2,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "rate(k6_loadgen_publish_ok{scenario=~\"$scenario\"}[1m])",
+          "legendFormat": "published/s",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "rate(k6_loadgen_publish_errors{scenario=~\"$scenario\"}[1m])",
+          "legendFormat": "errors/s",
+          "refId": "B"
+        }
+      ],
+      "title": "Ingest throughput",
+      "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 9},
+      "id": 101,
+      "panels": [],
+      "title": "Evaluate",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "description": "Pipeline evaluate latency from sn360-es. The `sn360_es_evaluate_latency_seconds` histogram covers ingest -> Tier 0/1/2 -> action. Bands match the per-tier SLO budgets (Tier 0 <50ms, Tier 1 <200ms, Tier 2 <2s).",
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 10},
+      "id": 3,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "histogram_quantile(0.50, sum by (le, tier) (rate(sn360_es_evaluate_latency_seconds_bucket[1m])))",
+          "legendFormat": "p50 {{tier}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "histogram_quantile(0.95, sum by (le, tier) (rate(sn360_es_evaluate_latency_seconds_bucket[1m])))",
+          "legendFormat": "p95 {{tier}}",
+          "refId": "B"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "histogram_quantile(0.99, sum by (le, tier) (rate(sn360_es_evaluate_latency_seconds_bucket[1m])))",
+          "legendFormat": "p99 {{tier}}",
+          "refId": "C"
+        }
+      ],
+      "title": "Evaluate latency by tier",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "description": "Counts of evaluations completed per tier. A flat line on Tier 1 with growth on Tier 0 means the tier-0 prefilter is short-circuiting cleanly. A spike on Tier 2 escalations means cost is rising.",
+      "fieldConfig": {"defaults": {"unit": "ops"}},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 10},
+      "id": 4,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "sum by (tier) (rate(sn360_es_evaluate_outcome_total[1m]))",
+          "legendFormat": "{{tier}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Evaluate outcomes by tier",
+      "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 18},
+      "id": 102,
+      "panels": [],
+      "title": "Tier 2",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "description": "Concurrent in-flight Tier 2 (SLM) calls. This is the `sn360_es_tier2_inflight_requests` gauge added in this WS-6a PR. A persistently high value indicates the SLM is the pipeline bottleneck.",
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 19},
+      "id": 5,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "sum(sn360_es_tier2_inflight_requests)",
+          "legendFormat": "inflight",
+          "refId": "A"
+        }
+      ],
+      "title": "Tier 2 inflight SLM calls",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "description": "Tier 2 (SLM) round-trip latency. Watch the p99 — it tracks SLM cold starts and queueing.",
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 19},
+      "id": 6,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(sn360_es_tier2_inference_latency_seconds_bucket[1m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(sn360_es_tier2_inference_latency_seconds_bucket[1m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(sn360_es_tier2_inference_latency_seconds_bucket[1m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "title": "Tier 2 SLM latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "description": "Rate of Tier 2 escalations (Tier 1 -> Tier 2 hand-off). The cost-model expects 8-12% of Tier 1 traffic to escalate. A sustained spike indicates Tier 1 confidence has dropped.",
+      "fieldConfig": {"defaults": {"unit": "ops"}},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 19},
+      "id": 7,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "sum(rate(sn360_es_tier2_escalations_total[1m]))",
+          "legendFormat": "escalations/s",
+          "refId": "A"
+        }
+      ],
+      "title": "Tier 2 escalations",
+      "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 27},
+      "id": 103,
+      "panels": [],
+      "title": "Postgres",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "description": "PgBouncer client-side (app -> pgbouncer) and server-side (pgbouncer -> postgres) connection counts. Server-side at the pool ceiling means the app is queueing on Postgres rather than the application.",
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 28},
+      "id": 8,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "sum(pgbouncer_client_connections)",
+          "legendFormat": "client (app -> pgbouncer)",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "sum(pgbouncer_server_connections)",
+          "legendFormat": "server (pgbouncer -> postgres)",
+          "refId": "B"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "sum(pg_stat_activity_count)",
+          "legendFormat": "pg_stat_activity (fallback)",
+          "refId": "C"
+        }
+      ],
+      "title": "Postgres connections",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "description": "Query latency from the postgres_exporter pg_stat_statements collector. A WS-6a regression in this panel is the canary for index regressions on hot evaluation_results inserts.",
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 28},
+      "id": 9,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(pg_stat_statements_seconds_total_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(pg_stat_statements_seconds_total_bucket[5m])))",
+          "legendFormat": "p99",
+          "refId": "B"
+        }
+      ],
+      "title": "Postgres query latency",
+      "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 36},
+      "id": 104,
+      "panels": [],
+      "title": "Redis",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "description": "Resident memory consumed by Redis. The rate-limiter + idempotency cache work in here; a leak shows up as monotonic growth across a soak run.",
+      "fieldConfig": {"defaults": {"unit": "bytes"}},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 37},
+      "id": 10,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "redis_memory_used_bytes",
+          "legendFormat": "used",
+          "refId": "A"
+        }
+      ],
+      "title": "Redis memory",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "description": "Rate of Redis commands the rate-limiter + cache emit. A flat line at high throughput indicates Redis is the bottleneck.",
+      "fieldConfig": {"defaults": {"unit": "ops"}},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 37},
+      "id": 11,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "sum by (cmd) (rate(redis_commands_processed_total[1m]))",
+          "legendFormat": "{{cmd}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Redis command rate",
+      "type": "timeseries"
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 45},
+      "id": 105,
+      "panels": [],
+      "title": "NATS",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "description": "JetStream consumer lag — this is the KEDA scaler input. Sustained lag > 0 means the consumer is falling behind; KEDA should scale workers up. If lag keeps growing despite KEDA's `maxReplicaCount` the bottleneck is downstream (Tier 2, Postgres). Per-consumer breakdown shows tier1/tier2/action queues separately.",
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 46},
+      "id": 12,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "sum by (consumer_name) (nats_jetstream_consumer_num_pending)",
+          "legendFormat": "{{consumer_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "NATS consumer lag (KEDA input)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "description": "JetStream throughput. `messages/s` is the publish rate the consumers see; `ack/s` is the rate they acknowledge. A growing gap is the same signal as growing consumer lag, expressed as a flow.",
+      "fieldConfig": {"defaults": {"unit": "ops"}},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 46},
+      "id": 13,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "sum(rate(nats_jetstream_stream_total_messages[1m]))",
+          "legendFormat": "messages/s",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "sum(rate(nats_jetstream_consumer_delivered_consumer_seq[1m]))",
+          "legendFormat": "delivered/s",
+          "refId": "B"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "$datasource"},
+          "expr": "sum(rate(nats_jetstream_consumer_ack_floor_consumer_seq[1m]))",
+          "legendFormat": "ack/s",
+          "refId": "C"
+        }
+      ],
+      "title": "NATS throughput",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["sn360-es", "load-test", "ws-6a"],
+  "templating": {
+    "list": [
+      {
+        "current": {"selected": false, "text": "Prometheus", "value": "PBFA97CFB590B2093"},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "current": {"selected": false, "text": "baseline", "value": "baseline"},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Scenario",
+        "name": "scenario",
+        "options": [
+          {"selected": true, "text": "baseline", "value": "baseline"},
+          {"selected": false, "text": "typical", "value": "typical"},
+          {"selected": false, "text": "peak", "value": "peak"}
+        ],
+        "query": "baseline,typical,peak",
+        "queryValue": "",
+        "skipUrlSync": false,
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "sn360-es — WS-6a Load Test",
+  "uid": "sn360-es-load",
+  "version": 1,
+  "weekStart": ""
+}

@@ -97,13 +97,77 @@ test-e2e:
 test-addins:
 	cd deployments/addins && npm install --no-audit --no-fund && npm test
 
+# --- WS-6a load harness -------------------------------------------------
+#
+# The WS-6a brief asks for 3 scenarios at 5,000-tenant scale plus a
+# fast smoke + long-running soak. Each `make load-*` target spins
+# the k6 runner against the local `sn360-es-loadgen publisher` (the
+# HTTP -> NATS shim under cmd/sn360-es-loadgen) and writes a JSON
+# artefact under tests/load/results/. Run `make loadgen-build`
+# first to compile the companion binary; `make load-bootstrap`
+# pre-provisions the tenant pool. The full lifecycle is documented
+# at tests/load/README.md.
+
+LOADGEN_BIN ?= $(BIN_DIR)/sn360-es-loadgen
+LOAD_DURATION_MIN ?=
+LOAD_TENANTS ?=
+LOAD_SEED ?=
+LOAD_TENANTS_PATH ?=
+LOAD_CORPUS_PATH ?=
+LOAD_PROM_URL ?=
+LOAD_NATS_MON_URL ?=
+LOADGEN_PUBLISHER_URL ?=
+
+# load_env expands to the env-var assignments k6 needs. Empty
+# values are dropped so they don't shadow the in-script defaults.
+define load_env
+	$(if $(LOAD_DURATION_MIN),LOAD_DURATION_MIN=$(LOAD_DURATION_MIN)) \
+	$(if $(LOAD_TENANTS),LOAD_TENANTS=$(LOAD_TENANTS)) \
+	$(if $(LOAD_SEED),LOAD_SEED=$(LOAD_SEED)) \
+	$(if $(LOAD_TENANTS_PATH),LOAD_TENANTS_PATH=$(LOAD_TENANTS_PATH)) \
+	$(if $(LOAD_CORPUS_PATH),LOAD_CORPUS_PATH=$(LOAD_CORPUS_PATH)) \
+	$(if $(LOAD_PROM_URL),LOAD_PROM_URL=$(LOAD_PROM_URL)) \
+	$(if $(LOAD_NATS_MON_URL),LOAD_NATS_MON_URL=$(LOAD_NATS_MON_URL)) \
+	$(if $(LOADGEN_PUBLISHER_URL),LOADGEN_PUBLISHER_URL=$(LOADGEN_PUBLISHER_URL))
+endef
+
+.PHONY: loadgen-build
+loadgen-build:
+	@mkdir -p $(BIN_DIR)
+	$(GO) build -o $(LOADGEN_BIN) ./cmd/sn360-es-loadgen
+
+.PHONY: load-bootstrap
+load-bootstrap: loadgen-build
+	@mkdir -p tests/load/results
+	$(LOADGEN_BIN) bootstrap \
+		-count=$${LOAD_TENANTS:-5000} \
+		-postgres-url=$${LOADGEN_POSTGRES_URL:-postgres://sn360es:sn360es@localhost:5432/sn360es?sslmode=disable} \
+		-out=tests/load/results/tenants.json
+
 .PHONY: load-smoke
 load-smoke:
-	k6 run tests/load/smoke.js
+	@mkdir -p tests/load/results
+	$(call load_env) k6 run tests/load/smoke.js
 
 .PHONY: load-soak
 load-soak:
-	k6 run tests/load/soak.js
+	@mkdir -p tests/load/results
+	$(call load_env) k6 run tests/load/soak.js
+
+.PHONY: load-baseline
+load-baseline:
+	@mkdir -p tests/load/results
+	$(call load_env) k6 run tests/load/baseline.js
+
+.PHONY: load-typical
+load-typical:
+	@mkdir -p tests/load/results
+	$(call load_env) k6 run tests/load/typical.js
+
+.PHONY: load-peak
+load-peak:
+	@mkdir -p tests/load/results
+	$(call load_env) k6 run tests/load/peak.js
 
 # --- OpenAPI spec sync ---------------------------------------------------
 #

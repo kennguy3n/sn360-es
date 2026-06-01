@@ -47,10 +47,18 @@ type Metrics struct {
 	Tier1BatchLegacyPayloadTotal *prometheus.CounterVec
 	Tier2Escalations             *prometheus.CounterVec
 	Tier2Latency                 *prometheus.HistogramVec
-	RspamdLatency                *prometheus.HistogramVec
-	EvaluateLatency              *prometheus.HistogramVec
-	EvaluateOutcome              *prometheus.CounterVec
-	EvaluateDegraded             *prometheus.CounterVec
+	// Tier2Inflight is a scalar gauge tracking the number of Tier 2
+	// SLM calls currently in flight on this replica. The evaluator
+	// increments before invoking the Tier 2 client and decrements on
+	// return (success or error). The WS-6a load harness reads this
+	// gauge to capture SLM call concurrency during a scenario run,
+	// and the SLO dashboard surfaces it next to Tier2Latency so a
+	// queue-up under load is visible at a glance.
+	Tier2Inflight    prometheus.Gauge
+	RspamdLatency    *prometheus.HistogramVec
+	EvaluateLatency  *prometheus.HistogramVec
+	EvaluateOutcome  *prometheus.CounterVec
+	EvaluateDegraded *prometheus.CounterVec
 
 	// --- Education service ----------------------------------------
 	SimulationSent  *prometheus.CounterVec
@@ -191,6 +199,8 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 			"Tier 2 LLM inference latency.",
 			latencyBuckets(),
 			[]string{"outcome"}),
+		Tier2Inflight: b.gauge("tier2_inflight_requests",
+			"Tier 2 SLM calls currently in flight on this replica."),
 		RspamdLatency: b.histogramVec("rspamd_latency_seconds",
 			"Rspamd scoring latency.",
 			latencyBuckets(),
@@ -463,6 +473,13 @@ func (b builder) histogramVec(name, help string, buckets []float64, labels []str
 	return register(b.reg, hv).(*prometheus.HistogramVec)
 }
 
+func (b builder) gauge(name, help string) prometheus.Gauge {
+	g := prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: b.ns, Subsystem: b.sub, Name: name, Help: help,
+	})
+	return register(b.reg, g).(prometheus.Gauge)
+}
+
 func (b builder) gaugeVec(name, help string, labels []string) *prometheus.GaugeVec {
 	gv := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: b.ns, Subsystem: b.sub, Name: name, Help: help,
@@ -513,6 +530,12 @@ type PipelineObserver interface {
 	ObserveRspamd(outcome string, latency time.Duration)
 	ObserveEvaluate(tier string, latency time.Duration)
 	ObserveDegraded(service string)
+	// ObserveTier2InflightDelta adjusts the Tier 2 SLM in-flight
+	// gauge by delta (+1 entering runTier2, -1 on return). Kept on
+	// the interface so the evaluator does not need a direct
+	// reference to *Metrics — the no-op observer still composes
+	// cleanly in test wiring.
+	ObserveTier2InflightDelta(delta int)
 }
 
 type metricsPipelineObserver struct{ m *Metrics }
@@ -541,6 +564,12 @@ func (p *metricsPipelineObserver) ObserveTier2(outcome string, latency time.Dura
 	}
 	p.m.Tier2Escalations.WithLabelValues(outcome).Inc()
 	p.m.Tier2Latency.WithLabelValues(outcome).Observe(latency.Seconds())
+}
+func (p *metricsPipelineObserver) ObserveTier2InflightDelta(delta int) {
+	if p.m.Tier2Inflight == nil {
+		return
+	}
+	p.m.Tier2Inflight.Add(float64(delta))
 }
 func (p *metricsPipelineObserver) ObserveRspamd(outcome string, latency time.Duration) {
 	if outcome == "" {
@@ -571,6 +600,7 @@ type noopPipelineObserver struct{}
 func (noopPipelineObserver) ObserveTier0(string)                   {}
 func (noopPipelineObserver) ObserveTier1(string, time.Duration)    {}
 func (noopPipelineObserver) ObserveTier2(string, time.Duration)    {}
+func (noopPipelineObserver) ObserveTier2InflightDelta(int)         {}
 func (noopPipelineObserver) ObserveRspamd(string, time.Duration)   {}
 func (noopPipelineObserver) ObserveEvaluate(string, time.Duration) {}
 func (noopPipelineObserver) ObserveDegraded(string)                {}
