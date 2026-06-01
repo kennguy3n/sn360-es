@@ -326,6 +326,19 @@ func validateInput(ev IncidentResolved) error {
 	if ev.DedupID == "" {
 		return errors.New("escalation: dedup_id required")
 	}
+	// ResolvedBy is enforced by the audit repository at INSERT
+	// time (both Postgres and memory backends require a non-empty
+	// value). Validating upfront keeps the resolver's "exactly
+	// one audit row per invocation" invariant intact: without
+	// this check, a malformed payload would fire the verdict
+	// flip + banner reopen side effects, then the audit insert
+	// would fail with a repo-layer error, and JetStream would
+	// redeliver — leaving the system with side effects committed
+	// but no audit trail until the message DLQs. Reject at the
+	// boundary so we never produce side effects we can't audit.
+	if ev.ResolvedBy == "" {
+		return errors.New("escalation: resolved_by required")
+	}
 	return nil
 }
 
@@ -521,19 +534,30 @@ func composeReason(notes, resolution string) string {
 // the reopen path. Mirrors the banner-renderer's "what
 // changed" microcopy style. Truncates to a sane length so the
 // recipient mailbox doesn't render a wall of text.
+//
+// Truncation is rune-aware: the producer-side
+// MaxAnalystNotesBytes cap is a byte cap, but here we are
+// rendering into a user-visible banner where slicing in the
+// middle of a multi-byte UTF-8 rune (CJK, emoji, accented
+// Latin) would either corrupt the rendered string or trip
+// downstream HTML / provider validation. Convert to []rune
+// before slicing so we always cut on a character boundary.
 func composeBannerReason(resolution, notes string) string {
 	notes = strings.TrimSpace(notes)
 	prefix := "Updated by SOC analyst: " + resolution
 	if notes == "" {
 		return prefix
 	}
-	// Mirror the producer-side MaxAnalystNotesBytes cap so a
-	// pathological note can't bloat the banner HTML. 256
-	// chars is comfortably above the rendered-in-a-banner
-	// length budget and below any wire / cell-format ceiling.
+	// 256 characters is comfortably above the
+	// rendered-in-a-banner length budget and below any wire
+	// / cell-format ceiling. Using rune-count rather than byte
+	// count means a banner full of CJK text gets the same
+	// character budget as a banner full of ASCII text, which
+	// matches user expectations for the "keep this short"
+	// contract.
 	const maxBannerNoteChars = 256
-	if len(notes) > maxBannerNoteChars {
-		notes = notes[:maxBannerNoteChars-1] + "…"
+	if runes := []rune(notes); len(runes) > maxBannerNoteChars {
+		notes = string(runes[:maxBannerNoteChars-1]) + "…"
 	}
 	return prefix + " — " + notes
 }

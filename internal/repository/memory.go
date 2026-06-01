@@ -647,14 +647,19 @@ func (m *memoryEvalResults) SetFinalVerdict(_ context.Context, tenantID string, 
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for id, r := range m.rows {
-		if r.TenantID == tenantID && bytes.Equal(r.MessageIDHash, messageIDHash) {
-			r.FinalVerdict = verdict
-			m.rows[id] = r
-			return nil
-		}
+	// Use the byHash secondary index rather than a linear scan
+	// so the in-memory backend matches the production backend's
+	// algorithmic shape (Postgres uses the same (tenant_id,
+	// message_id_hash) UNIQUE index for its UPDATE WHERE). Every
+	// other read path on memoryEvalResults already keys through
+	// byHash; the early implementation here was a leftover from
+	// before the index existed.
+	idx, ok := m.byHash[tenantID+":"+hex.EncodeToString(messageIDHash)]
+	if !ok {
+		return ErrNotFound
 	}
-	return ErrNotFound
+	m.rows[idx].FinalVerdict = verdict
+	return nil
 }
 
 // --- communication histories --------------------------------------------

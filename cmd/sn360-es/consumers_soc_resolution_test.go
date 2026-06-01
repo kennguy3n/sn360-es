@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,19 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/constant"
 	"github.com/kennguy3n/sn360-es/internal/repository"
 	"github.com/kennguy3n/sn360-es/internal/service/escalation"
+	"github.com/kennguy3n/sn360-es/pkg/events"
 )
+
+// headerMessage is a payloadMessage variant whose Headers()
+// returns a configurable map. Used by bodyTenantHeaderShim
+// tests to verify the producer-header pass-through vs
+// body-derived fallback paths.
+type headerMessage struct {
+	payloadMessage
+	headers map[string]string
+}
+
+func (m headerMessage) Headers() map[string]string { return m.headers }
 
 // reopenerSpy is a hand-rolled escalation.BannerReopener that
 // captures calls into a slice for assertion. Lives in the
@@ -254,5 +267,102 @@ func TestHandleSOCIncidentResolved_Duplicate_NoReopen(t *testing.T) {
 	}
 	if len(spy.calls) != 1 {
 		t.Errorf("reopener calls = %d; want 1 (duplicate must collapse)", len(spy.calls))
+	}
+}
+
+// -- bodyTenantHeaderShim: when the producer doesn't stamp the
+// canonical sn360 tenant-id header, the shim derives it from
+// the IncidentResolved body's tenant_id field and overlays it
+// on the message before the inner handler runs. This is the
+// defence-in-depth seam that makes the SOC consumer immune to
+// cross-repo header-stamping regressions.
+func TestBodyTenantHeaderShim_DerivesFromBody(t *testing.T) {
+	app, _ := buildEscalationApp(t)
+
+	payload := escalation.IncidentResolved{
+		IncidentID: "inc-shim",
+		TenantID:   "tenant-derived",
+		Resolution: escalation.ResolutionInconclusive,
+		ResolvedAt: time.Now().UTC(),
+		ResolvedBy: "analyst-shim",
+		DedupID:    "dedup-shim",
+		RelatedEmail: &escalation.EmailLink{
+			PseudoMessageID: "msg-shim",
+		},
+	}
+	body := mustMarshal(t, payload)
+
+	var observed map[string]string
+	captured := func(_ context.Context, msg events.Message) error {
+		observed = msg.Headers()
+		return nil
+	}
+	shim := app.bodyTenantHeaderShim(captured)
+
+	// Case 1: producer omitted the header → shim overlays
+	// body tenant_id.
+	if err := shim(context.Background(), payloadMessage{data: body, subject: socResolutionSubject}); err != nil {
+		t.Fatalf("shim: %v", err)
+	}
+	if got := observed[events.HeaderTenantID]; got != "tenant-derived" {
+		t.Errorf("body-derived header = %q; want tenant-derived", got)
+	}
+
+	// Case 2: producer stamped the header → shim leaves it
+	// alone (no body parse, no overlay allocation).
+	observed = nil
+	headed := headerMessage{
+		payloadMessage: payloadMessage{data: body, subject: socResolutionSubject},
+		headers:        map[string]string{events.HeaderTenantID: "tenant-from-header"},
+	}
+	if err := shim(context.Background(), headed); err != nil {
+		t.Fatalf("shim with header: %v", err)
+	}
+	if got := observed[events.HeaderTenantID]; got != "tenant-from-header" {
+		t.Errorf("header-preferred = %q; want tenant-from-header", got)
+	}
+
+	// Case 3: malformed body AND no header → shim falls
+	// through with no panic; inner handler will drop the
+	// message at the resolver boundary.
+	observed = map[string]string{"sentinel": "left-intact"}
+	innerCalled := false
+	pass := func(_ context.Context, msg events.Message) error {
+		innerCalled = true
+		// confirm no synthetic tenant-id header was added
+		if _, ok := msg.Headers()[events.HeaderTenantID]; ok {
+			t.Errorf("malformed-body case should not synthesise tenant header")
+		}
+		return nil
+	}
+	if err := app.bodyTenantHeaderShim(pass)(context.Background(), payloadMessage{
+		data: []byte("{not-json"), subject: socResolutionSubject,
+	}); err != nil {
+		t.Fatalf("shim malformed: %v", err)
+	}
+	if !innerCalled {
+		t.Errorf("inner handler not invoked on malformed body")
+	}
+}
+
+// -- bodyTenantHeaderShim propagates errors from the inner
+// handler without swallowing them. This pins the contract that
+// the shim is a strictly additive overlay; it must never
+// silently absorb a downstream error.
+func TestBodyTenantHeaderShim_PropagatesInnerError(t *testing.T) {
+	app, _ := buildEscalationApp(t)
+	want := errors.New("inner-handler boom")
+	shim := app.bodyTenantHeaderShim(func(context.Context, events.Message) error {
+		return want
+	})
+	err := shim(context.Background(), payloadMessage{
+		data: mustMarshal(t, escalation.IncidentResolved{
+			IncidentID: "x", TenantID: "t", Resolution: escalation.ResolutionInconclusive,
+			ResolvedAt: time.Now().UTC(), ResolvedBy: "a", DedupID: "d",
+		}),
+		subject: socResolutionSubject,
+	})
+	if !errors.Is(err, want) {
+		t.Errorf("err = %v; want %v", err, want)
 	}
 }

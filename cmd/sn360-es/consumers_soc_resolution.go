@@ -16,6 +16,76 @@ import (
 	"github.com/kennguy3n/sn360-es/pkg/events"
 )
 
+// bodyTenantHeaderShim is a NATS-header-injecting wrapper. It
+// peeks at the IncidentResolved JSON envelope and, if the
+// publisher didn't stamp events.HeaderTenantID on the message,
+// copies the body's tenant_id field onto the headers BEFORE
+// the wrapped tenantBoundMessageHandler runs.
+//
+// Why this matters: the producer in sn360-security-platform's
+// soc-triage emits across a repo boundary. A future producer
+// regression (or a legacy publisher build still in flight)
+// could publish without the header. Without this shim,
+// tenantBoundMessageHandler would fall through with no RLS
+// bind, the resolver's evaluation_results reads would return
+// zero rows under FORCE ROW LEVEL SECURITY, every event would
+// degenerate to a "no evaluation row found" skip, and the
+// audit table would fill with skip rows that ops can't
+// distinguish from legitimately-missing evaluations.
+//
+// The body always carries tenant_id (validated by the
+// resolver's own validateInput), so deriving from it is
+// strictly more defensible than the header-only path. We
+// still prefer the header when present so the same payload
+// can ride other transports (Redis, in-proc bus) without
+// special-casing the SOC subject.
+func (a *application) bodyTenantHeaderShim(
+	inner func(context.Context, events.Message) error,
+) func(context.Context, events.Message) error {
+	return func(ctx context.Context, msg events.Message) error {
+		headers := msg.Headers()
+		if headers[events.HeaderTenantID] != "" {
+			return inner(ctx, msg)
+		}
+		var peek struct {
+			TenantID string `json:"tenant_id"`
+		}
+		// A malformed body is fine here — the inner
+		// handler does its own json.Unmarshal and will
+		// drop the message at the resolver boundary with
+		// a WARN log. We just can't enrich the header in
+		// that case.
+		if err := json.Unmarshal(msg.Data(), &peek); err == nil && peek.TenantID != "" {
+			return inner(ctx, &tenantHeaderMessage{Message: msg, tenantID: peek.TenantID})
+		}
+		return inner(ctx, msg)
+	}
+}
+
+// tenantHeaderMessage wraps an events.Message to overlay the
+// canonical tenant-id header without mutating the underlying
+// transport message. Used by bodyTenantHeaderShim so the
+// downstream tenantBoundMessageHandler observes a header even
+// when the producer didn't stamp one.
+type tenantHeaderMessage struct {
+	events.Message
+	tenantID string
+}
+
+// Headers returns the underlying headers with HeaderTenantID
+// overlaid. We allocate a new map per call because the
+// downstream wrapper is allowed to read it concurrently with
+// other handler invocations on the same Message instance.
+func (t *tenantHeaderMessage) Headers() map[string]string {
+	src := t.Message.Headers()
+	out := make(map[string]string, len(src)+1)
+	for k, v := range src {
+		out[k] = v
+	}
+	out[events.HeaderTenantID] = t.tenantID
+	return out
+}
+
 // socResolutionSubject is the WS-5A.6 wire subject the
 // sn360-security-platform soc-triage publisher emits to. Lives
 // on the `sn360-platform` JetStream stream with per-subject
@@ -124,7 +194,16 @@ func (a *application) startSOCResolutionConsumer(ctx context.Context) error {
 		return nil
 	}
 	sub, err := a.eventBus.Subscribe(ctx, socResolutionSubject,
-		a.tenantBoundMessageHandler(a.handleSOCIncidentResolved),
+		// Compose: bodyTenantHeaderShim runs first, derives
+		// the tenant_id from the JSON body when the producer
+		// didn't stamp the header, then
+		// tenantBoundMessageHandler binds the RLS GUC. This
+		// pairing guarantees the SOC resolver runs inside a
+		// tenant-bound DB context even when the cross-repo
+		// producer regresses on its header contract.
+		a.bodyTenantHeaderShim(
+			a.tenantBoundMessageHandler(a.handleSOCIncidentResolved),
+		),
 		events.WithDurable(socResolutionDurable),
 		events.WithAckWait(socResolutionAckWait),
 		events.WithMaxDeliver(socResolutionMaxDeliver),

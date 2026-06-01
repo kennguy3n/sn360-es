@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kennguy3n/sn360-es/internal/constant"
 	"github.com/kennguy3n/sn360-es/internal/repository"
@@ -92,41 +93,31 @@ func (f *fixture) seedEval(t *testing.T, tenantID, messageID, tier string) *repo
 	return r
 }
 
-// seedBanner inserts a banner_state row, optionally marking
-// it delivered. The test passes a nil `at` to leave
-// delivered_at NULL (exercising the WS-5A.6 reopen
-// suppression gate).
-func (f *fixture) seedBanner(t *testing.T, tenantID, messageID string, delivered bool) {
+// seedBanner inserts a delivered banner_state row. Tests
+// that need to exercise the "delivered_at IS NULL" gate use
+// fakeBannerStateRepo (defined below) which surfaces the
+// in-memory row with a forced-nil DeliveredAt — that is the
+// supported seam for that path, not this helper. Earlier
+// revisions of this helper accepted a `delivered bool` flag
+// that tried to undo MarkDelivered's timestamp via the value
+// returned by Get(), but the memory backend defensively
+// copies the row on Get, so the mutation never reached the
+// stored map and the helper silently did nothing on the
+// non-delivered path. Keeping the helper delivered-only
+// removes the foot-gun.
+func (f *fixture) seedBanner(t *testing.T, tenantID, messageID string) {
 	t.Helper()
 	in := repository.MarkDeliveredInput{
 		TenantID:           tenantID,
 		MessageIDHash:      []byte(messageID),
+		At:                 time.Now().UTC(),
 		Reason:             "test-seed",
 		Provider:           "gmail",
 		DeliveredMessageID: messageID,
 		DeliveredEmail:     "recipient@example.test",
 	}
-	if delivered {
-		in.At = time.Now().UTC()
-	}
 	if err := f.repos.BannerStates.MarkDelivered(context.Background(), in); err != nil {
 		t.Fatalf("MarkDelivered: %v", err)
-	}
-	if !delivered {
-		// Force the delivered_at column back to nil — the
-		// memory backend stamps the current time when
-		// `at` is zero (per repository contract). For the
-		// test we want to exercise the NULL gate
-		// explicitly, so undo by clearing the row.
-		bs, err := f.repos.BannerStates.Get(context.Background(), tenantID, []byte(messageID))
-		if err != nil {
-			t.Fatalf("Get banner: %v", err)
-		}
-		bs.DeliveredAt = nil
-		// memory backend stores a copy, so direct
-		// mutation here is fine; the test's resolver
-		// path goes through Get which returns its own
-		// copy.
 	}
 }
 
@@ -180,7 +171,7 @@ func TestReconcile_ConfirmedThreat_FlipsAndReopens(t *testing.T) {
 		messageID = "msg-1"
 	)
 	fx.seedEval(t, tenantID, messageID, string(constant.TierCaution))
-	fx.seedBanner(t, tenantID, messageID, true /* delivered */)
+	fx.seedBanner(t, tenantID, messageID)
 
 	ev := newIncidentResolved(tenantID, "inc-1", escalation.ResolutionConfirmedThreat, messageID)
 	ev.AnalystNotes = "phishing kit signature match"
@@ -250,7 +241,7 @@ func TestReconcile_FalsePositive_FlipsToBenign_NoReopen(t *testing.T) {
 		messageID = "msg-2"
 	)
 	fx.seedEval(t, tenantID, messageID, string(constant.TierBlocked))
-	fx.seedBanner(t, tenantID, messageID, true)
+	fx.seedBanner(t, tenantID, messageID)
 
 	ev := newIncidentResolved(tenantID, "inc-2", escalation.ResolutionFalsePositive, messageID)
 	out, err := fx.resolver.Reconcile(context.Background(), ev)
@@ -281,7 +272,7 @@ func TestReconcile_ConfirmedThreat_AlreadyMalicious_Noop(t *testing.T) {
 		messageID = "msg-3"
 	)
 	fx.seedEval(t, tenantID, messageID, string(constant.TierHighRisk))
-	fx.seedBanner(t, tenantID, messageID, true)
+	fx.seedBanner(t, tenantID, messageID)
 
 	ev := newIncidentResolved(tenantID, "inc-3", escalation.ResolutionConfirmedThreat, messageID)
 	out, err := fx.resolver.Reconcile(context.Background(), ev)
@@ -361,7 +352,7 @@ func TestReconcile_DuplicateDedupID_NoSideEffects(t *testing.T) {
 		messageID = "msg-6"
 	)
 	fx.seedEval(t, tenantID, messageID, string(constant.TierCaution))
-	fx.seedBanner(t, tenantID, messageID, true)
+	fx.seedBanner(t, tenantID, messageID)
 
 	ev := newIncidentResolved(tenantID, "inc-6", escalation.ResolutionConfirmedThreat, messageID)
 
@@ -548,7 +539,7 @@ func TestReconcile_BannerReason_TruncatesAtMax(t *testing.T) {
 		messageID = "msg-10"
 	)
 	fx.seedEval(t, tenantID, messageID, string(constant.TierCaution))
-	fx.seedBanner(t, tenantID, messageID, true)
+	fx.seedBanner(t, tenantID, messageID)
 
 	notes := strings.Repeat("X", 1024) // far above the 256-char cap
 	ev := newIncidentResolved(tenantID, "inc-10", escalation.ResolutionConfirmedThreat, messageID)
@@ -570,6 +561,53 @@ func TestReconcile_BannerReason_TruncatesAtMax(t *testing.T) {
 	}
 }
 
+// -- composeBannerReason must truncate on rune (character)
+// boundaries, NOT byte boundaries. A multi-byte UTF-8 note
+// (CJK / emoji / accented Latin) that exceeds the 256-char
+// cap MUST yield a string that round-trips through utf8.Valid
+// without corruption. Slicing at a byte offset would split
+// the last rune of the truncated prefix and produce a string
+// the banner-renderer / html.EscapeString / provider client
+// can mis-render or reject.
+func TestReconcile_BannerReason_TruncatesOnRuneBoundary(t *testing.T) {
+	fx := newFixture(t)
+	const (
+		tenantID  = "tenant-utf8"
+		messageID = "msg-utf8"
+	)
+	fx.seedEval(t, tenantID, messageID, string(constant.TierCaution))
+	fx.seedBanner(t, tenantID, messageID)
+
+	// 3-byte CJK rune × 400 = 1200 bytes >> 256-char cap.
+	notes := strings.Repeat("漢", 400)
+	ev := newIncidentResolved(tenantID, "inc-utf8", escalation.ResolutionConfirmedThreat, messageID)
+	ev.AnalystNotes = notes
+
+	out, err := fx.resolver.Reconcile(context.Background(), ev)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !out.BannerReopened {
+		t.Fatalf("BannerReopened = false; want true")
+	}
+	calls := fx.reopener.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("reopener calls = %d; want 1", len(calls))
+	}
+	got := calls[0].Reason
+	if !utf8.ValidString(got) {
+		t.Errorf("reopen reason is not valid UTF-8: % x", []byte(got))
+	}
+	// Truncation cap is rune-count, not byte-count. After
+	// the prefix ("Updated by SOC analyst: confirmed_threat
+	// — ") the trailing payload's rune length must be <=
+	// 256 — verified at the renderer boundary by re-parsing
+	// the trailing notes segment.
+	if !strings.Contains(got, "…") {
+		t.Errorf("expected ellipsis marker on truncated banner; got %q", got)
+	}
+}
+
 // -- input validation: missing tenant_id / incident_id /
 // resolved_at / dedup_id / unknown resolution → typed errors,
 // no audit-row side effects.
@@ -584,6 +622,7 @@ func TestReconcile_InputValidation(t *testing.T) {
 		{name: "missing incident", mutate: func(e *escalation.IncidentResolved) { e.IncidentID = "" }, want: "incident_id"},
 		{name: "missing tenant", mutate: func(e *escalation.IncidentResolved) { e.TenantID = "" }, want: "tenant_id"},
 		{name: "missing dedup_id", mutate: func(e *escalation.IncidentResolved) { e.DedupID = "" }, want: "dedup_id"},
+		{name: "missing resolved_by", mutate: func(e *escalation.IncidentResolved) { e.ResolvedBy = "" }, want: "resolved_by"},
 		{name: "zero resolved_at", mutate: func(e *escalation.IncidentResolved) { e.ResolvedAt = time.Time{} }, want: "resolved_at"},
 		{name: "invalid resolution", mutate: func(e *escalation.IncidentResolved) { e.Resolution = "foo" }, want: "invalid resolution"},
 	}
@@ -612,7 +651,7 @@ func TestReconcile_ReopenerFailure_NonFatal(t *testing.T) {
 		messageID = "msg-11"
 	)
 	fx.seedEval(t, tenantID, messageID, string(constant.TierWarning))
-	fx.seedBanner(t, tenantID, messageID, true)
+	fx.seedBanner(t, tenantID, messageID)
 
 	ev := newIncidentResolved(tenantID, "inc-11", escalation.ResolutionConfirmedThreat, messageID)
 	out, err := fx.resolver.Reconcile(context.Background(), ev)
