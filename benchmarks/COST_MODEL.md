@@ -47,13 +47,35 @@ baseline.
 | high       |   8 500 | $45.490  | $31.566  | $13.924  | 30.6% |
 | enterprise |  15 000 | $148.839 | $104.237 | $44.601  | 30.0% |
 
-Percentage savings descend with traffic because the Bedrock Tier 2
-token cost — proportional to escalated messages and not affected
-by any compute / storage lever — dominates the high / enterprise
-cohort totals. Those cohorts still gain the largest *absolute*
-dollar savings per tenant, but levers like Tier 1 batching and
-PG partitioning amortise less aggressively against the Tier 2
-token line at that scale.
+Percentage savings peak at the `medium` cohort (36.0 %) and
+descend from there toward the high / enterprise cohorts (30.6 %
+and 30.0 %). Two effects compose to produce that shape:
+
+1. From `low` (35.1 %) upward, raising message volume engages
+   the variable-cost levers — Tier 1 batching efficiency,
+   PG partitioning storage / write multipliers, and the
+   role-split + KEDA-on-lag compute floor — against a larger
+   denominator, so the % savings grows.
+2. Once message volume crosses into the `high` and
+   `enterprise` cohorts, the Bedrock Tier 2 token cost
+   (proportional to escalated messages and not affected by
+   *any* compute / storage lever) starts to dominate the
+   total, so the levers amortise less aggressively against
+   that token line and the % savings descends.
+
+Those high-volume cohorts still gain the largest *absolute*
+dollar savings per tenant — $13.92 (high) and $44.60
+(enterprise) versus $1.36 (medium) and $0.23 (low) — they just
+trade them off against a larger Tier 2 token baseline. Prior
+to the WS-2c recalibration the savings curve was monotonically
+descending (33.7 % → 32.6 % → 25.1 % → 22.6 %); the WS-2b HASH
+partitioning consumer-CPU drop and the tightened
+`partitioning_active` multipliers compounded against the
+`medium` cohort's profile mix in a way that nudged it above
+`low`. Both shapes are consistent with the model's
+architecture — high-volume cohorts always pay a larger share
+of their total in Tier 2 tokens — the WS-2c numbers just make
+the inflection visible on the headline table.
 
 The `enterprise` row is the 5 000-tenant scale-out anchor: the
 load tests in `tests/load/` drive this same 15 000 msg / tenant /
