@@ -58,7 +58,7 @@ function renderStdout(out) {
     `  msgs_per_sec target = ${out.config.msgs_per_sec}`,
     `  publish ok           = ${ok}`,
     `  publish err          = ${err}`,
-    `  publish_latency p50  = ${(lat.med ?? 0).toFixed(1)} ms`,
+    `  publish_latency p50  = ${(lat.p50 ?? lat.med ?? 0).toFixed(1)} ms`,
     `  publish_latency p95  = ${(lat.p95 ?? 0).toFixed(1)} ms`,
     `  publish_latency p99  = ${(lat.p99 ?? 0).toFixed(1)} ms`,
     `  metric families      = ${

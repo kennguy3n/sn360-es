@@ -41,18 +41,27 @@ export const publishLatency = new Trend("loadgen_publish_latency_ms", true);
  * @returns {object}                   k6 options object
  */
 export function buildOptions(cfg, overrides = {}) {
+  // k6's `constant-arrival-rate` rate is measured in *iterations*
+  // per second, not messages. Each iteration publishes
+  // `cfg.batchSize` messages (publishBatch fans them out in one
+  // HTTP call), so the per-iteration rate is msgsPerSec /
+  // batchSize. Without this division the peak scenario at
+  // batchSize=4 would actually issue ~4× the intended message
+  // rate.
+  const batchSize = Math.max(1, cfg.batchSize || 1);
+  const httpRequestsPerSec = cfg.msgsPerSec / batchSize;
   // Cap the pre-allocated VU pool so a runaway scenario does not
   // open thousands of TCP connections against the dev publisher.
-  // The peak scenario at ~492 msg/s with one HTTP call per message
-  // and a 100 ms p95 round-trip needs ~50 VUs; we keep headroom.
-  const baseVUs = Math.max(20, Math.ceil(cfg.msgsPerSec * 0.5));
-  const maxVUs = Math.max(baseVUs, Math.ceil(cfg.msgsPerSec * 2));
+  // VU need scales with HTTP requests/sec (not raw msg/s) because
+  // batching folds multiple messages into one VU-borne request.
+  const baseVUs = Math.max(20, Math.ceil(httpRequestsPerSec * 0.5));
+  const maxVUs = Math.max(baseVUs, Math.ceil(httpRequestsPerSec * 2));
   // k6's constant-arrival-rate `rate` must be a positive integer.
   // For the smoke profile (32 tenants × 200/day -> 0.07 msg/s)
-  // that rounds to zero, so we floor at 1 msg/s. The real
-  // per-scenario rates (>= 11 for baseline at 5,000 tenants) are
-  // already integers after the ceil, so this only affects smoke.
-  const ratePerSec = Math.max(1, Math.ceil(cfg.msgsPerSec));
+  // that rounds to zero, so we floor at 1 iter/s. Likewise a
+  // high batchSize on a low msg/s scenario can also round to
+  // zero, so the floor applies post-division.
+  const ratePerSec = Math.max(1, Math.ceil(httpRequestsPerSec));
   return {
     discardResponseBodies: true,
     // WS-6a captures p50/p95/p99 explicitly. k6's default trend
@@ -343,6 +352,11 @@ function hashStr(s) {
  * @param {number} [args.durationMin]   minutes to hold the load
  * @param {number} [args.tenants]       override tenant count
  * @param {number} [args.seed]          override the seed
+ * @param {number} [args.batchSize]     messages packed per HTTP
+ *                                       iteration; must be set before
+ *                                       runScenario() so buildOptions
+ *                                       divides the arrival rate
+ *                                       correctly
  * @param {object} [args.optionsOverrides] passed to buildOptions
  */
 export function runScenario(args) {
@@ -357,6 +371,7 @@ export function runScenario(args) {
   if (args.tenants !== undefined) overrides.tenants = args.tenants;
   if (args.durationMin !== undefined) overrides.durationMin = args.durationMin;
   if (args.seed !== undefined) overrides.seed = args.seed;
+  if (args.batchSize !== undefined) overrides.batchSize = args.batchSize;
   const cfg = loadConfig(args.name, overrides);
   if (args.msgsPerSecond !== undefined) {
     cfg.msgsPerSec = args.msgsPerSecond;

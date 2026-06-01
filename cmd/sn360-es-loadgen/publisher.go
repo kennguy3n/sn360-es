@@ -185,12 +185,16 @@ func dialNATS(ctx context.Context, url string) (*nats.Conn, jetstream.JetStream,
 // address is not loopback. The publisher publishes raw evaluate
 // requests with no auth — exposing it externally is a deliberate
 // choice the operator has to make consciously.
+//
+// `-bind=:9099` (empty host) means "bind to all interfaces", which
+// is the exact case the warning is meant to catch, so we route it
+// through IsLoopbackBind() and warn on anything that does not
+// match a loopback literal.
 func warnIfNonLoopback(bind string, logger *slog.Logger) error {
-	host, _, err := net.SplitHostPort(bind)
-	if err != nil {
+	if _, _, err := net.SplitHostPort(bind); err != nil {
 		return fmt.Errorf("-bind: %w", err)
 	}
-	if host == "" || host == "127.0.0.1" || host == "::1" || host == "localhost" {
+	if IsLoopbackBind(bind) {
 		return nil
 	}
 	logger.Warn("sn360-es-loadgen: publisher binding to non-loopback address; this is a local-dev tool with no auth — only do this on an isolated network",
