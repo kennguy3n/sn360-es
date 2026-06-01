@@ -230,6 +230,25 @@ func buildMux(app *application) (http.Handler, error) {
 		mux.Handle("/v1/org-graph", orgGraphH)
 	}
 
+	// WS-5B.2 — per-tenant standalone webhook sinks. Registered
+	// only when the repository + encryptor are wired. The handler
+	// itself does tenant-bound authz against the JWT's tid claim;
+	// RequireAdmin enforces the role gate so JWTAuth's tenant
+	// binding and the role check fail closed in lock-step.
+	if app.repos != nil && app.repos.WebhookSinks != nil && app.encryptor != nil {
+		whH, whErr := handler.NewWebhookSinksHandler(
+			logger,
+			app.repos.WebhookSinks,
+			app.encryptor,
+			app.webhookDispatcher,
+		)
+		if whErr != nil {
+			logger.Warn("sn360-es: webhook sinks handler init failed", slog.Any("error", whErr))
+		} else {
+			mux.Handle("/v1/tenants/", middleware.RequireAdmin(whH))
+		}
+	}
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		logger.Debug("http: unmatched route", slog.String("path", r.URL.Path))
 		w.WriteHeader(http.StatusNotFound)

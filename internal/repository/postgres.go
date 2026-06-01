@@ -41,6 +41,7 @@ func NewPostgresRegistry(db *postgres.DB) *Registry {
 		TenantReleasePolicies:  NewPgTenantReleasePolicy(db),
 		EmailVerdictAudits:     &pgEmailVerdictAudits{db: db},
 		BannerStates:           &pgBannerStates{db: db},
+		WebhookSinks:           NewPgWebhookSinks(db),
 	}
 }
 

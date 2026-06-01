@@ -36,6 +36,7 @@ func NewInMemoryRegistry() *Registry {
 		TenantReleasePolicies:  NewMemoryTenantReleasePolicy(),
 		EmailVerdictAudits:     newMemoryEmailVerdictAudits(),
 		BannerStates:           newMemoryBannerStates(),
+		WebhookSinks:           newMemoryWebhookSinks(),
 	}
 }
 

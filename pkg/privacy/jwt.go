@@ -55,6 +55,20 @@ const (
 	ScopeAdminAPI = "admin_api"
 )
 
+// Role constants identify the kind of principal a token represents.
+//
+// Tokens minted for message-scoped flows (banner action, quarantine
+// release) carry an empty Role — those flows authenticate the
+// recipient by the message-id + tenant-id binding, not by an
+// operator identity. Operator-issued tokens that drive the
+// management plane carry RoleAdmin; middleware.RequireAdmin gates
+// admin-only routes on this value.
+const (
+	// RoleAdmin grants access to tenant-administrator endpoints
+	// (e.g. WS-5B.2 webhook-sink CRUD).
+	RoleAdmin = "admin"
+)
+
 // ActionClaims is the canonical claim shape for banner / interstitial
 // and self-release tokens. The intent is to carry zero PII so a
 // leaked token cannot be used to enumerate users or messages from a
@@ -81,6 +95,15 @@ type ActionClaims struct {
 	// of the recipient mailbox the token authorises. Populated
 	// only for ScopeQuarantineRelease.
 	RecipientUserHash string `json:"ruh,omitempty"`
+	// Role identifies the principal type the token represents.
+	// Empty means "recipient / message-scoped action token" (the
+	// legacy banner / quarantine path). Operator-issued admin
+	// tokens that drive management-plane CRUD APIs (e.g.
+	// WS-5B.2 webhook-sink configuration) carry RoleAdmin.
+	// Middleware that gates admin-only routes
+	// (middleware.RequireAdmin) accepts a token only when this
+	// is RoleAdmin.
+	Role string `json:"role,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -128,6 +151,10 @@ type IssueOptions struct {
 	// RecipientUserHash is hex-encoded into the `ruh` claim.
 	// Populated only for ScopeQuarantineRelease tokens.
 	RecipientUserHash string
+	// Role is the value the issued token carries in its `role`
+	// claim. Used for operator-issued admin tokens — see
+	// privacy.RoleAdmin.
+	Role string
 }
 
 // Issue signs a fresh ActionClaims token for tenantID + pseudoMessageID.
@@ -154,6 +181,7 @@ func (i *JWTIssuer) Issue(tenantID, pseudoMessageID string, opts IssueOptions) (
 		OriginalURLHash:      opts.URLHash,
 		Scope:                opts.Scope,
 		RecipientUserHash:    opts.RecipientUserHash,
+		Role:                 opts.Role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    i.issuer,
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),

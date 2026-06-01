@@ -70,6 +70,23 @@ const (
 	// email_verdict_audit (tenant_id, dedup_id) UNIQUE provides
 	// defence-in-depth beyond the broker window.
 	StreamPlatform = "sn360-platform"
+	// StreamWebhookDLQ owns the `sn360.dlq.webhook.>` namespace
+	// used by WS-5B.2 — per-tenant standalone-deployment webhook
+	// sinks. Failed customer-endpoint POSTs (5xx / 408 / 429 /
+	// network / timeout) are republished onto
+	// `sn360.dlq.webhook.<tenant>.<sink>` with a DLQEnvelope
+	// (pkg/sinks/webhook). The durable consumer in
+	// cmd/sn360-es/consumers_webhook_dlq.go retries with an
+	// explicit exponential schedule (1s, 5s, 30s, 5m, 1h) up to
+	// 5 deliveries; the WorkQueuePolicy retention is correct
+	// here because we want a single retrier (not a fan-out) and
+	// successful Acks must free the message immediately.
+	//
+	// Subject lives under `sn360.*` rather than `es.dlq.*` so it
+	// does NOT collide with the existing DLQProcessor's
+	// `es.dlq.>` namespace (which serves a different decide-and-
+	// republish semantic — see internal/service/dlq_processor.go).
+	StreamWebhookDLQ = "SN360_WEBHOOK_DLQ"
 )
 
 // StreamSpec describes a JetStream stream that SN360-ES requires.
@@ -198,6 +215,22 @@ func DefaultStreamSpecs(cfg Config) []StreamSpec {
 			Replicas:    replicas,
 			Discard:     jetstream.DiscardOld,
 			Description: "SN360-ES dead-letter queue (failed events)",
+		},
+		{
+			Name:      StreamWebhookDLQ,
+			Subjects:  []string{"sn360.dlq.webhook.>"},
+			Retention: jetstream.WorkQueuePolicy,
+			Storage:   storage,
+			// 7 days easily covers the longest valid retry path
+			// (5 deliveries with backoff 1s, 5s, 30s, 5m, 1h ≈ 1h6m
+			// wall-clock to final-fail). Keeping a week gives ops
+			// time to inspect dead messages before they age out.
+			MaxAge:      7 * 24 * time.Hour,
+			MaxMsgSize:  10 * 1024 * 1024,
+			DedupWindow: orDefault(cfg.DedupWindow, 2*time.Minute),
+			Replicas:    replicas,
+			Discard:     jetstream.DiscardOld,
+			Description: "SN360-ES per-tenant standalone webhook DLQ (WS-5B.2; consumer retries with 1s/5s/30s/5m/1h backoff)",
 		},
 		{
 			Name: StreamPlatform,
@@ -378,6 +411,9 @@ func isResultFilter(subj string) bool {
 //     management-domain work queues)
 //   - soc.>                          → StreamPlatform (cross-repo SOC
 //     envelopes from sn360-security-platform, e.g. WS-5A.6 IncidentResolved)
+//   - sn360.dlq.webhook.>            → StreamWebhookDLQ (WS-5B.2
+//     per-tenant standalone webhook DLQ; the consumer in
+//     cmd/sn360-es/consumers_webhook_dlq.go drains with exp backoff)
 //
 // Any other es.evaluate.* subject (e.g. a hypothetical
 // es.evaluate.status) is treated as unrouted and returns "" rather
@@ -402,6 +438,8 @@ func StreamForSubject(subject string) string {
 		return StreamManagement
 	case subject == "soc" || strings.HasPrefix(subject, "soc."):
 		return StreamPlatform
+	case strings.HasPrefix(subject, "sn360.dlq.webhook."):
+		return StreamWebhookDLQ
 	default:
 		return ""
 	}

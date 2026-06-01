@@ -31,6 +31,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/selfrelease"
 	"github.com/kennguy3n/sn360-es/internal/service/tier0"
 	"github.com/kennguy3n/sn360-es/internal/service/tier1"
+	"github.com/kennguy3n/sn360-es/internal/service/webhooksink"
 	"github.com/kennguy3n/sn360-es/internal/service/worker"
 	"github.com/kennguy3n/sn360-es/pkg/events"
 	"github.com/kennguy3n/sn360-es/pkg/events/bus"
@@ -43,6 +44,7 @@ import (
 	_ "github.com/kennguy3n/sn360-es/pkg/inference/slm/all"
 	"github.com/kennguy3n/sn360-es/pkg/intel"
 	"github.com/kennguy3n/sn360-es/pkg/privacy"
+	"github.com/kennguy3n/sn360-es/pkg/sinks/webhook"
 	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
 	"github.com/kennguy3n/sn360-es/pkg/storage/redis"
 	"github.com/kennguy3n/sn360-es/pkg/telemetry"
@@ -150,6 +152,27 @@ type application struct {
 	// PLATFORM_NATS_ENABLED is false so handlers can call its
 	// methods unconditionally.
 	platformBridge bridge.PlatformPublisher
+
+	// WS-5B.2: per-tenant standalone webhook fan-out + DLQ.
+	//
+	// webhookPublisher is the shared HTTPS publisher used by both
+	// the dispatcher's initial publish and the DLQ retrier. It is
+	// nil only when the binary is wired without webhook support
+	// (memory-only / dev runs without an encryptor); both the
+	// dispatcher and the DLQ consumer no-op cleanly in that case.
+	//
+	// webhookDispatcher fans terminal verdicts out to each enabled
+	// sink for a tenant. encryptor below decrypts the per-sink
+	// HMAC secret at publish time so the plaintext key never lives
+	// at rest in this struct.
+	webhookPublisher  webhook.Publisher
+	webhookDispatcher *webhooksink.Dispatcher
+	// encryptor is the SecretEncryptor used to unseal
+	// per-tenant HMAC secrets at webhook publish time. It is the
+	// same envelope-encryption KMS wiring used by buildURLEncryptor
+	// for the URL rewriter (action.URLEncryptor). Nil when no
+	// encryptor could be wired; webhook fan-out then no-ops.
+	encryptor webhooksink.SecretEncryptor
 
 	// Provider-side action machinery.
 	providers     *providerRegistry
@@ -978,6 +1001,56 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 			logger.Warn("sn360-es: quarantine service init failed",
 				slog.Any("error", qerr))
 		}
+	}
+
+	// WS-5B.2: per-tenant standalone webhook fan-out.
+	//
+	// Wired only when (a) the encryptor can be built (we need to
+	// decrypt per-sink HMAC secrets at publish time), (b) the
+	// repository registry is present (the dispatcher's hot path
+	// walks tenant_webhook_sinks), and (c) the event bus is up
+	// (the dispatcher routes retriable failures to the
+	// sn360.dlq.webhook.> stream). Missing any of those means a
+	// memory-only or KMS-less deployment, so we silently no-op —
+	// the binary still answers /healthz and serves every other
+	// route.
+	if wenc, werr := buildURLEncryptor(cfg, logger); werr != nil {
+		logger.Warn("sn360-es: webhook fan-out disabled — encryptor init failed",
+			slog.Any("error", werr))
+	} else if app.repos != nil && app.repos.WebhookSinks != nil && app.eventBus != nil {
+		app.encryptor = wenc
+		app.webhookPublisher = webhook.NewHTTPPublisher(webhook.HTTPPublisherConfig{
+			Timeout: webhooksink.DefaultPublishTimeout,
+		})
+		var limiter webhooksink.RateLimiter
+		if app.redis != nil {
+			rb, berr := redis.NewRateBucketStore(ctx, app.redis, redis.RateBucketConfig{
+				KeyPrefix: "webhooksink",
+			})
+			if berr != nil {
+				logger.Warn("sn360-es: webhook fan-out rate-limiter init failed; running unlimited",
+					slog.Any("error", berr))
+			} else {
+				limiter = rb
+			}
+		}
+		dispatcher, derr := webhooksink.New(webhooksink.Config{
+			Repo:      app.repos.WebhookSinks,
+			Encryptor: wenc,
+			Publisher: app.webhookPublisher,
+			Bus:       app.eventBus,
+			Limiter:   limiter,
+			Logger:    logger,
+		})
+		if derr != nil {
+			logger.Warn("sn360-es: webhook dispatcher init failed",
+				slog.Any("error", derr))
+		} else {
+			app.webhookDispatcher = dispatcher
+			logger.Info("sn360-es: webhook dispatcher wired (WS-5B.2)")
+		}
+	} else {
+		logger.Info("sn360-es: webhook fan-out skipped (missing repository, encryptor, or event bus)")
 	}
 
 	// Ingestion poller.
