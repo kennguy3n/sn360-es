@@ -81,6 +81,17 @@ func (a *application) handleEvaluateRequest(ctx context.Context, msg events.Mess
 		return fmt.Errorf("evaluate: %w", err)
 	}
 	dto.BackfillRoutingFields(&result, req)
+	// WS-3b: stamp the pseudonymised participant hashes onto the
+	// result BEFORE publish so the downstream evaluate.result
+	// consumer can persist them on evaluation_results and the
+	// investigation API's sender-trail lookup has a hash to index
+	// on. The helper reuses the same SignalEnricher.SightingFor
+	// the WS-4a sighting publish below calls, so the hashes
+	// stamped here are guaranteed identical to the ones the
+	// communication_histories row picks up — a divergence would
+	// silently break the join the investigation API performs on
+	// (tenant_id, sender_hash) across the two tables.
+	evaluate.StampResultParticipantHashes(ctx, a.signalEnricher, req, &result)
 	payload, err := json.Marshal(result)
 	if err != nil {
 		a.logger.WarnContext(ctx, "sn360-es: evaluate.result marshal failed",
@@ -222,6 +233,14 @@ func evaluateResultRow(res dto.EvaluateResult, msg events.Message) *repository.E
 	return &repository.EvaluationResult{
 		TenantID:      tenantID,
 		MessageIDHash: []byte(res.MessageID),
+		// WS-3b: copy through the participant hashes the producer
+		// (per-message or batch path) stamped on the result. The
+		// repository Create path NULLs zero-length values so a
+		// producer that couldn't derive a hash (NoopEnricher /
+		// SightingFor short-circuit) persists SQL NULL rather
+		// than the empty-byte sentinel.
+		SenderHash:    append([]byte(nil), res.SenderHash...),
+		RecipientHash: append([]byte(nil), res.RecipientHash...),
 		CorrelationID: correlationID,
 		Score:         res.Score,
 		Tier:          string(res.Tier),

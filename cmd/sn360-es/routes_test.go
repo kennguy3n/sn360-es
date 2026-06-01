@@ -23,6 +23,12 @@ func TestRateLimitRouteLabel(t *testing.T) {
 		{"l token collapses", "/l/abc.def.ghi", "/l/:token"},
 		{"education lesson collapses", "/v1/education/lesson/anyid", "/v1/education/lesson/:id"},
 		{"vendors id collapses", "/v1/vendors/uuid-here", "/v1/vendors/:id"},
+		// WS-3b investigation API: every probed pseudo_id /
+		// sender_hash MUST fold into a single label so the
+		// per-message and per-sender hashes don't blow up
+		// Prometheus head series.
+		{"investigation message id collapses", "/v1/investigation/message/abcdef1234", "/v1/investigation/message/:pseudo_id"},
+		{"investigation sender hash collapses", "/v1/investigation/sender/AAAA-BBBB", "/v1/investigation/sender/:sender_hash"},
 		{"known exact preserved", "/v1/banner/action", "/v1/banner/action"},
 		{"known exact predict", "/v1/predict/open", "/v1/predict/open"},
 		// Random attacker paths bucket into "/other" rather than

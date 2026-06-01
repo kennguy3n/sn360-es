@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -51,25 +52,40 @@ func startPG(t *testing.T) postgres.Config {
 	}
 }
 
-// applyInitialMigration loads migrations/0001_init.up.sql and executes
-// it against the live database. We deliberately do not depend on
-// golang-migrate here so this test stays decoupled from the migration
-// runner; integration coverage of the runner itself lives in
-// cmd/sn360-es-migrate.
-func applyInitialMigration(t *testing.T, db *postgres.DB) {
+// applyMigrations loads every migrations/NNNN_*.up.sql file in
+// lexicographic order and executes it against the live database. We
+// deliberately do not depend on golang-migrate here so this test
+// stays decoupled from the migration runner; integration coverage of
+// the runner itself lives in cmd/sn360-es-migrate. Applying the full
+// chain (not just 0001) keeps the in-test schema in lockstep with the
+// pgEvalResults / pgCommHistories backends, both of which evolve
+// across migrations (e.g. 0020 adds sender_hash / recipient_hash and
+// the column is referenced unconditionally by the INSERT path).
+func applyMigrations(t *testing.T, db *postgres.DB) {
 	t.Helper()
 	wd, _ := os.Getwd()
 	// repo root is two levels above pkg/storage/postgres.
 	root := filepath.Clean(filepath.Join(wd, "..", "..", ".."))
-	path := filepath.Join(root, "migrations", "0001_init.up.sql")
-	bytes, err := os.ReadFile(path)
+	matches, err := filepath.Glob(filepath.Join(root, "migrations", "*.up.sql"))
 	if err != nil {
-		t.Fatalf("read migration: %v", err)
+		t.Fatalf("glob migrations: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if len(matches) == 0 {
+		t.Fatalf("no migrations found under %s", filepath.Join(root, "migrations"))
+	}
+	// Filenames are NNNN_<slug>.up.sql; lexicographic sort gives
+	// the same ordering as the migration runner.
+	sort.Strings(matches)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	if _, err := db.ExecContext(ctx, string(bytes)); err != nil {
-		t.Fatalf("apply migration: %v", err)
+	for _, path := range matches {
+		bytes, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", filepath.Base(path), err)
+		}
+		if _, err := db.ExecContext(ctx, string(bytes)); err != nil {
+			t.Fatalf("apply migration %s: %v", filepath.Base(path), err)
+		}
 	}
 }
 
@@ -95,7 +111,7 @@ func TestPostgresIntegration_MigrationsCreateSchema(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	defer db.Close()
-	applyInitialMigration(t, db)
+	applyMigrations(t, db)
 
 	// Sanity: every table the audit references should be present.
 	for _, tbl := range []string{
@@ -124,7 +140,7 @@ func TestPostgresIntegration_TenantRepositoryCRUD(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	defer db.Close()
-	applyInitialMigration(t, db)
+	applyMigrations(t, db)
 
 	reg := repository.NewPostgresRegistry(db)
 	ctx := context.Background()
@@ -195,7 +211,7 @@ func TestPostgresIntegration_EvaluationResultCreate(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	defer db.Close()
-	applyInitialMigration(t, db)
+	applyMigrations(t, db)
 
 	reg := repository.NewPostgresRegistry(db)
 	ctx := context.Background()
@@ -231,5 +247,97 @@ func TestPostgresIntegration_EvaluationResultCreate(t *testing.T) {
 	}
 	if got.Score != 77 || got.Tier != "warning" || got.Primary != "likely_phishing" {
 		t.Fatalf("unexpected eval result: %+v", got)
+	}
+}
+
+// TestPostgresIntegration_EvaluationResultCreate_HashColumnVariants pins
+// the three SenderHash / RecipientHash input shapes that the producer
+// path can hand to the repository through the bytea NULLIF dance in
+// pgEvalResults.Create:
+//
+//	nil       — legacy / pre-WS-3b path; pq sends untyped NULL, but
+//	            the `::bytea` cast pins the planner type so OCTET_LENGTH
+//	            doesn't fall back to text.
+//	[]byte{}  — explicit zero-length; same NULL collapse, different
+//	            wire encoding from nil.
+//	populated — happy path; round-trips through the partial index.
+//
+// Without the explicit `::bytea` cast this test fails with SQLSTATE
+// 42804 ("column 'sender_hash' is of type bytea but expression is of
+// type text") on the nil variant — the planner-inference regression
+// caught by Devin Review round 1 / CI integration job 78779842851.
+func TestPostgresIntegration_EvaluationResultCreate_HashColumnVariants(t *testing.T) {
+	cfg := startPG(t)
+	db, err := postgres.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	applyMigrations(t, db)
+	reg := repository.NewPostgresRegistry(db)
+	ctx := context.Background()
+	tenant := &repository.Tenant{
+		Name: "tenant-hash-variants", DisplayName: "HashVar", Provider: "gws",
+		PrimaryDomain: "hashvar.test", Region: "ap-southeast-1",
+		KMSKeyARN: "arn", ScoreBase: 100, RetentionDays: 30, Locale: "en", Status: "active",
+	}
+	if err := reg.Tenants.Create(ctx, tenant); err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	cases := []struct {
+		name string
+		send []byte
+		recp []byte
+	}{
+		{"nil_hashes", nil, nil},
+		{"empty_hashes", []byte{}, []byte{}},
+		{"populated_hashes",
+			[]byte("\xaa\xbb\xcc\xdd\xee\xff\x00\x11\x22\x33\x44\x55\x66\x77\x88\x99"),
+			[]byte("\x99\x88\x77\x66\x55\x44\x33\x22\x11\x00\xff\xee\xdd\xcc\xbb\xaa")},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msgHash := []byte{byte(i + 1)}
+			rec := &repository.EvaluationResult{
+				TenantID:      tenant.ID,
+				MessageIDHash: msgHash,
+				SenderHash:    tc.send,
+				RecipientHash: tc.recp,
+				CorrelationID: "corr-" + tc.name,
+				Score:         50,
+				Tier:          "info",
+				Primary:       "neutral",
+				Secondary:     []string{},
+				ReasonCodes:   []string{},
+				EvaluatedAt:   now,
+			}
+			if err := reg.EvaluationResults.Create(ctx, rec); err != nil {
+				t.Fatalf("create %s: %v", tc.name, err)
+			}
+			got, err := reg.EvaluationResults.GetByMessageHash(ctx, tenant.ID, msgHash)
+			if err != nil || got == nil {
+				t.Fatalf("get %s: %+v err=%v", tc.name, got, err)
+			}
+			// Both nil and []byte{} variants persist as SQL NULL, so the
+			// read path surfaces them as nil. Only the populated variant
+			// echoes back exact bytes — assert that and the empty-collapse
+			// invariant separately.
+			if len(tc.send) > 0 {
+				if string(got.SenderHash) != string(tc.send) {
+					t.Errorf("%s: SenderHash round-trip mismatch: got=%x want=%x", tc.name, got.SenderHash, tc.send)
+				}
+				if string(got.RecipientHash) != string(tc.recp) {
+					t.Errorf("%s: RecipientHash round-trip mismatch: got=%x want=%x", tc.name, got.RecipientHash, tc.recp)
+				}
+			} else {
+				if len(got.SenderHash) != 0 {
+					t.Errorf("%s: SenderHash should collapse to empty/NULL, got=%x", tc.name, got.SenderHash)
+				}
+				if len(got.RecipientHash) != 0 {
+					t.Errorf("%s: RecipientHash should collapse to empty/NULL, got=%x", tc.name, got.RecipientHash)
+				}
+			}
+		})
 	}
 }

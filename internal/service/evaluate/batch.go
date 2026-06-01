@@ -505,6 +505,14 @@ func (o *BatchOrchestrator) finalisePending(
 	publishErrLabel string,
 ) {
 	dto.BackfillRoutingFields(&res, req)
+	// WS-3b: stamp participant hashes onto the result BEFORE
+	// publish so the management Postgres writer can persist them
+	// onto evaluation_results. Mirrors the per-message path in
+	// cmd/sn360-es/consumers_evaluate.go; the helper is a no-op
+	// when the enricher is NoopEnricher or short-circuits, in
+	// which case the result carries empty hashes and the
+	// repository NULLs them via OCTET_LENGTH on Create.
+	StampResultParticipantHashes(ctx, o.cfg.Enricher, req, &res)
 	if err := o.publishResult(ctx, res); err != nil {
 		o.log.Error(publishErrLabel, slog.String("err", err.Error()))
 		_ = msg.Nak(5 * time.Second)

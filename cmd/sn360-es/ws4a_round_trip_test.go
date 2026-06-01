@@ -411,6 +411,10 @@ func (r *recordingCommHistoryRepo) ListByTenant(_ context.Context, _ string, _ t
 	panic("unexpected ListByTenant call in WS-4a round-trip test")
 }
 
+func (r *recordingCommHistoryRepo) ListBySender(_ context.Context, _ string, _ []byte, _ int) ([]repository.CommunicationHistory, error) {
+	panic("unexpected ListBySender call in WS-4a round-trip test")
+}
+
 // loopbackBus is a test double for events.EventService that
 // dispatches every Publish onto a registered handler synchronously
 // on the same goroutine. It is intentionally narrower than

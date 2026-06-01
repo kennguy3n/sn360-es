@@ -193,6 +193,16 @@ func TestBuildMux_RegistersAllRoutes(t *testing.T) {
 		{name: "escalation resolve wired", method: http.MethodPost, path: "/v1/escalation/resolve",
 			body: `{}`, notStatus: []int{http.StatusNotFound}},
 
+		// WS-3b investigation API — both routes are always
+		// registered (the handler renders 503 when the service is
+		// nil), so anything but 404 proves the wiring. The
+		// unauthenticated request hits the handler's auth gate
+		// first and returns 401.
+		{name: "investigation message wired", method: http.MethodGet, path: "/v1/investigation/message/abcdef",
+			notStatus: []int{http.StatusNotFound}},
+		{name: "investigation sender wired", method: http.MethodGet, path: "/v1/investigation/sender/AAAA",
+			notStatus: []int{http.StatusNotFound}},
+
 		// Unmatched route — confirm fallback 404 still works.
 		{name: "unmatched returns 404", method: http.MethodGet, path: "/no/such/route",
 			mustStatus: []int{http.StatusNotFound}},

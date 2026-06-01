@@ -138,10 +138,22 @@ type Vendor struct {
 }
 
 // EvaluationResult is the persisted output of a Tier 0/1/2 evaluation.
+//
+// SenderHash and RecipientHash carry the pseudonymised participant
+// identities the signal enricher derived during evaluation. They
+// are persisted onto the row so the WS-3b investigation API can
+// reverse-lookup per-sender history without joining back to
+// communication_histories on a non-hash equality. Both fields are
+// nullable in the database (migration 0020) because rows written
+// before the WS-4a / WS-3b producer paths landed have no usable
+// participant identity to backfill — the raw addresses were never
+// persisted by design.
 type EvaluationResult struct {
 	ID                string
 	TenantID          string
 	MessageIDHash     []byte
+	SenderHash        []byte
+	RecipientHash     []byte
 	CorrelationID     string
 	Score             int
 	Tier              string
@@ -359,11 +371,52 @@ type VendorRepository interface {
 	Delete(ctx context.Context, tenantID, domain string) error
 }
 
+// EvalListBySenderMaxLimit is the hard cap on the number of rows
+// EvaluationResultRepository.ListBySender returns in a single call.
+// Sized to comfortably page through the operator-facing
+// investigation view without letting a malformed caller stream the
+// entire per-sender history through the bus on one HTTP request.
+// Callers that need a longer trail must paginate by evaluated_at.
+const EvalListBySenderMaxLimit = 500
+
+// clampEvalListBySenderLimit normalises a caller-supplied `limit`
+// for ListBySender to a strictly positive, bounded value. Both
+// backends (memory.go, postgres.go) MUST clamp identically so
+// callers get the same effective slice regardless of the backend
+// under the seam.
+//
+//   - limit <= 0 ⇒ EvalListBySenderMaxLimit (no longer "unbounded")
+//   - limit > EvalListBySenderMaxLimit ⇒ EvalListBySenderMaxLimit
+//   - otherwise ⇒ the caller's value.
+func clampEvalListBySenderLimit(limit int) int {
+	if limit <= 0 || limit > EvalListBySenderMaxLimit {
+		return EvalListBySenderMaxLimit
+	}
+	return limit
+}
+
 // EvaluationResultRepository persists EvaluationResult rows.
+//
+// ListBySender returns rows for `tenantID` whose sender_hash matches
+// `senderHash`, ordered by evaluated_at descending (newest first) so
+// the investigation UI sees the most recent verdicts at the top.
+// Implementations MUST filter out rows whose persisted sender_hash
+// is NULL or empty — a legacy row written before the WS-3b producer
+// path stamped a hash carries no usable participant identity and
+// matching it against an empty `senderHash` argument would leak the
+// row to the wrong query.
 type EvaluationResultRepository interface {
 	Create(ctx context.Context, r *EvaluationResult) error
 	GetByMessageHash(ctx context.Context, tenantID string, messageIDHash []byte) (*EvaluationResult, error)
 	ListRecent(ctx context.Context, tenantID string, limit int) ([]EvaluationResult, error)
+	// ListBySender returns evaluation results for the (tenant, sender)
+	// pair, newest first, capped at min(limit, EvalListBySenderMaxLimit).
+	// An empty senderHash returns an empty slice and no error — the
+	// equality predicate against a zero-length pseudonym is
+	// structurally pointless and would otherwise scan the table on
+	// the Postgres backend where the partial index excludes the
+	// NULL-sender rows.
+	ListBySender(ctx context.Context, tenantID string, senderHash []byte, limit int) ([]EvaluationResult, error)
 }
 
 // CommHistoryListByTenantMaxLimit is the hard cap on the number of
@@ -521,6 +574,19 @@ type CommunicationHistoryRepository interface {
 	// next cycle. The contract here is "best-effort monotonic
 	// increment", not "exactly-once increment".
 	RecordSighting(ctx context.Context, s Sighting) error
+
+	// ListBySender returns CommunicationHistory rows for `tenantID`
+	// whose sender_hash matches `senderHash`, ordered by
+	// last_seen_at descending (most recently active recipients
+	// first). Capped at min(limit, CommHistoryListByTenantMaxLimit).
+	// An empty senderHash returns an empty slice and no error.
+	//
+	// Used by the WS-3b investigation API to render the
+	// per-sender recipient fan-out for an operator drill-down
+	// without forcing the read path through ListByTenant (which is
+	// the relationship worker's full-tenant scan path with a
+	// different `since` semantic).
+	ListBySender(ctx context.Context, tenantID string, senderHash []byte, limit int) ([]CommunicationHistory, error)
 }
 
 // Sighting is the input to CommunicationHistoryRepository.RecordSighting.
