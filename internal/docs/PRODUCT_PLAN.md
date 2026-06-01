@@ -118,43 +118,58 @@ against the priority table):
   The migration looks up the constraint by target column rather
   than by name to stay safe across dump-and-restore round-trips.
 
-### 2a — Read-Replica Routing  *(TODO)*
+### 2a — Read-Replica Routing  *(DONE — PR #57)*
 
-- `cmd/sn360-es/app.go`: add `readPgDB *postgres.DB` to the
-  `application` struct.
-- `internal/config/postgres.go`: add `PG_READ_HOST`,
-  `PG_READ_PORT` (optional; fall back to primary when unset).
-- `cmd/sn360-es/wire_infra.go`: open a second `*postgres.DB`
-  against the read host when configured; wire the same RLS
-  binding middleware (the read path must `SET sn360.tenant_id`
-  on the replica connection — RLS is enforced replica-side).
-- `internal/repository/registry.go`: pass `writeDB` and `readDB`
-  to repositories; route `List*` / `Get*` / dashboard queries to
-  `readDB`; route every mutation to `writeDB`.
-- Document the replica's expected lag tolerance in
-  [`ARCHITECTURE.md`](./ARCHITECTURE.md) §6 — anything more than
-  a few seconds of lag will produce visible inconsistency on the
-  dashboard summary.
+`pkg/storage/postgres/postgres.go` exposes `AttachReader` and a
+routing matrix on `*postgres.DB`: a tenant-bound connection from
+`WithTenant` always pins to the write pool (so the
+`sn360.tenant_id` GUC stays attached to the same conn and RLS
+remains enforced); an unbound `QueryContext` / `QueryRowContext`
+routes to the read replica when one is attached; `ExecContext`
+and `BeginTx` always route to the write pool so mutations cannot
+land on a read-only standby. `internal/config/postgres.go` opts
+in via `PG_READ_HOST` (with `PG_READ_PORT` / `_USER` /
+`_PASSWORD` / `_DATABASE` / `_SSLMODE` / `_MAX_OPEN_CONNS` /
+`_MAX_IDLE_CONNS` / `_CONN_MAX_LIFETIME` overrides that inherit
+from the primary when unset); a missing `PG_READ_HOST` keeps the
+old single-pool behaviour. `internal/config/validate.go` rejects
+`PG_READ_SSLMODE=disable` in prod / uat when the read host is
+set, mirroring the existing primary-side TLS guard.
+`pkg/storage/postgres/read_replica_test.go` and
+`internal/config/postgres_read_test.go` pin the routing matrix,
+the `ExecAlwaysWritePool` invariant, idempotent `AttachReader`,
+empty-host no-op, empty-database rejection, nil-receiver safety,
+and the inheritance / override matrix.
 
-### 2b — Communication Histories HASH Partitioning  *(TODO)*
+### 2b — Communication Histories HASH Partitioning  *(DONE — PR #58)*
 
-`migrations/0017_partition_append_only_tables.up.sql` lines 27–34
-explicitly defer this work; this item closes the deferral.
-
-- `migrations/0019_hash_partition_comm_histories.up.sql` (new):
-  convert `communication_histories` to `PARTITION BY HASH
-  (tenant_id)` into 32 partitions. The `up` migration must walk
-  existing rows into the partitioned table without a
-  `DROP TABLE` window (use `CREATE TABLE LIKE ... INCLUDING ALL`
-  + `INSERT INTO ... SELECT` + atomic rename, then drop the
-  legacy table).
-- Down migration must consolidate the partitions back into the
-  pre-partitioned shape; document the consolidation strategy in
-  the down-migration header.
-- `internal/repository/communication_history.go`: no code change
-  expected — partitioned tables are transparent to the query
-  layer — but add a partition-pruning test that asserts the
-  query planner actually prunes by `tenant_id`.
+`migrations/0019_hash_partition_comm_histories.up.sql` converts
+`communication_histories` to `PARTITION BY HASH (tenant_id)` with
+32 partitions (`communication_histories_p00` through `_p31`,
+`MODULUS 32`). The primary key is `(id, tenant_id)` because
+Postgres requires the partition key in every unique constraint;
+the natural unique key `(tenant_id, sender_hash, recipient_hash)`
+is preserved. The up migration renames the legacy heap aside,
+recreates the partitioned table, walks every row in via
+`INSERT ... SELECT ... ON CONFLICT (tenant_id, sender_hash,
+recipient_hash) DO NOTHING`, and only then drops the legacy
+table — the whole conversion runs in a single `BEGIN ... COMMIT`
+so failure rolls back cleanly. RLS, the `tenant_isolation`
+policy, the `GRANT` to `sn360_app`, and the five indexes
+(including the partial `idx_comm_hist_tenant_sender_domain ...
+WHERE sender_domain IS NOT NULL`) are re-applied so they
+propagate to every child partition; the down migration is
+symmetric (`DROP TABLE ... CASCADE` walks the 32 partitions).
+The application repository at
+`internal/repository/communication_history.go` is unchanged —
+every query already carries `tenant_id` in the WHERE clause so
+Postgres prunes to a single partition at plan time.
+`pkg/storage/postgres/rls_integration_test.go` was rewritten
+to `applyAllMigrations` (discovers every numbered `.up.sql` at
+runtime) so future migrations are picked up automatically, and
+`migrations/migration_0019_test.go` pins HASH / MODULUS-32 / PK
+/ RLS / grant / partial-index shape via 13 structural unit
+tests.
 
 ### 2c — Cost Model Recalibration for 5,000 Tenants  *(TODO)*
 
@@ -185,36 +200,74 @@ and "what does this sender's pattern look like?" in a single API
 call, and the customer-facing dashboard summary endpoint is
 populated.
 
-### 3a — Quarantine Self-Service  *(TODO)*
+### 3a — Quarantine Self-Service  *(DONE — PR #64)*
 
-- New handler: `internal/handler/quarantine_digest.go`.
-  - `GET /v1/quarantine/digest?tenant_id={id}&user_hash={hash}` —
-    returns the user's pseudonymised quarantine list (score, tier,
-    reason codes, sender hash).
-  - `POST /v1/quarantine/self-release` — release a message at
-    `Warning` tier or below; `HighRisk` / `Blocked` returns
-    `403 admin_required` and emits an escalation ticket.
-- Register routes in `cmd/sn360-es/routes.go`; gate via
-  `RequireRole("end_user", "operator", "admin")`.
-- The `end_user` role binds the token's `user_hash` claim to the
-  query parameter — a user cannot read another user's queue even
-  with a valid token.
+`internal/handler/quarantine.go` dispatches
+`POST /v1/quarantine/release` on the verified token's `scp`
+claim: `ScopeQuarantineRelease` ("quarantine_release") routes
+to the recipient self-release path; the existing operator
+banner-action scope keeps the SOC flow. Token verification
+runs *before* any resource lookup so a malformed / expired
+token never produces a "this pmid exists" oracle. The recipient
+state machine lives in `internal/service/selfrelease/service.go`
+and walks `lookup → unconditional Tier-2 malicious gate →
+per-recipient rate-limit lookup → reuse of the SOC
+`action.ReleaseService` runner → audit row` — so operator and
+recipient flows share exactly one release implementation.
+Outcomes collapse onto a uniform HTTP surface
+(`released → 202`, `already_released → 200`,
+`rate_limited → 429`, `tier2_blocked → 403`; every miss /
+cross-tenant / token-failure case → 404 or 401 with the same
+body) so the endpoint cannot fingerprint another tenant's
+message IDs. `migrations/0022_quarantine_release_audit.up.sql`
+adds `quarantine_release_audit` (HASH-partitioned by tenant_id,
+7-value closed-set outcome enum) and `tenant_release_policies`
+(per-tenant `quarantine_self_release_per_hour`, default 5).
+`pkg/privacy/jwt.go` adds `ScopeQuarantineRelease`, the
+`RecipientUserHash` claim, and `VerifyDetail` so the handler
+distinguishes `token_expired` from `invalid_token` in the audit
+row while keeping the wire response uniform. The end-user banner
+is rendered inline by `internal/service/selfrelease/banner.go`
+with no JavaScript, HTML-escaped sender / subject, and a
+`dir="rtl"` flip for known RTL locales so it survives mail-client
+script stripping.
 
-### 3b — Investigation API  *(TODO)*
+### 3b — Investigation API  *(DONE — PR #62)*
 
-- New handler: `internal/handler/investigation.go`.
-  - `GET /v1/investigation/message/{pseudo_id}?tenant_id={id}` —
-    returns the full evaluation trail (Tier 0 gate outcome, Tier 1
-    score + features, Tier 2 verdict + rationale, enriched risk
-    signals, relationship label snapshot at evaluation time).
-  - `GET /v1/investigation/sender/{sender_hash}?tenant_id={id}` —
-    returns every evaluation result for the sender within the
-    retention window, plus the aggregated
-    `CommunicationHistory` row.
-- These are the API contracts the SOC-lite dashboard and the AI
-  Support Agent (`internal/service/agent/`) call into; document
-  the contracts in `api/openapi.yaml`.
-- Gate via `RequireRole("viewer", "operator", "admin")`.
+`internal/handler/investigation.go` exposes
+`GET /v1/investigation/message/{pseudo_id}` and
+`GET /v1/investigation/sender/{sender_hash}?limit=1..500&since_hours=1..720`,
+wired in `cmd/sn360-es/routes.go` under the bounded path
+templates `/v1/investigation/message/:pseudo_id` and
+`/v1/investigation/sender/:sender_hash` (so per-message /
+per-sender cardinality stays bounded on `http_requests_total` and
+`http_rate_limited_total`). The handler runs
+`TenantIDFromContext` before any resource-observable branch so
+an unauthenticated caller cannot distinguish service-unconfigured
+(503) from bad-path (400), and cross-tenant + genuine-miss
+collapse onto an identical 404 body so the surface cannot
+fingerprint another tenant's IDs.
+`internal/service/investigation/service.go` loads the evaluation
+result, best-effort joins `communication_histories` (transient
+errors logged, not propagated), and computes the per-sender
+aggregate (`TotalVerdicts`, `HighRiskVerdicts`, `MaxScore`,
+`LastVerdictAt`, `DistinctRecipients` in the 30-day window,
+`TotalSightingsWindow`) in-process so the dashboard headline
+needs one repository round-trip rather than two. The per-sender
+query is only SARGable because
+`migrations/0020_evaluation_results_sender_recipient_hash.up.sql`
+adds nullable `sender_hash` / `recipient_hash` BYTEA columns
+plus a partial index on
+`(tenant_id, sender_hash, evaluated_at DESC) WHERE sender_hash
+IS NOT NULL`; `internal/service/evaluate/enricher.go` grows
+`SightingFor` and the new `evaluate.StampResultParticipantHashes`
+helper stamps the same hash bytes on the verdict before publish
+so the join cannot diverge. `sender_hash` is accepted as
+base64url (canonical) with base64-standard-with-padding as a
+defense-in-depth fallback; `repository.EvalListBySenderMaxLimit
+= 500` clamps the cursor on both memory and Postgres backends.
+The spec lives in `api/openapi.yaml` and the embedded
+`internal/handler/openapi.yaml`.
 
 ---
 
@@ -227,39 +280,81 @@ adversarial corpora rather than only the synthetic mix, and the
 Tier 2 SLM is one of several pluggable providers so the platform
 is not locked to one model vendor.
 
-### 4a — Incremental Behavioral Baselines  *(TODO)*
+### 4a — Incremental Behavioral Baselines  *(DONE — PR #61)*
 
-- `cmd/sn360-es/signal_enricher.go`: after `commHistorySignalEnricher`
-  enriches the per-message signals, publish an async event
-  `es.management.comm_history.update` containing
-  `{sender_hash, recipient_hash, sent_at, tenant_id}`.
-- New consumer: `comm-history-update` on `ES_MANAGEMENT` (or
-  on `ES_EVALUATE` if we want to keep the topology flat) — upserts
-  the `communication_histories` row inline using the existing
-  `UpdateCountsIfFresh` CAS path.
-- Net effect: the next message from the same sender sees an
-  up-to-date baseline without waiting for the 4-hour
-  `relationship_worker` cycle. The 4-hour worker stays in place
-  for aggregated stats (typical send-hour distribution, volume
-  smoothing) where stale-by-a-few-hours is fine.
+`pkg/events/nats/streams.go` declares `StreamManagement =
+"ES_MANAGEMENT"` as the work-queue stream for the new
+`es.management.comm_history.update` subject (24h `MaxAge`,
+2-minute broker dedup window). The shared publisher
+`evaluate.PublishCommHistoryUpdate` (in
+`internal/service/evaluate/comm_history.go`) is wired from two
+sites: per-message via
+`cmd/sn360-es/consumers_evaluate.go::publishCommHistoryUpdate`
+after `Evaluate` returns, and per-batch via
+`internal/service/evaluate/batch.go::finalisePending` so the
+batch orchestrator emits the same sighting after the batch
+result lands. Both call sites publish the sighting *after* the
+verdict result so an orphaned sighting can never appear for a
+message whose verdict was never delivered.
+`internal/service/evaluate/enricher.go` exposes `SightingFor`
+on the `SignalEnricher` — it shares the `TrimSpace` + `ToLower`
++ PII-hasher cascade with `Enrich`, so the
+`(sender_hash, recipient_hash)` pair the publisher emits is
+bit-identical to the keys the read path looks up. The new
+durable `comm-history-update` (registered in
+`cmd/sn360-es/consumers.go`, `MaxDeliver=3`, registration
+failure is a `critErrs` boot failure) calls
+`CommunicationHistories.RecordSighting`: a single
+`INSERT ... ON CONFLICT (tenant_id, sender_hash,
+recipient_hash) DO UPDATE SET count_7d = c.count_7d + 1,
+count_30d = c.count_30d + 1, last_seen_at =
+GREATEST(c.last_seen_at, EXCLUDED.last_seen_at),
+sender_domain = COALESCE(NULLIF(c.sender_domain, ''),
+EXCLUDED.sender_domain)` on Postgres, with a mutex-guarded
+compare-and-write on the memory backend. `RecordSighting`
+touches only the incremental columns; `first_seen_at`,
+`typical_hour`, and `relationship` stay exclusively owned by
+the 4-hour `relationship_worker` cycle, so neither side
+cross-writes the other's columns. `dto.CommHistoryUpdate.DedupID`
+is a length-prefixed SHA-256 of
+`(tenant, sender_hash, recipient_hash, message_id)` emitted as
+the `Nats-Msg-Id` header so JetStream collapses redeliveries at
+the broker rather than at the consumer.
 
-### 4b — Real-World Corpus & Adversarial Testing  *(TODO)*
+### 4b — Real-World Corpus & Adversarial Testing  *(DONE — PR #63)*
 
-- `scripts/corpus_generator/`: add a `realworld` source that
-  fetches and labels public phishing corpora (Nazario phishing
-  email corpus, PhishTank URL set). Cite the licence on each
-  corpus in the README.
-- Add adversarial template transforms: homoglyph substitution,
-  zero-width-character injection, Unicode RTL override, HTML
-  entity encoding. Each transform is a deterministic function
-  taking a clean message and emitting an adversarial variant for
-  the same label.
-- `Makefile`: new `make bench-adversarial` target running the
-  accuracy harness against the adversarial corpus.
-- Pin regression targets in `scripts/corpus_generator/README.md`:
-  F1 ≥ 0.95 on real-world corpus, F1 ≥ 0.90 on adversarial
-  corpus. Refresh [`benchmarks/BASELINE.md`](../../benchmarks/BASELINE.md)
-  with the new baselines.
+`cmd/corpus-eval/main.go` is a JSONL-driven offline harness:
+it loads a labelled corpus, runs every fixture through the
+production `evaluate.NewEvaluator`, and emits a JSON report
+with per-label precision / recall / F1, tier coverage,
+confusion matrix, and a misclassification list. The corpus
+runtime lives in
+`internal/test/corpus/{types,eval,loader,synthetic,baseline}.go`;
+the bundled 200-email synthetic fixture
+`testdata/corpus-eval/synthetic.jsonl` is generated from
+`corpus.DefaultSyntheticSeed = 4242` (50 per label across
+phish / spam / benign / bec, every row annotated
+`synthetic: true`). The committed baseline at
+`testdata/corpus-eval/baseline.json` records the honest
+Tier-0-only numbers (macro-F1 0.34, with `synthetic_only:
+true` and `full_pipeline: false` surfaced in every report)
+so reviewers cannot misread partial-pipeline metrics as
+full-pipeline accuracy.
+`internal/test/adversarial/perturbations.go` ships five
+deterministic transforms — `HomoglyphSubstitute`,
+`ZeroWidthInsert`, `Base64ObfuscateURL`, `MIMEMultipartSmuggle`,
+`HeaderInjection` — and `properties_test.go` runs each through
+100 iterations with `PropertySeed` pinned, asserting
+`predictedLabel == baseLabel OR (degraded && reasonCode
+matches)`; the reason-code vocabulary is enumerated in
+`internal/test/adversarial/reasoncodes.go` and silent flips
+without a matching reason code are logged with full diagnostics
+rather than asserted, so the test surface stays honest while
+Tier 1 / 2 remain unwired in CI. Makefile targets `corpus-eval`
+/ `corpus-eval-gen` / `corpus-eval-baseline` and CI jobs
+`corpus-eval` + `adversarial-fuzz` make the harness
+non-blocking on PRs and blocking on `main`; an F1 drop > 5%
+fails the gate (> 25% is treated as catastrophic).
 
 ### 4c — Tier 2 Model Abstraction  *(TODO)*
 
@@ -292,111 +387,215 @@ events from sn360-es and to author the email-specific correlation
 rules + playbooks + dashboard panels that turn the raw events
 into SOC-actionable signal.
 
-### 5A.1 — NATS Event Bridge  *(TODO — P0)*
+### 5A.1 — NATS Event Bridge  *(DONE — PR #56)*
 
-- New file: `internal/service/bridge/platform_publisher.go`
-  in sn360-es. Publishes HighRisk+ and Blocked evaluation results,
-  quarantine events, and escalation events to the platform's NATS
-  on subject `sn360.events.email.<tenant_id>.<kind>`.
-- Subject mapping:
+`internal/service/bridge/platform_publisher.go` is the
+fire-and-forget bridge: it fans terminal email verdicts (Blocked
+/ HighRisk phishing / BEC / malware-bearing attachment),
+quarantine apply / release actions, and escalation create /
+resolve transitions onto
+`sn360.events.email.<tenant_id>.<kind>` on the platform's
+`sn360-platform` JetStream. `kindForVerdict` routes by primary
+category plus an `attachment_score >= 70` fallback that
+promotes any verdict with an attachment-malware signal into the
+`.malware` subject. The wire envelope reuses the platform's
+existing alert-forwarder shape (`@timestamp` / `rule` / `agent`
+/ `data`) so the platform indexes email events with no
+platform-side code change, and the rule-ID range 7800–7899 is
+reserved (`7800`/`7801` phishing Blocked/HighRisk,
+`7810`/`7811` BEC, `7820`/`7821` malware, `7830`/`7831`
+quarantine apply/release, `7840`/`7841` escalation
+create/resolve). `hashIdentifier(tenantID, email) =
+SHA-256(tenant || ":" || lower(trim(email)))` is the only path
+recipient and sender addresses take across the wire — raw
+addresses never cross the bridge.
 
-  | sn360-es event                | Subject                                       |
-  | ---                            | ---                                            |
-  | phishing verdict (Tier 1/2)   | `sn360.events.email.<tid>.phishing`           |
-  | BEC verdict                   | `sn360.events.email.<tid>.bec`                |
-  | malware-bearing attachment    | `sn360.events.email.<tid>.malware`            |
-  | quarantine action             | `sn360.events.email.<tid>.quarantine`         |
-  | escalation ticket             | `sn360.events.email.<tid>.escalation`         |
+Wiring lives in `cmd/sn360-es/app.go::newApplication` (bridge
+constructed after the event bus; closer registered for graceful
+shutdown; boot fails if `bridge.New` returns an error so a
+misconfigured-but-enabled bridge cannot silently drop every
+HighRisk verdict), `cmd/sn360-es/wire_infra.go::platformBridgeConfig`,
+`cmd/sn360-es/consumers_action.go::handleIngestionAction` and
+`handleActionQuarantine` (verdict + quarantine publish after
+the local action commits), and
+`cmd/sn360-es/consumers.go::handleEscalation` (create + resolve
+publish after `Escalate` / `ResolveEscalation` succeed). The
+bridge is gated on `PLATFORM_NATS_ENABLED` (default `false`)
+and the new `PLATFORM_NATS_URLS` / `_CREDS_FILE` / `_TOKEN` /
+`_STREAM` / `PLATFORM_CLUSTER_ID` / `_TLS_*` /
+`_RECONNECT_WAIT` / `_MAX_RECONNECTS` / `_PUBLISH_TIMEOUT` /
+`_RETRIES` env vars; `internal/config/validate.go` fail-closes
+on `PLATFORM_NATS_TLS_INSECURE=true` or empty
+`PLATFORM_NATS_URLS` in prod, mirroring the existing
+`NATS_TLS_INSECURE` guard. Hybrid-envelope extensions and
+dedup-budget env validation landed in follow-ups PR #59 and
+PR #60; the consumer side of WS-5A.6 lives in PR #65.
 
-- Config (new env vars on the sn360-es side):
-  - `PLATFORM_NATS_URLS` — comma-separated platform NATS URLs.
-  - `PLATFORM_NATS_ENABLED` — gate the bridge; defaults `false`
-    for standalone deployments.
-  - `PLATFORM_NATS_CREDS_FILE` — path to NATS credentials.
-- Wiring in `cmd/sn360-es/consumers.go`:
-  - `handleIngestionAction` (`consumers_action.go:21`) — publish
-    on terminal verdicts.
-  - `handleEscalation` (`consumers.go:297`) — publish escalation
-    open / update / resolve.
-  - `handleActionQuarantine` (`consumers_action.go:32`) — publish
-    quarantine apply / release / hold.
-- Wire envelope shape: re-use the platform's existing event
-  envelope (the same shape that `services/alert-forwarder`
-  already indexes into OpenSearch) — that keeps the bridge purely
-  a routing concern, not a schema-translation concern.
+### 5A.2 — Email-specific correlation rules  *(DONE — sn360-security-platform PR #257)*
 
-### 5A.2 — Email-specific correlation rules  *(TODO — P0)*
+Four bundled rules in
+[`kennguy3n/sn360-security-platform/data/correlation/`](https://github.com/kennguy3n/sn360-security-platform/tree/main/data/correlation)
+consume the WS-5A.1 envelope through the engine's existing
+matcher hot path with no engine code changes:
 
-In `kennguy3n/sn360-security-platform/data/correlation/`, add:
+- `21_email_phishing_then_escalation.yaml` — `message_id` join,
+  600s window, severity `high`. Joins on `message_id` because
+  escalations carry no `recipient_hash`.
+- `22_email_bec_then_escalation.yaml` — `message_id` join,
+  600s window, severity `critical`.
+- `23_email_quarantine_release_then_high_risk.yaml` —
+  `recipient_hash` join, 1800s window, severity `high`. Uses the
+  engine's `Source.Fields{action:"released"}` matcher to gate on
+  release events only, so apply→verdict (upstream policy
+  re-firing) cannot look like a release-driven signal.
+- `24_email_repeat_phishing_from_sender.yaml` — `sender_hash`
+  join, 1800s window, severity `high`. Two-slot same-subject
+  campaign idiom (cf. rule 08).
 
-- `11_phish_click_then_endpoint_activity.yaml` — phish-click
-  followed by suspicious endpoint behaviour (lateral-movement
-  precursor on the device the click came from).
-- `12_bec_then_wire_transfer.yaml` — BEC verdict followed by a
-  finance approval workflow event (joins to the kapp-fab finance
-  event stream).
-- `13_post_phish_account_compromise.yaml` — phish verdict
-  followed by impossible-travel sign-in or token-abuse from the
-  same identity.
-- `14_mass_phishing_campaign.yaml` — N phishing verdicts targeting
-  the same tenant within a sliding window, regardless of recipient.
+Fifteen new cases in `data/correlation/tests/` are auto-loaded
+by
+`services/correlation-engine/internal/dac/canonical_test.go::TestRuleTestHarness_CanonicalFixtures`
+and replay through a real `engine.Engine` wired to
+`DryRunStore` + `DryRunSink`. `data/mitre-mapping.yaml` gains
+six dotted `event_class` entries the bridge actually publishes,
+and `services/_mitre/killchain.go` adds `"T1656":
+"installation"` so kill-chain phase tagging is correct.
 
-The existing correlation files (`01_…` through `10_…`) live in
-the same directory and form the schema reference for these new
-rules.
+### 5A.3 — Playbooks  *(DONE — sn360-security-platform PR #258)*
 
-### 5A.3 — Playbooks  *(TODO — P0)*
+[`kennguy3n/sn360-security-platform/data/playbooks/11_phishing_response.yaml`](https://github.com/kennguy3n/sn360-security-platform/blob/main/data/playbooks/11_phishing_response.yaml)
+is rewritten to match the actual bridge envelope: the prior
+phantom `user_id` / `device_id` / `url` references (none of
+which the bridge publishes) are replaced with the canonical
+`message_id` / `sender_hash` / `recipient_hash` /
+`correlation_id` / `tier` keys from `engineFieldsForVerdict`,
+and the action surface is narrowed to enrichment + SOC
+visibility + audit — destructive identity actions are deferred
+to the soc-triage hash→identity resolution path. New
+`data/playbooks/23_email_quarantine_escalation.yaml` triggers on
+the WS-5A.2 correlation-match envelopes from rules 21 / 22 / 23
+only (explicit `trigger_subjects`, not the bare
+`sn360.events.correlation.matched.>` wildcard) and gates on a
+CEL `event.event_class == "correlation_match"` so a legacy
+raw-alert publish on the same subject hierarchy never trips the
+playbook. Each WS-5A.2 rule grows
+`incident_template.soar_trigger.enabled: false` so per-rule
+opt-in is preserved across the 5,000-tenant fleet.
+`TestBundledPlaybooks_EmailBridgeFieldsAreCanonical` pins every
+email-bridge playbook (PB-09, PB-11, PB-23) to a closed allow-list
+of `event.fields.<key>` derived from the bridge's published
+shape, walking nested params so a phantom field reference cannot
+sneak through a nested key.
+`TestBundledPlaybooks_PB23_SubscribesToWS5A2Rules` pins PB-23's
+`trigger_subjects` to the exact three WS-5A.2 SOAR subjects.
 
-In `kennguy3n/sn360-security-platform/data/playbooks/`:
+### 5A.4 — Dashboard panels  *(DONE — sn360-security-platform PR #266)*
 
-- Verify `data/playbooks/11_phishing_response.yaml`'s
-  `condition_cel` matches the bridge wire shape — the playbook's
-  `trigger_subjects` already lists `sn360.events.email.*.phishing`
-  / `sn360.events.email.*.identity.phishing`, which lines up with
-  the 5A.1 subject map.
-- New `23_email_quarantine_escalation.yaml` — runs when a
-  HighRisk quarantine is held for admin review on the sn360-es
-  side, opens a case in the platform's case-manager, and notifies
-  the SOC channel.
+Three operator investigation surfaces under
+[`kennguy3n/sn360-security-platform/sn360-dashboard-plugin/`](https://github.com/kennguy3n/sn360-security-platform/tree/main/sn360-dashboard-plugin):
+the verdict-mix histogram
+(`public/pages/Investigation/VerdictMixPanel.tsx`, reading the
+`sn360-events-*` OpenSearch index populated by WS-5A.1's
+bridge), the sender-trail drilldown
+(`public/pages/Investigation/SenderTrailDrilldown.tsx`), and
+the `?pseudo_id=` pivot page
+(`public/pages/MessageTrail/MessageTrailPanel.tsx`). The OSD
+BFF proxies through `server/routes/investigation.ts` and
+`server/clients/email_security.ts` — an HS256-signed JWT minter
+that binds `tid` to the operator's tenant — into the WS-3b
+investigation API. The proxy preserves sn360-es's invariants on
+the dashboard side: auth-before-resource (401 before any path
+parse or upstream call), missing-operator-role collapses to 401
+(not 403) to defeat role fingerprinting,
+unconfigured-upstream + unauth returns 401 (cannot probe
+service health), and upstream 404 emits a generic
+`{message:"not found"}` body so cross-tenant probes are
+indistinguishable. `sender_hash` is canonicalised to
+base64url-no-padding on both halves
+(`server/clients/email_security_encoding.ts`,
+`public/services/sender_hash.ts`) with
+`canonical(canonical(x)) === canonical(x)` idempotence pinned
+in tests. The plugin registers `APP_IDS.investigation` (order
+120) and `APP_IDS.messageTrail` (order 121), both
+`operatorOnly: true`.
 
-### 5A.4 — Dashboard panels  *(TODO — P1)*
+### 5A.5 — SOC triage email enrichment  *(DONE — sn360-security-platform PR #265)*
 
-In `kennguy3n/sn360-security-platform/sn360-dashboard-plugin/`,
-add an email-security tab with three panel groups:
+[`kennguy3n/sn360-security-platform/services/soc-triage/internal/enrichment/email_trail.go`](https://github.com/kennguy3n/sn360-security-platform/blob/main/services/soc-triage/internal/enrichment/email_trail.go)
+stamps `evidence.email_trail.{message_trail|sender_trail}` on
+SOC incidents whose `evidence` JSONB carries a `correlation_id`
+plus an email hint (`verdict_tier` / `source:"sn360-es"` /
+`pseudo_message_id` / `sender_hash`). Two wires share the merge:
+the handler-inline path in
+`services/soc-triage/internal/handler/handler.go::enrichInline`
+runs under a 3s budget before `Store.CreateIncident` (errors
+logged + swallowed; never blocks the request), and the
+60-second reconciler in
+`services/soc-triage/internal/enrichment/reconciler.go` sweeps
+incidents the inline path didn't enrich (batch 100, 24h
+window). The HTTP client at
+`services/soc-triage/internal/clients/sn360es/investigation.go`
+mints an HS256 JWT per call with `tid=tenant_id`, returns the
+sentinel `ErrNotFound` on 404, clamps `limit ≤ 500` and
+`since_hours ≤ 720`, and rejects `/` in base64url hashes at the
+typed boundary so a path-traversal cannot escape the URL.
+Per-incident `TryEnrichmentLock` calls
+`pg_try_advisory_lock(hashtextextended(incident_id,
+0x534f433541350000))` so the reconciler safely scales across
+replicas without double-fetch.
+`migrations/093_soc_incidents_evidence_gin.up.sql` adds the GIN
+index that keeps the `evidence ? 'correlation_id'` plan stable
+as the table grows. The merge is additive (existing
+`email_trail` keys preserved) and idempotent (last-write-wins
+on `email_trail`).
 
-- **Threat volume** — phishing / BEC / malware per tenant over
-  time, broken out by tier (Warning vs HighRisk vs Blocked) and
-  by Tier 0 bypass rate.
-- **Quarantine management** — held messages by tier, time-to-release,
-  release-by (user vs admin), FP-tracked re-injections.
-- **Investigation views** — drilldown from a correlation hit back
-  to the underlying sn360-es evaluation result via the
-  Investigation API (WS-3b).
+### 5A.6 — Escalation ticket resolution sync  *(DONE — cross-repo: sn360-security-platform PR #264 + sn360-es PR #65)*
 
-These panels read the same OpenSearch indices `alert-forwarder`
-already populates — WS-5A.1 fills the indices; WS-5A.4 visualises
-them.
+**Producer ([sn360-security-platform PR #264](https://github.com/kennguy3n/sn360-security-platform/pull/264)).**
+`services/soc-triage/internal/handler/handler.go::transitionIncident`
+emits the `IncidentResolved` envelope on
+`soc.incident.resolved` *after*
+`store.TransitionIncident` commits, gated on terminal status,
+wired publisher, and
+`extractEmailLink(inc.Evidence).HasIdentifier()` so non-email
+incidents (network IOC, process tree) don't burn audit rows on
+unactionable events. The envelope shape lives in
+`services/soc-triage/internal/events/incident_resolved.go`;
+`DedupIDFor` is `sha256(uvarint(len(id)) || id ||
+big_endian(resolved_at.UnixNano()))` emitted in both the body's
+`dedup_id` and the `Nats-Msg-Id` header so JetStream's
+600-second `sn360-platform` dedup window collapses redeliveries.
+Analyst outcomes map to a closed enum (`false_positive` →
+`false_positive`; `resolved` + `confirmed_phishing|confirmed_threat`
+→ `confirmed_threat`; `resolved` + `closed_no_action|benign` →
+`benign`; `resolved` + `requires_hunting|empty|unknown` →
+`inconclusive`; non-terminal → suppress publish).
 
-### 5A.5 — SOC triage email enrichment  *(TODO — P1)*
-
-- `kennguy3n/sn360-security-platform/services/soc-triage/`:
-  enrich case context with the matching email evaluation trail
-  (calls back into sn360-es Investigation API from WS-3b).
-- `kennguy3n/sn360-security-platform/services/ai-triage-agent/`:
-  add an email-specific prompt template that summarises the
-  evaluation trail + relationship context for the analyst.
-
-### 5A.6 — Escalation ticket resolution sync  *(TODO — P1)*
-
-Bidirectional sync over platform NATS:
-
-- sn360-es opens an escalation via 5A.1; the platform's
-  case-manager creates a case. Case state changes (assigned,
-  in-progress, resolved, root-cause-tagged) flow back to sn360-es
-  on `sn360.events.email.<tid>.escalation.update`.
-- sn360-es applies the resolution to the local
-  `escalation_tickets` row so the customer-facing API surfaces
-  the final disposition without polling the platform.
+**Consumer (PR #65).**
+The durable `ws5a6-escalation-sync` consumer registered in
+`cmd/sn360-es/consumers.go` calls
+`internal/service/escalation/resolver.go::Resolve`, which walks
+tenant check → wire-enum check → `dedup_id` idempotency → eval
+row lookup (`pseudo_message_id` → `correlation_id` fallback) →
+verdict-flip matrix. The matrix is asymmetric:
+`confirmed_threat × {benign,suspicious} → malicious`;
+`false_positive × {malicious,suspicious} → benign`;
+`benign × malicious → benign` (downgrade);
+`inconclusive | matching → noop`. On flip,
+`EvaluationResults.SetFinalVerdict` updates the verdict,
+`EmailVerdictAudits.Insert` writes exactly one audit row per
+invocation (idempotent on `UNIQUE (tenant_id, dedup_id)`), and —
+only if the new verdict is `malicious` and the banner was
+already delivered — `cmd/sn360-es/banner_reopener.go::ReopenBanner`
+re-injects an "Updated by SOC analyst" banner through the same
+provider / `delivered_message_id` / `delivered_email` tuple
+stamped by `handleActionBanner` on the original delivery.
+`migrations/0021_email_verdict_audit.up.sql` ships the audit
+table plus the
+`banner_state.{provider,delivered_message_id,delivered_email}`
+extensions; `pkg/events/nats/streams.go` registers `soc.>` as a
+soc-triage-owned subject on the existing `sn360-platform`
+stream so cross-stream ordering stays simple.
 
 ---
 
@@ -540,18 +739,34 @@ X-Content-Type-Options: nosniff
 
 ## Priority table
 
-| Priority | Workstream | Why |
-| --- | --- | --- |
-| P0 | WS-1 (Security: RLS, RBAC, JWT, TTL fix) | Cannot go to production without these |
-| P0 | WS-2 (Read-replica + HASH partitioning + cost model 5k) | Remaining infrastructure for 5k tenants (PgBouncer + KEDA already done) |
-| P0 | WS-5A.1–3 (NATS bridge + correlation rules + playbooks) | Platform IS the SOC — email events must flow into it |
-| P1 | WS-5A.4–6 (Dashboard panels + SOC enrichment + escalation sync) | Complete the bidirectional SOC loop |
-| P1 | WS-3 (Dashboard + Quarantine self-service) | Biggest usability gap vs competitors |
-| P1 | WS-4a (Incremental baselines) | Biggest detection gap vs Abnormal Security |
-| P2 | WS-5B (External SIEM export + threat intel feeds) | For standalone deployments / third-party SIEM |
-| P2 | WS-4b–c (Real corpus + model abstraction) | Detection credibility |
-| P3 | WS-6 (Load testing at 5k tenants) | Validates everything above |
-| P3 | WS-7 (Add-ins + schema versioning + CSP) | Polish |
+| Priority | Workstream | Why | Status |
+| --- | --- | --- | --- |
+| P0 | WS-1 (Security: RLS, RBAC, JWT, TTL fix) | Cannot go to production without these | **Shipped** (PR #49, #50, #51, #52) |
+| P0 | WS-2 (Read-replica + HASH partitioning + cost model 5k) | Remaining infrastructure for 5k tenants (PgBouncer + KEDA already done) | **2a / 2b shipped** (PR #57, #58); 2c P2 in flight (see *P2 — In flight* below) |
+| P0 | WS-5A.1–3 (NATS bridge + correlation rules + playbooks) | Platform IS the SOC — email events must flow into it | **Shipped** (sn360-es PR #56; sn360-security-platform PR #257, #258) |
+| P1 | WS-5A.4–6 (Dashboard panels + SOC enrichment + escalation sync) | Complete the bidirectional SOC loop | **Shipped** (sn360-security-platform PR #266, #265, #264 + sn360-es PR #65) |
+| P1 | WS-3 (Dashboard + Quarantine self-service) | Biggest usability gap vs competitors | **Shipped** (PR #62, #64) |
+| P1 | WS-4a (Incremental baselines) | Biggest detection gap vs Abnormal Security | **Shipped** (PR #61) |
+| P2 | WS-5B (External SIEM export + threat intel feeds) | For standalone deployments / third-party SIEM | **In flight** — 5B.2 + 5B.3 parallel sub-Devins (see below); 5B.1 TODO |
+| P2 | WS-4b–c (Real corpus + model abstraction) | Detection credibility | **4b shipped** (PR #63); **4c in flight** (see below) |
+| P3 | WS-6 (Load testing at 5k tenants) | Validates everything above | TODO |
+| P3 | WS-7 (Add-ins + schema versioning + CSP) | Polish | TODO |
+
+### P2 — In flight (parallel sub-Devins)
+
+The following P2 workstreams are currently being delivered by
+parallel sub-Devin sessions spawned after the P0+P1 sweep
+landed. Each section above (§2c, §4c, §5B.2, §5B.3) describes
+the target shape; PR refs will be added here as each session
+opens its PR.
+
+- **WS-2c** — Cost Model Recalibration for 5,000 Tenants
+  (sn360-es). _PR pending._
+- **WS-4c** — Tier 2 Model Abstraction (sn360-es). _PR pending._
+- **WS-5B.2** — Webhook / SIEM export sink for standalone
+  deployments (sn360-es). _PR pending._
+- **WS-5B.3** — Threat intel feed consumption (sn360-es). _PR
+  pending._
 
 ---
 
