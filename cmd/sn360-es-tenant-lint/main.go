@@ -118,6 +118,15 @@ var tenantScopedTables = map[string]struct{}{
 	// WS-3a quarantine self-service tables (migration 0022).
 	"quarantine_release_audit": {},
 	"tenant_release_policies":  {},
+	// WS-5A.6 cross-repo escalation sync tables (migration 0021).
+	// Registered here because both tables are tenant-scoped with
+	// RLS policies installed by 0021_email_verdict_audit.up.sql,
+	// and the reverse drift guard in main_test.go correctly
+	// requires every RLS-protected table to appear in this map so
+	// the analyser refuses to query them without a tenant_id
+	// predicate.
+	"banner_state":        {},
+	"email_verdict_audit": {},
 }
 
 // tableREs holds one pre-compiled regexp per tenant-scoped table,
