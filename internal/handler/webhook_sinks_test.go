@@ -352,6 +352,43 @@ func TestWebhookSinks_TestEndpointReportsHTTPStatusFromCustomer(t *testing.T) {
 	}
 }
 
+// TestWebhookSinks_ParseTenantPath pins the path-parser boundary:
+// the prefix match on `/webhook-sinks` must NOT accept any
+// continuation other than empty (collection) or `/<id>...` (item /
+// sub-resource). Otherwise `/webhook-sinksXXX` would traverse the
+// handler with `XXX` as a garbled sink id, returning 404 only by
+// accident (because the repo lookup misses) and creating a
+// confusing audit signal at the repo layer.
+func TestWebhookSinks_ParseTenantPath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		path     string
+		wantOK   bool
+		wantTID  string
+		wantTail string
+	}{
+		{"collection_endpoint", "/v1/tenants/acme/webhook-sinks", true, "acme", ""},
+		{"item_get", "/v1/tenants/acme/webhook-sinks/abc-id", true, "acme", "/abc-id"},
+		{"test_subresource", "/v1/tenants/acme/webhook-sinks/abc-id/test", true, "acme", "/abc-id/test"},
+		{"missing_tenant", "/v1/tenants//webhook-sinks", false, "", ""},
+		{"wrong_prefix", "/v1/tenants/acme/other", false, "", ""},
+		{"trailing_garbage_no_slash", "/v1/tenants/acme/webhook-sinksXXX", false, "", ""},
+		{"trailing_garbage_word", "/v1/tenants/acme/webhook-sinksfoo/bar", false, "", ""},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tid, tail, ok := parseTenantSinksPath(tc.path)
+			if ok != tc.wantOK || tid != tc.wantTID || tail != tc.wantTail {
+				t.Fatalf("parseTenantSinksPath(%q) = (%q,%q,%v); want (%q,%q,%v)",
+					tc.path, tid, tail, ok, tc.wantTID, tc.wantTail, tc.wantOK)
+			}
+		})
+	}
+}
+
 // --- Helpers --------------------------------------------------------------
 
 func must(t *testing.T, err error) {

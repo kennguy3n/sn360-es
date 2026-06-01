@@ -691,12 +691,21 @@ func (m *memoryWebhookSinks) AppendAudit(_ context.Context, e WebhookSinkAuditEn
 	if e.DedupID == "" {
 		return errors.New("repository: webhook sink audit dedup_id is required")
 	}
+	if e.TenantID == "" {
+		return errors.New("repository: webhook sink audit tenant_id is required")
+	}
 	if !e.Action.Valid() {
 		return fmt.Errorf("repository: invalid webhook sink audit action %q", e.Action)
 	}
+	// Dedup is scoped to (tenant_id, dedup_id) to match the Postgres
+	// UNIQUE constraint in migration 0023. A global-on-dedup_id key
+	// would silently swallow a second tenant emitting the same
+	// dedup string and produce diverging behavior under cross-tenant
+	// tests.
+	key := e.TenantID + "\x00" + e.DedupID
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, exists := m.audit[e.DedupID]; exists {
+	if _, exists := m.audit[key]; exists {
 		// Idempotent — silently drop duplicate.
 		return nil
 	}
@@ -706,8 +715,8 @@ func (m *memoryWebhookSinks) AppendAudit(_ context.Context, e WebhookSinkAuditEn
 	if e.CreatedAt.IsZero() {
 		e.CreatedAt = time.Now().UTC()
 	}
-	m.audit[e.DedupID] = e
-	m.auditO = append(m.auditO, e.DedupID)
+	m.audit[key] = e
+	m.auditO = append(m.auditO, key)
 	return nil
 }
 

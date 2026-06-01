@@ -230,6 +230,14 @@ func parseTenantSinksPath(p string) (tenantID, suffix string, ok bool) {
 		return "", "", false
 	}
 	suffix = tail[len(seg):]
+	// Reject `/webhook-sinksXXX` style paths where the prefix
+	// match accepts any continuation. The collection endpoint
+	// has an empty suffix; sub-resources start with '/'. Anything
+	// else is a malformed path and must 404 at the parser layer
+	// rather than traversing into the repo with a garbled id.
+	if suffix != "" && suffix[0] != '/' {
+		return "", "", false
+	}
 	if tenantID == "" {
 		return "", "", false
 	}
