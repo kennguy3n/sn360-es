@@ -56,6 +56,23 @@ type Config struct {
 	// FetchBatchSize / FetchMaxWait are the defaults for pull consumers.
 	FetchBatchSize int
 	FetchMaxWait   time.Duration
+
+	// HomeRegion identifies the deployment's home region; used to
+	// pick the home entry out of Supercluster when wiring
+	// cross-region leaf-cluster connections. Empty in
+	// single-region deployments (the default) and ignored when
+	// Supercluster is also empty.
+	HomeRegion string
+	// Supercluster maps region name -> comma-separated NATS URL
+	// list for that region's leaf cluster. When non-empty,
+	// NewClient appends the URLs from Supercluster[HomeRegion]
+	// to the primary URL so the binary fails over to home-region
+	// leaf nodes when the primary URL is unreachable, and
+	// surfaces the remote-region URLs to operators via the
+	// boot log. Cross-region publish/subscribe is the same Subject
+	// space — see internal/docs/MULTI_REGION.md for the wiring.
+	// Nil / empty: single-region behaviour (use URL only).
+	Supercluster map[string]string
 }
 
 // DefaultConfig returns a Config populated with sensible defaults.

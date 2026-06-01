@@ -1,12 +1,25 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
 )
+
+// RegionResolver is the small interface TenantConnBinder consumes to
+// route a tenant's request to its regional pool (WS-7a). The real
+// implementation lives in internal/service/tenant.CachedRegionResolver
+// — the middleware accepts the interface so the package stays
+// dependency-free of the resolver implementation. Returning a
+// non-empty region and a nil error binds the request to that region's
+// pool; any error fails closed with 5xx so the downstream handler
+// does not see a misrouted request.
+type RegionResolver interface {
+	ResolveRegion(ctx context.Context, tenantID string) (string, error)
+}
 
 // TenantConnConfig wires TenantConnBinder.
 type TenantConnConfig struct {
@@ -16,6 +29,17 @@ type TenantConnConfig struct {
 	// that wire up the HTTP stack without a real database (e.g.
 	// in-memory repositories, unit tests of route registration).
 	DB *postgres.DB
+	// Regional, when non-nil, switches the binder into WS-7a
+	// multi-region mode: tenant_id -> region via Resolver, then
+	// region -> *DB via Regional.WithTenantInRegion. Leaving
+	// Regional nil keeps the single-region code path — the default
+	// for every deployment that has not set PG_REGION_MAP.
+	Regional *postgres.RegionalDB
+	// Resolver maps a tenant id to its region label. Required when
+	// Regional is non-nil; ignored otherwise. The wiring layer
+	// passes a CachedRegionResolver backed by the home-region
+	// TenantRepository.
+	Resolver RegionResolver
 	// Logger receives any failure to acquire a conn or set the
 	// tenant GUC. The request is rejected with 500 in that case
 	// because RLS would silently zero-out reads on an unbound
@@ -52,11 +76,13 @@ type TenantConnConfig struct {
 // at the binding step (5xx on acquire-conn failure) is preferable to
 // silently serving empty responses to a real user.
 type TenantConnBinder struct {
-	next   http.Handler
-	db     *postgres.DB
-	logger *slog.Logger
-	skip   map[string]bool
-	prefix []string
+	next     http.Handler
+	db       *postgres.DB
+	regional *postgres.RegionalDB
+	resolver RegionResolver
+	logger   *slog.Logger
+	skip     map[string]bool
+	prefix   []string
 }
 
 // NewTenantConnBinder wraps next.
@@ -77,11 +103,13 @@ func NewTenantConnBinder(next http.Handler, cfg TenantConnConfig) *TenantConnBin
 		logger = slog.New(slog.NewTextHandler(discardWriter{}, nil))
 	}
 	return &TenantConnBinder{
-		next:   next,
-		db:     cfg.DB,
-		logger: logger,
-		skip:   skip,
-		prefix: prefixes,
+		next:     next,
+		db:       cfg.DB,
+		regional: cfg.Regional,
+		resolver: cfg.Resolver,
+		logger:   logger,
+		skip:     skip,
+		prefix:   prefixes,
 	}
 }
 
@@ -102,7 +130,7 @@ func (t *TenantConnBinder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		t.next.ServeHTTP(w, r)
 		return
 	}
-	ctx, release, err := t.db.WithTenant(r.Context(), tenantID)
+	ctx, release, err := t.bind(r.Context(), tenantID)
 	if err != nil {
 		t.logger.WarnContext(r.Context(), "sn360-es: tenant_conn: bind failed",
 			slog.String("tenant_id", tenantID), slog.Any("error", err))
@@ -116,6 +144,46 @@ func (t *TenantConnBinder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	t.next.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// bind dispatches between the single-region path (t.db.WithTenant) and
+// the multi-region path (resolve region -> t.regional.WithTenantInRegion).
+// Extracted so the consumer-side wrapper in cmd/sn360-es/consumers.go
+// can share the same routing decision via BindTenant.
+func (t *TenantConnBinder) bind(ctx context.Context, tenantID string) (context.Context, postgres.ReleaseFunc, error) {
+	if t.regional != nil && t.resolver != nil {
+		region, err := t.resolver.ResolveRegion(ctx, tenantID)
+		if err != nil {
+			return ctx, nil, err
+		}
+		return t.regional.WithTenantInRegion(ctx, region, tenantID)
+	}
+	return t.db.WithTenant(ctx, tenantID)
+}
+
+// BindTenant exposes the binder's bind decision to non-HTTP call-sites
+// (the NATS consumer wrapper in cmd/sn360-es/consumers.go in
+// particular) so HTTP and consumer paths route through the same
+// single-region / multi-region branch. The signature mirrors
+// (*postgres.DB).WithTenant exactly.
+func (t *TenantConnBinder) BindTenant(ctx context.Context, tenantID string) (context.Context, postgres.ReleaseFunc, error) {
+	if t == nil {
+		return ctx, nil, errors.New("middleware: TenantConnBinder is nil")
+	}
+	return t.bind(ctx, tenantID)
+}
+
+// Resolver returns the RegionResolver this binder was constructed with,
+// or nil for a single-region binder. Exposed so the HTTP-path binder
+// in wrapMiddleware (cmd/sn360-es/routes.go) can be constructed with
+// the same resolver as the shared NATS-consumer binder — preserving
+// the invariant that both entrypoints route through identical region
+// resolution.
+func (t *TenantConnBinder) Resolver() RegionResolver {
+	if t == nil {
+		return nil
+	}
+	return t.resolver
 }
 
 func (t *TenantConnBinder) isSkipped(path string) bool {

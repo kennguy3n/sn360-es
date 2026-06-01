@@ -11,6 +11,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/handler"
 	"github.com/kennguy3n/sn360-es/internal/middleware"
 	"github.com/kennguy3n/sn360-es/pkg/intel"
+	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
 	storageredis "github.com/kennguy3n/sn360-es/pkg/storage/redis"
 )
 
@@ -291,8 +292,23 @@ func wrapMiddleware(mux http.Handler, app *application) (http.Handler, error) {
 	// mux handlers see a ctx with both tenant_id AND a pinned
 	// conn whose session GUC is set to that tenant.
 	if app.pgDB != nil {
+		// WS-7a: forward the shared tenantBinder's
+		// RegionalDB + Resolver into the per-mux binder so
+		// HTTP and NATS entrypoints route through identical
+		// region-resolution logic. Either / both fields stay
+		// nil in single-region deployments and the binder
+		// falls back to the pgDB.WithTenant single-pool code
+		// path -- the existing single-region default.
+		var regional *postgres.RegionalDB
+		var resolver middleware.RegionResolver
+		if app.tenantBinder != nil {
+			regional = app.regional
+			resolver = app.tenantBinder.Resolver()
+		}
 		h = middleware.NewTenantConnBinder(h, middleware.TenantConnConfig{
 			DB:        app.pgDB,
+			Regional:  regional,
+			Resolver:  resolver,
 			Logger:    logger,
 			SkipPaths: defaultAuthSkipPaths(),
 		})

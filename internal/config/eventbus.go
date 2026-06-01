@@ -24,6 +24,18 @@ type NATS struct {
 	Storage              string // "file" or "memory"
 	FetchBatchSize       int
 	FetchMaxWait         time.Duration
+
+	// Supercluster is the parsed NATS_SUPERCLUSTER env var: a
+	// region -> comma-separated NATS URL list used by the
+	// cross-region SOC bridge publisher / subscriber to dial a
+	// specific region's leaf cluster. Empty / nil means the
+	// binary only talks to the local-region NATS server
+	// (NATS_URL) and no cross-region publishing is wired — the
+	// default for single-region deployments. See
+	// internal/docs/MULTI_REGION.md for the deployment topology
+	// and pkg/events/nats/supercluster.go for the option
+	// builder.
+	Supercluster map[string]string
 }
 
 func loadNATS() NATS {

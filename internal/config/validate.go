@@ -65,6 +65,24 @@ func (c Config) validate() error {
 		c.Score.Caution <= c.Score.Info {
 		return errors.New("SCORE_*_THRESHOLD must be strictly decreasing: blocked > high > warning > caution > info")
 	}
+	// WS-7a multi-region routing: every multi-region deployment must
+	// carry a PG_REGION_MAP entry for its home region so the primary
+	// PG_HOST pool maps cleanly into the regional router. Without
+	// this check, a tenant whose `tenants.region` equals
+	// PG_HOME_REGION would have no pool to bind to and every request
+	// for that tenant would fail closed at the middleware boundary —
+	// a fail-fast at boot is more useful than fail-closed-at-runtime
+	// because the operator catches the misconfig before any traffic
+	// arrives. Empty / nil RegionMap (single-region default) leaves
+	// the guard a no-op.
+	if len(c.Postgres.RegionMap) > 0 {
+		if c.Postgres.HomeRegion == "" {
+			return errors.New("PG_HOME_REGION must be set when PG_REGION_MAP is configured (it names which region the primary PG_HOST pool serves)")
+		}
+		if _, ok := c.Postgres.RegionMap[c.Postgres.HomeRegion]; !ok {
+			return fmt.Errorf("PG_REGION_MAP must contain an entry for PG_HOME_REGION=%q; got regions %v", c.Postgres.HomeRegion, sortedRegionKeys(c.Postgres.RegionMap))
+		}
+	}
 	// TIER1_SUPPRESS_PARTNER is the (typically negative) offset
 	// applied to Tier1 PassBelow / FlagAbove for Partner / Customer
 	// senders. .env.example documents the contract as "Must be <= 0"
@@ -230,6 +248,17 @@ func (c Config) validate() error {
 		if c.Postgres.Read.Host != "" &&
 			strings.EqualFold(strings.TrimSpace(c.Postgres.Read.SSLMode), "disable") {
 			return errors.New("PG_READ_SSLMODE=disable is not allowed in production environments (UAT/prod) when PG_READ_HOST is set; set PG_READ_SSLMODE=require or PG_READ_SSLMODE=verify-full")
+		}
+		// WS-7a multi-region routing: every regional pool carries
+		// the same RLS-scoped data, so a PG_REGION_MAP entry with
+		// sslmode=disable downgrades the trust chain identically
+		// to the primary guard above. Only kicks in when the
+		// operator actually wired a region map; the empty / nil
+		// map (single-region default) leaves the loop a no-op.
+		for region, pg := range c.Postgres.RegionMap {
+			if strings.EqualFold(strings.TrimSpace(pg.SSLMode), "disable") {
+				return fmt.Errorf("PG_REGION_MAP[%s]: sslmode=disable is not allowed in production environments (UAT/prod); set sslmode=require or sslmode=verify-full on the connection URL", region)
+			}
 		}
 		// CORS_ALLOWED_ORIGINS=* (wildcard) defeats browser SOP for
 		// every authenticated route. middleware/cors.go already

@@ -93,6 +93,15 @@ func factoryConfigFromAppConfig(cfg *config.Config) bus.Config {
 			Storage:              cfg.NATS.Storage,
 			FetchBatchSize:       cfg.NATS.FetchBatchSize,
 			FetchMaxWait:         cfg.NATS.FetchMaxWait,
+			// WS-7a: forward the multi-region home region
+			// + super-cluster map so the NATS client can
+			// fail over to leaf-cluster URLs in the same
+			// region. Both default to zero values
+			// (HomeRegion="" via natsbus default, nil
+			// Supercluster) when the operator left
+			// NATS_SUPERCLUSTER unset.
+			HomeRegion:   cfg.Postgres.HomeRegion,
+			Supercluster: cfg.NATS.Supercluster,
 		},
 		Redis: redisbus.Config{
 			Addr:           cfg.Redis.Addr,

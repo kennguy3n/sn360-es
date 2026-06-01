@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +17,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/dto"
 	"github.com/kennguy3n/sn360-es/internal/eventsschema"
 	"github.com/kennguy3n/sn360-es/internal/handler"
+	"github.com/kennguy3n/sn360-es/internal/middleware"
 	"github.com/kennguy3n/sn360-es/internal/repository"
 	"github.com/kennguy3n/sn360-es/internal/service"
 	"github.com/kennguy3n/sn360-es/internal/service/action"
@@ -30,6 +33,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/onboarding"
 	"github.com/kennguy3n/sn360-es/internal/service/predict"
 	"github.com/kennguy3n/sn360-es/internal/service/selfrelease"
+	tenantsvc "github.com/kennguy3n/sn360-es/internal/service/tenant"
 	"github.com/kennguy3n/sn360-es/internal/service/tier0"
 	"github.com/kennguy3n/sn360-es/internal/service/tier1"
 	"github.com/kennguy3n/sn360-es/internal/service/webhooksink"
@@ -82,8 +86,22 @@ type application struct {
 
 	eventBus events.EventService
 	pgDB     *postgres.DB
-	redis    *redis.Client
-	repos    *repository.Registry
+	// regional carries the WS-7a multi-region routing wrapper.
+	// Nil in single-region deployments (PG_REGION_MAP empty);
+	// every code path that needs to bind a tenant connection
+	// goes through tenantBinder, which uses regional when set
+	// and falls back to pgDB.WithTenant when nil. See
+	// internal/docs/MULTI_REGION.md.
+	regional *postgres.RegionalDB
+	// tenantBinder is the shared single-region / multi-region
+	// tenant-context binder used by both the HTTP middleware and
+	// the NATS consumer wrapper, so the routing decision lives in
+	// exactly one place. Nil when pgDB is not wired (in-memory
+	// runs / tests of route registration); call-sites null-check
+	// and skip binding in that case.
+	tenantBinder *middleware.TenantConnBinder
+	redis        *redis.Client
+	repos        *repository.Registry
 
 	// schemaValidator is the WS-7c registry that gates every
 	// publish + every subscribe against the registered
@@ -459,9 +477,102 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 					slog.String("read_host", pgDB.ReadHost()),
 					slog.String("primary_host", cfg.Postgres.Host))
 			}
+
+			// WS-7a (Multi-Region Routing): when PG_REGION_MAP
+			// is set, open one extra pool per non-home region
+			// and wrap them in a RegionalDB. The primary pool
+			// (pgDB) doubles as the home region's pool so we
+			// do not double-open against the same host. A
+			// failure to open any regional pool is fatal: a
+			// deployment that explicitly enumerated multiple
+			// regions in PG_REGION_MAP relies on every region
+			// being reachable for tenant isolation; silently
+			// dropping a region would route its tenants to no
+			// pool at all and fail closed at every request —
+			// the operator wants the boot to fail loudly
+			// instead. Operators who want to disable
+			// multi-region routing should unset
+			// PG_REGION_MAP (single-region default).
+			if len(cfg.Postgres.RegionMap) > 0 {
+				extras := make(map[string]*postgres.DB, len(cfg.Postgres.RegionMap)-1)
+				for _, region := range sortedRegionNames(cfg.Postgres.RegionMap) {
+					if region == cfg.Postgres.HomeRegion {
+						continue
+					}
+					regCfg := cfg.Postgres.RegionMap[region]
+					regDB, rerr := postgres.Open(ctx, postgres.Config{
+						Host:            regCfg.Host,
+						Port:            regCfg.Port,
+						User:            regCfg.User,
+						Password:        regCfg.Password,
+						Database:        regCfg.Database,
+						SSLMode:         regCfg.SSLMode,
+						MaxOpenConns:    regCfg.MaxOpenConns,
+						MaxIdleConns:    regCfg.MaxIdleConns,
+						ConnMaxLifetime: regCfg.ConnMaxLifetime,
+					})
+					if rerr != nil {
+						// Close pools we opened so far before
+						// bailing out — leaks here become
+						// orphaned connections at the regional
+						// Postgres instances.
+						for _, opened := range extras {
+							_ = opened.Close()
+						}
+						return nil, fmt.Errorf("postgres region %q: %w", region, rerr)
+					}
+					extras[region] = regDB
+				}
+				regional, rerr := postgres.NewRegionalDB(cfg.Postgres.HomeRegion, pgDB, extras)
+				if rerr != nil {
+					for _, opened := range extras {
+						_ = opened.Close()
+					}
+					return nil, fmt.Errorf("postgres regional router: %w", rerr)
+				}
+				app.regional = regional
+				app.closers = append(app.closers, regional.Close)
+				regional.LogBoot(logger)
+			}
 		}
 	} else {
 		logger.Info("sn360-es: postgres not configured; repository layer disabled")
+	}
+
+	// WS-7a: build the shared tenant-context binder. Both the HTTP
+	// middleware (wrapMiddleware) and the NATS consumer wrapper
+	// (tenantBoundMessageHandler) route through the same binder so
+	// the single-region vs multi-region routing decision lives in
+	// one place. The binder constructor accepts a nil DB and
+	// no-ops (passes through unbound) in that case, matching the
+	// existing single-region "no pgDB" code path.
+	if app.pgDB != nil {
+		binderCfg := middleware.TenantConnConfig{
+			DB:     app.pgDB,
+			Logger: logger,
+		}
+		if app.regional != nil && app.repos != nil {
+			// CachedRegionResolver wraps the home-region
+			// TenantRepository (Repos.Tenants) — the
+			// `tenants` table is NOT under RLS so the
+			// lookup runs on an unbound conn. TTL defaults
+			// to 5 min via DefaultRegionCacheTTL.
+			resolver := tenantsvc.NewCachedRegionResolver(
+				tenantsvc.NewRegionLookup(app.repos.Tenants),
+				0, // use DefaultRegionCacheTTL
+			)
+			binderCfg.Regional = app.regional
+			binderCfg.Resolver = resolver
+		}
+		// The HTTP middleware wraps an http.Handler; we
+		// construct a no-op http.Handler here so the same
+		// *TenantConnBinder can be re-used for its
+		// BindTenant() side. wrapMiddleware in routes.go
+		// builds another TenantConnBinder wrapping the real
+		// mux for the HTTP path — both bindings consult the
+		// same regional+resolver pair so behaviour is
+		// identical between HTTP and NATS entrypoints.
+		app.tenantBinder = middleware.NewTenantConnBinder(noopHandler{}, binderCfg)
 	}
 
 	// Redis.
@@ -1481,3 +1592,32 @@ func buildTracer(ctx context.Context, cfg *config.Config, logger *slog.Logger) (
 	}
 	return tr, closer, nil
 }
+
+// sortedRegionNames returns the keys of the PG_REGION_MAP region map in
+// lexicographic order. Used by the multi-region pool open loop in
+// newApplication so boot-time logs (and any partial-failure messages)
+// are deterministic — Go's randomised map iteration order would
+// otherwise make repeat boots look unstable to operators reading the
+// rolling deploy log.
+func sortedRegionNames(m map[string]config.Postgres) []string {
+	out := make([]string, 0, len(m))
+	for region := range m {
+		out = append(out, region)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// noopHandler is the http.Handler stub used to construct the
+// application's shared *middleware.TenantConnBinder. The shared
+// binder is consumed only via its BindTenant() method (from the
+// NATS consumer wrapper in consumers.go); its ServeHTTP path is
+// never reached because wrapMiddleware in routes.go builds a
+// separate *middleware.TenantConnBinder wrapping the real mux for
+// the HTTP path. We accept the small bookkeeping cost of two
+// binder instances to keep the middleware API symmetric — both
+// instances consult the same RegionalDB + Resolver so behaviour is
+// identical between HTTP and NATS entrypoints.
+type noopHandler struct{}
+
+func (noopHandler) ServeHTTP(_ http.ResponseWriter, _ *http.Request) {}
