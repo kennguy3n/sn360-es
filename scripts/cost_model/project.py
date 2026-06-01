@@ -499,10 +499,13 @@ def cost_compute(profile: TrafficProfile, levers: CostLevers) -> Dict[str, float
         # (single-replica monolith under the medium-cohort workload).
         # The discount intentionally MAKES the role-split-alone path
         # nominally more expensive than the monolith, which the
-        # regression test at test_project.py:207 asserts. KEDA-on-lag
-        # is the lever that recovers the consolidation savings on
-        # the split topology; the cost model surfaces both lines so
-        # the role-split → KEDA pairing is visible as a net win.
+        # ``test_role_split_reduces_compute`` regression in
+        # ``scripts/cost_model/test_project.py`` asserts (referenced
+        # by symbol name so a future test-file reshuffle doesn't
+        # bit-rot this comment). KEDA-on-lag is the lever that
+        # recovers the consolidation savings on the split topology;
+        # the cost model surfaces both lines so the role-split →
+        # KEDA pairing is visible as a net win.
         total_vcpu_h = (api_vcpu_h + consumer_vcpu_h + worker_vcpu_h) * 0.70
 
     # Memory roughly tracks vCPU at the container shape we use.
