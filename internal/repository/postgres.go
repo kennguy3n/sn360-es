@@ -972,6 +972,90 @@ UPDATE communication_histories
 	return n > 0, nil
 }
 
+// RecordSighting is the WS-4a incremental write path. See the
+// docstring on CommunicationHistoryRepository.RecordSighting for the
+// semantic contract. The implementation is a single
+// INSERT ... ON CONFLICT DO UPDATE statement so the increment is
+// atomic at the row level — no read-modify-write window for a
+// concurrent worker CAS or another sighting to race against.
+//
+// Column-level semantics enforced in SQL:
+//
+//   - count_7d / count_30d: monotonically incremented by 1 on conflict.
+//   - last_seen_at: GREATEST(existing, $sent_at) — never regresses.
+//   - first_seen_at: excluded from DO UPDATE SET so the persisted
+//     value stays stable across every subsequent
+//     sighting (FirstTimeExternal heuristic invariant).
+//   - sender_domain / sender_domain_hash: filled in only when the
+//     persisted value is empty AND the sighting
+//     carries a non-empty value (COALESCE on
+//     NULLIF(persisted, ”) for sender_domain;
+//     length-check via OCTET_LENGTH for the bytea).
+//   - relationship / typical_hour: not touched. Owned by the worker
+//     CAS path (UpdateCountsIfFresh).
+//   - updated_at: stamped to NOW() so the worker's CAS guard reads
+//     a fresher row and steps aside on the next
+//     cycle, exactly like Upsert does.
+func (p *pgCommHistory) RecordSighting(ctx context.Context, s Sighting) error {
+	if s.TenantID == "" {
+		return errors.New("repository: RecordSighting requires a tenant id")
+	}
+	if len(s.SenderHash) == 0 || len(s.RecipientHash) == 0 {
+		return errors.New("repository: RecordSighting requires non-empty sender and recipient hashes")
+	}
+	if s.SentAt.IsZero() {
+		return errors.New("repository: RecordSighting requires a non-zero SentAt")
+	}
+	// Pre-allocate a fresh id for the INSERT branch. ON CONFLICT
+	// DO UPDATE preserves the persisted id (PRIMARY KEY is never
+	// re-assigned on conflict), so this UUID is consumed only when
+	// the row didn't exist yet.
+	newID := uuid.NewString()
+	// sender_domain is nullable; pass a NULL when the sighting
+	// doesn't carry one so the column default (NULL) wins on the
+	// INSERT branch and the COALESCE-with-existing logic wins on
+	// the UPDATE branch. sender_domain_hash is NOT NULL in the
+	// schema, so empty bytes are stored as an empty-but-present
+	// bytea on the INSERT branch (`''::bytea`); the UPDATE branch
+	// uses OCTET_LENGTH to gate the upgrade.
+	var sdomain any
+	if s.SenderDomain != "" {
+		sdomain = s.SenderDomain
+	}
+	domainHash := s.SenderDomainHash
+	if domainHash == nil {
+		domainHash = []byte{}
+	}
+	_, err := p.db.ExecContext(ctx, `
+INSERT INTO communication_histories (
+    id, tenant_id, sender_hash, recipient_hash, sender_domain_hash,
+    sender_domain, count_7d, count_30d, first_seen_at, last_seen_at, relationship
+)
+VALUES ($1, $2, $3, $4, $5, $6, 1, 1, $7, $7, '')
+ON CONFLICT (tenant_id, sender_hash, recipient_hash) DO UPDATE SET
+    count_7d   = communication_histories.count_7d + 1,
+    count_30d  = communication_histories.count_30d + 1,
+    last_seen_at = GREATEST(communication_histories.last_seen_at, EXCLUDED.last_seen_at),
+    sender_domain = CASE
+        WHEN COALESCE(NULLIF(communication_histories.sender_domain, ''), '') = ''
+             AND EXCLUDED.sender_domain IS NOT NULL
+            THEN EXCLUDED.sender_domain
+        ELSE communication_histories.sender_domain
+    END,
+    sender_domain_hash = CASE
+        WHEN OCTET_LENGTH(communication_histories.sender_domain_hash) = 0
+             AND OCTET_LENGTH(EXCLUDED.sender_domain_hash) > 0
+            THEN EXCLUDED.sender_domain_hash
+        ELSE communication_histories.sender_domain_hash
+    END,
+    updated_at = NOW()
+`,
+		newID, s.TenantID, s.SenderHash, s.RecipientHash, domainHash,
+		sdomain, s.SentAt,
+	)
+	return err
+}
+
 func (p *pgCommHistory) Get(ctx context.Context, tenantID string, senderHash, recipientHash []byte) (*CommunicationHistory, error) {
 	row := p.db.QueryRowContext(ctx, `
 SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(sender_domain, ''),

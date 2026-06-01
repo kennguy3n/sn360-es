@@ -457,6 +457,81 @@ type CommunicationHistoryRepository interface {
 	// cannot accidentally depend on a reflection that production
 	// does not provide.
 	UpdateCountsIfFresh(ctx context.Context, h *CommunicationHistory, readAt time.Time) (bool, error)
+
+	// RecordSighting is the WS-4a "incremental baseline" write
+	// path. It atomically inserts the (tenant, sender, recipient)
+	// row when it does not already exist OR increments the rolling
+	// counters when it does — in a single SQL statement on the
+	// Postgres backend, eliminating the read-modify-write race
+	// window that Upsert leaves open.
+	//
+	// Semantics on conflict:
+	//
+	//   - count_30d: incremented by 1 unconditionally. The decay
+	//                     side is owned by the relationship worker
+	//                     which periodically re-bases the counters
+	//                     via UpdateCountsIfFresh, so an aged
+	//                     sighting that should not have contributed
+	//                     to the 30-day window is corrected on the
+	//                     next worker cycle.
+	//
+	//   - count_7d:  incremented by 1 unconditionally for the same
+	//                     reason. The worker recomputes
+	//                     post-decay.
+	//
+	//   - last_seen_at: GREATEST(persisted, s.SentAt). Monotonic;
+	//                     a redelivered (or out-of-order) sighting
+	//                     never regresses the timestamp.
+	//
+	//   - first_seen_at: NEVER overwritten on conflict. The Tier 0
+	//                     FirstTimeExternal heuristic depends on
+	//                     the timestamp of the original sighting
+	//                     being row-stable.
+	//
+	//   - sender_domain / sender_domain_hash: filled in IFF the
+	//                     persisted row's domain is empty AND the
+	//                     sighting carries a non-empty domain.
+	//                     This handles the case where the first
+	//                     few sightings of a sender arrived before
+	//                     the bridge could extract a parseable
+	//                     domain and a later sighting fills it in;
+	//                     it does NOT overwrite a persisted domain
+	//                     just because a later sighting carries a
+	//                     different one (e.g. a forwarded message
+	//                     with a different envelope sender).
+	//
+	//   - relationship: never touched. Owned by the worker via
+	//                     UpdateCountsIfFresh.
+	//
+	//   - typical_hour: never touched. Owned by the worker.
+	//
+	//   - updated_at: stamped to NOW() so subsequent worker CAS
+	//                     reads via UpdateCountsIfFresh see a
+	//                     fresher row and step aside on the next
+	//                     cycle. This is the same CAS-coherence
+	//                     property Upsert maintains, so the
+	//                     existing worker contract is preserved
+	//                     transparently.
+	//
+	// Idempotency: callers are responsible for upstream dedup (the
+	// JetStream consumer relies on a per-(tenant, sender, recipient,
+	// message_id) dedup key). A duplicate call that DOES reach
+	// this method will increment the counters a second time; the
+	// worker's 4-hour recomputation cycle corrects any drift the
+	// next cycle. The contract here is "best-effort monotonic
+	// increment", not "exactly-once increment".
+	RecordSighting(ctx context.Context, s Sighting) error
+}
+
+// Sighting is the input to CommunicationHistoryRepository.RecordSighting.
+// See the docstring on RecordSighting for the semantics of each field.
+type Sighting struct {
+	TenantID         string
+	SenderHash       []byte
+	RecipientHash    []byte
+	SenderDomainHash []byte
+	SenderDomain     string
+	SentAt           time.Time
 }
 
 // FeedbackEventRepository persists FeedbackEvent rows and exposes the

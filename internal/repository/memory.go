@@ -798,6 +798,74 @@ func (m *memoryCommHistory) UpdateCountsIfFresh(_ context.Context, h *Communicat
 	return true, nil
 }
 
+// RecordSighting is the WS-4a incremental write path. See the
+// docstring on CommunicationHistoryRepository.RecordSighting for the
+// semantic contract; this in-memory implementation mirrors the
+// Postgres SQL by performing an atomic-by-mutex compare-and-write on
+// the keyed map row.
+func (m *memoryCommHistory) RecordSighting(_ context.Context, s Sighting) error {
+	if s.TenantID == "" {
+		return errors.New("repository: RecordSighting requires a tenant id")
+	}
+	if len(s.SenderHash) == 0 || len(s.RecipientHash) == 0 {
+		return errors.New("repository: RecordSighting requires non-empty sender and recipient hashes")
+	}
+	if s.SentAt.IsZero() {
+		return errors.New("repository: RecordSighting requires a non-zero SentAt")
+	}
+	now := time.Now().UTC()
+	key := commKey(s.TenantID, s.SenderHash, s.RecipientHash)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.rows[key]
+	if !ok {
+		// New row: count_7d / count_30d start at 1 (this is the
+		// first sighting). FirstSeenAt == LastSeenAt == SentAt.
+		// TypicalHour is initialised to the sentinel so the
+		// worker's CAS path stays in charge of computing it; if a
+		// later Upsert path ever re-creates the row, the same
+		// sentinel guard applies.
+		row := CommunicationHistory{
+			ID:               uuid.NewString(),
+			TenantID:         s.TenantID,
+			SenderHash:       append([]byte(nil), s.SenderHash...),
+			RecipientHash:    append([]byte(nil), s.RecipientHash...),
+			SenderDomainHash: append([]byte(nil), s.SenderDomainHash...),
+			SenderDomain:     s.SenderDomain,
+			Count7d:          1,
+			Count30d:         1,
+			FirstSeenAt:      s.SentAt,
+			LastSeenAt:       s.SentAt,
+			Relationship:     "",
+			TypicalHour:      TypicalHourUnset,
+			UpdatedAt:        now,
+		}
+		m.rows[key] = row
+		return nil
+	}
+	// Existing row: atomic increment + last_seen_at advancement.
+	cur.Count30d++
+	cur.Count7d++
+	if s.SentAt.After(cur.LastSeenAt) {
+		cur.LastSeenAt = s.SentAt
+	}
+	// Backfill sender_domain only when the persisted row's domain
+	// is empty AND the sighting carries a non-empty domain. See
+	// the interface docstring for why this is a one-way
+	// transition: filling-in a missing value is safe, but
+	// overwriting a persisted value risks losing legitimate
+	// publisher state on a forwarded message.
+	if cur.SenderDomain == "" && s.SenderDomain != "" {
+		cur.SenderDomain = s.SenderDomain
+	}
+	if len(cur.SenderDomainHash) == 0 && len(s.SenderDomainHash) > 0 {
+		cur.SenderDomainHash = append([]byte(nil), s.SenderDomainHash...)
+	}
+	cur.UpdatedAt = now
+	m.rows[key] = cur
+	return nil
+}
+
 // --- feedback events ----------------------------------------------------
 
 type memoryFeedbackEvents struct {
