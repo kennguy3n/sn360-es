@@ -171,23 +171,33 @@ runtime) so future migrations are picked up automatically, and
 / RLS / grant / partial-index shape via 13 structural unit
 tests.
 
-### 2c — Cost Model Recalibration for 5,000 Tenants  *(TODO)*
+### 2c — Cost Model Recalibration for 5,000 Tenants  *(DONE — PR #68)*
 
-PR #49 already added `--tenants` flag support, an
-`enterprise` traffic profile (15 000 msg/tenant/day), and the
-`test_5000_tenant_density` structural-invariant regression
-(`scripts/cost_model/test_project.py`). This item recalibrates
-the unit-economics constants once read-replica + HASH
-partitioning are in place:
-
-- Refresh `scripts/cost_model/project.py::PRICE_*` constants
-  against current cloud-provider price sheets.
-- Re-run `make bench-cost-model` and regenerate
-  [`benchmarks/cost_model.json`](../../benchmarks/cost_model.json).
-- Update the per-tenant figures in
-  [`benchmarks/COST_MODEL.md`](../../benchmarks/COST_MODEL.md) §
-  "Per-tenant cost at 5,000-tenant density" with the post-HASH
-  numbers.
+WS-2a (read-replica routing) and WS-2b (HASH partitioning) shifted
+the per-role compute coefficients in
+`scripts/cost_model/project.py`:
+`API_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY` drops 0.05 → **0.04**
+(dashboard reads off the writer pool free API replicas at the
+same throughput), `CONSUMER_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY`
+drops 0.18 → **0.135** (partition-pruned writes hit smaller heaps),
+and the `partitioning_active` Postgres storage multiplier in
+`cost_postgres` drops 0.85 → **0.72**. Every `PRICE_*` constant
+was re-verified against the AWS public pricing API on 2026-06-01
+with header citations naming the offer URL + publication date
+so the next recalibration is reproducible — list prices are
+unchanged vs the 2026-01 snapshot, so the citation refresh and
+the architectural recalibration are the entire diff.
+[`benchmarks/cost_model.json`](../../benchmarks/cost_model.json)
+regenerates from `make bench-cost-model` and
+[`benchmarks/COST_MODEL.md`](../../benchmarks/COST_MODEL.md)
+records the post-WS-2 per-tenant figure of **$104.07 / tenant
+/ month** at 5 000 tenants × 15 000 msg/day, a 9.6 % reduction
+vs the $115.12 pre-WS-2 anchor. The new
+`test_post_ws2_density_delta` regression in
+`scripts/cost_model/test_project.py` floors the drop at 8 %
+against `PRE_WS2_LEVERS_ON_5K_ENTERPRISE_USD = 115.1182` so a
+future price walkback that breaks the WS-2c assumption surfaces
+as a test failure rather than silent drift.
 
 ---
 
@@ -356,19 +366,31 @@ Tier 1 / 2 remain unwired in CI. Makefile targets `corpus-eval`
 non-blocking on PRs and blocking on `main`; an F1 drop > 5%
 fails the gate (> 25% is treated as catastrophic).
 
-### 4c — Tier 2 Model Abstraction  *(TODO)*
+### 4c — Tier 2 Model Abstraction  *(DONE — PR #67)*
 
-- `internal/service/evaluate/tier2.go`: extract a `Tier2Provider`
-  interface `Analyze(ctx, Tier2Input) (Tier2Result, error)`.
-- Implement three concrete providers: `BonsaiProvider` (the
-  current Ternary-Bonsai-8B path), `OllamaProvider` (any Ollama
-  model for local dev), `BedrockProvider` (AWS Bedrock Claude /
-  Haiku).
-- `internal/config/`: add `TIER2_PROVIDER=bonsai|ollama|bedrock`
-  plus the provider-specific config blocks.
-- Each provider gets its own row in
-  [`benchmarks/accuracy_*.md`](../../benchmarks/) so the model
-  swap doesn't drift detection accuracy invisibly.
+`pkg/inference/slm/registry.go` is the canonical Tier 2 provider
+interface (`Client.Evaluate(ctx, *EvaluateRequest)`); each
+provider self-registers from its sub-package `init()` block via
+`slm.Register(name, Factory)` and `slm.New(ProviderConfig)`
+returns the constructed client. Three real providers ship under
+`pkg/inference/slm/providers/`: `ternarybonsai` (verbatim port of
+the previous Ternary-Bonsai-8B HTTP path, default),
+`llamaserver` (llama.cpp-server with path-model trimming +
+lenient JSON parsing), `openai` (OpenAI-compatible
+chat-completions, strict parsing, 429 / 5xx retry honouring
+`Retry-After`). `cmd/sn360-es/tier2.go::buildTier2Client` reads
+`TIER2_PROVIDER` + `TIER2_PROVIDER_OPTS` from
+`internal/config/ai.go::loadAI` (default `ternarybonsai`),
+constructs the default `slm.Client`, then wraps it in
+`slm.NewRouter` so a per-tenant override on
+`score_engines.tier2_provider` (migration
+`0023_score_engine_tier2_provider.up.sql`) lazily constructs an
+alternate provider on first use and caches it. Unknown provider
+name → warn + nil → evaluator skips Tier 2 (graceful
+degradation, no boot failure). `evaluate.Tier2Client` is now a
+type alias for `slm.Client` so call-sites are unchanged, and
+`internal/service/evaluate/tier2_http.go` shrinks to a
+back-compat shim that delegates to `ternarybonsai.NewClient`.
 
 ---
 
@@ -614,36 +636,84 @@ every event it sees into OpenSearch. Once WS-5A.1 is live no
 additional indexing work is required for OpenSearch-based SIEM
 queries.
 
-### 5B.2 — Optional webhook / SIEM export for standalone deployments  *(TODO — P2)*
+### 5B.2 — Optional webhook / SIEM export for standalone deployments  *(DONE — PR #69)*
 
-For deployments that run sn360-es without the platform:
+Per-tenant HTTPS webhook sink so deployments running without the
+WS-5A.1 platform bridge can still ship verdicts to Splunk HEC /
+Elastic / Sentinel Logic App / Chronicle Forwarder.
+`migrations/0025_tenant_webhook_sinks.up.sql` adds
+`tenant_webhook_sinks` (URL HTTPS-only validated at write,
+`hmac_secret BYTEA` AES-encrypted via `privacy.Encryptor`,
+`format` ENUM-like `ecs|cef`, JSONB `event_filters`, soft-delete
+via `deleted_at`) and `tenant_webhook_sink_audit` whose dedup
+key `sink|event|attempt` makes terminal audit rows idempotent
+across JetStream redeliveries. Six admin-gated routes mount
+under `/v1/tenants/{tid}/webhook-sinks[/{id}[/test]]` in
+`internal/handler/webhook_sinks.go`; `POST` returns the 32-byte
+HMAC secret **once** at create time and never logs it
+thereafter. `internal/service/webhooksink/dispatcher.go` fires
+sinks after the SOC-bridge publish in
+`cmd/sn360-es/consumers_action.go::finalisePending`: per-sink
+5 s context timeout, per-tenant Redis rate limit (default 100
+req/min, overridable via `event_filters.rate_limit_per_minute`),
+bounded worker pool (cap 8). Failed deliveries publish to
+`sn360.dlq.webhook.<tenant>.<sink>` with `DLQEnvelope`;
+`cmd/sn360-es/consumers_webhook_dlq.go` retries with exponential
+backoff `1s / 5s / 30s / 5m` across 4 redeliveries — 1
+dispatcher POST + 4 DLQ POSTs = 5 customer-facing POSTs max
+under `MaxDeliver=5`. Wire bodies sign with
+`X-SN360-Signature: sha256=<hex>` over the canonical bytes;
+outputs are ECS 8.11 JSON (`Content-Type: application/json`) or
+ArcSight CEF v0 (`Content-Type: text/plain; charset=utf-8`).
+Init-fail invariant: `app.encryptor` / `app.webhookPublisher` /
+`app.webhookDispatcher` only commit to the struct after
+`webhooksink.New` returns nil, and `routes.go` gates registration
+on both, so a dispatcher init failure leaves all webhook routes
+unmounted — there is no half-mounted state where CRUD works but
+`/test` returns 503.
 
-- `internal/service/integration/webhook.go` (new) — register
-  webhook URL per tenant with event filter (HighRisk, Blocked,
-  escalation, quarantine).
-- `POST/GET/DELETE /v1/integrations/webhook[/{id}]` — manage
-  registrations.
-- Output formats: JSON (default), CEF.
-- Adapters: generic webhook, Splunk HEC, RFC 5424 syslog.
-- Gate on `RequireRole("admin")` for the management endpoints.
+### 5B.3 — Threat intel feed consumption  *(DONE — PR #70)*
 
-Skipped when the platform is running — `PLATFORM_NATS_ENABLED=true`
-disables the standalone export path to avoid double-firing
-into both the platform NATS and a separate SIEM.
-
-### 5B.3 — Threat intel feed consumption  *(TODO — P2)*
-
-- `internal/service/threatintel/feed.go` (new) — consume
-  PhishTank (URL), URLhaus (URL), AbuseIPDB (IP).
-- Cache IOCs in Redis: `threatintel:{type}:{hash}` with TTL
-  matching feed refresh cadence (PhishTank 1h, URLhaus 5min).
-- Wire into `internal/service/tier0/gate.go`: check sender
-  domain and message URLs against cached IOCs; a match → instant
-  `Blocked` without invoking Tier 1 / Tier 2.
-- When the platform is running, optionally subscribe to the
-  platform's IOCFS distribution (`workers/iocfs-compiler`) instead
-  of pulling external feeds directly — IOCFS already deduplicates
-  and signs the IOC set.
+`pkg/intel/intel.go` exposes the `Provider` interface
+(`Fetch(ctx) ([]Indicator, error)`) plus `DefaultRegistry`. Four
+real spec-compliant providers self-register from sub-package
+`init()` blocks under `pkg/intel/{urlhaus,misp,stixtaxii,csv}`:
+`urlhaus` parses the public CSV and routes rows as `domain` or
+`url`; `misp` POSTs `/events/restSearch` with
+`Authorization: <api-token>`, paginates, and routes attributes
+by `type` (`url` / `domain` / `ip-src` / `ip-dst` / `sha256`);
+`stix-taxii` walks `/taxii2/collections/{id}/objects/` and
+parses STIX 2.1 `indicator` SDOs
+(`[domain-name:value='…']`, `[url:value='…']`,
+`[ipv4-addr:value='…']`, `[file:hashes.'SHA-256'='…']`); `csv`
+is a generic 1-column reader with `?col=…&type=…` query knobs.
+All four canonicalise (lowercase, strip `www.`, IDN-normalise)
+before SHA-256; `migrations/0024_threat_intel_feeds.up.sql` adds
+`intel_feeds` + `intel_indicators` (deployment-scoped, exempted
+from `cmd/sn360-es-tenant-lint` with a comment block); upsert is
+`ON CONFLICT (hash) DO UPDATE SET last_seen = now(),
+severity = GREATEST(...)`.
+`internal/service/worker/intel_worker.go` is the Redis-lock
+singleton scheduler (`worker:lock:intel`, concurrency cap 4,
+three-strike consecutive-failure path that bumps a Prometheus
+counter + writes an `intel_stale_alerts` audit row, retention
+GC sweep deletes indicators with `last_seen < now() - 30d`).
+`internal/service/tier0/{ti_match,ti_cache_redis,gate}.go`
+plumbs a `TIChecker` interface; the production `StoreTIChecker`
+canonicalises sender / recipient domain + body URLs into one
+batched `LookupByHash` call, with `RedisTICache` doing positive
+AND negative caching (5 min TTL, prefix `intel:ticache:`).
+Severity tiering: `severity ≥ 75` → Bypass + SkipML +
+`ForcedCategory=LikelyPhishing` (block); `50 ≤ s < 75` →
+Bypass + SkipML + `SuspiciousURL` (quarantine); `s < 50` →
+`ForceEscalate` (Tier 2 corroboration). `evaluate.ForcedTierFor`
+was extended with explicit cases for these two forced
+categories so IOC-confirmed verdicts cannot fall through to
+`TierTrusted`. Admin CRUD lives under
+`/v1/intel/feeds[/{id}[/refresh]]` + `/v1/intel/indicators` in
+`internal/handler/intel.go`, gated on a new
+`privacy.ScopeAdminAPI` so leaked recipient / operator tokens
+cannot be replayed against the admin surface.
 
 ---
 
@@ -654,37 +724,96 @@ end-to-end under representative traffic, and the failure modes
 documented in [`DEGRADATION_MODES.md`](./DEGRADATION_MODES.md) are
 exercised in CI rather than discovered in production.
 
-### 6a — End-to-End Load Test at 5,000 Tenants  *(TODO)*
+### 6a — End-to-End Load Test at 5,000 Tenants  *(DONE — PR #76)*
 
-- New directory: `tests/load/` with k6 scripts (the `make
-  load-smoke` and `make load-soak` Makefile targets are already
-  installed in the dev image — extend the targets to point at the
-  new scripts).
-- Scenarios: 5 000 tenants × {200, 1 200, 8 500} msgs/tenant/day
-  (matches the cost-model traffic profiles).
-- Capture per-scenario: end-to-end latency p50/p95/p99, NATS
-  consumer lag (KEDA scaler input), Postgres connection count
-  (PgBouncer client + server side), Redis memory, Tier 1 / Tier 2
-  queue depth, Tier 2 SLM call concurrency.
-- Grafana dashboard template under `tests/load/grafana/` so
-  scenarios can be replayed and compared release-over-release.
+`tests/load/` is the k6 harness against the ingest → JetStream →
+consumer → Tier 0/1/2 → action pipeline; `make load-smoke` and
+`make load-soak` point at it. Three scenarios + smoke / soak
+cover the cost-model traffic profiles in
+`scripts/cost_model/project.py`: `baseline.js` (5 000 × 200
+msg/tenant/day, ≈ 11.6 msg/s, p99 ≤ 2.0 s), `typical.js`
+(5 000 × 1 200, ≈ 69.4 msg/s, p99 ≤ 2.5 s), `peak.js`
+(5 000 × 8 500, ≈ 491.9 msg/s, p99 ≤ 4.0 s), `smoke.js`
+(32 × 200, CI gate, rate floored at 1 msg/s for k6's
+`constant-arrival-rate` executor), `soak.js` (5 000 × 1 200, 30
+min). `tests/load/lib/scenario.js::runScenario` is the reusable
+composer (`{name, durationMin, msgsPerSecond, tenants, seed,
+optionsOverrides}` → cfg + options + iter + summary) — WS-6b
+reuses the same composer for chaos scenarios. Six metric
+families land per run (`tests/load/lib/metrics.js`, persisted to
+`tests/load/results/<scenario>-<unix_ts>.json`): e2e latency
+p50/p95/p99 (k6 `loadgen_publish_latency_ms` trend +
+`sn360_es_evaluate_latency_seconds` histogram), NATS JetStream
+consumer lag (Prometheus `nats_jetstream_consumer_num_pending`,
+`/jsz` fallback), Postgres connections (PgBouncer client +
+server pools, `pg_stat_activity_count` fallback), Redis memory,
+Tier 1 / Tier 2 queue depth, Tier 2 SLM call concurrency
+(`sn360_es_tier2_inflight_requests` — new gauge in
+`pkg/telemetry/metrics.go`, wired into
+`internal/service/evaluate.PipelineObserver`). Bootstrap is a
+Go binary (`cmd/sn360-es-loadgen/bootstrap.go`) that provisions
+5 000 deterministic tenants in < 2 s via batched
+`ON CONFLICT DO NOTHING`; `publisher.go` auto-provisions the
+canonical `ES_EVALUATE` stream via
+`natsstreams.DefaultStreamSpecs + EnsureStream` so the CI smoke
+job only needs NATS + Postgres + Redis (sn360-es not required).
+`tests/load/grafana/sn360-es-load.json` is the importable
+dashboard with a `$scenario` template variable.
+`.github/workflows/load.yml` runs `make load-smoke` per-PR on
+harness changes and exposes `workflow_dispatch` with a scenario
+dropdown for the heavyweight runs (gated, manual-only).
 
-### 6b — Chaos Engineering  *(TODO)*
+### 6b — Chaos Engineering  *(DONE — PR #74)*
 
-Exercise the degradation paths the binary claims to handle:
+`tests/chaos/` pins the four degradation paths documented in
+[`DEGRADATION_MODES.md`](./DEGRADATION_MODES.md) with real
+testcontainers regressions, build-tagged `//go:build chaos` so
+they never run in `make test`. Each scenario boots the actual
+`sn360-es` binary, injects a real fault mid-stream, and asserts
+the observable contract rather than mocking the failure at the
+call site:
 
-- Tier 2 SLM failure → expect graceful fallback to Tier 0 + Tier 1
-  + Rspamd; no Blocked decisions silently downgraded.
-- NATS single-node failure → expect ack-pending replay and zero
-  data loss on the JetStream-backed streams.
-- Postgres primary failover → expect the WS-2a read replicas to
-  absorb dashboard reads while writes wait for promotion.
-- Redis eviction storm → expect `assertProductionDurableStores`
-  to block the boot when downgraded to in-memory stores in a
-  production-tagged config.
+- `tier2_failure_test.go::TestChaos_Tier2SLMFailure` —
+  `httptest.Server.Close()` on the Tier 2 endpoint mid-stream;
+  Tier 2 returns nil, `Degraded=true` carries `"tier2"`, no
+  silent downgrade of `Blocked` / `HighRisk`,
+  `circuit_breaker_state{name="tier2"}=1` after
+  `CB_FAILURE_THRESHOLD`,
+  `tier2_escalations_total{outcome="error"}` increments while
+  `outcome="flagged"` does NOT.
+- `nats_failover_test.go::TestChaos_NATSSingleNodeFailure` —
+  `NATSContainer.Stop()` mid-stream → 5 s dwell → restart; every
+  pre-stop message replays exactly once, `NumAckPending` drains
+  to zero, re-publishing the same `Nats-Msg-Id` inside the 2 min
+  `DedupWindow` is rejected as a duplicate.
+- `postgres_failover_test.go::TestChaos_PostgresPrimaryFailover` —
+  stop the primary container while the reader pool is bound;
+  unbound reads continue against the replica (WS-2a routing
+  preserved), tenant-bound writes fail fast and are NEVER
+  silently routed; after closing / re-opening against the
+  promoted replica, tenant-bound writes resume with clean
+  RLS-GUC state.
+- `redis_eviction_test.go::TestChaos_RedisAssertProductionDurableStores`
+  + `TestChaos_RedisEvictionStorm` — Redis launched with
+  `--maxmemory 16mb --maxmemory-policy allkeys-lru` + 250 k SET
+  flood; `assertProductionDurableStores` refuses to boot when an
+  in-memory store would be the durable backing in
+  `ENVIRONMENT=prod`; under eviction `/readyz` stays 200 and the
+  rate limiter keeps serving, with no cascading failure into the
+  request path.
 
-Each scenario lands as a regression under `tests/chaos/` plus a
-runbook entry in `internal/docs/DEGRADATION_MODES.md`.
+Plumbing landed alongside: `pkg/telemetry/metrics.go` adds the
+`circuit_breaker_state` gauge (`0/1/2` for closed / open /
+half-open) and `circuit_breaker_short_circuit_total` counter;
+`internal/service/evaluate/circuit_breaker.go` gets a new
+`OnShortCircuit` callback so the counter ticks on every
+short-circuited call (not just on transitions);
+`cmd/sn360-es/app.go` wires per-breaker `OnStateChange` /
+`OnShortCircuit` callbacks that emit the new metrics and `slog`
+the transitions. `make chaos` runs the suite;
+`.github/workflows/chaos.yml` runs it nightly (`30 2 * * *`)
+plus `workflow_dispatch` — intentionally not per-PR
+(testcontainers spin-up is ~7 min cold / ~3 min warm).
 
 ---
 
@@ -694,35 +823,133 @@ End-state items that make the system better but do not gate the
 production cutover. Each is small enough to ship independently
 in a single PR.
 
-### 7a — Multi-Region Routing  *(TODO)*
+### 7a — Multi-Region Routing  *(DONE — PR #73)*
 
-- `internal/config/postgres.go`: add `PG_REGION_MAP` for
-  region-aware routing.
-- Tenants already carry a `region` field (`migrations/0001_init.up.sql`
-  line 25); route queries to the regional database using that
-  field at request entry.
-- NATS super-cluster config for cross-region event routing.
+Routes per-request Postgres traffic to the regional pool of the
+tenant's `region` (`migrations/0001_init.up.sql:25`, default
+`'ap-southeast-1'`) and surfaces a NATS super-cluster URL set
+so the client fails over to home-region leaf nodes.
+`internal/config/postgres.go` adds `PG_REGION_MAP` (JSON
+`{region: postgres://...}`) and `PG_HOME_REGION`;
+`internal/config/supercluster.go` adds `NATS_SUPERCLUSTER`
+(JSON `{region: "nats://leaf-a,nats://leaf-b"}`). Empty / unset
+→ today's single-region code path (no regression).
+`pkg/storage/postgres/regional.go::RegionalDB` wraps one `*DB`
+per region (primary is reused for home);
+`internal/service/tenant/region.go::CachedRegionResolver` does
+5 min success-only caching of tenant→region lookups;
+`internal/middleware/tenant_conn.go::TenantConnBinder.bind()` is
+the single decision point shared between the HTTP middleware and
+the NATS consumer wrapper
+(`cmd/sn360-es/consumers.go::tenantBoundConn`) so routing lives
+in exactly one place. `pkg/events/nats/supercluster.go` merges
+home-region leaf URLs into the `nats.Connect` server list.
+Failure modes are fail-closed: malformed `PG_REGION_MAP` JSON /
+bad URL / port out of range / missing scheme-host-db,
+`PG_HOME_REGION` not in `PG_REGION_MAP`, or `NATS_SUPERCLUSTER`
+missing the home region → boot fails with the offending region
+named; tenant region lookup failures 5xx / NAK at the middleware
+boundary (never default to home, never cache errors); tenant
+resolves to a region with no pool → 5xx / NAK (no silent
+fallback so data residency is preserved).
+`internal/repository/multi_region_test.go` spins up two
+testcontainers Postgres instances, writes the same `label_id`
+from a tenant in each region, and verifies neither side sees
+the other's row. Operator-facing deployment + failover
+walkthrough lives in `internal/docs/MULTI_REGION.md`.
 
-### 7b — Add-In Production Readiness  *(TODO)*
+### 7b — Add-In Production Readiness  *(DONE — PR #72)*
 
-- `deployments/addins/outlook/src/presend.js` — full Office.js
-  pre-send handler: recipient risk check via `/v1/predict/recipient`,
-  lookalike domain detection, external-thread-going-external
-  warning.
-- `deployments/addins/gmail/` — equivalent Apps Script add-on.
-- Automated tests for both add-ins (Office.js + Apps Script have
-  documented testing harnesses — wire them into CI).
-- Deployment docs for GWS Marketplace and M365 Admin Center.
+Production Office.js (Outlook) and Gmail Apps Script add-ins
+hook the pre-send event and emit security warnings against
+`/v1/predict/recipient`. `deployments/addins/outlook/src/presend.js::onMessageSend`
+→ `buildRequest` → `callPredict` → `showWarning` via
+`notificationMessages.replaceAsync`;
+`deployments/addins/gmail/src/presend.gs::sn360PreSendTrigger`
+→ `UrlFetchApp.fetch` → `buildSendWarningCard_` returned via
+`CardService.newActionResponseBuilder`. Three flows on both
+platforms with real algorithms (no hardcoded lookalike list, no
+stubs):
 
-### 7c — NATS Message Schema Versioning  *(TODO)*
+1. Recipient risk via `POST /v1/predict/recipient`.
+2. Lookalike detection at Damerau-Levenshtein OSA distance ≤ 2
+   (transposition supported) against sender-seeded known
+   domains, inlined with attribution-style comments rather than
+   vendored npm packages so neither Apps Script nor Office.js
+   bundles take a runtime dep.
+3. External-thread-going-external — Outlook captures a one-time
+   baseline per compose (only when `item.conversationId` is set,
+   so new composes don't false-positive); Gmail walks prior
+   thread `From / To / Cc / Bcc` via
+   `Gmail.Users.Threads.get(METADATA)`.
 
-- Add a `schema_version` field (string, e.g. `"v2"`) to every
-  NATS message DTO in `internal/dto/`.
-- New `pkg/events/SchemaValidator` validates payloads against
-  registered schemas at publish time.
-- Prevents a repeat of the `BatchMessage` vs flat
-  `EvaluateRequest` migration documented in
-  [`ARCHITECTURE.md`](./ARCHITECTURE.md) §3 ("NATS subject layout").
+Recipients leave the client only as
+`SHA-256(tenant_id|lower(email))`; domains travel cleartext.
+Outlook fetch carries a 250 ms `AbortController`; Gmail uses
+`UrlFetchApp` defaults. Fail-open on every error path. Caching:
+`Office.context.mailbox.item.sessionData` (Outlook) +
+`CacheService.getUserCache()` (Gmail), sorted-recipient-hash
+key (order-irrelevant), 1 h TTL.
+`outlook/manifest.json` bumps `1.0.0 → 1.1.0` + Mailbox
+`1.10 → 1.11` (required for `sessionData`) +
+`SendMode="PromptUser"` on `MessageSending`;
+`gmail/appsscript.json` adds `onTriggerFunction:
+sn360PreSendTrigger` plus the `gmail.readonly` /
+`gmail.addons.current.message.readonly` / `userinfo.email`
+scopes (justified in `DEPLOYMENT.md`).
+`deployments/addins/outlook/test/presend.test.js` (40 cases) +
+`deployments/addins/gmail/test/presend.test.js` (20 cases) cover
+the DL algorithm, `findLookalike` / `isThreadInternal` /
+`combineWarnings`, all three flows incl. Bcc / network-error
+fail-open / no-API-call on empty recipients, caching idempotence,
+ordering invariance, locale fallback, and `sha256Hex_` golden
+values; `make test-addins` runs both locally, and the new
+`addin-tests` CI job is gated by `build`'s `needs:` so
+regressions block publish. Full M365 Admin Center Centralized
+Deployment walkthrough lives in
+`deployments/addins/outlook/DEPLOYMENT.md`; Google Workspace
+Marketplace listing + OAuth verification path for sensitive
+scopes in `deployments/addins/gmail/DEPLOYMENT.md`.
+
+### 7c — NATS Message Schema Versioning  *(DONE — PR #75)*
+
+Every NATS DTO under `internal/dto/`, the wrapper types
+(`evaluate.BatchMessage`, `action.FeedbackEvent`,
+`action.ClawbackEvent`), and `bridge.Envelope` now carry a
+top-level `schema_version` string field (all ship as `"v1"`);
+pre-WS-7c unversioned payloads default to `"v1"` so legacy
+publishers keep working without a lock-step cutover.
+`pkg/events/schema/schema.go` defines `Validator` / `Result` /
+`ValidationError` / `DLQSubject`;
+`pkg/events/schema/register_struct.go::RegisterStruct[T]` +
+`RegisterStructPrefix[T]` are the generic helpers; and
+`internal/eventsschema/registry.go` is the canonical sn360-es
+subject→validator binding. Wire-up has three behaviours by
+layer: `pkg/events/nats/publisher.go` returns
+`*schema.ValidationError` and the broker call is NOT made;
+`internal/service/bridge/platform_publisher.go` logs warn +
+increments the metric but STILL publishes (the bridge cannot
+drop verdicts); `cmd/sn360-es/consumers_schema.go::schemaValidatedMessageHandler`
+wraps every `Subscribe` via `a.validatedTenantBoundHandler(...)`
+so a mismatched payload republishes to
+`sn360.dlq.schema.<original_subject>` with `origin-subject` +
+`schema-mismatch-reason` + `error` headers and Acks before the
+tenant conn-pool acquisition burns. `es.evaluate.request` uses a
+hand-rolled validator (not `RegisterStruct[T]`) because the
+subject must tolerate both the canonical
+`BatchMessage{Request, Signals}` wrapper AND the legacy flat
+`dto.EvaluateRequest` shape — that's the
+[`ARCHITECTURE.md`](./ARCHITECTURE.md) §3 contract. New
+`SN360_SCHEMA_DLQ` stream binds `sn360.dlq.schema.>` with 600 s
+dedup window (matches FU-B) and 30d retention, disjoint from
+`es.dlq.>` (handler-failure DLQ) and `sn360.dlq.webhook.>`
+(webhook DLQ) so the subject namespace tells operators "this
+failed validation" vs "this failed the handler" at a glance.
+`pkg/telemetry/metrics.go::nats_schema_mismatch_total{subject_family,
+reason, side}` is the observability surface
+(high-cardinality-safe — keys on the registry-matched family,
+not per-tenant); recommended alerts in
+`internal/docs/SCHEMA_VERSIONING.md` §8.
 
 ### 7d — CSP Headers on Interstitial  *(DONE — PR #71)*
 
@@ -757,31 +984,15 @@ exit paths.
 | Priority | Workstream | Why | Status |
 | --- | --- | --- | --- |
 | P0 | WS-1 (Security: RLS, RBAC, JWT, TTL fix) | Cannot go to production without these | **Shipped** (PR #49, #50, #51, #52) |
-| P0 | WS-2 (Read-replica + HASH partitioning + cost model 5k) | Remaining infrastructure for 5k tenants (PgBouncer + KEDA already done) | **2a / 2b shipped** (PR #57, #58); 2c P2 in flight (see *P2 — In flight* below) |
+| P0 | WS-2 (Read-replica + HASH partitioning + cost model 5k) | Remaining infrastructure for 5k tenants (PgBouncer + KEDA already done) | **Shipped** (PR #57, #58, #68) |
 | P0 | WS-5A.1–3 (NATS bridge + correlation rules + playbooks) | Platform IS the SOC — email events must flow into it | **Shipped** (sn360-es PR #56; sn360-security-platform PR #257, #258) |
 | P1 | WS-5A.4–6 (Dashboard panels + SOC enrichment + escalation sync) | Complete the bidirectional SOC loop | **Shipped** (sn360-security-platform PR #266, #265, #264 + sn360-es PR #65) |
 | P1 | WS-3 (Dashboard + Quarantine self-service) | Biggest usability gap vs competitors | **Shipped** (PR #62, #64) |
 | P1 | WS-4a (Incremental baselines) | Biggest detection gap vs Abnormal Security | **Shipped** (PR #61) |
-| P2 | WS-5B (External SIEM export + threat intel feeds) | For standalone deployments / third-party SIEM | **In flight** — 5B.2 + 5B.3 parallel sub-Devins (see below); 5B.1 TODO |
-| P2 | WS-4b–c (Real corpus + model abstraction) | Detection credibility | **4b shipped** (PR #63); **4c in flight** (see below) |
-| P3 | WS-6 (Load testing at 5k tenants) | Validates everything above | TODO |
-| P3 | WS-7 (Add-ins + schema versioning + CSP) | Polish | TODO |
-
-### P2 — In flight (parallel sub-Devins)
-
-The following P2 workstreams are currently being delivered by
-parallel sub-Devin sessions spawned after the P0+P1 sweep
-landed. Each section above (§2c, §4c, §5B.2, §5B.3) describes
-the target shape; PR refs will be added here as each session
-opens its PR.
-
-- **WS-2c** — Cost Model Recalibration for 5,000 Tenants
-  (sn360-es). _PR pending._
-- **WS-4c** — Tier 2 Model Abstraction (sn360-es). _PR pending._
-- **WS-5B.2** — Webhook / SIEM export sink for standalone
-  deployments (sn360-es). _PR pending._
-- **WS-5B.3** — Threat intel feed consumption (sn360-es). _PR
-  pending._
+| P2 | WS-5B (External SIEM export + threat intel feeds) | For standalone deployments / third-party SIEM | **Shipped** (PR #69, #70); 5B.1 is a no-op (alert-forwarder already indexes events) |
+| P2 | WS-4b–c (Real corpus + model abstraction) | Detection credibility | **Shipped** (PR #63, #67) |
+| P3 | WS-6 (Load testing at 5k tenants) | Validates everything above | **Shipped** (PR #74, #76) |
+| P3 | WS-7 (Add-ins + schema versioning + CSP + multi-region) | Polish | **Shipped** (PR #71, #72, #73, #75) |
 
 ---
 
