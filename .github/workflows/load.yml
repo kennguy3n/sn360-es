@@ -318,6 +318,51 @@ jobs:
           LOAD_TENANTS: ${{ inputs.tenants }}
         run: make "load-${{ inputs.scenario }}"
 
+      - name: Validate artefact
+        # Scenario-specific validation. For soak we require a
+        # populated metrics backend — the run is meaningless
+        # without it. For baseline / typical / peak the workflow
+        # may target environments where Prom is partially deployed,
+        # so we only assert shape and let the operator interpret
+        # null values. LOAD_SOAK_ALLOW_NO_PROM=1 short-circuits the
+        # strict soak check (mirrors the env var soak.js honours).
+        #
+        # The artefact is *uploaded regardless* of whether this
+        # step fails (the upload-artifact step below uses
+        # `if: always()`), so a 30-minute soak that hit a flaky
+        # Prom still produces a downloadable artefact for
+        # diagnosis — only the workflow exit code differs.
+        run: |
+          set -euo pipefail
+          latest=$(ls -1t tests/load/results/${{ inputs.scenario }}-*.json | head -n1)
+          test -n "$latest" || { echo "no ${{ inputs.scenario }} artefact written"; exit 1; }
+          echo "validating $latest"
+          status=$(jq -r '.metrics_collection_status // "missing"' "$latest")
+          echo "metrics_collection_status=$status"
+          if [ "${{ inputs.scenario }}" = "soak" ] \
+             && [ "$status" != "available" ] \
+             && [ "${LOAD_SOAK_ALLOW_NO_PROM:-}" != "1" ]; then
+            echo "soak: metrics_collection_status=$status (required: available); pass LOAD_SOAK_ALLOW_NO_PROM=1 to override"
+            exit 1
+          fi
+          jq -e '
+            . as $root
+            | .config.msgs_per_sec != null
+            and .k6_summary.loadgen_publish_latency_ms != null
+            and (.metrics_collection_status | type == "string")
+            and ((.metrics_snapshot.families // {}) | type == "object")
+            and (
+              [
+                "nats_consumer_lag",
+                "pg_client_connections",
+                "redis_memory_bytes",
+                "tier1_queue_depth",
+                "tier2_queue_depth",
+                "tier2_inflight_requests"
+              ] | all(. as $k | (($root.metrics_snapshot.families // {}) | has($k)))
+            )
+          ' "$latest"
+
       - name: Stop publisher
         if: always()
         run: |

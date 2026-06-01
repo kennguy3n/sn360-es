@@ -83,15 +83,34 @@ export function captureMetrics(cfg) {
 
   // 2. NATS consumer lag (KEDA scaler input). We read it from
   //    Prometheus first (preferred — already smoothed), then
-  //    fall back to the NATS /jsz endpoint.
-  snap.families.nats_consumer_lag = readPromVector(
+  //    fall back to the NATS /jsz endpoint. The fallback fires
+  //    when:
+  //      * Prometheus itself was unreachable / errored
+  //        (readPromVector returned null), OR
+  //      * Prometheus answered cleanly but no series matched —
+  //        e.g. the NATS exporter isn't deployed in this
+  //        environment (readPromVector returned
+  //        `{value: null, empty: true}`). Without the second
+  //        branch the NATS /jsz fallback was dead code in this
+  //        case, even though /jsz can answer it directly.
+  const promLag = readPromVector(
     snap,
     cfg.promURL,
     'sum(nats_jetstream_consumer_num_pending)',
     "prometheus.sum(nats_jetstream_consumer_num_pending)",
   );
-  if (snap.families.nats_consumer_lag == null) {
-    snap.families.nats_consumer_lag = readNATSJSZ(snap, cfg.natsMonURL);
+  const promLagEmpty =
+    promLag == null || (promLag && promLag.value == null);
+  if (promLagEmpty) {
+    const jszLag = readNATSJSZ(snap, cfg.natsMonURL);
+    // Prefer the /jsz number if it actually produced one. If
+    // /jsz also came up empty, fall back to the Prom empty
+    // object so the reader still sees the prometheus.* source
+    // label and `empty: true` marker instead of a bare null.
+    snap.families.nats_consumer_lag =
+      jszLag != null && jszLag.value != null ? jszLag : promLag;
+  } else {
+    snap.families.nats_consumer_lag = promLag;
   }
   snap.families.nats_consumer_lag_bound = {
     value: cfg.expectedNATSLagBound,

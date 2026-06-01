@@ -32,25 +32,45 @@ export function handleSummary(data) {
   const ts = Math.floor(Date.now() / 1000);
   const path = `tests/load/results/soak-${ts}.json`;
   // Soak targets a real environment with a real metrics backend.
-  // If Prometheus is unreachable, the run is not useful — abort
-  // with a non-zero exit so the operator notices immediately
-  // instead of silently producing a soak artefact with all-null
-  // families. Smoke deliberately tolerates this; soak does not.
-  // Set LOAD_SOAK_ALLOW_NO_PROM=1 only as an escape hatch when
-  // intentionally exercising the harness without Prometheus.
+  // If Prometheus is unreachable, the run is not useful for the
+  // intended "did we leak under 30 minutes of typical load"
+  // question, but the k6-side data (publish counts, latency,
+  // throughput drift) is still valuable for diagnosing why and
+  // for confirming the load itself ran cleanly.
+  //
+  // So we deliberately do *not* throw here — throwing from
+  // handleSummary would discard the entire 30-minute artefact,
+  // which is the opposite of what an operator wants when Prom
+  // happens to be flaky. Instead we print a loud, multi-line
+  // warning to stderr and let the surrounding workflow (or the
+  // operator) decide whether to fail the run. The CI scenario
+  // job at .github/workflows/load.yml runs a strict
+  // post-validation step that enforces
+  // metrics_collection_status == "available" for soak (unless
+  // LOAD_SOAK_ALLOW_NO_PROM=1) and fails the workflow there,
+  // outside the k6 process, so the artefact is still uploaded.
+  let stderr = "";
   if (
     out.metrics_collection_status === "unreachable" &&
     __ENV.LOAD_SOAK_ALLOW_NO_PROM !== "1"
   ) {
-    throw new Error(
-      `soak: Prometheus at ${out.config.prom_url} was unreachable for ` +
-        `every captured metric; soak runs require a populated metrics ` +
-        `backend. Set LOAD_PROM_URL to a reachable Prometheus, or pass ` +
-        `LOAD_SOAK_ALLOW_NO_PROM=1 to suppress this check.`,
-    );
+    stderr =
+      "\n" +
+      "============================================================\n" +
+      "WARNING: soak ran without a reachable Prometheus backend.\n" +
+      `  prom_url:                      ${out.config.prom_url}\n` +
+      `  metrics_collection_status:     ${out.metrics_collection_status}\n` +
+      `  prom_query_successes/attempts: ${out.metrics_snapshot.prom_query_successes}/${out.metrics_snapshot.prom_query_attempts}\n` +
+      "Soak runs are only meaningful against a populated metrics\n" +
+      "backend — every metric family is null in this artefact.\n" +
+      "Set LOAD_PROM_URL to a reachable Prometheus, or pass\n" +
+      "LOAD_SOAK_ALLOW_NO_PROM=1 to suppress this warning. CI\n" +
+      "will fail the workflow at the post-validation step.\n" +
+      "============================================================\n";
   }
   return {
     [path]: JSON.stringify(out, null, 2),
     stdout: JSON.stringify(out.k6_summary, null, 2),
+    stderr,
   };
 }

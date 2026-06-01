@@ -66,12 +66,25 @@ This is what lets CI smoke (which intentionally runs without a Prometheus
 backend) still produce a valid artefact and pass the workflow's shape
 check.
 
-The `soak` target treats `unreachable` as an error and aborts the run, since
-soaks only make sense against a real metrics backend. Set
-`LOAD_SOAK_ALLOW_NO_PROM=1` as an escape hatch when intentionally exercising
-the harness without Prometheus. `smoke`, `baseline`, `typical`, and `peak`
-do not enforce this — they record the status for diagnostic purposes and
-otherwise continue.
+The `soak` target requires a populated metrics backend, since a 30-minute
+soak with all-null metrics is not useful for the "did we leak?" question it
+exists to answer. Enforcement is split across two layers so the artefact is
+never lost:
+
+* `soak.js` itself prints a loud stderr warning when status is
+  `unreachable` but still writes the full artefact (the k6-side
+  publish counts, latency, throughput drift are valuable for diagnosing
+  *why* Prom is unreachable).
+* The `.github/workflows/load.yml` scenario job's `Validate artefact`
+  step fails the workflow when soak's `metrics_collection_status` is
+  not `available`. The artefact is uploaded before this step decides
+  pass/fail (the upload uses `if: always()`), so a flaky-Prom soak
+  still leaves a downloadable artefact for offline analysis.
+
+Set `LOAD_SOAK_ALLOW_NO_PROM=1` as an escape hatch in both layers when
+intentionally exercising the harness without Prometheus. `smoke`,
+`baseline`, `typical`, and `peak` do not enforce this — they record the
+status for diagnostic purposes and otherwise continue.
 
 ## How to run a scenario
 
