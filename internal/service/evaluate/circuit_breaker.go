@@ -59,9 +59,26 @@ type CircuitBreakerConfig struct {
 	// observers and structured-log writers.
 	OnStateChange func(from, to State)
 	// OnShortCircuit is invoked synchronously every time Do skips
-	// the wrapped op because the breaker is open. Optional;
-	// primarily for metrics emission (operators alert on a
-	// sustained non-zero rate as the open-state signal).
+	// the wrapped op because allow() refused. Optional; primarily
+	// for metrics emission (operators alert on a sustained
+	// non-zero rate as the open-state signal).
+	//
+	// Two distinct call sites trigger this callback — the
+	// counter conflates them by design:
+	//
+	//   (a) StateOpen and the open-window has not yet elapsed.
+	//       This is the canonical "breaker is open" rejection.
+	//   (b) StateHalfOpen, halfOpenProbe CAS lost (a concurrent
+	//       caller already claimed the single probe slot for
+	//       this open-cycle). The probe is in flight; this
+	//       caller falls back to the open-state path.
+	//
+	// Dashboards that want to distinguish them should compare
+	// against the CircuitBreakerState gauge (see
+	// pkg/telemetry/metrics.go) — the gauge IS the
+	// disambiguator. The counter alone is intentionally a
+	// "fraction of calls the breaker rejected" signal, not a
+	// state classifier.
 	//
 	// Unlike OnStateChange, this callback runs OUTSIDE cb.mu —
 	// Do invokes it after allow() has released the lock and

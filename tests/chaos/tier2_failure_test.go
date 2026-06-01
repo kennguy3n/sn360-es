@@ -302,9 +302,18 @@ func subscribeResultStream(ctx context.Context, t *testing.T, js jetstream.JetSt
 	t.Helper()
 	out := make(chan jetstream.Msg, resultChannelCapacity)
 	stream := awaitResultStream(ctx, t, js)
+	// FilterSubjects (plural) covers BOTH the exact-subject path
+	// (current production wiring in cmd/sn360-es/app.go:
+	// ResultSubject: "es.evaluate.result") AND the per-tenant
+	// fan-out path (es.evaluate.result.>) that the stream is
+	// declared to accept in pkg/events/nats/streams.go. If a
+	// future change moves results to a tenant-suffixed subject,
+	// the chaos suite keeps observing them without a silent
+	// time-out. The stream config at streams.go:169 accepts both
+	// shapes, so this consumer is forward-compatible by design.
 	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Name:              name,
-		FilterSubject:     "es.evaluate.result",
+		FilterSubjects:    []string{"es.evaluate.result", "es.evaluate.result.>"},
 		AckPolicy:         jetstream.AckExplicitPolicy,
 		DeliverPolicy:     jetstream.DeliverAllPolicy,
 		MaxAckPending:     1024,

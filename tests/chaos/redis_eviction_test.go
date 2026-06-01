@@ -366,7 +366,13 @@ func floodRedis(ctx context.Context, t *testing.T, c *tcredis.RedisContainer, co
 	bw := bufio.NewWriter(scriptFile)
 	val := strings.Repeat("x", bytesPerVal)
 	for i := 0; i < count; i++ {
-		if _, err := fmt.Fprintf(bw, "SET chaos:flood:%d %s\n", i, val); err != nil {
+		// "\r\n" line terminator is what RESP / the Redis
+		// inline-command parser is specified against (see
+		// https://redis.io/docs/latest/develop/reference/protocol-spec/).
+		// Modern redis-cli's pipe parser also accepts a bare
+		// "\n", but we follow the spec so a future tightening
+		// of the parser cannot break the chaos test.
+		if _, err := fmt.Fprintf(bw, "SET chaos:flood:%d %s\r\n", i, val); err != nil {
 			_ = scriptFile.Close()
 			t.Fatalf("flood write line %d: %v", i, err)
 		}

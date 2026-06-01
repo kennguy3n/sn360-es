@@ -230,7 +230,13 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 			"Circuit breaker state per dependency (0=closed, 1=open, 2=half_open).",
 			[]string{"name"}),
 		CircuitBreakerShortCircuit: b.counterVec("circuit_breaker_short_circuit_total",
-			"Calls short-circuited by an open circuit breaker, partitioned by breaker name.",
+			// Counter fires on EVERY allow() refusal — both StateOpen
+			// rejections AND StateHalfOpen probe-slot losses. The
+			// CircuitBreakerState gauge is the disambiguator for
+			// dashboards that need to tell them apart; see
+			// internal/service/evaluate/circuit_breaker.go OnShortCircuit
+			// doc for the full contract.
+			"Calls short-circuited by the breaker (open OR half-open probe-slot loss), partitioned by breaker name.",
 			[]string{"name"}),
 
 		SimulationSent: b.counterVec("simulation_sent_total",
