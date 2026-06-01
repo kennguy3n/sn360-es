@@ -145,6 +145,15 @@ function makeStubs(opts) {
       Gmail: Gmail,
       CardService: CardService,
       CacheService: CacheService,
+      // Apps Script exposes a `console` global at runtime that maps to
+      // Stackdriver Logging. The trigger uses console.error inside its
+      // top-level try-catch to record unexpected failures before
+      // fail-open. We mirror that surface in tests.
+      console: {
+        error: function () {},
+        warn: function () {},
+        log: function () {},
+      },
     },
     state: {
       cache: cache,
@@ -599,4 +608,54 @@ test("buildSendWarningCard_ renders one paragraph per warning and an acknowledge
   const button = sec._children[sec._children.length - 1];
   assert.equal(button._type, "textButton");
   assert.equal(button._props.onClickAction._props.functionName, "sn360AcknowledgeWarning");
+});
+
+// === Fail-open contract ==============================================
+
+test("sn360PreSendTrigger swallows unexpected exceptions and returns no card", function () {
+  const stubs = makeStubs();
+  const presend = loadPresend(stubs.globals);
+  // Pass an event with a draftMetadata getter that throws to simulate
+  // an unexpected platform error inside the trigger body.
+  const evil = {
+    get draftMetadata() {
+      throw new Error("boom");
+    },
+    userLocale: "en",
+  };
+  const out = presend.sn360PreSendTrigger(evil);
+  assert.equal(out.length, 0, "trigger must fail open on unexpected error");
+});
+
+test("buildSendWarningCard_ HTML-escapes API-provided suggestion values", function () {
+  const stubs = makeStubs();
+  const presend = loadPresend(stubs.globals);
+  const card = presend.buildSendWarningCard_(
+    {
+      overall_level: 4,
+      warnings: [
+        {
+          code: "lookalike_recipient",
+          message: "msg",
+          suggestion: "<script>alert(1)</script>",
+        },
+      ],
+    },
+    "en"
+  );
+  const sec = card._children[0];
+  // 1 main paragraph + 1 did-you-mean paragraph + acknowledge button.
+  const dym = sec._children[1];
+  assert.equal(dym._type, "textParagraph");
+  // The raw '<script>' must not survive into the rendered card.
+  assert.equal(
+    dym._props.text.indexOf("<script>"),
+    -1,
+    "raw <script> leaked into card text: " + dym._props.text
+  );
+  assert.notEqual(
+    dym._props.text.indexOf("&lt;script&gt;"),
+    -1,
+    "expected escaped suggestion in card text: " + dym._props.text
+  );
 });

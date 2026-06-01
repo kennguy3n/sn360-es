@@ -77,6 +77,25 @@ function sn360HomepageTrigger() {
 }
 
 function sn360PreSendTrigger(e) {
+  // Explicit fail-open: any unexpected error in our pre-send path
+  // must NOT block legitimate sends. Apps Script's platform-level
+  // fail-open (a throwing trigger is treated as no card returned)
+  // already covers this, but mirroring Outlook's structure makes
+  // the contract obvious to future maintainers and lets us record
+  // the error before swallowing it.
+  try {
+    return sn360PreSendTriggerImpl_(e);
+  } catch (err) {
+    try {
+      console.error("sn360PreSendTrigger failed: " + err);
+    } catch (_) {
+      // console may be unavailable in older Apps Script runtimes.
+    }
+    return [];
+  }
+}
+
+function sn360PreSendTriggerImpl_(e) {
   if (!e) return [];
   // Workspace Add-on compose triggers deliver the draft metadata at
   // the top level (e.draftMetadata). e.gmail.* is only populated for
@@ -206,9 +225,20 @@ function buildSendWarningCard_(resp, locale) {
       )
     );
     if (w.suggestion) {
+      // The API may emit a suggestion field on lookalike warnings.
+      // CardService.newTextParagraph().setText renders a subset of
+      // HTML, so we escape the substituted value before placing it
+      // inside the <i> wrapper to keep malformed / hostile API
+      // suggestions from breaking the card layout.
       section.addWidget(
         CardService.newTextParagraph().setText(
-          "<i>" + localizedMessage_("did_you_mean", locale, { suggestion: w.suggestion }) + "</i>"
+          "<i>" +
+            escapeHtml_(
+              localizedMessage_("did_you_mean", locale, {
+                suggestion: w.suggestion,
+              })
+            ) +
+            "</i>"
         )
       );
     }

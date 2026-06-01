@@ -493,17 +493,38 @@ test("predict cache: identical recipient set ⇒ one fetch call across two sends
 test("predict cache key is invariant to recipient ordering", async function () {
   const office = makeMockOffice();
   const presend = loadPresend(office);
-  const a = presend._internals.predictCacheKey({
+  const a = await presend._internals.predictCacheKey({
     sender_hash: "S",
     recipients: [{ user_hash: "h1" }, { user_hash: "h2" }, { user_hash: "h3" }],
     thread_is_internal: false,
   });
-  const b = presend._internals.predictCacheKey({
+  const b = await presend._internals.predictCacheKey({
     sender_hash: "S",
     recipients: [{ user_hash: "h3" }, { user_hash: "h1" }, { user_hash: "h2" }],
     thread_is_internal: false,
   });
   assert.equal(a, b);
+});
+
+test("predict cache key collapses to SHA-256 when raw key exceeds 240 chars", async function () {
+  const office = makeMockOffice();
+  const presend = loadPresend(office);
+  // 50 recipients × 64-char hash overflows the 240-char inline budget.
+  const recipients = [];
+  for (let i = 0; i < 50; i++) {
+    const hex = String(i).padStart(2, "0").repeat(32);
+    recipients.push({ user_hash: hex.slice(0, 64) });
+  }
+  const k = await presend._internals.predictCacheKey({
+    sender_hash: "0123456789abcdef".repeat(4),
+    recipients: recipients,
+    thread_is_internal: true,
+  });
+  assert.ok(
+    k.length < 240,
+    "long cache keys must be collapsed (got length " + k.length + ")"
+  );
+  assert.ok(k.startsWith("sn360.predict."));
 });
 
 // === Locale-aware messages =============================================

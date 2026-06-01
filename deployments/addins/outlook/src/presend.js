@@ -421,7 +421,14 @@
     };
   }
 
-  function predictCacheKey(body) {
+  // sessionData values tolerate ~4 KB but the underlying string ops
+  // (and any future move to a stricter store such as a localStorage
+  // mirror) are cheaper with bounded keys. With 50 recipients × 64
+  // hex chars the joined hash list alone is ~3 KB, so once a draft
+  // gets large we collapse the key to its SHA-256.
+  const SK_MAX_INLINE_KEY = 240;
+
+  async function predictCacheKey(body) {
     // The cache key is the sender hash plus the (sorted) recipient
     // hashes. Sorting makes the key invariant to recipient ordering,
     // so adding a recipient to the middle of the list invalidates
@@ -433,18 +440,19 @@
       .slice()
       .sort()
       .join(",");
-    return (
+    const raw =
       SK_PREDICT_PREFIX +
       body.sender_hash +
       "|" +
       (body.thread_is_internal ? "1" : "0") +
       "|" +
-      rHashes
-    );
+      rHashes;
+    if (raw.length <= SK_MAX_INLINE_KEY) return raw;
+    return SK_PREDICT_PREFIX + (await sha256Hex(raw));
   }
 
   async function callPredict(body) {
-    const key = predictCacheKey(body);
+    const key = await predictCacheKey(body);
     const cached = await getCached(key);
     if (cached) return cached;
     const controller = new AbortController();
@@ -524,7 +532,13 @@
     const top =
       (response.warnings && response.warnings[0]) ||
       { message: "Suspicious recipient detected." };
-    const banner = t("banner_high") + top.message + t("confirm_suffix");
+    // A warning object can arrive without a message field (older
+    // backend versions or partial responses). Fall back to a generic
+    // string rather than rendering "SN360 warning: undefined ..." in
+    // the InsightMessage banner.
+    const topMessage =
+      (top && top.message) || "Suspicious recipient detected.";
+    const banner = t("banner_high") + topMessage + t("confirm_suffix");
     try {
       Office.context.mailbox.item.notificationMessages.replaceAsync("sn360-presend", {
         type: Office.MailboxEnums.ItemNotificationMessageType.ErrorMessage,

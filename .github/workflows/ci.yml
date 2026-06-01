@@ -283,7 +283,11 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: deployments/addins/package.json
+          # Hash the lockfile so the npm cache invalidates whenever a
+          # locked dependency version changes — hashing package.json
+          # alone would let semver-range patch updates ride on a stale
+          # node_modules cache.
+          cache-dependency-path: deployments/addins/package-lock.json
 
       - name: Install add-in test deps
         working-directory: deployments/addins
