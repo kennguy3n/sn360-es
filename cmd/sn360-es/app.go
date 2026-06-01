@@ -24,6 +24,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/education"
 	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
 	"github.com/kennguy3n/sn360-es/internal/service/ingestion"
+	"github.com/kennguy3n/sn360-es/internal/service/investigation"
 	"github.com/kennguy3n/sn360-es/internal/service/onboarding"
 	"github.com/kennguy3n/sn360-es/internal/service/predict"
 	"github.com/kennguy3n/sn360-es/internal/service/tier0"
@@ -109,6 +110,15 @@ type application struct {
 	recipientSvc        *predict.RecipientService
 	openSvc             *predict.OpenService
 	escalationSvc       *agent.EscalationService
+
+	// investigationSvc backs the WS-3b operator investigation API
+	// (GET /v1/investigation/message/{pseudo_id} +
+	// GET /v1/investigation/sender/{sender_hash}). Nil when the
+	// repository registry is unavailable (memory-only deployments
+	// without evaluation_results / communication_histories);
+	// handler renders 503 in that case so the route still 404s
+	// cleanly under role-gated mux and 503s under wired mux.
+	investigationSvc *investigation.Service
 
 	// platformBridge fans HighRisk+ verdicts, quarantine actions,
 	// and escalation ticket transitions out to the
@@ -544,6 +554,25 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		app.escalationSvc = esc
 	} else {
 		logger.Warn("sn360-es: escalation service init failed", slog.Any("error", eerr))
+	}
+
+	// WS-3b investigation service. Requires both repositories to be
+	// wired (evaluation_results + communication_histories) — the
+	// in-memory registry NewMemoryRegistry satisfies the contract
+	// for tests, the Postgres registry for production. When neither
+	// is wired (a degraded headless-worker deployment), the
+	// constructor refuses and the handler renders 503 so the route
+	// is honest about its readiness.
+	if app.repos != nil && app.repos.EvaluationResults != nil && app.repos.CommunicationHistories != nil {
+		if inv, ierr := investigation.NewService(investigation.ServiceConfig{
+			EvaluationResults:      app.repos.EvaluationResults,
+			CommunicationHistories: app.repos.CommunicationHistories,
+			Logger:                 logger,
+		}); ierr == nil {
+			app.investigationSvc = inv
+		} else {
+			logger.Warn("sn360-es: investigation service init failed", slog.Any("error", ierr))
+		}
 	}
 
 	// Dashboard generator.

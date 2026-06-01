@@ -23,6 +23,48 @@ import (
 	"github.com/kennguy3n/sn360-es/pkg/events"
 )
 
+// StampResultParticipantHashes folds the pseudonymised participant
+// hashes the SignalEnricher derives for the request onto the
+// EvaluateResult so the downstream `es.evaluate.result` consumer
+// (the management Postgres writer) persists them onto the
+// evaluation_results row for the WS-3b investigation API.
+//
+// The function reuses SignalEnricher.SightingFor (which already
+// runs the read-side normalisation cascade) rather than re-deriving
+// the hashes inline so the (tenant, sender, recipient) triple
+// stamped onto the result is guaranteed identical to the one that
+// will land on communication_histories from the sighting publish
+// downstream. A divergent shape between the two writes would mean
+// the investigation API's sender-trail lookup keys never join
+// against the row WS-4a wrote.
+//
+// Both arguments are tolerated nil and the function returns
+// silently — a partially-wired deployment is treated like
+// NoopEnricher (the same as PublishCommHistoryUpdate below). The
+// caller-supplied hashes on res are preserved if non-empty so a
+// future evaluator that wants to override participant identity is
+// not clobbered.
+func StampResultParticipantHashes(
+	ctx context.Context,
+	enricher SignalEnricher,
+	req dto.EvaluateRequest,
+	res *dto.EvaluateResult,
+) {
+	if enricher == nil || res == nil {
+		return
+	}
+	upd, ok := enricher.SightingFor(ctx, req)
+	if !ok {
+		return
+	}
+	if len(res.SenderHash) == 0 && len(upd.SenderHash) > 0 {
+		res.SenderHash = append([]byte(nil), upd.SenderHash...)
+	}
+	if len(res.RecipientHash) == 0 && len(upd.RecipientHash) > 0 {
+		res.RecipientHash = append([]byte(nil), upd.RecipientHash...)
+	}
+}
+
 // PublishCommHistoryUpdate is the WS-4a producer-side helper. It
 // derives the per-message sighting via SignalEnricher.SightingFor
 // (which shares the read-side normalisation cascade so the

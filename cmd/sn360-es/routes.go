@@ -87,6 +87,14 @@ func buildMux(app *application) (http.Handler, error) {
 	mux.HandleFunc("/v1/escalation/resolve", escalationH.ServeResolve)
 	mux.HandleFunc("/v1/escalation/", escalationH.ServeGet)
 
+	// WS-3b investigation API. Both routes always register; the
+	// handler renders 503 if app.investigationSvc is nil so the
+	// readiness signal matches the wiring state rather than
+	// silently 404-ing on a wired-but-unbacked deployment.
+	investigationH := handler.NewInvestigationHandler(logger, app.investigationSvc)
+	mux.HandleFunc("/v1/investigation/message/", investigationH.ServeMessage)
+	mux.HandleFunc("/v1/investigation/sender/", investigationH.ServeSender)
+
 	// Interstitial click handler. Only registered when the URL
 	// rewriter is configured; the handler unconditionally calls into
 	// the rewriter and would panic on a nil dereference otherwise.
@@ -378,6 +386,14 @@ func defaultRouteTemplates() []middleware.RoutePattern {
 		{Prefix: "/v1/education/lesson/", Label: "/v1/education/lesson/:id"},
 		{Prefix: "/v1/vendors/", Label: "/v1/vendors/:id"},
 		{Prefix: "/v1/push/", Label: "/v1/push/:provider/:tenant"},
+		// WS-3b investigation API — pseudo_id and sender_hash are
+		// high-cardinality (one per message / per sender), so both
+		// need stable Prometheus labels here. Without this the
+		// telemetry middleware would emit a unique
+		// http_requests_total{path="..."} time-series per probed
+		// hash, blowing up Prometheus head series.
+		{Prefix: "/v1/investigation/message/", Label: "/v1/investigation/message/:pseudo_id"},
+		{Prefix: "/v1/investigation/sender/", Label: "/v1/investigation/sender/:sender_hash"},
 	}
 }
 

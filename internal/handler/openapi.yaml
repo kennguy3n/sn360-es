@@ -36,6 +36,7 @@ tags:
   - name: predict
   - name: onboarding
   - name: vendor
+  - name: investigation
   - name: system
 
 paths:
@@ -298,6 +299,117 @@ paths:
         "401":
           $ref: "#/components/responses/Error"
         "404":
+          $ref: "#/components/responses/Error"
+
+  /v1/investigation/message/{pseudo_id}:
+    get:
+      tags: [investigation]
+      summary: Per-message investigation trail
+      description: |
+        WS-3b operator pivot from an incident / dashboard into the
+        message-level verdict context. Returns the persisted
+        EvaluationResult for (tenant, pseudo_message_id) plus, when
+        the result carries pseudonymised participant hashes, the
+        CommunicationHistory row for the (sender, recipient) pair.
+
+        Tenant isolation: cross-tenant accesses return 404 with an
+        identical response body to the genuine "not found" case so
+        the response surface cannot be used to fingerprint which
+        message IDs exist in another tenant. The caller's tenant
+        comes from the verified JWT claim — the pseudo_message_id
+        path parameter is the lookup key, never the tenant ID.
+      parameters:
+        - in: path
+          name: pseudo_id
+          required: true
+          schema:
+            type: string
+          description: |
+            Pseudonymised message identifier the evaluator stamped on
+            the verdict (BYTEA message_id_hash on
+            evaluation_results, rendered as the original wire string
+            by the writer). Operators copy this from the incident
+            detail view; it is opaque to the SOC.
+      responses:
+        "200":
+          description: Message trail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageTrailResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+
+  /v1/investigation/sender/{sender_hash}:
+    get:
+      tags: [investigation]
+      summary: Per-sender investigation trail
+      description: |
+        WS-3b operator pivot from a verdict / dashboard into the
+        sender-level activity pattern. Returns the recent
+        evaluation verdicts for (tenant, sender_hash), the recipient
+        fan-out across the tenant, and a small aggregate envelope
+        for the dashboard headline metrics.
+
+        sender_hash is base64url-encoded (no padding) so it fits
+        cleanly into a URL path. base64-standard with padding is
+        also accepted as a defense-in-depth fallback.
+
+        The look-back is bounded server-side: the optional
+        `since_hours` parameter caps at 720 (30 days), matching the
+        rolling Count30d window on communication_histories.
+      parameters:
+        - in: path
+          name: sender_hash
+          required: true
+          schema:
+            type: string
+          description: |
+            base64url-encoded BYTEA pseudonym derived by the bridge /
+            enricher (HashPII(tenantID, lower(trim(address)))). The
+            dashboard typically copies this from a verdict detail.
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+          description: |
+            Cap on the number of verdicts returned. Default 100; the
+            repository hard-caps at 500 regardless of the requested
+            value, but values above 500 are rejected at the handler
+            with 400 so the caller can correct the typo.
+        - in: query
+          name: since_hours
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 720
+          description: |
+            Aggregation look-back in hours. Default 720 (30 days).
+            Values outside [1, 720] return 400.
+      responses:
+        "200":
+          description: Sender trail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SenderTrailResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
           $ref: "#/components/responses/Error"
 
   /v1/dashboard/summary:
@@ -855,6 +967,145 @@ components:
         resolution_notes:
           type: string
       required: [ticket_id, tenant_id, created_at, reason]
+
+    MessageTrailResponse:
+      type: object
+      description: |
+        Per-message investigation trail returned by GET
+        /v1/investigation/message/{pseudo_id}. Pseudonymised — all
+        identifying participant fields are hashes, never raw
+        addresses.
+      required: [result]
+      properties:
+        result:
+          $ref: "#/components/schemas/EvaluationResultSummary"
+        communication_history:
+          $ref: "#/components/schemas/CommunicationHistorySummary"
+
+    SenderTrailResponse:
+      type: object
+      description: |
+        Per-sender investigation trail returned by GET
+        /v1/investigation/sender/{sender_hash}. Includes the recent
+        evaluation verdicts the sender produced, the recipient
+        fan-out across the tenant, and a small aggregate envelope
+        the dashboard renders without paging the slices.
+      required: [sender_hash, verdicts, communication_histories, aggregate]
+      properties:
+        sender_hash:
+          type: string
+          description: Echoed back base64url so the caller can confirm decode.
+        verdicts:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvaluationResultSummary"
+        communication_histories:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommunicationHistorySummary"
+        aggregate:
+          $ref: "#/components/schemas/SenderTrailAggregate"
+
+    EvaluationResultSummary:
+      type: object
+      description: |
+        Compact projection of one evaluation_results row. Pseudonyms
+        are base64url-encoded; raw addresses never appear.
+      required: [id, score, tier, evaluated_at]
+      properties:
+        id:
+          type: string
+        correlation_id:
+          type: string
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+        tier:
+          type: string
+        primary_category:
+          type: string
+        secondary_categories:
+          type: array
+          items: { type: string }
+        reason_codes:
+          type: array
+          items: { type: string }
+        degraded:
+          type: boolean
+        sender_hash:
+          type: string
+          description: base64url-encoded pseudonym; empty on legacy rows.
+        recipient_hash:
+          type: string
+          description: base64url-encoded pseudonym; empty on legacy rows.
+        evaluated_at:
+          type: string
+          format: date-time
+
+    CommunicationHistorySummary:
+      type: object
+      description: |
+        Compact projection of one communication_histories row. Used
+        as both the per-message join target and as one element of
+        the per-sender recipient fan-out.
+      required: [sender_hash, recipient_hash, count_7d, count_30d, typical_hour, first_seen_at, last_seen_at]
+      properties:
+        sender_hash:
+          type: string
+        recipient_hash:
+          type: string
+        sender_domain:
+          type: string
+          description: Domain string when persisted unhashed (legacy rows).
+        count_7d:
+          type: integer
+        count_30d:
+          type: integer
+        typical_hour:
+          type: integer
+          minimum: 0
+          maximum: 23
+        relationship:
+          type: string
+        first_seen_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+
+    SenderTrailAggregate:
+      type: object
+      description: |
+        Derived headline metrics for SenderTrailResponse. Computed in
+        process from the verdicts + recipients slices; no additional
+        repository round-trip is performed.
+      required: [total_verdicts, high_risk_verdicts, max_score, distinct_recipients, total_sightings_window]
+      properties:
+        total_verdicts:
+          type: integer
+        high_risk_verdicts:
+          type: integer
+          description: |
+            Count of verdicts whose tier is "blocked" or "high".
+        max_score:
+          type: integer
+          minimum: 0
+          maximum: 100
+        last_verdict_at:
+          type: string
+          format: date-time
+        distinct_recipients:
+          type: integer
+          description: |
+            Recipients whose LastSeenAt falls within the look-back
+            window (defaults to 30 days).
+        total_sightings_window:
+          type: integer
+          description: |
+            Sum of count_30d across the recipients counted in
+            distinct_recipients.
 
     DashboardSummary:
       type: object

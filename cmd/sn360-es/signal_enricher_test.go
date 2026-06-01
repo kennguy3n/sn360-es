@@ -62,6 +62,10 @@ func (f *fakeCommHistoryRepo) ListByTenant(_ context.Context, _ string, _ time.T
 	panic("unexpected ListByTenant call in signal-enricher test")
 }
 
+func (f *fakeCommHistoryRepo) ListBySender(_ context.Context, _ string, _ []byte, _ int) ([]repository.CommunicationHistory, error) {
+	panic("unexpected ListBySender call in signal-enricher test")
+}
+
 func (f *fakeCommHistoryRepo) Get(_ context.Context, tenantID string, senderHash, recipientHash []byte) (*repository.CommunicationHistory, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -97,6 +97,27 @@ type EvaluateResult struct {
 	// Treated as routing metadata only — never logged in clear text;
 	// callers should still pseudonymise before persistence.
 	Recipient string `json:"recipient,omitempty"`
+
+	// SenderHash and RecipientHash are the pseudonymised participant
+	// identities derived by the signal enricher
+	// (HashPII(tenantID, lower(trim(address)))). They are propagated
+	// onto the verdict so the management Postgres consumer that
+	// persists evaluation_results can index by sender for the WS-3b
+	// investigation API
+	//
+	//   GET /v1/investigation/sender/{sender_hash}
+	//
+	// without joining back to communication_histories on a non-hash
+	// equality.
+	//
+	// Both fields are best-effort: a producer that cannot derive a
+	// hash (Sender or Recipient missing / empty / privately-stored)
+	// leaves them empty and the consumer treats the row as
+	// participant-unknown. The omitempty tags keep older consumers
+	// happy — every reader either understands the new fields or
+	// silently ignores them.
+	SenderHash    []byte `json:"sender_hash,omitempty"`
+	RecipientHash []byte `json:"recipient_hash,omitempty"`
 }
 
 // BackfillRoutingFields propagates the routing/identity fields the

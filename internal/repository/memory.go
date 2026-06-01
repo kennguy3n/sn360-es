@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -591,6 +592,45 @@ func (m *memoryEvalResults) ListRecent(_ context.Context, tenantID string, limit
 	return out, nil
 }
 
+// ListBySender returns rows for (tenantID, senderHash) sorted by
+// EvaluatedAt descending and capped at
+// min(limit, EvalListBySenderMaxLimit). Mirrors the Postgres
+// backend's WHERE sender_hash IS NOT NULL guard by short-circuiting
+// on an empty senderHash argument — callers must supply a
+// non-empty pseudonym for the predicate to be meaningful.
+func (m *memoryEvalResults) ListBySender(_ context.Context, tenantID string, senderHash []byte, limit int) ([]EvaluationResult, error) {
+	limit = clampEvalListBySenderLimit(limit)
+	if len(senderHash) == 0 {
+		return []EvaluationResult{}, nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]EvaluationResult, 0)
+	for _, r := range m.rows {
+		if r.TenantID != tenantID {
+			continue
+		}
+		if len(r.SenderHash) == 0 {
+			// Legacy row written before the WS-3b producer stamped
+			// a hash. The Postgres partial index excludes these;
+			// mirror that exclusion here so tests against the
+			// in-memory registry see the same row set as production.
+			continue
+		}
+		if !bytes.Equal(r.SenderHash, senderHash) {
+			continue
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].EvaluatedAt.After(out[j].EvaluatedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 // --- communication histories --------------------------------------------
 
 type memoryCommHistory struct {
@@ -887,6 +927,37 @@ func (m *memoryCommHistory) RecordSighting(_ context.Context, s Sighting) error 
 	cur.UpdatedAt = now
 	m.rows[key] = cur
 	return nil
+}
+
+// ListBySender returns rows for (tenantID, senderHash) sorted by
+// LastSeenAt descending and capped at
+// min(limit, CommHistoryListByTenantMaxLimit). The clamp matches
+// the Postgres backend so the WS-3b investigation API sees the
+// same slice regardless of backend.
+func (m *memoryCommHistory) ListBySender(_ context.Context, tenantID string, senderHash []byte, limit int) ([]CommunicationHistory, error) {
+	limit = clampCommHistoryLimit(limit)
+	if len(senderHash) == 0 {
+		return []CommunicationHistory{}, nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	rows := make([]CommunicationHistory, 0)
+	for _, h := range m.rows {
+		if h.TenantID != tenantID {
+			continue
+		}
+		if !bytes.Equal(h.SenderHash, senderHash) {
+			continue
+		}
+		rows = append(rows, h)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].LastSeenAt.After(rows[j].LastSeenAt)
+	})
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows, nil
 }
 
 // --- feedback events ----------------------------------------------------

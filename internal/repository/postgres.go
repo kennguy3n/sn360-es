@@ -709,17 +709,33 @@ func (p *pgEvalResults) Create(ctx context.Context, r *EvaluationResult) error {
 	if degradedSvcs == nil {
 		degradedSvcs = []string{}
 	}
+	// SenderHash / RecipientHash are nullable (migration 0020).
+	// Use NULLIF on a zero-length []byte so a producer that
+	// couldn't derive the pseudonym (Sender / Recipient empty)
+	// persists a SQL NULL instead of a zero-length BYTEA — the
+	// partial index on the column has `WHERE sender_hash IS NOT
+	// NULL`, so an empty-byte sentinel would silently bypass the
+	// index and surface as a stray row in the per-sender query
+	// when the operator probes for the empty-hash sender. Mapping
+	// `[]byte{}` to NULL on the way in keeps the index
+	// authoritative and matches the memory backend's ListBySender
+	// short-circuit on len(senderHash)==0.
 	_, err := p.db.ExecContext(ctx, `
-INSERT INTO evaluation_results (id, tenant_id, message_id_hash, correlation_id, score, tier,
+INSERT INTO evaluation_results (id, tenant_id, message_id_hash, sender_hash, recipient_hash,
+                                correlation_id, score, tier,
                                 primary_category, secondary_categories, reason_codes,
                                 degraded, degraded_services,
                                 tier0_outcome, tier1_outcome, tier2_outcome, rspamd_outcome,
                                 evaluated_at)
-VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,NULLIF($7,''),$8,$9,$10,$11,
-        NULLIF($12,'')::JSONB, NULLIF($13,'')::JSONB, NULLIF($14,'')::JSONB, NULLIF($15,'')::JSONB,
-        COALESCE($16, NOW()))
+VALUES ($1,$2,$3,
+        CASE WHEN OCTET_LENGTH($4) > 0 THEN $4 ELSE NULL END,
+        CASE WHEN OCTET_LENGTH($5) > 0 THEN $5 ELSE NULL END,
+        NULLIF($6,''),$7,$8,NULLIF($9,''),$10,$11,$12,$13,
+        NULLIF($14,'')::JSONB, NULLIF($15,'')::JSONB, NULLIF($16,'')::JSONB, NULLIF($17,'')::JSONB,
+        COALESCE($18, NOW()))
 `,
-		r.ID, r.TenantID, r.MessageIDHash, r.CorrelationID, r.Score, r.Tier,
+		r.ID, r.TenantID, r.MessageIDHash, r.SenderHash, r.RecipientHash,
+		r.CorrelationID, r.Score, r.Tier,
 		r.Primary, pq.Array(secondary), pq.Array(reasons),
 		r.Degraded, pq.Array(degradedSvcs),
 		stringOrEmpty(r.Tier0OutcomeJSON), stringOrEmpty(r.Tier1OutcomeJSON),
@@ -733,23 +749,13 @@ VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,NULLIF($7,''),$8,$9,$10,$11,
 }
 
 func (p *pgEvalResults) GetByMessageHash(ctx context.Context, tenantID string, messageIDHash []byte) (*EvaluationResult, error) {
-	row := p.db.QueryRowContext(ctx, `
-SELECT id, tenant_id, message_id_hash, COALESCE(correlation_id,''), score, tier,
-       COALESCE(primary_category,''), secondary_categories, reason_codes, degraded, degraded_services,
-       COALESCE(tier0_outcome::text,''), COALESCE(tier1_outcome::text,''),
-       COALESCE(tier2_outcome::text,''), COALESCE(rspamd_outcome::text,''),
-       evaluated_at, created_at
+	row := p.db.QueryRowContext(ctx, evalResultSelect+`
   FROM evaluation_results WHERE tenant_id=$1 AND message_id_hash=$2`, tenantID, messageIDHash)
 	return scanEval(row)
 }
 
 func (p *pgEvalResults) ListRecent(ctx context.Context, tenantID string, limit int) ([]EvaluationResult, error) {
-	rows, err := p.db.QueryContext(ctx, `
-SELECT id, tenant_id, message_id_hash, COALESCE(correlation_id,''), score, tier,
-       COALESCE(primary_category,''), secondary_categories, reason_codes, degraded, degraded_services,
-       COALESCE(tier0_outcome::text,''), COALESCE(tier1_outcome::text,''),
-       COALESCE(tier2_outcome::text,''), COALESCE(rspamd_outcome::text,''),
-       evaluated_at, created_at
+	rows, err := p.db.QueryContext(ctx, evalResultSelect+`
   FROM evaluation_results WHERE tenant_id=$1 ORDER BY evaluated_at DESC LIMIT NULLIF($2,0)`, tenantID, limit)
 	if err != nil {
 		return nil, err
@@ -765,6 +771,57 @@ SELECT id, tenant_id, message_id_hash, COALESCE(correlation_id,''), score, tier,
 	}
 	return out, rows.Err()
 }
+
+// ListBySender returns recent evaluation results for the (tenant,
+// sender) pair, newest first. Capped at
+// min(limit, EvalListBySenderMaxLimit) so an operator probe cannot
+// stream a multi-year per-sender history through one HTTP request.
+//
+// The query reuses the migration-0020 partial index
+// idx_eval_results_tenant_sender_evaluated; the index already
+// excludes legacy rows whose sender_hash is NULL, so no additional
+// WHERE clause is needed to skip them.
+func (p *pgEvalResults) ListBySender(ctx context.Context, tenantID string, senderHash []byte, limit int) ([]EvaluationResult, error) {
+	limit = clampEvalListBySenderLimit(limit)
+	if len(senderHash) == 0 {
+		// Match the in-memory backend's short-circuit: an empty
+		// senderHash predicate is structurally pointless and would
+		// otherwise force a sequential scan around the partial index.
+		return []EvaluationResult{}, nil
+	}
+	rows, err := p.db.QueryContext(ctx, evalResultSelect+`
+  FROM evaluation_results
+ WHERE tenant_id=$1 AND sender_hash=$2
+ ORDER BY evaluated_at DESC
+ LIMIT $3`, tenantID, senderHash, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]EvaluationResult, 0)
+	for rows.Next() {
+		r, err := scanEvalRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *r)
+	}
+	return out, rows.Err()
+}
+
+// evalResultSelect is the canonical column projection shared by
+// every read path on pgEvalResults. Keeping it as a const guarantees
+// the SELECT column order and the scan-into-struct order in scanEval
+// / scanEvalRows stay in lockstep — a future migration that adds a
+// column only needs to touch this one literal plus the scan helpers,
+// rather than four near-duplicate SELECT strings.
+const evalResultSelect = `
+SELECT id, tenant_id, message_id_hash, sender_hash, recipient_hash,
+       COALESCE(correlation_id,''), score, tier,
+       COALESCE(primary_category,''), secondary_categories, reason_codes, degraded, degraded_services,
+       COALESCE(tier0_outcome::text,''), COALESCE(tier1_outcome::text,''),
+       COALESCE(tier2_outcome::text,''), COALESCE(rspamd_outcome::text,''),
+       evaluated_at, created_at`
 
 // populateEvalJSON fills in the optional JSON / string-array fields
 // on an EvaluationResult after the caller has Scanned the row into
@@ -795,7 +852,8 @@ func scanEval(row *sql.Row) (*EvaluationResult, error) {
 		secondary, reasons, degSvcs pq.StringArray
 		t0, t1, t2, rsp             string
 	)
-	err := row.Scan(&r.ID, &r.TenantID, &r.MessageIDHash, &r.CorrelationID, &r.Score, &r.Tier,
+	err := row.Scan(&r.ID, &r.TenantID, &r.MessageIDHash, &r.SenderHash, &r.RecipientHash,
+		&r.CorrelationID, &r.Score, &r.Tier,
 		&r.Primary, &secondary, &reasons, &r.Degraded, &degSvcs, &t0, &t1, &t2, &rsp,
 		&r.EvaluatedAt, &r.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -814,7 +872,8 @@ func scanEvalRows(rows *sql.Rows) (*EvaluationResult, error) {
 		secondary, reasons, degSvcs pq.StringArray
 		t0, t1, t2, rsp             string
 	)
-	if err := rows.Scan(&r.ID, &r.TenantID, &r.MessageIDHash, &r.CorrelationID, &r.Score, &r.Tier,
+	if err := rows.Scan(&r.ID, &r.TenantID, &r.MessageIDHash, &r.SenderHash, &r.RecipientHash,
+		&r.CorrelationID, &r.Score, &r.Tier,
 		&r.Primary, &secondary, &reasons, &r.Degraded, &degSvcs, &t0, &t1, &t2, &rsp,
 		&r.EvaluatedAt, &r.CreatedAt); err != nil {
 		return nil, err
@@ -1086,6 +1145,51 @@ SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(
 		return nil, ErrNotFound
 	}
 	return &h, err
+}
+
+// ListBySender returns the recipient fan-out for a (tenant, sender)
+// pair sorted by last_seen_at descending. Capped at
+// min(limit, CommHistoryListByTenantMaxLimit) so the WS-3b
+// investigation API cannot accidentally stream a multi-thousand-
+// recipient row set through one HTTP request.
+//
+// The query uses the migration-0019 (tenant_id, sender_hash,
+// recipient_hash) hash-partition pruning + the per-partition
+// (tenant_id, sender_hash) btree index from migration 0001 so the
+// planner converges on a single partition scan even for the
+// noisiest sender in the largest tenant.
+func (p *pgCommHistory) ListBySender(ctx context.Context, tenantID string, senderHash []byte, limit int) ([]CommunicationHistory, error) {
+	limit = clampCommHistoryLimit(limit)
+	if len(senderHash) == 0 {
+		return []CommunicationHistory{}, nil
+	}
+	rows, err := p.db.QueryContext(ctx, `
+SELECT id, tenant_id, sender_hash, recipient_hash, sender_domain_hash, COALESCE(sender_domain, ''),
+       count_7d, count_30d, first_seen_at, last_seen_at, relationship,
+       COALESCE(typical_hour, -1), updated_at
+  FROM communication_histories
+ WHERE tenant_id=$1 AND sender_hash=$2
+ ORDER BY last_seen_at DESC
+ LIMIT $3`,
+		tenantID, senderHash, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]CommunicationHistory, 0)
+	for rows.Next() {
+		var h CommunicationHistory
+		if err := rows.Scan(&h.ID, &h.TenantID, &h.SenderHash, &h.RecipientHash, &h.SenderDomainHash, &h.SenderDomain,
+			&h.Count7d, &h.Count30d, &h.FirstSeenAt, &h.LastSeenAt, &h.Relationship,
+			&h.TypicalHour, &h.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // --- feedback events ----------------------------------------------------
