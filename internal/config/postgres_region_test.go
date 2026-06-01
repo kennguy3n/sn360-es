@@ -212,3 +212,24 @@ func TestSortedRegionKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestParsePostgresRegionMap_RejectsDuplicateAfterTrim pins the
+// fail-loud contract on whitespace-padded duplicate region keys.
+// Without the guard, the parser would silently overwrite one entry
+// with the other (Go's map iteration order is randomised — the
+// surviving DSN is non-deterministic), so the operator's intent
+// is ambiguous. The right call is to fail boot.
+func TestParsePostgresRegionMap_RejectsDuplicateAfterTrim(t *testing.T) {
+	t.Parallel()
+
+	const dsn = "postgres://user:pw@host:5432/db?sslmode=require"
+	raw := `{"ap-southeast-1": "` + dsn + `", " ap-southeast-1": "` + dsn + `"}`
+	_, err := parsePostgresRegionMap(raw, Postgres{})
+	if err == nil {
+		t.Fatalf("parsePostgresRegionMap() err = nil; want duplicate-region error")
+	}
+	wantSubstr := `duplicate region key "ap-southeast-1"`
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Fatalf("error = %q; want substring %q", err.Error(), wantSubstr)
+	}
+}

@@ -86,6 +86,13 @@ func parsePostgresRegionMap(raw string, base Postgres) (map[string]Postgres, err
 		if trimmed == "" {
 			return nil, errors.New("PG_REGION_MAP: region name must not be empty")
 		}
+		// Reject duplicate-after-trim region keys explicitly:
+		// `{"ap-southeast-1": "...", " ap-southeast-1": "..."}`
+		// would silently overwrite one entry with the other,
+		// so the operator's intent is ambiguous. Fail boot.
+		if _, dup := out[trimmed]; dup {
+			return nil, fmt.Errorf("PG_REGION_MAP: duplicate region key %q (after whitespace trim)", trimmed)
+		}
 		pg, err := postgresFromURL(dsn, base)
 		if err != nil {
 			return nil, fmt.Errorf("PG_REGION_MAP[%s]: %w", trimmed, err)

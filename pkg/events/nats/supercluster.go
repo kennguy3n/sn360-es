@@ -52,10 +52,7 @@ func resolveSuperclusterServers(cfg Config) (string, error) {
 		return "", fmt.Errorf("nats: supercluster missing entry for home region %q; got regions %v",
 			cfg.HomeRegion, sortedSuperclusterRegions(cfg.Supercluster))
 	}
-	urls, err := splitSuperclusterURLs(raw)
-	if err != nil {
-		return "", fmt.Errorf("nats: supercluster home region %q: %w", cfg.HomeRegion, err)
-	}
+	urls := splitSuperclusterURLs(raw)
 	if len(urls) == 0 {
 		// Reject the empty list explicitly rather than
 		// silently falling back to cfg.URL — an operator who
@@ -71,7 +68,13 @@ func resolveSuperclusterServers(cfg Config) (string, error) {
 // returns the trimmed, non-empty entries in input order. Whitespace
 // inside each URL is preserved as-is (the nats client itself rejects
 // malformed schemes).
-func splitSuperclusterURLs(raw string) ([]string, error) {
+//
+// No error return: per-URL scheme / host validation is delegated to
+// nats.Connect (which surfaces a clear error on dial), so the only
+// failure mode at this layer — an entirely empty URL list — is
+// expressed by callers checking `len(out) == 0` rather than threading
+// a dead error through every call site.
+func splitSuperclusterURLs(raw string) []string {
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
@@ -81,7 +84,7 @@ func splitSuperclusterURLs(raw string) ([]string, error) {
 		}
 		out = append(out, s)
 	}
-	return out, nil
+	return out
 }
 
 // mergeNATSServerList returns the primary URL first followed by every
