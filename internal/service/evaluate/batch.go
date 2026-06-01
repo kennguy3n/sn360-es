@@ -347,7 +347,7 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 		enrichedSig := o.cfg.Enricher.Enrich(ctx, bm.Request, bm.Signals)
 		p := pending{msg: m, req: bm.Request, sig: enrichedSig}
 		if o.cfg.Tier0 != nil {
-			outcome := o.cfg.Tier0.Apply(bm.Request, enrichedSig)
+			outcome := o.cfg.Tier0.ApplyWithContext(ctx, bm.Request, enrichedSig)
 			p.tier0Outcome = outcome
 			if outcome.Bypass {
 				// Tier 0 short-circuit: build the published

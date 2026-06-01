@@ -115,6 +115,16 @@ func buildMux(app *application) (http.Handler, error) {
 	mux.HandleFunc("/v1/investigation/message/", investigationH.ServeMessage)
 	mux.HandleFunc("/v1/investigation/sender/", investigationH.ServeSender)
 
+	// Threat-intel feed admin API (WS-5B.3). Gated on
+	// scp="admin_api" inside the handler; if the intel store
+	// failed to wire (e.g. Postgres down at boot) the handler
+	// still mounts and renders 503 so operators see a clear
+	// readiness signal rather than a 404.
+	intelH := handler.NewIntelFeedsHandler(logger, app.intelStore, app.intelJob)
+	mux.HandleFunc("/v1/intel/feeds", intelH.ServeFeeds)
+	mux.HandleFunc("/v1/intel/feeds/", intelH.ServeFeeds)
+	mux.HandleFunc("/v1/intel/indicators", intelH.ServeIndicators)
+
 	// Interstitial click handler. Only registered when the URL
 	// rewriter is configured; the handler unconditionally calls into
 	// the rewriter and would panic on a nil dereference otherwise.

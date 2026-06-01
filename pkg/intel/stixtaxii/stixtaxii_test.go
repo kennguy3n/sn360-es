@@ -161,15 +161,15 @@ func TestParsePattern_UnquoteEscapes(t *testing.T) {
 func TestBoolish_VariantParsings(t *testing.T) {
 	t.Parallel()
 	cases := map[string]bool{
-		`true`:       true,
-		`false`:      false,
-		`"true"`:     true,
-		`"false"`:    false,
-		`1`:          true,
-		`0`:          false,
-		`"1"`:        true,
-		`"0"`:        false,
-		`null`:       false,
+		`true`:    true,
+		`false`:   false,
+		`"true"`:  true,
+		`"false"`: false,
+		`1`:       true,
+		`0`:       false,
+		`"1"`:     true,
+		`"0"`:     false,
+		`null`:    false,
 	}
 	for in, want := range cases {
 		var b boolish

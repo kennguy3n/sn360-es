@@ -742,10 +742,10 @@ func buildPushSignatureVerifier(cfg *config.Config, receivers []ingestion.PushRe
 // Periodic worker wiring.
 // ---------------------------------------------------------------------
 
-func buildWorkers(cfg *config.Config, logger *slog.Logger, app *application) (*worker.Runner, *worker.Runner, *worker.Runner, *worker.Runner, *worker.Runner) {
+func buildWorkers(cfg *config.Config, logger *slog.Logger, app *application) (*worker.Runner, *worker.Runner, *worker.Runner, *worker.Runner, *worker.Runner, *worker.Runner) {
 	if app.repos == nil {
 		logger.Info("sn360-es: periodic workers skipped; repository registry not wired")
-		return nil, nil, nil, nil, nil
+		return nil, nil, nil, nil, nil, nil
 	}
 
 	lockFactory := buildWorkerLockFactory(cfg, logger, app)
@@ -767,8 +767,64 @@ func buildWorkers(cfg *config.Config, logger *slog.Logger, app *application) (*w
 	partitionRunner := buildPartitionRunner(cfg, logger, app, lockFactory, metricsRec)
 	cleanupRunner := buildCleanupRunner(cfg, logger, app, lockFactory, metricsRec, partitionRunner)
 	dirSyncRunner := buildDirectorySyncRunner(cfg, logger, app, lockFactory, metricsRec)
+	intelRunner := buildIntelRunner(cfg, logger, app, lockFactory, metricsRec)
 
-	return relRunner, vendorRunner, cleanupRunner, dirSyncRunner, partitionRunner
+	return relRunner, vendorRunner, cleanupRunner, dirSyncRunner, partitionRunner, intelRunner
+}
+
+// buildIntelRunner wires the threat-intel feed-consumption worker
+// (WS-5B.3). Returns nil when:
+//   - intel feature is disabled via IntelEnabled=false
+//   - app.intelStore is unwired
+//
+// In both cases the function logs at Info level. The runner is
+// safe-to-start when non-nil; the underlying job acquires the
+// "intel" Redis lock so multiple replicas converge on a single
+// active poller per cycle.
+func buildIntelRunner(cfg *config.Config, logger *slog.Logger, app *application, lockFactory worker.LockFactory, metricsRec workerMetricsAdapter) *worker.Runner {
+	if !cfg.Worker.IntelEnabled {
+		logger.Info("sn360-es: intel worker disabled (WORKER_INTEL_ENABLED=false)")
+		return nil
+	}
+	if app.intelStore == nil {
+		logger.Info("sn360-es: intel worker skipped (intel store not wired)")
+		return nil
+	}
+	apiKeyMap := map[string]string{
+		"misp":       cfg.Worker.IntelMISPAPIKey,
+		"stix-taxii": cfg.Worker.IntelSTIXAPIKey,
+	}
+	job, err := worker.NewIntelJob(worker.IntelJobConfig{
+		Interval:       cfg.Worker.IntelInterval,
+		MaxConcurrent:  cfg.Worker.IntelMaxConcurrent,
+		FeedTimeout:    cfg.Worker.IntelFeedTimeout,
+		StaleThreshold: cfg.Worker.IntelStaleThreshold,
+		GCInterval:     cfg.Worker.IntelGCInterval,
+		GCRetention:    cfg.Worker.IntelGCRetention,
+		Store:          app.intelStore,
+		APIKeyMap:      apiKeyMap,
+		Logger:         logger.With(slog.String("worker", "intel")),
+		Metrics:        intelWorkerMetricsAdapter{m: app.metrics},
+	})
+	if err != nil {
+		logger.Warn("sn360-es: intel job init failed", slog.Any("error", err))
+		return nil
+	}
+	app.intelJob = job
+	runner, err := worker.NewRunner(worker.RunnerConfig{
+		Job:     job,
+		Logger:  logger,
+		Locks:   lockFactory,
+		Metrics: metricsRec,
+	})
+	if err != nil {
+		logger.Warn("sn360-es: intel runner init failed", slog.Any("error", err))
+		return nil
+	}
+	logger.Info("sn360-es: intel worker wired",
+		slog.Duration("interval", cfg.Worker.IntelInterval),
+		slog.Int("max_concurrent", cfg.Worker.IntelMaxConcurrent))
+	return runner
 }
 
 func buildWorkerLockFactory(cfg *config.Config, logger *slog.Logger, app *application) worker.LockFactory {

@@ -34,9 +34,9 @@ func TestDecode_FixtureMaps(t *testing.T) {
 	}
 
 	want := map[string]intel.IndicatorType{
-		"http://bad.example.com/dropper": intel.IndicatorURL,
-		"bad.example.com":                intel.IndicatorDomain,
-		"203.0.113.42":                   intel.IndicatorIP,
+		"http://bad.example.com/dropper":     intel.IndicatorURL,
+		"bad.example.com":                    intel.IndicatorDomain,
+		"203.0.113.42":                       intel.IndicatorIP,
 		"http://informational.example.org/x": intel.IndicatorURL,
 	}
 	for _, ind := range res.Indicators {

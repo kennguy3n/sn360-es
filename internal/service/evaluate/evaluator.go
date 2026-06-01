@@ -24,6 +24,11 @@ import (
 // visible at every call site.
 type Tier0Gate interface {
 	Apply(req dto.EvaluateRequest, signals dto.RiskSignals) dto.Tier0Outcome
+	// ApplyWithContext is the context-aware variant used by the
+	// ti_match threat-intel hook. Implementations that don't
+	// need a context (e.g. the in-memory fake used in tests)
+	// MAY forward to Apply, discarding ctx.
+	ApplyWithContext(ctx context.Context, req dto.EvaluateRequest, signals dto.RiskSignals) dto.Tier0Outcome
 }
 
 // Tier1Client invokes the Tier 1 (encoder) inference service. The actual
@@ -279,7 +284,7 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest, signa
 	if e.cfg.Tier0 == nil {
 		return res, errors.New("evaluate: Tier0 gate is required")
 	}
-	tier0 := e.cfg.Tier0.Apply(req, signals)
+	tier0 := e.cfg.Tier0.ApplyWithContext(ctx, req, signals)
 	res.Tier0 = &tier0
 	if tier0.Bypass || tier0.SkipML || tier0.RspamdOnly {
 		reason := tier0.Reason

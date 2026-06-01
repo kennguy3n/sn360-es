@@ -206,7 +206,7 @@ func decodeEvents(events []eventEnvelope) []intel.Indicator {
 				continue
 			}
 			sev := baseSeverity
-			if !boolFromMISP(a.ToIDS) {
+			if !boolFromMISP(a.ToIDs) {
 				// Non-actionable attributes get a lower
 				// severity floor regardless of the parent
 				// event's threat_level_id.
@@ -320,9 +320,9 @@ type restSearchResponse struct {
 }
 
 type eventEnvelope struct {
-	Event     event           `json:"Event"`
-	Attribute []attribute     `json:"Attribute,omitempty"`
-	Tag       []tagEnvelope   `json:"Tag,omitempty"`
+	Event     event         `json:"Event"`
+	Attribute []attribute   `json:"Attribute,omitempty"`
+	Tag       []tagEnvelope `json:"Tag,omitempty"`
 }
 
 // flat returns a synthetic Event built from the envelope's
@@ -345,7 +345,7 @@ type event struct {
 type attribute struct {
 	Type  string        `json:"type"`
 	Value string        `json:"value"`
-	ToIDS any           `json:"to_ids"`
+	ToIDs any           `json:"to_ids"`
 	Tag   []tagEnvelope `json:"Tag"`
 }
 

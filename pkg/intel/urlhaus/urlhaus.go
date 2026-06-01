@@ -265,4 +265,3 @@ func severityFromStatus(status string) int {
 		return 60
 	}
 }
-

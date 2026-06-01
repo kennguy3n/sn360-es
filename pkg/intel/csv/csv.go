@@ -24,8 +24,8 @@
 package csv
 
 import (
-	stdcsv "encoding/csv"
 	"context"
+	stdcsv "encoding/csv"
 	"errors"
 	"fmt"
 	"io"
@@ -47,8 +47,8 @@ func init() {
 
 // Poller is the CSV implementation of intel.Poller.
 type Poller struct {
-	cfg     intel.FeedConfig
-	parsed  csvOptions
+	cfg      intel.FeedConfig
+	parsed   csvOptions
 	fetchURL string
 }
 

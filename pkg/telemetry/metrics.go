@@ -87,6 +87,16 @@ type Metrics struct {
 	// --- Periodic workers -----------------------------------------
 	WorkerCycleCompleted *prometheus.CounterVec
 	WorkerCycleLatency   *prometheus.HistogramVec
+
+	// --- Threat-intel feed worker (WS-5B.3) ------------------------
+	IntelFeedPolled     *prometheus.CounterVec
+	IntelFeedIndicators *prometheus.CounterVec
+	IntelFeedLatency    *prometheus.HistogramVec
+	IntelFeedStale      *prometheus.CounterVec
+	IntelGCDeleted      *prometheus.CounterVec
+	IntelTier0Lookups   *prometheus.CounterVec
+	IntelTier0Matches   *prometheus.CounterVec
+	IntelCacheHits      *prometheus.CounterVec
 }
 
 // MetricsConfig configures the metric set. Subsystem maps to Prometheus
@@ -249,6 +259,32 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 			"Periodic worker cycle duration.",
 			latencyBuckets(),
 			[]string{"worker"}),
+
+		IntelFeedPolled: b.counterVec("intel_feed_poll_total",
+			"Threat-intel feed poll attempts, partitioned by feed and outcome (ok|error).",
+			[]string{"feed", "outcome"}),
+		IntelFeedIndicators: b.counterVec("intel_feed_indicators_total",
+			"Indicators upserted by the intel worker, partitioned by feed.",
+			[]string{"feed"}),
+		IntelFeedLatency: b.histogramVec("intel_feed_poll_latency_seconds",
+			"Per-feed poll duration.",
+			latencyBuckets(),
+			[]string{"feed"}),
+		IntelFeedStale: b.counterVec("intel_feed_stale_total",
+			"Threat-intel feed crossed the consecutive-failure threshold; the feed is considered stale until the next successful poll.",
+			[]string{"feed"}),
+		IntelGCDeleted: b.counterVec("intel_gc_deleted_total",
+			"Indicators garbage-collected by the retention sweep.",
+			nil),
+		IntelTier0Lookups: b.counterVec("intel_tier0_lookups_total",
+			"Tier 0 ti_match lookups, partitioned by outcome (hit|miss|skipped|error).",
+			[]string{"outcome"}),
+		IntelTier0Matches: b.counterVec("intel_tier0_matches_total",
+			"Tier 0 ti_match matches, partitioned by severity tier (block|quarantine|flag).",
+			[]string{"tier"}),
+		IntelCacheHits: b.counterVec("intel_cache_total",
+			"Tier 0 redis negative-cache results, partitioned by outcome (hit|miss|error).",
+			[]string{"outcome"}),
 	}
 	return m
 }

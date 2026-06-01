@@ -1085,6 +1085,63 @@ func (a workerMetricsAdapter) ObserveCycle(name string, duration time.Duration, 
 	a.m.ObserveWorkerCycle(name, duration, err)
 }
 
+// intelTier0Observer adapts *telemetry.Metrics to the
+// tier0.TIObserver interface so the gate can emit `ti_match`
+// lookup / match counters without importing the telemetry
+// package directly.
+type intelTier0Observer struct {
+	m *telemetry.Metrics
+}
+
+func (o intelTier0Observer) ObserveLookup(outcome string) {
+	if o.m == nil || o.m.IntelTier0Lookups == nil {
+		return
+	}
+	o.m.IntelTier0Lookups.WithLabelValues(outcome).Inc()
+}
+
+func (o intelTier0Observer) ObserveMatch(tier string) {
+	if o.m == nil || o.m.IntelTier0Matches == nil {
+		return
+	}
+	o.m.IntelTier0Matches.WithLabelValues(tier).Inc()
+}
+
+// intelWorkerMetricsAdapter implements
+// worker.IntelMetricsRecorder against the telemetry registry.
+type intelWorkerMetricsAdapter struct {
+	m *telemetry.Metrics
+}
+
+func (a intelWorkerMetricsAdapter) ObserveIntelPoll(feed, outcome string, latency time.Duration, indicators int) {
+	if a.m == nil {
+		return
+	}
+	if a.m.IntelFeedPolled != nil {
+		a.m.IntelFeedPolled.WithLabelValues(feed, outcome).Inc()
+	}
+	if a.m.IntelFeedLatency != nil {
+		a.m.IntelFeedLatency.WithLabelValues(feed).Observe(latency.Seconds())
+	}
+	if outcome == "ok" && a.m.IntelFeedIndicators != nil && indicators > 0 {
+		a.m.IntelFeedIndicators.WithLabelValues(feed).Add(float64(indicators))
+	}
+}
+
+func (a intelWorkerMetricsAdapter) ObserveIntelStale(feed string) {
+	if a.m == nil || a.m.IntelFeedStale == nil {
+		return
+	}
+	a.m.IntelFeedStale.WithLabelValues(feed).Inc()
+}
+
+func (a intelWorkerMetricsAdapter) ObserveIntelGC(deleted int) {
+	if a.m == nil || a.m.IntelGCDeleted == nil || deleted == 0 {
+		return
+	}
+	a.m.IntelGCDeleted.WithLabelValues().Add(float64(deleted))
+}
+
 // ingestionLockAdapter adapts *redis.DistributedLock to the
 // ingestion.DistributedLock interface.
 type ingestionLockAdapter struct {

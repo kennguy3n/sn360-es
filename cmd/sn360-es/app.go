@@ -35,6 +35,7 @@ import (
 	"github.com/kennguy3n/sn360-es/pkg/events"
 	"github.com/kennguy3n/sn360-es/pkg/events/bus"
 	natsbus "github.com/kennguy3n/sn360-es/pkg/events/nats"
+	"github.com/kennguy3n/sn360-es/pkg/intel"
 	"github.com/kennguy3n/sn360-es/pkg/privacy"
 	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
 	"github.com/kennguy3n/sn360-es/pkg/storage/redis"
@@ -188,6 +189,20 @@ type application struct {
 	cleanupRunner       *worker.Runner
 	directorySyncRunner *worker.Runner
 	partitionRunner     *worker.Runner
+	intelRunner         *worker.Runner
+
+	// Threat-intel feed integration (WS-5B.3).
+	//
+	// intelStore is the deployment-scoped IntelStore — backed by
+	// PgIntelStore in production and *repository.MemoryIntelStore
+	// in dev / unit-test runs. Nil only when both Postgres AND
+	// the in-memory fallback are absent (a configuration the
+	// build does not emit in practice).
+	intelStore intel.IntelStore
+	// intelJob is the worker job that polls intel_feeds, upserts
+	// indicators and runs the 30-day GC. It is also the
+	// IntelFeedRefresher consumed by the admin /refresh endpoint.
+	intelJob *worker.IntelJob
 
 	// AI agents.
 	onboardAgent  *agent.OnboardingAgent
@@ -657,6 +672,17 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		logger.Info("sn360-es: dashboard generator disabled (postgres not configured)")
 	}
 
+	// Threat-intel feed store (WS-5B.3). Deployment-scoped — no
+	// tenant binder; the worker / Tier 0 gate read across feeds.
+	// In-memory fallback when Postgres isn't wired keeps unit
+	// tests + dev mode functional.
+	if app.pgDB != nil {
+		app.intelStore = repository.NewPgIntelStore(app.pgDB)
+	} else {
+		app.intelStore = repository.NewMemoryIntelStore()
+		logger.Info("sn360-es: intel store using in-memory backend (postgres not configured)")
+	}
+
 	// Evaluation pipeline.
 	app.tier0Gate = tier0.NewGate(tier0.GateConfig{
 		SkipInternal:         cfg.Tier0.SkipInternal,
@@ -664,6 +690,22 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		SkipRecurring:        cfg.Tier0.SkipRecurring,
 		HighVolumeRspamdOnly: cfg.Tier0.HighVolumeRspamdOnly,
 	}, nil)
+	// Threat-intel hook on the gate. Optional Redis negative
+	// cache fronts the lookup when Redis is wired.
+	if app.intelStore != nil {
+		ticker := &tier0.StoreTIChecker{Store: app.intelStore}
+		if app.redis != nil {
+			ticker.Cache = &tier0.RedisTICache{
+				Client: app.redis,
+				TTL:    5 * time.Minute,
+				Logger: logger.With(slog.String("component", "ti_cache")),
+			}
+		}
+		app.tier0Gate = app.tier0Gate.
+			WithTIChecker(ticker).
+			WithTIObserver(intelTier0Observer{m: app.metrics}).
+			WithLogger(logger.With(slog.String("component", "tier0_ti")))
+	}
 
 	if cfg.Tier1.URL != "" {
 		t1, err := tier1.New(tier1.Config{
@@ -982,7 +1024,7 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	}
 
 	// Periodic workers.
-	app.relationshipRunner, app.vendorRunner, app.cleanupRunner, app.directorySyncRunner, app.partitionRunner = buildWorkers(cfg, logger, app)
+	app.relationshipRunner, app.vendorRunner, app.cleanupRunner, app.directorySyncRunner, app.partitionRunner, app.intelRunner = buildWorkers(cfg, logger, app)
 
 	// AI agents.
 	app.onboardAgent, app.tuningAgent, app.supportAgent = buildAgents(cfg, logger, app)
@@ -1198,6 +1240,17 @@ func (a *application) StartBackground(ctx context.Context) {
 				return nil
 			}
 			return a.partitionRunner.Run(ctx)
+		})
+		// Threat-intel feed-consumption worker (WS-5B.3). The
+		// Redis lock keyed on "worker:lock:intel" serialises
+		// polling across replicas so a single replica owns the
+		// poller fleet per cycle, mirroring the cleanup /
+		// partition workers' lock pattern.
+		a.spawn(ctx, "intel worker", func(ctx context.Context) error {
+			if a.intelRunner == nil {
+				return nil
+			}
+			return a.intelRunner.Run(ctx)
 		})
 	}
 

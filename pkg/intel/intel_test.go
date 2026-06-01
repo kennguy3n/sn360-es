@@ -201,5 +201,5 @@ type stubPoller struct {
 	provider string
 }
 
-func (s stubPoller) Provider() string                          { return s.provider }
-func (s stubPoller) Poll(_ context.Context) (Result, error)    { return Result{}, nil }
+func (s stubPoller) Provider() string                       { return s.provider }
+func (s stubPoller) Poll(_ context.Context) (Result, error) { return Result{}, nil }

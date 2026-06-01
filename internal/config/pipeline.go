@@ -151,6 +151,42 @@ type Worker struct {
 	// archive + drop it manually. Set to 0 to disable partition-
 	// drop entirely (forward-creation still runs).
 	PartitionRetentionMonths int
+
+	// IntelEnabled gates the threat-intel feed-consumption worker
+	// (migrations/0023_threat_intel_feeds.up.sql). When false the
+	// scheduler does not start; the Tier 0 ti_match reason code
+	// still works against any rows already in intel_indicators
+	// because the gate consults the table directly.
+	IntelEnabled bool
+	// IntelInterval is the scheduler tick interval — how often the
+	// worker scans intel_feeds for due rows. Default 1m.
+	IntelInterval time.Duration
+	// IntelMaxConcurrent caps the number of simultaneously-running
+	// feed pollers per cycle. Default 4 — IO-bound enough that the
+	// system tolerates more, conservative enough to keep one slow
+	// MISP from blocking URLhaus refreshes.
+	IntelMaxConcurrent int
+	// IntelGCInterval is how often the garbage-collection sweep runs.
+	// Default 6h.
+	IntelGCInterval time.Duration
+	// IntelGCRetention is the maximum age of an indicator row
+	// (relative to its last_seen) before it is eligible for GC.
+	// Default 30 days. URLhaus rotates aggressively; older rows
+	// produce false positives.
+	IntelGCRetention time.Duration
+	// IntelMISPAPIKey is the MISP API token. Required for the misp
+	// provider; ignored by other providers.
+	IntelMISPAPIKey string
+	// IntelSTIXAPIKey is the STIX-TAXII Bearer token. Optional —
+	// public TAXII collections require no auth.
+	IntelSTIXAPIKey string
+	// IntelFeedTimeout caps the per-feed HTTP poll duration before
+	// the worker considers the poll failed. Default 60s.
+	IntelFeedTimeout time.Duration
+	// IntelStaleThreshold is the number of consecutive failures at
+	// which the worker raises the Prometheus stale-feed alert and
+	// writes the audit row. Default 3.
+	IntelStaleThreshold int
 }
 
 func loadWorker() Worker {
@@ -164,6 +200,15 @@ func loadWorker() Worker {
 		PartitionInterval:        getDuration("WORKER_PARTITION_INTERVAL", 24*time.Hour),
 		PartitionLookaheadMonths: getInt("WORKER_PARTITION_LOOKAHEAD_MONTHS", 3),
 		PartitionRetentionMonths: getInt("WORKER_PARTITION_RETENTION_MONTHS", 12),
+		IntelEnabled:             getBool("WORKER_INTEL_ENABLED", false),
+		IntelInterval:            getDuration("WORKER_INTEL_INTERVAL", time.Minute),
+		IntelMaxConcurrent:       getInt("WORKER_INTEL_MAX_CONCURRENT", 4),
+		IntelGCInterval:          getDuration("WORKER_INTEL_GC_INTERVAL", 6*time.Hour),
+		IntelGCRetention:         getDuration("WORKER_INTEL_GC_RETENTION", 30*24*time.Hour),
+		IntelMISPAPIKey:          getStr("INTEL_MISP_API_KEY", ""),
+		IntelSTIXAPIKey:          getStr("INTEL_STIX_API_KEY", ""),
+		IntelFeedTimeout:         getDuration("WORKER_INTEL_FEED_TIMEOUT", 60*time.Second),
+		IntelStaleThreshold:      getInt("WORKER_INTEL_STALE_FAILURES", 3),
 	}
 }
 

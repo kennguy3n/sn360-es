@@ -32,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -210,11 +211,12 @@ var DefaultHTTPDoer HTTPDoer = &http.Client{Timeout: 30 * time.Second}
 //     ("http://x/" → "http://x"). Query string is preserved
 //     verbatim because campaign trackers often live in the query.
 //
-//   - ip: trimmed and lowercased (IPv6 hex is case-insensitive);
-//     the actual netip.Addr parse is deferred so a malformed IP
-//     is still recorded — pollers are not the right layer to drop
-//     a feed's data, the gate's lookup will simply never hit a
-//     malformed row.
+//   - ip: parsed via net/netip.ParseAddr — both IPv4 and IPv6 are
+//     supported and the canonical form is the netip String()
+//     output (lowercased IPv6 in shortest-form notation). Inputs
+//     that fail the parse are rejected with ErrIndicatorMalformed
+//     so a malformed feed row cannot accidentally collide with a
+//     domain canonicalisation.
 //
 //   - sha256: lowercased; must be exactly 64 hex chars (32 bytes).
 //     Anything else returns ErrIndicatorMalformed so a malformed
@@ -240,7 +242,7 @@ func Canonicalise(raw Indicator) (Indicator, error) {
 	case IndicatorURL:
 		canonical, err = canonicaliseURL(val)
 	case IndicatorIP:
-		canonical = strings.ToLower(val)
+		canonical, err = canonicaliseIP(val)
 	case IndicatorSHA256:
 		canonical, err = canonicaliseSHA256(val)
 	}
@@ -345,6 +347,14 @@ func canonicaliseURL(v string) (string, error) {
 		out = strings.TrimSuffix(out, "/")
 	}
 	return out, nil
+}
+
+func canonicaliseIP(v string) (string, error) {
+	addr, err := netip.ParseAddr(strings.TrimSpace(v))
+	if err != nil {
+		return "", fmt.Errorf("intel: canonicalise ip %q: %w", v, ErrIndicatorMalformed)
+	}
+	return addr.String(), nil
 }
 
 func canonicaliseSHA256(v string) (string, error) {

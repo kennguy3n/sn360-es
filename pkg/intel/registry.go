@@ -192,6 +192,18 @@ type IntelStore interface {
 	// same hash with a fresher last_seen. Returns the count of
 	// rows deleted so the worker can metric it.
 	GarbageCollect(ctx context.Context, cutoff time.Time) (int, error)
+
+	// RecordStaleAlert writes a deployment-scoped audit row noting
+	// that the named feed has crossed the consecutive-failure
+	// threshold. Implementations write tenant_id=NULL (the column
+	// is nullable for system-level events). The metadata blob is
+	// stored verbatim and surfaces in the operator's audit UI;
+	// callers should include at least feed_id and failure_count.
+	//
+	// The worker pairs the write with the
+	// `sn360_intel_feed_stale_total{name=...}` Prometheus counter
+	// so dashboards can correlate the alert with the audit row.
+	RecordStaleAlert(ctx context.Context, feedID, feedName string, failures int, lastError string, occurredAt time.Time) error
 }
 
 // Feed is the in-memory shape of the intel_feeds row. The repository

@@ -309,8 +309,8 @@ func mapObservable(objType, prop string) (intel.IndicatorType, bool) {
 // ---------------------------------------------------------------------
 
 type envelope struct {
-	More    boolish     `json:"more"`
-	Next    string      `json:"next"`
+	More    boolish      `json:"more"`
+	Next    string       `json:"next"`
 	Objects []stixObject `json:"objects"`
 }
 
@@ -354,4 +354,3 @@ func (b *boolish) UnmarshalJSON(data []byte) error {
 
 // Bool returns the underlying boolean, for tests.
 func (b boolish) Bool() bool { return bool(b) }
-

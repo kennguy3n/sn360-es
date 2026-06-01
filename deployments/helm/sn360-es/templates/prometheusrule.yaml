@@ -185,6 +185,10 @@ spec:
             (
               label_replace(absent_over_time(sn360_es_worker_cycle_completed_total{worker="vendor-discovery"}[30m]),         "worker", "vendor-discovery",         "", "") == 1
             )
+            or
+            (
+              label_replace(absent_over_time(sn360_es_worker_cycle_completed_total{worker="intel"}[30m]),                    "worker", "intel",                    "", "") == 1
+            )
           for: 30m
           labels:
             severity: critical
