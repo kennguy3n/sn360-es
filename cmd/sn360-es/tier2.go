@@ -101,10 +101,12 @@ func buildTier2Client(app *application, cfg *config.Config, logger *slog.Logger)
 	// the Router's per-tenant client cache. Without this hook the
 	// Router would keep returning the previously-constructed
 	// override client after the underlying provider name flipped.
-	// The hook is installed only when both an adapter and a Loader
-	// are wired — without the Loader the Router has no per-tenant
-	// cache anyway.
-	if app.tenantScoringConfig != nil && routerCfg.Loader != nil {
+	// The hook is installed only when an adapter is wired — without
+	// the adapter the Router has no per-tenant cache anyway, and
+	// routerCfg.Loader is set in lockstep with tenantScoringConfig
+	// above (line 75) so a separate `Loader != nil` check would be
+	// strictly redundant.
+	if app.tenantScoringConfig != nil {
 		app.tenantScoringConfig.SetOnInvalidate(router.Invalidate)
 	}
 	logger.Info("sn360-es: tier2 client wired",
