@@ -222,12 +222,19 @@ func (s *Service) Release(ctx context.Context, req Request) (Result, error) {
 			false), nil
 	}
 
-	// 3. Per-recipient rate-limit gate. We count EVERY recent
-	//    audit row, not just successes, so a client repeatedly
-	//    hitting the endpoint with bad inputs still consumes
-	//    their hourly budget (an abuse-resistance choice — see
+	// 3. Per-recipient rate-limit gate. The repository's
+	//    CountRecentByRecipient excludes auth-failure outcomes
+	//    (`token_expired`, `invalid_token`) so an attacker who
+	//    knows a recipient's BLAKE2b-256 hash cannot deny
+	//    self-release to that recipient by spraying forged
+	//    JWTs. Every other outcome — including refused, rate-
+	//    limited, tier2_blocked, already_released, not_found —
+	//    DOES count toward the bucket, because by the time the
+	//    state machine writes them the JWT has been
+	//    cryptographically verified and the claim is the real
+	//    recipient's intent. See
 	//    repository.QuarantineReleaseAuditRepository.CountRecentByRecipient
-	//    for the full rationale).
+	//    for the full threat model.
 	policy, err := s.policies.Get(ctx, req.TenantID)
 	if err != nil {
 		return Result{}, fmt.Errorf("selfrelease: load policy: %w", err)

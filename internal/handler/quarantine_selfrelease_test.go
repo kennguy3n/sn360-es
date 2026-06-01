@@ -321,6 +321,76 @@ func TestSelfReleaseHandler_RateLimitedReturns429(t *testing.T) {
 	}
 }
 
+// TestSelfReleaseHandler_AuthFailuresDoNotBurnRateLimit is the
+// handler-level regression guard for the rate-limit poisoning
+// attack identified in Devin Review round 2: an attacker who knows
+// a recipient's BLAKE2b-256 hash sprays forged JWTs at the endpoint.
+// Each rejected token writes an `invalid_token` audit row. If those
+// rows counted toward the per-recipient rate-limit bucket, the
+// attacker could deny self-release to the legitimate recipient by
+// pre-filling the bucket. The fix in the repository's
+// CountRecentByRecipient excludes auth-failure outcomes, and this
+// test exercises the full handler stack to assert the
+// end-to-end behaviour holds.
+func TestSelfReleaseHandler_AuthFailuresDoNotBurnRateLimit(t *testing.T) {
+	fx := newSelfReleaseFixture(t,
+		dto.EvaluateResult{Tier: constant.TierInformational}, false,
+		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 1})
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+
+	// Pre-fill the bucket from the attacker's POV: spray N
+	// tampered tokens that all carry the legitimate recipient's
+	// hash in their unverified claims. Every one results in
+	// an audit row.
+	const sprayCount = 10
+	for i := 0; i < sprayCount; i++ {
+		tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
+		// Tamper the signature so the JWT fails to verify.
+		// The handler decodes claims from the unverified
+		// payload to audit the auth failure, so each call
+		// writes one `invalid_token` row.
+		tampered := tok[:len(tok)-1] + "x"
+		if tampered == tok {
+			tampered = tok[:len(tok)-1] + "X"
+		}
+		rec := postForm(t, h, tampered)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("spray %d: expected 401, got %d body=%s", i, rec.Code, rec.Body.String())
+		}
+	}
+	// Confirm the audit rows landed (visibility for SOC).
+	rows, err := fx.audit.ListByMessage(context.Background(), "acme", "pmid-1", sprayCount+5)
+	if err != nil {
+		t.Fatalf("ListByMessage: %v", err)
+	}
+	if len(rows) != sprayCount {
+		t.Fatalf("audit rows from spray: got %d want %d (auth-fail rows MUST be written for forensics)", len(rows), sprayCount)
+	}
+	for _, e := range rows {
+		if e.Outcome != repository.QuarantineReleaseOutcomeInvalidToken {
+			t.Fatalf("spray row outcome=%q want=invalid_token", e.Outcome)
+		}
+	}
+
+	// Now the legitimate user clicks their valid token. With
+	// the fix, the rate-limit count for this recipient is 0
+	// (auth-failure rows excluded), so the release succeeds.
+	// WITHOUT the fix this would return 429 rate_limited.
+	validTok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
+	rec := postForm(t, h, validTok)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("legitimate click after spray: status=%d body=%s (auth-fail rows MUST NOT burn the rate-limit budget)",
+			rec.Code, rec.Body.String())
+	}
+	body := decodeSelfReleaseBody(t, rec)
+	if body.Outcome != string(repository.QuarantineReleaseOutcomeReleased) {
+		t.Fatalf("outcome=%q want=released", body.Outcome)
+	}
+	if !body.Restored {
+		t.Fatal("expected restored=true after legitimate post-spray click")
+	}
+}
+
 // TestSelfReleaseHandler_AlreadyReleasedReturns200 is the
 // idempotency case: a second click on a released message returns
 // 200 + already_released, no provider mutation.

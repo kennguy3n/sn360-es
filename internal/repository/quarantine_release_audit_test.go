@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -174,6 +175,76 @@ func TestMemoryQuarantineReleaseAudit_RoundTrip(t *testing.T) {
 	cnt, _ = repo.CountRecentByRecipient(ctx, "acme", hashA, t0.Add(-1*time.Minute))
 	if cnt != 0 {
 		t.Fatalf("count acme+hashA, last 1m: got %d want 0", cnt)
+	}
+}
+
+// TestMemoryQuarantineReleaseAudit_CountExcludesAuthFailures is
+// the regression guard for the rate-limit poisoning attack: an
+// attacker who learns a recipient's BLAKE2b-256 hash and sprays
+// forged JWTs would otherwise write `invalid_token` /
+// `token_expired` rows that count toward the legitimate recipient's
+// hourly bucket and deny them self-release. The Postgres and
+// in-memory implementations both filter these outcomes; this test
+// covers the in-memory path. The pg implementation's
+// `outcome NOT IN ('token_expired','invalid_token')` SQL predicate
+// is verified by the integration testcontainers suite.
+func TestMemoryQuarantineReleaseAudit_CountExcludesAuthFailures(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryQuarantineReleaseAudit()
+	hash := []byte{0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89,
+		0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89}
+	t0 := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	// Seed 5 auth-failure rows (3 invalid_token + 2 token_expired)
+	// plus 1 legitimate `released` row, all within the window.
+	// If the count incorrectly included auth-failure rows it would
+	// return 6; the correct (post-fix) value is 1.
+	authFailures := []QuarantineReleaseOutcome{
+		QuarantineReleaseOutcomeInvalidToken,
+		QuarantineReleaseOutcomeInvalidToken,
+		QuarantineReleaseOutcomeInvalidToken,
+		QuarantineReleaseOutcomeTokenExpired,
+		QuarantineReleaseOutcomeTokenExpired,
+	}
+	for i, o := range authFailures {
+		if _, err := repo.Record(ctx, QuarantineReleaseAuditEntry{
+			TenantID:          "acme",
+			PseudoMessageID:   fmt.Sprintf("pmid-fail-%d", i),
+			RecipientUserHash: hash,
+			Outcome:           o,
+			Reason:            "forged token from unverified claims",
+			RequestedAt:       t0.Add(-time.Duration(i+1) * time.Minute),
+		}); err != nil {
+			t.Fatalf("Record auth-fail %d: %v", i, err)
+		}
+	}
+	if _, err := repo.Record(ctx, QuarantineReleaseAuditEntry{
+		TenantID:          "acme",
+		PseudoMessageID:   "pmid-legit",
+		RecipientUserHash: hash,
+		Outcome:           QuarantineReleaseOutcomeReleased,
+		Reason:            "legitimate release",
+		RequestedAt:       t0.Add(-10 * time.Minute),
+	}); err != nil {
+		t.Fatalf("Record legit: %v", err)
+	}
+
+	cnt, err := repo.CountRecentByRecipient(ctx, "acme", hash, t0.Add(-1*time.Hour))
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	if cnt != 1 {
+		t.Fatalf("count: got %d want 1 (auth-failure rows must NOT count toward rate-limit budget — see CountRecentByRecipient interface doc)", cnt)
+	}
+
+	// And the rows are still in ListByMessage (audit visibility
+	// preserved — SOC can still see the forged-token attempts).
+	rows, err := repo.ListByMessage(ctx, "acme", "pmid-fail-0", 10)
+	if err != nil {
+		t.Fatalf("ListByMessage: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Outcome != QuarantineReleaseOutcomeInvalidToken {
+		t.Fatalf("ListByMessage: rows=%+v (auth-failure rows MUST remain visible for forensics)", rows)
 	}
 }
 

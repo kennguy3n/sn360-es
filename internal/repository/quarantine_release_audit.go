@@ -152,19 +152,35 @@ type QuarantineReleaseAuditRepository interface {
 	// the canonical ID.
 	Record(ctx context.Context, entry QuarantineReleaseAuditEntry) (QuarantineReleaseAuditEntry, error)
 	// CountRecentByRecipient returns the number of audit rows for
-	// (tenantID, recipientUserHash) with `requested_at >= since`.
+	// (tenantID, recipientUserHash) with `requested_at >= since`
+	// that come from a recipient whose JWT signature the handler
+	// successfully verified. Auth-failure outcomes
+	// (`token_expired`, `invalid_token`) are EXCLUDED from the
+	// count because they are written from the
+	// unverified-and-attacker-controllable claims of a rejected
+	// JWT; counting them would let an attacker who learned a
+	// target's `recipient_user_hash` (a BLAKE2b-256 digest, hard
+	// but not impossible to obtain — e.g. via observation of a
+	// legitimate self-release URL) deny self-release to that
+	// recipient by spraying forged JWTs.
+	//
 	// Used by the rate-limit check: the handler queries with
 	// `since = now() - 1 hour` and rejects when the count meets
 	// or exceeds the tenant's configured cap.
 	//
-	// IMPORTANT: this counts EVERY audit row in the window —
-	// including outcomes like `rate_limited` and `tier2_blocked`
-	// — not just successful releases. Counting only successes
-	// would let an abusive client burn the audit table by
-	// repeatedly hitting the endpoint with expired or invalid
-	// tokens. Counting all attempts keeps the rate-limit
-	// bounded against both legitimate-repeat and adversarial
-	// traffic.
+	// All other outcomes — `released`, `rate_limited`,
+	// `tier2_blocked`, `release_refused`, `already_released`,
+	// `not_found` — DO count, because they are written only after
+	// the JWT verified. An auth'd recipient hitting the endpoint
+	// with mismatched inputs still legitimately consumes their
+	// hourly budget.
+	//
+	// Defense against forged-token audit-table growth (the
+	// concern that previously motivated counting auth-failure
+	// rows) is the responsibility of upstream per-source-IP
+	// rate-limiting middleware, NOT the per-recipient counter:
+	// those two limits guard different threat models and should
+	// not be conflated.
 	CountRecentByRecipient(ctx context.Context, tenantID string, recipientUserHash []byte, since time.Time) (int, error)
 	// ListByMessage returns audit rows for a single
 	// (tenantID, pseudoMessageID) ordered newest first, capped at
@@ -236,7 +252,11 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 
 // CountRecentByRecipient runs the rate-limit count query. The index
 // `idx_qra_tenant_recipient_requested` from migration 0021 makes
-// this an index-only scan on the hot partition.
+// this an index-only scan on the hot partition. The
+// `outcome NOT IN (...)` predicate filters out the auth-failure
+// outcomes whose rows were written from unverified JWT claims; see
+// the QuarantineReleaseAuditRepository interface doc for the threat
+// model.
 func (p *pgQuarantineReleaseAudit) CountRecentByRecipient(ctx context.Context, tenantID string, recipientUserHash []byte, since time.Time) (int, error) {
 	if tenantID == "" {
 		return 0, fmt.Errorf("quarantine_release_audit: tenant_id is required")
@@ -250,7 +270,8 @@ SELECT count(*)
 FROM quarantine_release_audit
 WHERE tenant_id = $1
   AND recipient_user_hash = $2
-  AND requested_at >= $3`,
+  AND requested_at >= $3
+  AND outcome NOT IN ('token_expired', 'invalid_token')`,
 		tenantID, recipientUserHash, since).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("quarantine_release_audit: count: %w", err)
@@ -369,6 +390,15 @@ func (m *memoryQuarantineReleaseAudit) CountRecentByRecipient(_ context.Context,
 			continue
 		}
 		if e.RequestedAt.Before(since) {
+			continue
+		}
+		// Exclude auth-failure outcomes — see the
+		// QuarantineReleaseAuditRepository interface doc for
+		// the threat model. Mirror the Postgres
+		// `outcome NOT IN ('token_expired','invalid_token')`
+		// predicate exactly so both implementations agree.
+		if e.Outcome == QuarantineReleaseOutcomeTokenExpired ||
+			e.Outcome == QuarantineReleaseOutcomeInvalidToken {
 			continue
 		}
 		count++
