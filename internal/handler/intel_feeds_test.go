@@ -101,6 +101,13 @@ func TestIntelFeeds_CreateValidation(t *testing.T) {
 		{`{"name":"a","provider":"csv","url":""}`, http.StatusBadRequest}, // missing url
 		{`{"name":"a","provider":"","url":"https://e/x"}`, http.StatusBadRequest},
 		{`{"name":"a","provider":"csv","url":"https://e/x","foo":1}`, http.StatusBadRequest}, // unknown field
+		// fetch_interval_sec must be >= 60 when supplied (OpenAPI
+		// minimum). Zero/omitted falls through to the 15-minute
+		// default. A 30s value would let the worker re-poll on
+		// every tick and get the deployment rate-limited.
+		{`{"name":"a","provider":"csv","url":"https://e/x","fetch_interval_sec":30}`, http.StatusBadRequest},
+		{`{"name":"a","provider":"csv","url":"https://e/x","fetch_interval_sec":-5}`, http.StatusBadRequest},
+		{`{"name":"a","provider":"csv","url":"https://e/x","fetch_interval_sec":1}`, http.StatusBadRequest},
 	}
 	for i, c := range cases {
 		req := httptest.NewRequest(http.MethodPost, "/v1/intel/feeds", bytes.NewReader([]byte(c.body)))
@@ -110,6 +117,48 @@ func TestIntelFeeds_CreateValidation(t *testing.T) {
 		if rec.Code != c.status {
 			t.Errorf("case %d: status %d; want %d (body=%s)", i, rec.Code, c.status, rec.Body.String())
 		}
+	}
+}
+
+// TestIntelFeeds_PatchValidation exercises the
+// fetch_interval_sec >= 60 guard on the PATCH path. Without this
+// validator a PATCH {"fetch_interval_sec": 0} would pin nextDue at
+// exactly LastFetchedAt and the worker would hammer the upstream
+// provider once per tick.
+func TestIntelFeeds_PatchValidation(t *testing.T) {
+	t.Parallel()
+	h, store := newTestHandler(nil)
+	feed, err := store.CreateFeed(context.Background(), intel.Feed{
+		Name: "csv-a", Provider: "csv", URL: "https://e/x.csv",
+		FetchInterval: 10 * time.Minute, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cases := []struct {
+		name   string
+		body   string
+		status int
+	}{
+		{"zero", `{"fetch_interval_sec":0}`, http.StatusBadRequest},
+		{"negative", `{"fetch_interval_sec":-1}`, http.StatusBadRequest},
+		{"below_minimum", `{"fetch_interval_sec":30}`, http.StatusBadRequest},
+		{"exact_minimum_ok", `{"fetch_interval_sec":60}`, http.StatusOK},
+		{"large_ok", `{"fetch_interval_sec":86400}`, http.StatusOK},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPatch,
+				"/v1/intel/feeds/"+feed.ID,
+				bytes.NewReader([]byte(c.body)))
+			req = req.WithContext(adminCtx(req.Context(), privacy.ScopeAdminAPI))
+			rec := httptest.NewRecorder()
+			h.ServeFeeds(rec, req)
+			if rec.Code != c.status {
+				t.Errorf("status %d; want %d (body=%s)",
+					rec.Code, c.status, rec.Body.String())
+			}
+		})
 	}
 }
 

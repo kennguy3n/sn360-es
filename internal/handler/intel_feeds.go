@@ -39,6 +39,15 @@ type IntelFeedsHandler struct {
 	logger    *slog.Logger
 	store     intel.IntelStore
 	refresher IntelFeedRefresher
+	// providers, when non-empty, is the set of provider keys the
+	// admin API accepts on POST /v1/intel/feeds. Production wires
+	// the populated intel.DefaultRegistry's Providers() result
+	// (see routes.go), which keeps the handler aligned with the
+	// constructors actually registered for poll-time use without
+	// hardcoding a second list. Leave empty to skip provider-key
+	// validation (test default — the in-memory store does not
+	// need the registry plumbed in).
+	providers map[string]struct{}
 }
 
 // NewIntelFeedsHandler constructs the handler. logger is required;
@@ -48,6 +57,37 @@ func NewIntelFeedsHandler(logger *slog.Logger, store intel.IntelStore, refresher
 		logger = slog.Default()
 	}
 	return &IntelFeedsHandler{logger: logger, store: store, refresher: refresher}
+}
+
+// WithProviders returns h with the provider-key validator populated
+// from the supplied slice. The handler rejects POST /v1/intel/feeds
+// requests whose provider field is not in this set with a 400.
+//
+// Production passes intel.DefaultRegistry.Providers() so the admin
+// API only accepts providers that have a registered Constructor (and
+// will therefore actually poll once the feed is created). Without
+// this guard, MemoryIntelStore would silently accept an unknown
+// provider name — a divergence from the Postgres CHECK constraint
+// (migrations/0023_threat_intel_feeds.up.sql) that the dev/test
+// backend used to share.
+//
+// Returns the receiver so the call composes naturally at wiring time:
+//
+//	handler.NewIntelFeedsHandler(...).WithProviders(intel.DefaultRegistry.Providers())
+func (h *IntelFeedsHandler) WithProviders(providers []string) *IntelFeedsHandler {
+	if h == nil {
+		return h
+	}
+	if len(providers) == 0 {
+		h.providers = nil
+		return h
+	}
+	set := make(map[string]struct{}, len(providers))
+	for _, p := range providers {
+		set[p] = struct{}{}
+	}
+	h.providers = set
+	return h
 }
 
 // ServeFeeds dispatches /v1/intel/feeds and /v1/intel/feeds/{id}
@@ -180,8 +220,32 @@ func (h *IntelFeedsHandler) createFeed(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name_provider_url_required")
 		return
 	}
+	// If the handler was wired with the registry's provider keys,
+	// reject anything outside the set with a 400. This mirrors the
+	// Postgres CHECK (provider IN ('urlhaus','misp','stix-taxii',
+	// 'csv')) constraint and the OpenAPI enum, so dev/test (memory)
+	// behaviour matches production. We deliberately do not advertise
+	// the accepted set in the error body — callers see the same
+	// enum in the OpenAPI document.
+	if h.providers != nil {
+		if _, ok := h.providers[req.Provider]; !ok {
+			writeError(w, http.StatusBadRequest, "provider_unknown")
+			return
+		}
+	}
 	interval := 15 * time.Minute
-	if req.FetchIntervalSec > 0 {
+	if req.FetchIntervalSec != 0 {
+		// Reject anything below the OpenAPI minimum (60s).
+		// Zero falls through to the 15-minute default. The
+		// PATCH path uses the same validator below; keeping
+		// CREATE and PATCH aligned avoids the regression where
+		// a feed can be created at 30s OR patched to 30s and
+		// hammer the upstream provider once per worker tick
+		// (see filterDue in internal/service/worker/intel_worker.go).
+		if err := validateFetchIntervalSec(req.FetchIntervalSec); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		interval = time.Duration(req.FetchIntervalSec) * time.Second
 	}
 	enabled := true
@@ -219,6 +283,16 @@ func (h *IntelFeedsHandler) patchFeed(w http.ResponseWriter, r *http.Request, id
 		patch.URL = req.URL
 	}
 	if req.FetchIntervalSec != nil {
+		// Same OpenAPI minimum (60s) the create path enforces.
+		// Without this, PATCH {"fetch_interval_sec": 0} would
+		// pin the feed's nextDue at exactly LastFetchedAt and
+		// the worker would re-poll on every tick (default 1m)
+		// — potentially earning the deployment a rate-limit
+		// from URLhaus / MISP / the TAXII provider.
+		if err := validateFetchIntervalSec(*req.FetchIntervalSec); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		d := time.Duration(*req.FetchIntervalSec) * time.Second
 		patch.FetchInterval = &d
 	}
@@ -290,6 +364,43 @@ func (h *IntelFeedsHandler) refreshFeed(w http.ResponseWriter, r *http.Request, 
 	}
 	writeJSON(w, http.StatusOK, refreshResponse{IndicatorsUpserted: n})
 }
+
+// minFetchIntervalSec is the minimum poll cadence the admin API
+// accepts on either CREATE or PATCH. The constant mirrors the
+// OpenAPI `minimum: 60` constraint on the `fetch_interval_sec`
+// field (see api/openapi.yaml). Anything lower would let an
+// operator (or a typo) pin nextDue at or before the worker's tick
+// (default 1m, see WORKER_INTEL_INTERVAL), causing the worker to
+// re-poll the same feed every cycle and earn the deployment a
+// rate-limit from URLhaus / MISP / the TAXII provider.
+const minFetchIntervalSec int64 = 60
+
+// validateFetchIntervalSec returns a non-nil error whose message is
+// the wire-error code the caller should pass to writeError when the
+// supplied value is outside the documented range. Returning an
+// error (rather than emitting the response inline) keeps the create /
+// patch handlers responsible for their own response paths and makes
+// the validator trivially unit-testable.
+func validateFetchIntervalSec(v int64) error {
+	if v < minFetchIntervalSec {
+		return errFetchIntervalBelowMin
+	}
+	return nil
+}
+
+// errFetchIntervalBelowMin is the canonical wire-error code returned
+// to clients on CREATE / PATCH with fetch_interval_sec < 60. The
+// `_err` suffix on the variable is deliberately omitted so the
+// constant reads naturally at the call sites.
+var errFetchIntervalBelowMin = wireError("fetch_interval_sec_below_minimum")
+
+// wireError is the error-string type used for handler-level
+// validation responses. It exists only so writeError's "msg" arg
+// stays a plain string at the call site while the validator can
+// return a typed error value.
+type wireError string
+
+func (e wireError) Error() string { return string(e) }
 
 // decodeJSON validates Content-Type and decodes into out. Returns
 // false when the response was already written (caller short-circuits).

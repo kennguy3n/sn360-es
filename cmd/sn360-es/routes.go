@@ -10,6 +10,7 @@ import (
 
 	"github.com/kennguy3n/sn360-es/internal/handler"
 	"github.com/kennguy3n/sn360-es/internal/middleware"
+	"github.com/kennguy3n/sn360-es/pkg/intel"
 	storageredis "github.com/kennguy3n/sn360-es/pkg/storage/redis"
 )
 
@@ -134,7 +135,16 @@ func buildMux(app *application) (http.Handler, error) {
 	if app.intelJob != nil {
 		intelRefresher = app.intelJob
 	}
-	intelH := handler.NewIntelFeedsHandler(logger, app.intelStore, intelRefresher)
+	// intel.DefaultRegistry is populated by the init() blocks in
+	// each pkg/intel/<provider> sub-package, which the main
+	// binary loads via the anonymous imports in wire_intel.go.
+	// Providers() is the canonical list of registered keys (sorted)
+	// and matches the Postgres CHECK constraint + OpenAPI enum.
+	// Wiring it here turns the admin API into the single point of
+	// validation so MemoryIntelStore (dev/test) rejects the same
+	// inputs Postgres would reject in production.
+	intelH := handler.NewIntelFeedsHandler(logger, app.intelStore, intelRefresher).
+		WithProviders(intel.DefaultRegistry.Providers())
 	mux.HandleFunc("/v1/intel/feeds", intelH.ServeFeeds)
 	mux.HandleFunc("/v1/intel/feeds/", intelH.ServeFeeds)
 	mux.HandleFunc("/v1/intel/indicators", intelH.ServeIndicators)
