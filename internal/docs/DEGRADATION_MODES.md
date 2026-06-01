@@ -172,11 +172,18 @@ Each entry below pins:
   is delivered exactly once as a result on `es.evaluate.result`
   after the broker returns — no data loss. The work-queue
   consumer's `NumAckPending` drains to zero post-restart, proving
-  ack-pending replay completed cleanly. A re-publish of the same
-  `Nats-Msg-Id` within the configured `DedupWindow` (default 2 min,
-  see [`pkg/events/nats/streams.go`](../../pkg/events/nats/streams.go))
+  ack-pending replay completed cleanly. Within a single broker
+  lifetime, a re-publish of the same `Nats-Msg-Id` within the
+  configured `DedupWindow` (default 2 min, see
+  [`pkg/events/nats/streams.go`](../../pkg/events/nats/streams.go))
   is rejected as a duplicate by the broker and must NOT produce a
-  second result.
+  second result. NOTE: the JetStream dedup map is held in memory
+  on the broker and is RESET on server restart (documented
+  upstream behaviour: nats-io/nats-server#2257) — operators MUST
+  NOT rely on cross-restart Nats-Msg-Id dedup. The exactly-once
+  guarantee across restarts comes from the work-queue retention
+  + ack-pending semantics described above, not from
+  `Nats-Msg-Id`.
 * **Runbook.** Check the NATS pod's restart count and node health.
   The sn360-es client is configured with `MaxReconnects(-1)` so it
   rebinds automatically on broker recovery; no application restart

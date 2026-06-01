@@ -60,7 +60,10 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/dto"
 )
 
-const chaosNATSTenantID = "00000000-0000-0000-0000-0000cnts0001"
+// chaosNATSTenantID encodes "Chaos NATS #001" as hex (`ca7500001`)
+// for the last segment. Must be all-hex; see chaosTier2TenantID
+// for the encoding rationale.
+const chaosNATSTenantID = "00000000-0000-0000-0000-000ca7500001"
 
 // natsBurstSize controls how many evaluate.request messages the
 // scenario publishes. The number is small enough to keep the test
@@ -78,7 +81,13 @@ func TestChaos_NATSSingleNodeFailure(t *testing.T) {
 
 	_, pgCfg := startPostgres(ctx, t)
 	_, redisAddr := startRedis(ctx, t)
-	natsContainer, natsURL := startNATS(ctx, t)
+	// Pin a fixed host port so the NATS container's Stop/Start
+	// cycle preserves the host-side connection URL. Without this
+	// pin, Docker re-assigns the mapped 4222/tcp host port on
+	// every Start and sn360-es is left pointing at a dead URL
+	// after restart.
+	natsHostPort := freePort(t)
+	natsContainer, natsURL := startNATSWithOptions(ctx, t, natsHostPort)
 
 	applyMigrations(ctx, t, repoRoot, pgCfg)
 	seedTenant(ctx, t, pgCfg, chaosNATSTenantID)
@@ -111,13 +120,31 @@ func TestChaos_NATSSingleNodeFailure(t *testing.T) {
 	nc, js := connectJetStream(t, natsURL)
 	t.Cleanup(nc.Close)
 
-	// The pre-stop subscription is intentionally NOT used to read
-	// results back — we re-subscribe with a fresh consumer name
-	// after restart so the test never depends on the
-	// reconnect-loop semantics of a single consumer object. The
-	// subscription here only exists to confirm the stream is
-	// reachable before we publish the burst.
-	_ = subscribeResultStream(ctx, t, js, "chaos-nats-result-watcher")
+	// Wait for the es.evaluate.result stream to be lazy-created by
+	// the binary, then attach the test's result-watcher consumer
+	// BEFORE publishing the burst. This is structurally important:
+	// the result stream uses InterestPolicy retention
+	// (pkg/events/nats/streams.go ~L148), which means a message is
+	// deleted once all durable consumers with interest have ACK'd
+	// it. The production wiring has multiple durable consumers on
+	// es.evaluate.result (education-trigger, management-persist,
+	// ingestion-action, …) that ACK every result they process. If
+	// the test consumer is created only AFTER the broker restart,
+	// every pre-stop result has by then been ACK'd by all
+	// production consumers and deleted from the stream — so a
+	// DeliverAllPolicy post-restart consumer would observe zero
+	// messages even when the production code path lost nothing.
+	//
+	// Creating the consumer pre-publish pins it as a durable
+	// interest holder; messages remain in the stream until THIS
+	// consumer ACKs them, which happens via the dispatcher in
+	// subscribeResultStream as each delivery is forwarded into the
+	// buffered channel. The channel is sized at resultChannelCapacity
+	// (256) so all natsBurstSize (12) pre-stop deliveries land in
+	// the buffer even if the test goroutine is blocked on the
+	// broker-stop logic when they arrive.
+	awaitResultStream(ctx, t, js)
+	resultCh := subscribeResultStream(ctx, t, js, "chaos-nats-result-watcher")
 
 	// ---------- 1. Publish a burst before failure ------------------
 	ids := make([]string, 0, natsBurstSize)
@@ -170,19 +197,26 @@ func TestChaos_NATSSingleNodeFailure(t *testing.T) {
 		t.Fatalf("nats restart remapped the host port: was %s, now %s — this test cannot pin reconnect behaviour without a stable port", natsURL, newURL)
 	}
 
-	// Re-establish the test client. The previous nc/js are
-	// reconnecting in the background; opening a fresh pair
-	// guarantees we observe the post-restart state.
+	// Open a second JetStream client for the post-restart
+	// admin-API calls (ConsumerInfo poll below). The pre-stop nc
+	// is reconnecting in the background, but its high-level
+	// Consume() subscription continues to drain into resultCh —
+	// nats-go MaxReconnects(-1) keeps the subscription alive
+	// across the gap and replays ack-pending deliveries.
 	nc2, js2 := connectJetStream(t, natsURL)
 	t.Cleanup(nc2.Close)
 
 	// ---------- 4. Verify every message produces a result ----------
-	resultCh2 := subscribeResultStream(ctx, t, js2, "chaos-nats-result-watcher-post")
+	// The single pre-publish subscriber continues to drain into
+	// resultCh through the broker stop+start; any pre-stop
+	// deliveries are buffered in the 256-slot channel and any
+	// post-restart deliveries (the ack-pending replay) arrive on
+	// the same channel after the reconnect completes.
 	seen := make(map[string]struct{}, len(ids))
 	// 75 s budget: covers the ack-pending replay plus the slowest
 	// path through Tier 0 + Tier 1 + Tier 2 + Rspamd for the
 	// final message in the burst.
-	waitForAll(ctx, t, resultCh2, ids, 75*time.Second, seen)
+	waitForAll(ctx, t, resultCh, ids, 75*time.Second, seen)
 	if len(seen) != len(ids) {
 		t.Fatalf("post-restart: saw %d results, want %d (missing %v)", len(seen), len(ids), missing(ids, seen))
 	}
@@ -214,44 +248,67 @@ func TestChaos_NATSSingleNodeFailure(t *testing.T) {
 	})
 
 	// ---------- 6. Dedup window prevents double-processing ---------
-	// Re-publish the FIRST message ID with the same Nats-Msg-Id
-	// header; the stream's DedupWindow (default 2 min — see
+	// Publish a FRESH message (post-restart) and immediately
+	// re-publish it with the same Nats-Msg-Id header. The
+	// stream's DedupWindow (default 2 min — see
 	// pkg/events/nats/streams.go) should return Duplicate=true
-	// and SUPPRESS the second processing. Failure mode: if the
-	// dedup window is mis-configured the result counter will tick
-	// up again and we will spot an extra entry on resultCh2.
-	dupID := ids[0]
+	// on the second Publish and SUPPRESS the second processing.
+	//
+	// We deliberately use a NEW msg ID (not one of the pre-stop
+	// IDs) because the JetStream dedup map is held in memory and
+	// is reset on broker restart — that is a documented NATS
+	// behaviour, see nats-io/nats-server#2257. The PRODUCTION
+	// invariant we are pinning is "DedupWindow suppresses
+	// re-publishes within a single broker lifetime", and that is
+	// what the chaos scenario must regress, not the (untrue)
+	// claim that dedup state survives a server restart.
+	dupID := "nats-dedup-" + uniqueID()
 	req := makeChaosRequest(dupID, chaosNATSTenantID)
 	payload, err := json.Marshal(req)
 	if err != nil {
 		t.Fatalf("dedup marshal: %v", err)
 	}
-	ack, perr := js2.Publish(ctx, "es.evaluate.request", payload, jetstream.WithMsgID(dupID))
+	ack1, perr := js2.Publish(ctx, "es.evaluate.request", payload, jetstream.WithMsgID(dupID))
 	if perr != nil {
-		t.Fatalf("dedup publish: %v", perr)
+		t.Fatalf("dedup first publish: %v", perr)
 	}
-	if !ack.Duplicate {
-		t.Fatalf("dedup publish: Duplicate=false for %q — DedupWindow is not active", dupID)
+	if ack1.Duplicate {
+		t.Fatalf("dedup first publish: Duplicate=true — broker considers a fresh ID a duplicate")
+	}
+	ack2, perr := js2.Publish(ctx, "es.evaluate.request", payload, jetstream.WithMsgID(dupID))
+	if perr != nil {
+		t.Fatalf("dedup second publish: %v", perr)
+	}
+	if !ack2.Duplicate {
+		t.Fatalf("dedup second publish: Duplicate=false for %q — DedupWindow is not active", dupID)
 	}
 
-	// Wait a short bound (3x the worst-case evaluate latency we
-	// just measured) and assert that NO new result for the dup
-	// ID arrived. A successful second processing would push a
-	// fresh dto.EvaluateResult onto the resultCh2 channel; we
-	// drain everything currently pending and fail on any match.
-	deadline := time.NewTimer(15 * time.Second)
+	// Wait for the FIRST publish of dupID to produce its result
+	// (it should — it's a fresh message), then drain for a
+	// bounded window and confirm only ONE result lands for dupID.
+	// A SECOND result would mean the dedup window failed to
+	// suppress the second publish despite the broker returning
+	// Duplicate=true.
+	dupSeen := 0
+	deadline := time.NewTimer(45 * time.Second)
 	defer deadline.Stop()
 draining:
 	for {
 		select {
-		case msg := <-resultCh2:
+		case msg := <-resultCh:
 			var r dto.EvaluateResult
 			if err := json.Unmarshal(msg.Data(), &r); err == nil && r.MessageID == dupID {
-				t.Fatalf("dedup: saw a SECOND result for %q — DedupWindow did not suppress reprocessing", dupID)
+				dupSeen++
+				if dupSeen > 1 {
+					t.Fatalf("dedup: saw a SECOND result for %q — DedupWindow did not suppress reprocessing", dupID)
+				}
 			}
 		case <-deadline.C:
 			break draining
 		}
+	}
+	if dupSeen == 0 {
+		t.Fatalf("dedup: no result observed for %q — the FIRST (non-duplicate) publish never reached the consumer", dupID)
 	}
 }
 

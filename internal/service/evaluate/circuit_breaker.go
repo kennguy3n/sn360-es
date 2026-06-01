@@ -49,11 +49,22 @@ type CircuitBreakerConfig struct {
 	OpenTimeout      time.Duration
 	// OnStateChange is invoked synchronously whenever the breaker
 	// transitions. Optional; primarily for metrics emission.
+	//
+	// IMPORTANT: this callback runs while the breaker's internal
+	// mutex is held (it is called from transition, which is
+	// reached from onSuccess / onFailure / allow — all of which
+	// take cb.mu). Callbacks MUST NOT call back into the same
+	// breaker (State(), Do(), etc.) or they will deadlock. Use
+	// only thread-safe, non-blocking sinks such as Prometheus
+	// observers and structured-log writers.
 	OnStateChange func(from, to State)
 	// OnShortCircuit is invoked synchronously every time Do skips
 	// the wrapped op because the breaker is open. Optional;
 	// primarily for metrics emission (operators alert on a
 	// sustained non-zero rate as the open-state signal).
+	//
+	// Same locking contract as OnStateChange: the callback runs
+	// under cb.mu and MUST NOT call back into the breaker.
 	OnShortCircuit func()
 }
 

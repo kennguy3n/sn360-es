@@ -116,11 +116,27 @@ func TestChaos_RedisAssertProductionDurableStores(t *testing.T) {
 		rspamdURL: rspamd.URL,
 		httpPort:  port,
 		extra: map[string]string{
-			"ENVIRONMENT":             "prod",
-			"BANNER_TOKEN_SECRET":     highEntropySecret(t),
-			"AWS_KMS_MASTER_KEY_ID":   "arn:aws:kms:us-east-1:000000000000:alias/sn360-chaos-test",
-			"AWS_REGION":              "us-east-1",
-			"CORS_ALLOWED_ORIGINS":    "https://chaos.example.test",
+			"ENVIRONMENT": "prod",
+			// validate.go::Validate refuses prod with the
+			// default KMS_USE_MOCK=true. We turn the mock
+			// off and pin a syntactically valid ARN so
+			// config-load is satisfied; the binary never
+			// actually calls KMS at boot in this test
+			// (no providers wired, no URL encryptor
+			// engaged), so a fake ARN is enough.
+			"KMS_USE_MOCK":          "false",
+			"BANNER_TOKEN_SECRET":   highEntropySecret(t),
+			"AWS_KMS_MASTER_KEY_ID": "arn:aws:kms:us-east-1:000000000000:alias/sn360-chaos-test",
+			"AWS_REGION":            "us-east-1",
+			"CORS_ALLOWED_ORIGINS":  "https://chaos.example.test",
+			// validate.go::Validate refuses prod with
+			// PG_SSLMODE=disable (same threat model as
+			// the KMS guard). The chaos harness's base
+			// env sets disable by default for local
+			// containers; override here so the prod
+			// boot reaches the durable-stores assertion
+			// rather than tripping the SSL guard first.
+			"PG_SSLMODE":              "require",
 			"PG_HOST":                 "",
 			"REDIS_ADDR":              "",
 			"ENABLE_RATE_LIMIT_REDIS": "false",
@@ -273,7 +289,10 @@ func TestChaos_RedisEvictionStorm(t *testing.T) {
 	t.Logf("redis eviction storm scenario passed: /readyz stayed green and the rate limiter continued to serve through %d evictions", evictedAfter-evictedBefore)
 }
 
-const chaosRedisTenantID = "00000000-0000-0000-0000-0000redis001"
+// chaosRedisTenantID encodes "Redis #001" as hex (`ed150001`)
+// for the last segment. Must be all-hex; see chaosTier2TenantID
+// for the encoding rationale.
+const chaosRedisTenantID = "00000000-0000-0000-0000-0000ed150001"
 
 // startTinyRedis spins a redis:7-alpine with a 16 MiB cap and
 // allkeys-lru eviction policy. The cap is tight enough that even

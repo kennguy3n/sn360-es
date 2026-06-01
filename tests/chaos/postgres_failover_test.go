@@ -76,7 +76,10 @@ import (
 	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
 )
 
-const chaosPGTenantID = "00000000-0000-0000-0000-0000pgaf0001"
+// chaosPGTenantID encodes "Postgres failover #001" as hex
+// (`c0a4af00001`) for the last segment. Must be all-hex; see
+// chaosTier2TenantID for the encoding rationale.
+const chaosPGTenantID = "00000000-0000-0000-0000-0c0a4af00001"
 
 // TestChaos_PostgresPrimaryFailover pins the documented WS-2a
 // failover contract — see the package-doc above for the full list
@@ -158,7 +161,12 @@ func TestChaos_PostgresPrimaryFailover(t *testing.T) {
 	eventually(t, 10*time.Second, "post-failover replica read succeeds", func() bool {
 		readCtx, c := context.WithTimeout(ctx, 3*time.Second)
 		defer c()
-		return readTagViaWrapper(readCtx, t, db, chaosPGTenantID) == tagReplica
+		// MUST use the non-fatal variant — calling t.Fatalf
+		// inside an eventually callback runtime.Goexit's the
+		// test goroutine on the first transient blip and the
+		// retry never runs.
+		tag, err := tryReadTagViaWrapper(readCtx, db, chaosPGTenantID)
+		return err == nil && tag == tagReplica
 	})
 
 	// -----------------------------------------------------------------
@@ -246,14 +254,29 @@ func TestChaos_PostgresPrimaryFailover(t *testing.T) {
 // pkg/storage/postgres/postgres.go::QueryRowContext sends the read
 // to the read pool when one is attached. Returns the per-pool tag
 // the test seeded into tenants.display_name.
+//
+// Callers inside an eventually(...) retry loop MUST use
+// tryReadTagViaWrapper instead — t.Fatalf calls runtime.Goexit, so
+// the very first transient query error would tear the goroutine
+// down before the retry budget elapses.
 func readTagViaWrapper(ctx context.Context, t *testing.T, db *postgres.DB, tenantID string) string {
 	t.Helper()
-	var got string
-	err := db.QueryRowContext(ctx, `SELECT display_name FROM tenants WHERE id = $1`, tenantID).Scan(&got)
+	tag, err := tryReadTagViaWrapper(ctx, db, tenantID)
 	if err != nil {
 		t.Fatalf("read tag: %v", err)
 	}
-	return got
+	return tag
+}
+
+// tryReadTagViaWrapper is the error-returning variant of
+// readTagViaWrapper. It is the version safe to call from inside
+// eventually(...) — the caller can decide whether a transient
+// error counts as "not yet ready" (return false, keep polling) or
+// a hard failure.
+func tryReadTagViaWrapper(ctx context.Context, db *postgres.DB, tenantID string) (string, error) {
+	var got string
+	err := db.QueryRowContext(ctx, `SELECT display_name FROM tenants WHERE id = $1`, tenantID).Scan(&got)
+	return got, err
 }
 
 // readTagViaCtx executes a read on whatever conn is bound to ctx (a

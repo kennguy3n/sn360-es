@@ -42,6 +42,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,8 +54,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/testcontainers/testcontainers-go"
 	tcnats "github.com/testcontainers/testcontainers-go/modules/nats"
 	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
@@ -214,12 +218,34 @@ func startRedis(ctx context.Context, t *testing.T) (*tcredis.RedisContainer, str
 // default memory storage stream state would not survive the gap.
 func startNATS(ctx context.Context, t *testing.T) (*tcnats.NATSContainer, string) {
 	t.Helper()
+	return startNATSWithOptions(ctx, t, 0)
+}
+
+// startNATSWithOptions is the variant used by the NATS chaos
+// scenario. When hostPort != 0, the 4222/tcp port is bound to that
+// fixed host port via HostConfigModifier so a container Stop/Start
+// preserves the host-side URL. The Postgres / Redis chaos tests do
+// not need a stable port, so they use the zero-value form which
+// lets testcontainers pick an ephemeral port.
+func startNATSWithOptions(ctx context.Context, t *testing.T, hostPort int) (*tcnats.NATSContainer, string) {
+	t.Helper()
 	// Default nats:2.10-alpine command is `-DV -js` which enables
 	// JetStream with file storage at `/data`. Container Stop
 	// preserves the container filesystem (only Terminate destroys
 	// it), so JetStream state survives a stop/start cycle —
 	// exactly the property the NATS chaos scenario relies on.
-	c, err := tcnats.Run(ctx, "nats:2.10-alpine")
+	opts := []testcontainers.ContainerCustomizer{}
+	if hostPort > 0 {
+		opts = append(opts, testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
+			hc.PortBindings = network.PortMap{
+				network.MustParsePort("4222/tcp"): []network.PortBinding{{
+					HostIP:   netip.MustParseAddr("127.0.0.1"),
+					HostPort: strconv.Itoa(hostPort),
+				}},
+			}
+		}))
+	}
+	c, err := tcnats.Run(ctx, "nats:2.10-alpine", opts...)
 	skipIfNoDocker(t, err)
 	t.Cleanup(func() { _ = c.Terminate(context.Background()) })
 	url, err := c.ConnectionString(ctx)
@@ -340,13 +366,31 @@ func startTier1Mock(t *testing.T) *httptest.Server {
 func startTier2Mock(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/classify", func(w http.ResponseWriter, _ *http.Request) {
+	// The ternary-bonsai provider speaks OpenAI's
+	// /v1/chat/completions: a single ChatChoice whose
+	// message.content is a JSON `Verdict` document. The mock
+	// returns a deterministic "this is phishing" verdict so the
+	// chaos test's pre-failure baseline produces a Tier 2 score
+	// well above the Blocked threshold.
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		verdict, _ := json.Marshal(map[string]any{
+			"score":       95,
+			"categories":  []string{"likely_phishing", "credential_phishing"},
+			"confidence":  0.95,
+			"explanation": "chaos mock: deterministic phishing verdict",
+		})
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"score":        96,
-			"categories":   []string{"likely_phishing", "credential_phishing"},
-			"reason_codes": []string{"ceo_fraud_pattern", "wire_transfer_urgency"},
-			"model":        "ternary-bonsai-chaos",
+			"choices": []map[string]any{
+				{
+					"index":         0,
+					"finish_reason": "stop",
+					"message": map[string]string{
+						"role":    "assistant",
+						"content": string(verdict),
+					},
+				},
+			},
 		})
 	})
 	srv := httptest.NewServer(mux)

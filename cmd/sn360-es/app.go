@@ -1015,7 +1015,7 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	// so operators tune all three breakers from a single knob set.
 	pipelineObserver := app.metrics.PipelineObserver()
 	makeBreaker := func(name string) *evaluate.CircuitBreaker {
-		return evaluate.NewCircuitBreaker(evaluate.CircuitBreakerConfig{
+		cb := evaluate.NewCircuitBreaker(evaluate.CircuitBreakerConfig{
 			Name:             name,
 			FailureThreshold: cfg.CB.FailureThreshold,
 			SuccessThreshold: cfg.CB.SuccessThreshold,
@@ -1031,6 +1031,14 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 				pipelineObserver.ObserveCircuitBreakerShortCircuit(name)
 			},
 		})
+		// Seed the Prometheus gauge with the breaker's starting
+		// state (Closed = 0). OnStateChange only fires on a real
+		// transition, so without this Set the gauge series would
+		// not exist for a healthy breaker — dashboards rendering
+		// "expected 0, missing series" would mislead operators
+		// during an incident review.
+		pipelineObserver.ObserveCircuitBreakerState(name, int(cb.State()))
+		return cb
 	}
 
 	app.evaluator = evaluate.NewEvaluator(evaluate.Config{

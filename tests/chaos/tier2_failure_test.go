@@ -52,11 +52,13 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/dto"
 )
 
-// chaosTier2TenantID is a deterministic UUID so the test can assert
-// against `tenants.id = $1` writes without flaking on UUID
-// generation. The "ch2" infix keeps it visually distinct from the
-// e2e harness tenant.
-const chaosTier2TenantID = "00000000-0000-0000-0000-0000ch2a0001"
+// chaosTier2TenantID is a deterministic UUID so the test can
+// assert against `tenants.id = $1` writes without flaking on
+// UUID generation. The last segment must be all-hex (RFC 4122),
+// so we encode "Chaos Tier 2 #001" as 0xc2a00001 — visually
+// distinct from the e2e harness tenant while still parsing
+// cleanly as a UUID.
+const chaosTier2TenantID = "00000000-0000-0000-0000-0000c2a00001"
 
 // TestChaos_Tier2SLMFailure pins the documented Tier 2 degradation
 // path (DEGRADATION_MODES.md §Tier 2 SLM service unreachable). See
@@ -249,40 +251,57 @@ func publishEvalReq(ctx context.Context, t *testing.T, js jetstream.JetStream, t
 	return req.MessageID
 }
 
-// subscribeResultStream attaches a per-test consumer to
-// es.evaluate.result. Mirrors the e2e harness pattern: poll until
-// the binary has lazy-created the stream, then create a DeliverAll
-// consumer so messages published before the consumer attached are
-// also delivered.
-func subscribeResultStream(ctx context.Context, t *testing.T, js jetstream.JetStream, name string) <-chan jetstream.Msg {
+// resultChannelCapacity is the buffered-channel size for every
+// chaos-test result subscriber. Sized at ~10× the largest
+// scenario burst (natsBurstSize = 12) so the consumer goroutine
+// can always non-blockingly enqueue without dropping. The
+// dispatcher below ALSO fails the test loudly if the buffer ever
+// fills, so the constant doubles as a regression alarm — a future
+// scenario that publishes >resultChannelCapacity messages must
+// either bump this constant or refactor to streaming consumption.
+const resultChannelCapacity = 256
+
+// awaitResultStream polls JetStream until the sn360-es binary
+// has lazy-created the es.evaluate.result stream and returns a
+// handle to it. It deliberately does NOT create any consumer,
+// because the result stream uses InterestPolicy retention and an
+// inadvertent ACK'ing consumer would silently delete messages
+// before downstream subscribers attach.
+func awaitResultStream(ctx context.Context, t *testing.T, js jetstream.JetStream) jetstream.Stream {
 	t.Helper()
-	out := make(chan jetstream.Msg, 64)
 	deadline := time.Now().Add(15 * time.Second)
-	var stream jetstream.Stream
 	for time.Now().Before(deadline) {
 		streams := js.ListStreams(ctx)
 		for info := range streams.Info() {
 			for _, subj := range info.Config.Subjects {
 				if subj == "es.evaluate.result" || subj == "es.evaluate.result.>" {
-					s, err := js.Stream(ctx, info.Config.Name)
-					if err == nil {
-						stream = s
-						break
+					if s, err := js.Stream(ctx, info.Config.Name); err == nil {
+						return s
 					}
 				}
 			}
-			if stream != nil {
-				break
-			}
-		}
-		if stream != nil {
-			break
 		}
 		time.Sleep(defaultPollEvery)
 	}
-	if stream == nil {
-		t.Fatalf("stream for es.evaluate.result never appeared")
-	}
+	t.Fatalf("stream for es.evaluate.result never appeared")
+	return nil
+}
+
+// subscribeResultStream attaches a per-test consumer to
+// es.evaluate.result. Mirrors the e2e harness pattern: poll until
+// the binary has lazy-created the stream, then create a DeliverAll
+// consumer so messages published before the consumer attached are
+// also delivered.
+//
+// Callers that only need to confirm the stream exists (without
+// consuming) MUST use awaitResultStream instead — the result
+// stream uses InterestPolicy retention, so creating a consumer
+// and ACKing every message has the side effect of deleting the
+// underlying stream messages from the broker.
+func subscribeResultStream(ctx context.Context, t *testing.T, js jetstream.JetStream, name string) <-chan jetstream.Msg {
+	t.Helper()
+	out := make(chan jetstream.Msg, resultChannelCapacity)
+	stream := awaitResultStream(ctx, t, js)
 	cons, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Name:              name,
 		FilterSubject:     "es.evaluate.result",
@@ -299,6 +318,14 @@ func subscribeResultStream(ctx context.Context, t *testing.T, js jetstream.JetSt
 		select {
 		case out <- m:
 		default:
+			// The buffered channel is sized for ~10× the
+			// largest scenario burst; a fill here means a
+			// future scenario outgrew it without bumping
+			// resultChannelCapacity. Surface as a hard test
+			// error rather than silently dropping a result
+			// the assertion code will then "miss".
+			t.Errorf("subscribeResultStream(%s): result channel full (cap=%d) — bump resultChannelCapacity or drain faster",
+				name, resultChannelCapacity)
 		}
 	})
 	if err != nil {
