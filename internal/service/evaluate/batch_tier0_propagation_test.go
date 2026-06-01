@@ -7,20 +7,30 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/tier1"
 )
 
-// TestShouldFallbackToTier2_HonoursForceEscalate pins the
-// ForceEscalate parity invariant the batch path must hold: a
-// non-bypass Tier 0 outcome with ForceEscalate=true MUST trigger the
-// Tier 2 Fallback regardless of the Tier 1 verdict — matching the
-// per-message Evaluator.shouldRunTier2 (evaluator.go:521-535)
-// behaviour for the same input.
+// TestShouldFallbackToTier2_HonoursForceEscalate pins the parity
+// invariants the batch path must hold against the per-message
+// shouldRunTier2 (evaluator.go:521-535):
+//
+//   - SkipML / RspamdOnly Tier 0 outcomes MUST short-circuit and NOT
+//     run Tier 2, even when Tier 1 returned Escalate (Tier 0 has
+//     already decided the LLM should be skipped for cost/volume
+//     reasons).
+//   - ForceEscalate=true MUST run Tier 2 regardless of the Tier 1
+//     verdict (the gate uses this to demand LLM corroboration of
+//     low-severity TI matches per tier0/gate.go:306).
+//   - With no Tier 0 signal, only Tier 1 verdict==Escalate triggers
+//     Tier 2.
 //
 // Note on deliberate divergence from shouldRunTier2: the per-message
 // path also routes verdict==Flag to Tier 2 (t1.Flag triggers Tier 2),
 // while the batch path keeps Flag on the cheap Tier 1 verdict — the
 // batch orchestrator is the volume / cost-controlled path and is
-// intentionally more conservative about Tier 2 fan-out. This test
-// therefore only asserts the ForceEscalate row of the parity table,
-// not full equivalence.
+// intentionally more conservative about Tier 2 fan-out for the
+// pure-Tier-1-Flag case. This test therefore asserts the SkipML /
+// RspamdOnly / ForceEscalate rows of the parity table (where the
+// batch path must match per-message) and the Pass / Escalate rows
+// (where the batch path matches per-message because they don't
+// involve Flag).
 func TestShouldFallbackToTier2_HonoursForceEscalate(t *testing.T) {
 	t.Parallel()
 
@@ -60,6 +70,38 @@ func TestShouldFallbackToTier2_HonoursForceEscalate(t *testing.T) {
 			tier0:   dto.Tier0Outcome{ForceEscalate: true, Reason: "ti_match"},
 			want:    true,
 		},
+		{
+			// SkipML must short-circuit even when Tier 1 says
+			// Escalate: the gate's SkipML decision (e.g. high-
+			// volume sender) is supposed to suppress LLM work,
+			// and the per-message shouldRunTier2 returns false
+			// here at evaluator.go:524. Without this row the
+			// batch helper would silently diverge.
+			name:    "tier0_skipml_with_tier1_escalate_no_fallback",
+			verdict: tier1.VerdictEscalate,
+			tier0:   dto.Tier0Outcome{SkipML: true, Reason: "high_volume_sender"},
+			want:    false,
+		},
+		{
+			// RspamdOnly carries the same suppression contract
+			// as SkipML for the Tier 2 decision.
+			name:    "tier0_rspamdonly_with_tier1_escalate_no_fallback",
+			verdict: tier1.VerdictEscalate,
+			tier0:   dto.Tier0Outcome{RspamdOnly: true, Reason: "rspamd_only"},
+			want:    false,
+		},
+		{
+			// Defensive belt-and-suspenders row: no gate path
+			// today sets BOTH ForceEscalate and SkipML (TIChecker
+			// doesn't touch SkipML, ATO/recurring don't touch
+			// ForceEscalate), but if one ever does, SkipML must
+			// win — per-message shouldRunTier2 checks SkipML
+			// before ForceEscalate.
+			name:    "tier0_skipml_plus_force_escalate_skipml_wins",
+			verdict: tier1.VerdictEscalate,
+			tier0:   dto.Tier0Outcome{SkipML: true, ForceEscalate: true},
+			want:    false,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -73,24 +115,76 @@ func TestShouldFallbackToTier2_HonoursForceEscalate(t *testing.T) {
 	}
 }
 
-// TestShouldFallbackToTier2_AgreesWithShouldRunTier2_ForceEscalateRow
-// double-checks the parity claim above against the live per-message
-// helper. If shouldRunTier2 ever stops returning true for
-// ForceEscalate (e.g. someone deletes the line at evaluator.go:527),
-// this test fails at the same moment the per-message path would
-// silently start skipping LLM corroboration for flag-only TI matches.
-func TestShouldFallbackToTier2_AgreesWithShouldRunTier2_ForceEscalateRow(t *testing.T) {
+// TestShouldFallbackToTier2_AgreesWithShouldRunTier2 double-checks
+// the parity claims above against the live per-message helper across
+// every Tier 0 outcome shape that the batch helper should match
+// (ForceEscalate, SkipML, RspamdOnly, no-signal). If shouldRunTier2
+// ever changes one of these branches without a matching change in
+// shouldFallbackToTier2, this test fails at the same moment the
+// batch and per-message paths would silently start producing
+// different verdicts for the same input.
+//
+// Verdict==Flag is excluded because the batch path is intentionally
+// less aggressive than the per-message path on Tier 1 Flag (see the
+// docstring on shouldFallbackToTier2 / TestShouldFallbackToTier2_
+// HonoursForceEscalate).
+func TestShouldFallbackToTier2_AgreesWithShouldRunTier2(t *testing.T) {
 	t.Parallel()
 	per := &Evaluator{}
-	tier0 := dto.Tier0Outcome{ForceEscalate: true, Reason: "ti_match"}
-	verdict := tier1.VerdictPass
-	t1 := &dto.Tier1Outcome{Pass: true}
 
-	if !per.shouldRunTier2(tier0, t1) {
-		t.Fatal("Evaluator.shouldRunTier2 stopped honouring ForceEscalate; per-message path will skip Tier 2 for flag-only TI matches")
+	cases := []struct {
+		name  string
+		tier0 dto.Tier0Outcome
+		v     tier1.Verdict
+		t1    *dto.Tier1Outcome
+	}{
+		{
+			name:  "force_escalate_pass",
+			tier0: dto.Tier0Outcome{ForceEscalate: true, Reason: "ti_match"},
+			v:     tier1.VerdictPass,
+			t1:    &dto.Tier1Outcome{Pass: true},
+		},
+		{
+			name:  "skipml_pass",
+			tier0: dto.Tier0Outcome{SkipML: true, Reason: "high_volume_sender"},
+			v:     tier1.VerdictPass,
+			t1:    &dto.Tier1Outcome{Pass: true},
+		},
+		{
+			name:  "skipml_escalate",
+			tier0: dto.Tier0Outcome{SkipML: true, Reason: "high_volume_sender"},
+			v:     tier1.VerdictEscalate,
+			t1:    &dto.Tier1Outcome{Escalate: true},
+		},
+		{
+			name:  "rspamd_only_escalate",
+			tier0: dto.Tier0Outcome{RspamdOnly: true, Reason: "rspamd_only"},
+			v:     tier1.VerdictEscalate,
+			t1:    &dto.Tier1Outcome{Escalate: true},
+		},
+		{
+			name:  "no_signal_pass",
+			tier0: dto.Tier0Outcome{},
+			v:     tier1.VerdictPass,
+			t1:    &dto.Tier1Outcome{Pass: true},
+		},
+		{
+			name:  "no_signal_escalate",
+			tier0: dto.Tier0Outcome{},
+			v:     tier1.VerdictEscalate,
+			t1:    &dto.Tier1Outcome{Escalate: true},
+		},
 	}
-	if !shouldFallbackToTier2(verdict, tier0) {
-		t.Fatal("shouldFallbackToTier2 stopped honouring ForceEscalate; batch path will skip Tier 2 for flag-only TI matches")
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			wantPer := per.shouldRunTier2(c.tier0, c.t1)
+			gotBatch := shouldFallbackToTier2(c.v, c.tier0)
+			if wantPer != gotBatch {
+				t.Fatalf("divergence: per-message shouldRunTier2(tier0=%+v, t1=%+v) = %v, batch shouldFallbackToTier2(verdict=%v, tier0=%+v) = %v",
+					c.tier0, c.t1, wantPer, c.v, c.tier0, gotBatch)
+			}
+		})
 	}
 }
 

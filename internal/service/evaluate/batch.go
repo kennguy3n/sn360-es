@@ -656,10 +656,15 @@ func (o *BatchOrchestrator) resolveTenantConfig(ctx context.Context, tenantID st
 // shouldFallbackToTier2 mirrors evaluator.shouldRunTier2 for the batch
 // non-bypass path: the orchestrator hands the message to the Tier 2
 // Fallback (the per-message Evaluator) when Tier 1 said escalate OR
-// Tier 0 set ForceEscalate. Bypass / SkipML / RspamdOnly cases never
-// reach this code because they short-circuit at the top of processOnce
-// via tier0BypassResult, so the helper only handles the surviving
-// non-bypass outcomes.
+// Tier 0 set ForceEscalate. Only `Bypass` short-circuits at the top of
+// processOnce via tier0BypassResult; `SkipML` and `RspamdOnly` flow
+// through Tier 1 (Tier1Skipped lives on the per-message side at
+// evaluator.go:352, the batch path runs Tier 1 unconditionally) and
+// therefore DO reach this helper. Gate them here so the helper
+// genuinely matches shouldRunTier2's contract — without this check,
+// a high-volume sender (SkipML=true) whose Tier 1 verdict happened to
+// land on Escalate would be sent to the LLM even though Tier 0
+// already decided to skip ML, diverging from the per-message path.
 //
 // Keeping the rule in one helper (with a unit test that asserts it
 // agrees with shouldRunTier2 across the relevant outcomes) prevents
@@ -667,6 +672,9 @@ func (o *BatchOrchestrator) resolveTenantConfig(ctx context.Context, tenantID st
 // time someone touches one but not the other — which is exactly the
 // drift that produced the ForceEscalate-drop bug this helper fixes.
 func shouldFallbackToTier2(verdict tier1.Verdict, tier0 dto.Tier0Outcome) bool {
+	if tier0.SkipML || tier0.RspamdOnly {
+		return false
+	}
 	if tier0.ForceEscalate {
 		return true
 	}
