@@ -71,6 +71,11 @@ func NewInterstitialHandler(logger *slog.Logger, rewriter *action.URLRewriter, i
 
 // ServeHTTP implements http.Handler.
 func (h *InterstitialHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Defense-in-depth security headers for the interstitial page.
+	// Set before any branch so success, error, block, and redirect
+	// responses all carry them — Go's net/http freezes headers on
+	// the first WriteHeader/Write, so they have to land first.
+	setInterstitialSecurityHeaders(w)
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -111,6 +116,28 @@ func (h *InterstitialHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, original, http.StatusFound)
+}
+
+// setInterstitialSecurityHeaders applies the WS-7d defense-in-depth
+// header set on every response from the interstitial handler. Kept
+// per-handler (not in a generic middleware) because other endpoints
+// — dashboard plugin iframe views, action-token banners — need
+// looser CSP / framing rules; tightening them globally would break
+// those surfaces.
+//
+//	Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'
+//	X-Frame-Options:         DENY
+//	X-Content-Type-Options:  nosniff
+//
+// `style-src 'unsafe-inline'` is required because blockHTML embeds
+// its CSS in a <style> block to stay a self-contained document with
+// no external asset hosting. If that ever changes, drop
+// 'unsafe-inline' before relaxing anything else.
+func setInterstitialSecurityHeaders(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'")
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("X-Content-Type-Options", "nosniff")
 }
 
 // extractToken pulls the token from either the path (last segment) or
