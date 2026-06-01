@@ -189,7 +189,7 @@ func TestSelfReleaseHandler_HappyPath(t *testing.T) {
 		false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
 	h, err := NewQuarantineHandler(slog.New(slog.NewTextHandler(io.Discard, nil)),
-		fx.issuer, fx.release, fx.srSvc)
+		fx.issuer, fx.release, fx.srSvc, nil)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestSelfReleaseHandler_Tier2BlockedReturns403(t *testing.T) {
 		dto.EvaluateResult{Tier: constant.TierInformational}, // benign re-eval, but Tier2Malicious=true
 		true,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
 	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
 
 	rec := postForm(t, h, tok)
@@ -259,7 +259,7 @@ func TestSelfReleaseHandler_RunnerRefusedReturns403ReleaseRefused(t *testing.T) 
 		// gate at lookup time would have let us through.
 		false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
 	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
 
 	rec := postForm(t, h, tok)
@@ -308,7 +308,7 @@ func TestSelfReleaseHandler_RateLimitedReturns429(t *testing.T) {
 		t.Fatalf("seed audit: %v", err)
 	}
 
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
 	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
 
 	rec := postForm(t, h, tok)
@@ -336,7 +336,7 @@ func TestSelfReleaseHandler_AuthFailuresDoNotBurnRateLimit(t *testing.T) {
 	fx := newSelfReleaseFixture(t,
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 1})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
 
 	// Pre-fill the bucket from the attacker's POV: spray N
 	// tampered tokens that all carry the legitimate recipient's
@@ -398,7 +398,7 @@ func TestSelfReleaseHandler_AlreadyReleasedReturns200(t *testing.T) {
 	fx := newSelfReleaseFixture(t,
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
 	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
 
 	// First click → released.
@@ -436,7 +436,7 @@ func TestSelfReleaseHandler_CrossTenantReturnsNotFound(t *testing.T) {
 	fx := newSelfReleaseFixture(t,
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "other", QuarantineSelfReleasePerHour: 5})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
 	// Token signed for tenant=other (which has no quarantine
 	// record under pmid-1).
 	tok := issueSelfReleaseToken(t, fx.issuer, "other", "pmid-1", recipientHashHex)
@@ -457,7 +457,7 @@ func TestSelfReleaseHandler_ExpiredToken(t *testing.T) {
 	fx := newSelfReleaseFixture(t,
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
 
 	// Issue with tiny TTL and wait past expiry.
 	tok, err := fx.issuer.Issue("acme", "pmid-1", privacy.IssueOptions{
@@ -493,7 +493,7 @@ func TestSelfReleaseHandler_InvalidSignature(t *testing.T) {
 	fx := newSelfReleaseFixture(t,
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
 
 	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
 	// Tamper the signature.
@@ -524,7 +524,7 @@ func TestSelfReleaseHandler_WrongScopeNotReleased(t *testing.T) {
 	fx := newSelfReleaseFixture(t,
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
 
 	// Issue with an unknown scope — handler should refuse with 401.
 	tok, err := fx.issuer.Issue("acme", "pmid-1", privacy.IssueOptions{
@@ -558,7 +558,7 @@ func TestSelfReleaseHandler_NilSelfReleaseSvc(t *testing.T) {
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
 	// Construct the handler with selfRelease=nil so the dispatcher
 	// reaches the "no self-release service" guard.
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, nil)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, nil, nil)
 	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
 	rec := postForm(t, h, tok)
 	if rec.Code != http.StatusUnauthorized {
@@ -573,7 +573,7 @@ func TestSelfReleaseHandler_MalformedRecipientHash(t *testing.T) {
 	fx := newSelfReleaseFixture(t,
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
 
 	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", "not-valid-hex!")
 	rec := postForm(t, h, tok)
@@ -590,7 +590,7 @@ func TestSelfReleaseHandler_FormAndJSONInteroperate(t *testing.T) {
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
 
 	t.Run("form", func(t *testing.T) {
-		h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc)
+		h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
 		tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
 		rec := postForm(t, h, tok)
 		if rec.Code != http.StatusAccepted {
@@ -604,11 +604,134 @@ func TestSelfReleaseHandler_FormAndJSONInteroperate(t *testing.T) {
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
 	t.Run("json", func(t *testing.T) {
-		h, _ := NewQuarantineHandler(nil, fx2.issuer, fx2.release, fx2.srSvc)
+		h, _ := NewQuarantineHandler(nil, fx2.issuer, fx2.release, fx2.srSvc, nil)
 		tok := issueSelfReleaseToken(t, fx2.issuer, "acme", "pmid-1", recipientHashHex)
 		rec := postJSON(t, h, tok)
 		if rec.Code != http.StatusAccepted {
 			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 		}
 	})
+}
+
+// stubTenantBinder records every WithTenant invocation so tests
+// can assert (a) the handler called the binder at all, and
+// (b) it bound to the tenant_id from the verified JWT claim — not
+// e.g. the attacker-controlled `tid` of a tampered token. Returns
+// the parent ctx unmodified (no real conn is acquired) plus a
+// no-op release.
+type stubTenantBinder struct {
+	binds   []string
+	failErr error
+}
+
+func (s *stubTenantBinder) WithTenant(ctx context.Context, tenantID string) (context.Context, TenantBinderReleaseFunc, error) {
+	if s.failErr != nil {
+		return ctx, func() error { return nil }, s.failErr
+	}
+	s.binds = append(s.binds, tenantID)
+	return ctx, func() error { return nil }, nil
+}
+
+// TestSelfReleaseHandler_BindsTenantConnFromVerifiedClaim guards
+// the WS-3a Round-3 fix: the /v1/quarantine/release endpoint sits
+// in defaultAuthSkipPaths(), so JWTAuth + TenantConnBinder
+// middleware don't run for it. The handler MUST bind the
+// Postgres conn itself, AFTER the JWT verifies, using the
+// `tid` claim — otherwise the rate-limit COUNT query against
+// `quarantine_release_audit` and the policy SELECT against
+// `tenant_release_policies` silently see zero rows under RLS,
+// effectively disabling the rate limiter and dropping every
+// audit INSERT.
+//
+// The test wires a stub binder, posts a happy-path self-release,
+// and asserts:
+//   - the binder was invoked exactly once
+//   - the bound tenant_id equals the verified JWT's `tid`
+//   - the underlying service call still succeeded (i.e. the bind
+//     step is non-fatal in the happy path)
+func TestSelfReleaseHandler_BindsTenantConnFromVerifiedClaim(t *testing.T) {
+	fx := newSelfReleaseFixture(t,
+		dto.EvaluateResult{Tier: constant.TierInformational}, false,
+		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
+	binder := &stubTenantBinder{}
+	h, err := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, binder)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
+	rec := postForm(t, h, tok)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(binder.binds) != 1 {
+		t.Fatalf("expected exactly 1 WithTenant call, got %d: %v",
+			len(binder.binds), binder.binds)
+	}
+	if binder.binds[0] != "acme" {
+		t.Fatalf("WithTenant called with tenant_id=%q, want %q (must equal the verified JWT `tid` claim)",
+			binder.binds[0], "acme")
+	}
+}
+
+// TestSelfReleaseHandler_BindFailureReturns503 pins the
+// fail-closed contract on the bind step: if the binder cannot
+// acquire / configure a Postgres conn for the verified tenant
+// (pool exhausted, Postgres dropped the session, etc.) the
+// handler MUST reject the request with 503 rather than fall
+// through and run the service unbound — running unbound would
+// silently see zero rows under RLS and bypass the rate limiter,
+// which is strictly worse than a transient unavailability.
+func TestSelfReleaseHandler_BindFailureReturns503(t *testing.T) {
+	fx := newSelfReleaseFixture(t,
+		dto.EvaluateResult{Tier: constant.TierInformational}, false,
+		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
+	binder := &stubTenantBinder{failErr: io.ErrUnexpectedEOF}
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, binder)
+	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
+	rec := postForm(t, h, tok)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s; want 503 on bind failure",
+			rec.Code, rec.Body.String())
+	}
+	// Provider must NOT have been invoked: the service body
+	// never ran because the bind failed first.
+	if fx.prov.restoreCalls != 0 {
+		t.Fatalf("provider invoked despite bind failure: %d calls",
+			fx.prov.restoreCalls)
+	}
+}
+
+// TestSelfReleaseHandler_AuthFailureBindsTenantBeforeAuditWrite
+// guards the same RLS gap on the auth-failure audit path: when a
+// quarantine_release token fails JWT verification (expired or
+// invalid signature) but its partial claims carry a tenant_id,
+// the handler still writes an audit row recording the attempt.
+// That INSERT also runs against the RLS-protected
+// `quarantine_release_audit` table, so it MUST be inside a
+// WithTenant scope — otherwise the WITH CHECK clause rejects the
+// INSERT and SOC loses visibility into the spray attempt.
+func TestSelfReleaseHandler_AuthFailureBindsTenantBeforeAuditWrite(t *testing.T) {
+	fx := newSelfReleaseFixture(t,
+		dto.EvaluateResult{Tier: constant.TierInformational}, false,
+		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
+	binder := &stubTenantBinder{}
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, binder)
+	// Issue a normal token then tamper the signature so the
+	// verifier returns ErrTokenInvalid with non-nil partial
+	// claims (the WS-3a verifier extracts the unverified claims
+	// on signature failure for exactly this audit path).
+	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
+	tampered := tok[:len(tok)-2] + "XX"
+	rec := postForm(t, h, tampered)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s; want 401", rec.Code, rec.Body.String())
+	}
+	if len(binder.binds) != 1 {
+		t.Fatalf("expected exactly 1 WithTenant call on auth-failure audit path, got %d: %v",
+			len(binder.binds), binder.binds)
+	}
+	if binder.binds[0] != "acme" {
+		t.Fatalf("WithTenant called with tenant_id=%q, want %q (the partial-claim `tid` of the rejected token)",
+			binder.binds[0], "acme")
+	}
 }

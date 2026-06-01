@@ -822,6 +822,35 @@ func workerTenantBinder(app *application) worker.TenantBinder {
 	return pgWorkerBinder{db: app.pgDB}
 }
 
+// pgQuarantineBinder adapts *postgres.DB to handler.TenantBinder.
+// Mirrors pgWorkerBinder for the same reason: Go's named-type
+// equality means *postgres.DB.WithTenant's `postgres.ReleaseFunc`
+// does not satisfy `handler.TenantBinderReleaseFunc` directly even
+// though both are zero-arg, error-returning closures. The handler
+// package stays free of any concrete-storage import via this one-
+// line conversion. WithCrossTenant is NOT exposed — the
+// quarantine-release endpoint never needs cross-tenant scope
+// (every operation is implicitly tenant-scoped via the JWT's
+// verified `tid` claim).
+type pgQuarantineBinder struct{ db *postgres.DB }
+
+func (b pgQuarantineBinder) WithTenant(ctx context.Context, tenantID string) (context.Context, handler.TenantBinderReleaseFunc, error) {
+	c, r, e := b.db.WithTenant(ctx, tenantID)
+	return c, handler.TenantBinderReleaseFunc(r), e
+}
+
+// quarantineTenantBinder returns a handler.TenantBinder when the
+// app has a Postgres handle; nil otherwise (in-memory / dev
+// runs). The handler's constructor accepts nil as a valid no-op
+// so unit tests using the in-memory repository keep working
+// without a real database.
+func quarantineTenantBinder(app *application) handler.TenantBinder {
+	if app == nil || app.pgDB == nil {
+		return nil
+	}
+	return pgQuarantineBinder{db: app.pgDB}
+}
+
 func buildRelationshipRunner(cfg *config.Config, logger *slog.Logger, app *application, locks worker.LockFactory, metrics worker.MetricsRecorder) *worker.Runner {
 	if app.repos.Tenants == nil || app.repos.CommunicationHistories == nil {
 		return nil

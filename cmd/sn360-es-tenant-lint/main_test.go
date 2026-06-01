@@ -479,9 +479,22 @@ func TestTenantScopedTables_CoveredByRLSMigration(t *testing.T) {
 		}
 		// The policy block is also per-table; check for the
 		// CREATE POLICY line so a half-applied edit (ALTER but
-		// no policy) is caught.
+		// no policy) is caught. We check the same whitespace-
+		// collapsed view used for the ENABLE / FORCE markers
+		// above so a future migration that formats this
+		// statement with line-breaks or extra padding (e.g.
+		//   CREATE POLICY tenant_isolation
+		//       ON <table>
+		//       USING (...)
+		// ) still matches. Sticking to the raw `migText` would
+		// false-negative on that perfectly valid formatting
+		// while the ENABLE/FORCE checks above would still pass
+		// — a silently inconsistent guard. The reverse drift
+		// guard below stays on `migText` because it relies on
+		// a multiline-anchored regex that needs the original
+		// newline structure.
 		policyMarker := "CREATE POLICY tenant_isolation ON " + tbl
-		if !strings.Contains(migText, policyMarker) {
+		if !strings.Contains(collapsed, policyMarker) {
 			t.Errorf("migrations missing CREATE POLICY tenant_isolation for tenant-scoped table %q", tbl)
 		}
 	}

@@ -45,19 +45,33 @@ type QuarantineHandler struct {
 	verifier    *privacy.JWTIssuer
 	release     *action.ReleaseService
 	selfRelease *selfrelease.Service
+	// binder pins a Postgres conn to the verified tenant for the
+	// self-release path. Nil in in-memory test deployments; in
+	// Postgres-backed production it MUST be set or the Postgres-
+	// backed audit / policy / rate-limit queries run unbound and
+	// silently see zero rows under RLS. See the TenantBinder doc
+	// for the full threat model.
+	binder TenantBinder
 }
 
 // NewQuarantineHandler wires up the handler. verifier and release
 // must be non-nil. selfRelease is optional — when nil, the handler
 // refuses tokens with scp="quarantine_release" via a uniform
 // 401 ("invalid token") so the deployment doesn't accidentally
-// expose the operator path under a recipient-style token. logger
+// expose the operator path under a recipient-style token. binder
+// is optional — when nil, the handler skips the per-request
+// tenant-conn bind step. Production deployments backed by
+// Postgres MUST pass a non-nil binder, otherwise the self-release
+// path's RLS-protected reads return zero rows (silent rate-limit
+// disable) and its INSERTs are rejected (silent audit drop). See
+// the TenantBinder interface doc for the full rationale. logger
 // may be nil (defaults to slog.Default).
 func NewQuarantineHandler(
 	logger *slog.Logger,
 	verifier *privacy.JWTIssuer,
 	release *action.ReleaseService,
 	selfRelease *selfrelease.Service,
+	binder TenantBinder,
 ) (*QuarantineHandler, error) {
 	if verifier == nil {
 		return nil, errors.New("quarantine handler: verifier is required")
@@ -73,6 +87,7 @@ func NewQuarantineHandler(
 		verifier:    verifier,
 		release:     release,
 		selfRelease: selfRelease,
+		binder:      binder,
 	}, nil
 }
 
@@ -224,14 +239,45 @@ func (h *QuarantineHandler) serveSelfRelease(
 		writeError(w, http.StatusUnauthorized, "invalid token")
 		return
 	}
-	res, err := h.selfRelease.Release(r.Context(), selfrelease.Request{
+	// Bind the Postgres conn to the verified tenant for the rest
+	// of this request — this is what activates RLS on the
+	// `tenant_release_policies` read, the `quarantine_release_audit`
+	// COUNT query that drives the rate-limit gate, and the
+	// `quarantine_release_audit` INSERT that writes the outcome
+	// row. The endpoint sits in the auth-skip list (the recipient
+	// JWT is in the POST body, not the Authorization header, so
+	// the JWTAuth + TenantConnBinder middleware chain doesn't run
+	// here), so this is the only chance to bind. If the bind
+	// itself fails (pool exhausted, Postgres dropped the
+	// session) we fail the request — running the service unbound
+	// would silently see zero rows under RLS and bypass the rate
+	// limit, which is strictly worse than a 503.
+	ctx := r.Context()
+	if h.binder != nil {
+		boundCtx, release, bindErr := h.binder.WithTenant(ctx, claims.TenantID)
+		if bindErr != nil {
+			h.logger.WarnContext(ctx, "selfrelease: bind tenant conn",
+				slog.String("tenant_id", claims.TenantID),
+				slog.Any("error", bindErr))
+			writeError(w, http.StatusServiceUnavailable, "release temporarily unavailable")
+			return
+		}
+		defer func() {
+			if relErr := release(); relErr != nil {
+				h.logger.WarnContext(ctx, "selfrelease: release bound conn",
+					slog.Any("error", relErr))
+			}
+		}()
+		ctx = boundCtx
+	}
+	res, err := h.selfRelease.Release(ctx, selfrelease.Request{
 		TenantID:          claims.TenantID,
 		PseudoMessageID:   claims.PseudonymizedMessage,
 		RecipientUserHash: recipientHash,
 		CorrelationID:     correlationID,
 	})
 	if err != nil {
-		h.logger.WarnContext(r.Context(), "selfrelease: service failed",
+		h.logger.WarnContext(ctx, "selfrelease: service failed",
 			slog.String("tenant_id", claims.TenantID),
 			slog.Any("error", err))
 		writeError(w, http.StatusServiceUnavailable, "release temporarily unavailable")
@@ -261,9 +307,40 @@ func (h *QuarantineHandler) handleAuthFailure(r *http.Request, w http.ResponseWr
 		}
 		recipientHash, _ := hex.DecodeString(res.Claims.RecipientUserHash)
 		correlationID := strings.TrimSpace(r.Header.Get("X-Correlation-ID"))
+		// The audit INSERT also runs against the RLS-protected
+		// `quarantine_release_audit`. Bind the conn to the partial
+		// (unverified-claim) tenant first so the INSERT's WITH
+		// CHECK clause passes. Note the conceptual subtlety: we
+		// trust the claimed `tid` enough to bind it for the audit
+		// write, even though we just rejected the JWT as
+		// unverifiable — because the bind value affects which
+		// tenant's audit table the row lands in, and writing
+		// `token_expired` / `invalid_token` rows under the
+		// attacker-claimed `tid` is exactly what we want (SOC for
+		// the claimed tenant sees the attempt). If the bind fails
+		// we still return 401, just with no audit row written —
+		// the audit gap is logged inside AuditAuthFailure.
+		ctx := r.Context()
+		if h.binder != nil && res.Claims.TenantID != "" {
+			boundCtx, release, bindErr := h.binder.WithTenant(ctx, res.Claims.TenantID)
+			if bindErr != nil {
+				h.logger.WarnContext(ctx, "selfrelease: bind tenant conn for auth-failure audit",
+					slog.String("tenant_id", res.Claims.TenantID),
+					slog.Any("error", bindErr))
+				writeError(w, http.StatusUnauthorized, "invalid token")
+				return
+			}
+			defer func() {
+				if relErr := release(); relErr != nil {
+					h.logger.WarnContext(ctx, "selfrelease: release bound conn (auth-failure)",
+						slog.Any("error", relErr))
+				}
+			}()
+			ctx = boundCtx
+		}
 		// Audit-write failure is logged inside AuditAuthFailure;
 		// we always return 401 to the client regardless.
-		_, _ = h.selfRelease.AuditAuthFailure(r.Context(),
+		_, _ = h.selfRelease.AuditAuthFailure(ctx,
 			res.Claims.TenantID,
 			res.Claims.PseudonymizedMessage,
 			recipientHash,

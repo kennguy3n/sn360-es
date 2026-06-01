@@ -81,8 +81,21 @@ func buildMux(app *application) (http.Handler, error) {
 	// deployments without a durable audit / policy repository;
 	// the handler refuses self-release tokens with a uniform
 	// 401 in that case so no audit-less code path is reachable.
+	//
+	// The endpoint sits in defaultAuthSkipPaths() because the
+	// recipient JWT lives in the POST body, not the
+	// Authorization header — JWTAuth middleware cannot decode
+	// it. That also means the TenantConnBinder middleware
+	// (which depends on JWTAuth's tenant_id ctx value) is
+	// bypassed, so the handler is the only place that can
+	// activate Postgres RLS for the new self-release path. The
+	// `quarantineTenantBinder(app)` helper returns a real
+	// adapter when pgDB != nil (production), nil otherwise (in-
+	// memory / dev runs); the handler treats a nil binder as a
+	// valid no-op so unit tests with the in-memory repository
+	// continue to work unchanged.
 	if app.jwtIssuer != nil {
-		if qh, qerr := handler.NewQuarantineHandler(logger, app.jwtIssuer, app.releaseSvc, app.selfReleaseSvc); qerr == nil {
+		if qh, qerr := handler.NewQuarantineHandler(logger, app.jwtIssuer, app.releaseSvc, app.selfReleaseSvc, quarantineTenantBinder(app)); qerr == nil {
 			mux.Handle("/v1/quarantine/release", qh)
 		} else {
 			logger.Warn("sn360-es: quarantine handler init failed", slog.Any("error", qerr))
