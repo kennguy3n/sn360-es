@@ -287,21 +287,33 @@ class TestCostModel(unittest.TestCase):
             ),
         )
 
-        # Floor on the absolute post-WS-2 figure as well: the
-        # ratio assertion above would still pass if the pre-WS-2
-        # anchor were silently lowered alongside the post-WS-2
-        # figure. Lock the anchor by asserting the post figure
-        # against an absolute window. The 0.92 multiplier on the
-        # anchor mirrors the 8% floor; the upper bound at 1.00
-        # of the anchor catches the “cost went up” regression
-        # against a stale-snapshot anchor.
+        # Independent absolute-dollar ceiling on the post-WS-2
+        # figure. The ratio assertion above is anchored against
+        # ``PRE_WS2_LEVERS_ON_5K_ENTERPRISE_USD``, so if a future
+        # edit silently lowered both the anchor and the
+        # ``CostLevers.levers_on`` projection together, the ratio
+        # would still pass. This second assertion pins the post
+        # figure against a hard literal that does NOT reference
+        # any other constant in this file. The ceiling is set at
+        # $110 / tenant / month: above the WS-2c projection of
+        # $104.07 (with headroom for future price drift) and
+        # below the pre-WS-2 anchor of $115.12, so the WS-2c
+        # improvement claim can't silently regress without
+        # tripping this assertion even if the anchor moves.
+        POST_WS2_ABSOLUTE_CEILING_USD = 110.00
         self.assertLess(
             post_ws2_cost,
-            self.PRE_WS2_LEVERS_ON_5K_ENTERPRISE_USD,
+            POST_WS2_ABSOLUTE_CEILING_USD,
             (
-                "post-WS-2 cost must be strictly below the pre-WS-2 "
-                "5 000-tenant enterprise anchor; the architectural "
-                "levers cannot reverse direction silently"
+                f"post-WS-2 cost was ${post_ws2_cost:.4f}, above the "
+                f"absolute ceiling of ${POST_WS2_ABSOLUTE_CEILING_USD:.2f} / "
+                "tenant / month at 5 000-tenant enterprise density. "
+                "This ceiling is anchor-independent (does not reference "
+                "PRE_WS2_LEVERS_ON_5K_ENTERPRISE_USD) so it catches the "
+                "case where the pre-WS-2 anchor is silently lowered "
+                "alongside the post-WS-2 projection. If a legitimate "
+                "cloud-price refresh lifts the floor above $110, raise "
+                "the ceiling here deliberately (and document why)."
             ),
         )
 
