@@ -46,11 +46,17 @@ type QuarantineHandler struct {
 	release     *action.ReleaseService
 	selfRelease *selfrelease.Service
 	// binder pins a Postgres conn to the verified tenant for the
-	// self-release path. Nil in in-memory test deployments; in
-	// Postgres-backed production it MUST be set or the Postgres-
-	// backed audit / policy / rate-limit queries run unbound and
-	// silently see zero rows under RLS. See the TenantBinder doc
-	// for the full threat model.
+	// self-release path. Always non-nil — the constructor rejects
+	// nil binders. In-memory / dev deployments pass NopTenantBinder{}
+	// at the wire site so the "this deployment skips the bind"
+	// decision is a deliberate type-level declaration rather than
+	// an implicit nil-check inside ServeHTTP. The previous nil-as-
+	// no-op arrangement was a silent-failure shape: a future wiring
+	// regression that dropped the binder in a Postgres-backed
+	// deployment would silently disable the rate limiter (COUNT
+	// returns 0 under unbound RLS) and drop audit INSERTs (WITH
+	// CHECK rejects). See TenantBinder + NopTenantBinder in
+	// tenant_binder.go for the threat model.
 	binder TenantBinder
 }
 
@@ -59,13 +65,16 @@ type QuarantineHandler struct {
 // refuses tokens with scp="quarantine_release" via a uniform
 // 401 ("invalid token") so the deployment doesn't accidentally
 // expose the operator path under a recipient-style token. binder
-// is optional — when nil, the handler skips the per-request
-// tenant-conn bind step. Production deployments backed by
-// Postgres MUST pass a non-nil binder, otherwise the self-release
-// path's RLS-protected reads return zero rows (silent rate-limit
-// disable) and its INSERTs are rejected (silent audit drop). See
-// the TenantBinder interface doc for the full rationale. logger
-// may be nil (defaults to slog.Default).
+// is REQUIRED to be non-nil: production deployments pass the real
+// `pgQuarantineBinder` adapter; in-memory / dev deployments pass
+// `NopTenantBinder{}` as the explicit no-op. Returning an error
+// on a nil binder is the type-enforced version of the invariant
+// Devin Review round 7 flagged: a future wiring regression that
+// omitted the binder in a Postgres-backed deployment would have
+// silently disabled the rate limiter (COUNT returns 0 under
+// unbound RLS) and dropped audit INSERTs (WITH CHECK rejects).
+// Now it fails loudly at startup instead. logger may be nil
+// (defaults to slog.Default).
 func NewQuarantineHandler(
 	logger *slog.Logger,
 	verifier *privacy.JWTIssuer,
@@ -73,6 +82,9 @@ func NewQuarantineHandler(
 	selfRelease *selfrelease.Service,
 	binder TenantBinder,
 ) (*QuarantineHandler, error) {
+	if binder == nil {
+		return nil, errors.New("handler: tenant binder is required (use NopTenantBinder{} for in-memory deployments)")
+	}
 	if verifier == nil {
 		return nil, errors.New("quarantine handler: verifier is required")
 	}
@@ -252,24 +264,29 @@ func (h *QuarantineHandler) serveSelfRelease(
 	// session) we fail the request — running the service unbound
 	// would silently see zero rows under RLS and bypass the rate
 	// limit, which is strictly worse than a 503.
-	ctx := r.Context()
-	if h.binder != nil {
-		boundCtx, release, bindErr := h.binder.WithTenant(ctx, claims.TenantID)
-		if bindErr != nil {
-			h.logger.WarnContext(ctx, "selfrelease: bind tenant conn",
-				slog.String("tenant_id", claims.TenantID),
-				slog.Any("error", bindErr))
-			writeError(w, http.StatusServiceUnavailable, "release temporarily unavailable")
-			return
-		}
-		defer func() {
-			if relErr := release(); relErr != nil {
-				h.logger.WarnContext(ctx, "selfrelease: release bound conn",
-					slog.Any("error", relErr))
-			}
-		}()
-		ctx = boundCtx
+	// Binder is guaranteed non-nil by the constructor; in-memory
+	// deployments pass NopTenantBinder{} so the WithTenant call
+	// here is a uniform no-op for them rather than a hidden
+	// nil-bypass. The 503 branch below remains the production
+	// failure mode for genuine pool / Postgres outages — it's
+	// dead code under the Nop binder but the test fixture
+	// (`stubTenantBinder` in quarantine_selfrelease_test.go)
+	// exercises it directly.
+	boundCtx, release, bindErr := h.binder.WithTenant(r.Context(), claims.TenantID)
+	if bindErr != nil {
+		h.logger.WarnContext(r.Context(), "selfrelease: bind tenant conn",
+			slog.String("tenant_id", claims.TenantID),
+			slog.Any("error", bindErr))
+		writeError(w, http.StatusServiceUnavailable, "release temporarily unavailable")
+		return
 	}
+	defer func() {
+		if relErr := release(); relErr != nil {
+			h.logger.WarnContext(r.Context(), "selfrelease: release bound conn",
+				slog.Any("error", relErr))
+		}
+	}()
+	ctx := boundCtx
 	res, err := h.selfRelease.Release(ctx, selfrelease.Request{
 		TenantID:          claims.TenantID,
 		PseudoMessageID:   claims.PseudonymizedMessage,
@@ -321,7 +338,14 @@ func (h *QuarantineHandler) handleAuthFailure(r *http.Request, w http.ResponseWr
 		// we still return 401, just with no audit row written —
 		// the audit gap is logged inside AuditAuthFailure.
 		ctx := r.Context()
-		if h.binder != nil && res.Claims.TenantID != "" {
+		// h.binder is constructor-enforced non-nil; NopTenantBinder
+		// is the in-memory no-op. We still guard on
+		// res.Claims.TenantID != "" because the partial claims
+		// object may carry an empty tid (malformed JWT payload),
+		// and binding to an empty tenant would set the GUC to a
+		// value that fails the tenants(id) FK on the subsequent
+		// audit INSERT — wasting the write attempt.
+		if res.Claims.TenantID != "" {
 			boundCtx, release, bindErr := h.binder.WithTenant(ctx, res.Claims.TenantID)
 			if bindErr != nil {
 				h.logger.WarnContext(ctx, "selfrelease: bind tenant conn for auth-failure audit",

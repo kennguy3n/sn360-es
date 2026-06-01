@@ -31,13 +31,43 @@ import "context"
 //   - On error a no-op release is returned so callers can
 //     unconditionally `defer release()` without nil-checking.
 //
-// A nil TenantBinder is a valid no-op — in-memory test fixtures
-// don't enforce RLS, so the handler skips the bind step entirely.
-// Production wiring at cmd/sn360-es is responsible for providing
-// a real binder when `pgDB != nil`. Mirror of the
-// `worker.TenantBinder` pattern at internal/service/worker.
+// The constructor REQUIRES a non-nil TenantBinder. Deployments
+// that intentionally do not need a per-request bind (in-memory
+// test fixtures, dev runs without Postgres) MUST pass an explicit
+// NopTenantBinder{} rather than nil. Devin Review round 7 surfaced
+// the previous "nil = no-op" rule as a silent-failure shape: a
+// future wiring regression that omitted the binder in a Postgres-
+// backed deployment would have disabled the rate limiter (COUNT
+// returns 0 under unbound RLS) and dropped audit INSERTs (WITH
+// CHECK rejects) without surfacing any error. Promoting the
+// invariant to the type system makes the "do not bind" decision
+// a deliberate, single-line choice at the wire site instead of
+// an implicit nil-check buried in the handler. Mirror of the
+// `worker.TenantBinder` pattern at internal/service/worker but
+// with the no-op case made explicit.
 type TenantBinder interface {
 	WithTenant(ctx context.Context, tenantID string) (context.Context, TenantBinderReleaseFunc, error)
+}
+
+// NopTenantBinder is the explicit no-op TenantBinder used by
+// in-memory deployments (unit-test fixtures, dev runs without a
+// Postgres handle). It returns the context unchanged and a
+// release function that does nothing. Passing this value at the
+// wire site is a deliberate "this deployment does not enforce
+// RLS" declaration; the previous arrangement let nil silently mean
+// the same thing, which masked wiring regressions in Postgres-
+// backed deployments. Zero-valued; safe to use as `NopTenantBinder{}`.
+type NopTenantBinder struct{}
+
+// WithTenant implements TenantBinder by returning the input
+// context and a no-op release. The bindErr return is always nil
+// so handler code does not need a special-case branch — the
+// uniform `if bindErr != nil { 503 }` shape just becomes dead
+// code under the Nop binder, which is fine: tests that exercise
+// the 503 path use the stub binder fixture in
+// quarantine_selfrelease_test.go instead.
+func (NopTenantBinder) WithTenant(ctx context.Context, _ string) (context.Context, TenantBinderReleaseFunc, error) {
+	return ctx, func() error { return nil }, nil
 }
 
 // TenantBinderReleaseFunc unwinds a WithTenant scope. It RESETs the

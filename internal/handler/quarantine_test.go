@@ -216,7 +216,7 @@ func TestQuarantineHandler_ReleaseAllowed(t *testing.T) {
 		Tier:    constant.TierInformational,
 		Primary: constant.CategoryFirstContactExternal,
 	})
-	h, err := NewQuarantineHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), fx.issuer, fx.release, nil, nil)
+	h, err := NewQuarantineHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), fx.issuer, fx.release, nil, NopTenantBinder{})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestQuarantineHandler_ReleaseRefused(t *testing.T) {
 		Tier:    constant.TierBlocked,
 		Primary: constant.CategoryBECImpersonation,
 	})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, nil, nil)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, nil, NopTenantBinder{})
 	tok := issueQuarantineToken(t, fx.issuer, "acme", "pmid-1")
 	body, _ := json.Marshal(map[string]string{"token": tok})
 
@@ -274,7 +274,7 @@ func TestQuarantineHandler_ReleaseRefused(t *testing.T) {
 
 func TestQuarantineHandler_NotFound(t *testing.T) {
 	fx := newQuarantineFixture(t, dto.EvaluateResult{Tier: constant.TierInformational})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, nil, nil)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, nil, NopTenantBinder{})
 	// Issue a token for an unknown pseudonymised message id so the
 	// release service returns NotFound.
 	tok := issueQuarantineToken(t, fx.issuer, "acme", "missing")
@@ -290,7 +290,7 @@ func TestQuarantineHandler_NotFound(t *testing.T) {
 
 func TestQuarantineHandler_Rejections(t *testing.T) {
 	fx := newQuarantineFixture(t, dto.EvaluateResult{Tier: constant.TierInformational})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, nil, nil)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, nil, NopTenantBinder{})
 
 	cases := []struct {
 		name   string
@@ -374,7 +374,7 @@ func TestQuarantineHandler_PropagatesCorrelationID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("release svc: %v", err)
 	}
-	h, err := NewQuarantineHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), issuer, rsvc, nil, nil)
+	h, err := NewQuarantineHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), issuer, rsvc, nil, NopTenantBinder{})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -411,11 +411,21 @@ func TestQuarantineHandler_PropagatesCorrelationID(t *testing.T) {
 }
 
 func TestQuarantineHandler_RequiresDeps(t *testing.T) {
+	issuer, _ := privacy.NewJWTIssuer(privacy.JWTConfig{Secret: bytes.Repeat([]byte{1}, 32)})
+
+	// The constructor's argument-check ordering is binder → verifier
+	// → release. The first three sub-cases pin the ordering by
+	// supplying the prior args correctly and watching the next-arg
+	// check fire; the last asserts that a Postgres-backed deployment
+	// that forgets to wire the binder fails at startup (this is the
+	// Devin Review round 7 invariant being type-enforced).
 	if _, err := NewQuarantineHandler(nil, nil, nil, nil, nil); err == nil {
+		t.Fatal("expected error when binder is nil")
+	}
+	if _, err := NewQuarantineHandler(nil, nil, nil, nil, NopTenantBinder{}); err == nil {
 		t.Fatal("expected error when verifier is nil")
 	}
-	issuer, _ := privacy.NewJWTIssuer(privacy.JWTConfig{Secret: bytes.Repeat([]byte{1}, 32)})
-	if _, err := NewQuarantineHandler(nil, issuer, nil, nil, nil); err == nil {
+	if _, err := NewQuarantineHandler(nil, issuer, nil, nil, NopTenantBinder{}); err == nil {
 		t.Fatal("expected error when release service is nil")
 	}
 }

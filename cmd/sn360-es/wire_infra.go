@@ -839,14 +839,25 @@ func (b pgQuarantineBinder) WithTenant(ctx context.Context, tenantID string) (co
 	return c, handler.TenantBinderReleaseFunc(r), e
 }
 
-// quarantineTenantBinder returns a handler.TenantBinder when the
-// app has a Postgres handle; nil otherwise (in-memory / dev
-// runs). The handler's constructor accepts nil as a valid no-op
-// so unit tests using the in-memory repository keep working
-// without a real database.
+// quarantineTenantBinder returns a handler.TenantBinder that is
+// ALWAYS non-nil. When the app has a Postgres handle this is the
+// real pgQuarantineBinder which activates RLS via SET LOCAL on
+// the per-request conn; in-memory / dev runs receive an explicit
+// handler.NopTenantBinder{} instead of the historical nil-as-no-op.
+//
+// Devin Review round 7 flagged the nil-binder shape as a silent-
+// failure invariant: if a future wiring change disconnected the
+// binder in a Postgres-backed deployment, the rate limiter would
+// COUNT-as-zero under unbound RLS and audit INSERTs would be
+// rejected by WITH CHECK — both failures invisible from the wire
+// response. Returning NopTenantBinder{} for the in-memory case
+// makes the "this deployment skips the bind" decision a deliberate
+// single-line declaration here, and the handler constructor now
+// rejects nil binders outright so a future regression fails at
+// startup instead of silently in production.
 func quarantineTenantBinder(app *application) handler.TenantBinder {
 	if app == nil || app.pgDB == nil {
-		return nil
+		return handler.NopTenantBinder{}
 	}
 	return pgQuarantineBinder{db: app.pgDB}
 }

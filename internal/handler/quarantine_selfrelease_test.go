@@ -189,7 +189,7 @@ func TestSelfReleaseHandler_HappyPath(t *testing.T) {
 		false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
 	h, err := NewQuarantineHandler(slog.New(slog.NewTextHandler(io.Discard, nil)),
-		fx.issuer, fx.release, fx.srSvc, nil)
+		fx.issuer, fx.release, fx.srSvc, NopTenantBinder{})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestSelfReleaseHandler_Tier2BlockedReturns403(t *testing.T) {
 		dto.EvaluateResult{Tier: constant.TierInformational}, // benign re-eval, but Tier2Malicious=true
 		true,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, NopTenantBinder{})
 	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
 
 	rec := postForm(t, h, tok)
@@ -259,7 +259,7 @@ func TestSelfReleaseHandler_RunnerRefusedReturns403ReleaseRefused(t *testing.T) 
 		// gate at lookup time would have let us through.
 		false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, NopTenantBinder{})
 	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
 
 	rec := postForm(t, h, tok)
@@ -308,7 +308,7 @@ func TestSelfReleaseHandler_RateLimitedReturns429(t *testing.T) {
 		t.Fatalf("seed audit: %v", err)
 	}
 
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, NopTenantBinder{})
 	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
 
 	rec := postForm(t, h, tok)
@@ -336,7 +336,7 @@ func TestSelfReleaseHandler_AuthFailuresDoNotBurnRateLimit(t *testing.T) {
 	fx := newSelfReleaseFixture(t,
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 1})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, NopTenantBinder{})
 
 	// Pre-fill the bucket from the attacker's POV: spray N
 	// tampered tokens that all carry the legitimate recipient's
@@ -420,7 +420,7 @@ func TestSelfReleaseHandler_SecondClickAfterReleaseReturnsNotFound(t *testing.T)
 	fx := newSelfReleaseFixture(t,
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, NopTenantBinder{})
 	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
 
 	// First click → released.
@@ -458,7 +458,7 @@ func TestSelfReleaseHandler_CrossTenantReturnsNotFound(t *testing.T) {
 	fx := newSelfReleaseFixture(t,
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "other", QuarantineSelfReleasePerHour: 5})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, NopTenantBinder{})
 	// Token signed for tenant=other (which has no quarantine
 	// record under pmid-1).
 	tok := issueSelfReleaseToken(t, fx.issuer, "other", "pmid-1", recipientHashHex)
@@ -479,7 +479,7 @@ func TestSelfReleaseHandler_ExpiredToken(t *testing.T) {
 	fx := newSelfReleaseFixture(t,
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, NopTenantBinder{})
 
 	// Issue with tiny TTL and wait past expiry.
 	tok, err := fx.issuer.Issue("acme", "pmid-1", privacy.IssueOptions{
@@ -515,7 +515,7 @@ func TestSelfReleaseHandler_InvalidSignature(t *testing.T) {
 	fx := newSelfReleaseFixture(t,
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, NopTenantBinder{})
 
 	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
 	// Tamper the signature.
@@ -546,7 +546,7 @@ func TestSelfReleaseHandler_WrongScopeNotReleased(t *testing.T) {
 	fx := newSelfReleaseFixture(t,
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, NopTenantBinder{})
 
 	// Issue with an unknown scope — handler should refuse with 401.
 	tok, err := fx.issuer.Issue("acme", "pmid-1", privacy.IssueOptions{
@@ -580,7 +580,7 @@ func TestSelfReleaseHandler_NilSelfReleaseSvc(t *testing.T) {
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
 	// Construct the handler with selfRelease=nil so the dispatcher
 	// reaches the "no self-release service" guard.
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, nil, nil)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, nil, NopTenantBinder{})
 	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
 	rec := postForm(t, h, tok)
 	if rec.Code != http.StatusUnauthorized {
@@ -595,7 +595,7 @@ func TestSelfReleaseHandler_MalformedRecipientHash(t *testing.T) {
 	fx := newSelfReleaseFixture(t,
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
-	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
+	h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, NopTenantBinder{})
 
 	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", "not-valid-hex!")
 	rec := postForm(t, h, tok)
@@ -612,7 +612,7 @@ func TestSelfReleaseHandler_FormAndJSONInteroperate(t *testing.T) {
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
 
 	t.Run("form", func(t *testing.T) {
-		h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, nil)
+		h, _ := NewQuarantineHandler(nil, fx.issuer, fx.release, fx.srSvc, NopTenantBinder{})
 		tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
 		rec := postForm(t, h, tok)
 		if rec.Code != http.StatusAccepted {
@@ -626,7 +626,7 @@ func TestSelfReleaseHandler_FormAndJSONInteroperate(t *testing.T) {
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
 	t.Run("json", func(t *testing.T) {
-		h, _ := NewQuarantineHandler(nil, fx2.issuer, fx2.release, fx2.srSvc, nil)
+		h, _ := NewQuarantineHandler(nil, fx2.issuer, fx2.release, fx2.srSvc, NopTenantBinder{})
 		tok := issueSelfReleaseToken(t, fx2.issuer, "acme", "pmid-1", recipientHashHex)
 		rec := postJSON(t, h, tok)
 		if rec.Code != http.StatusAccepted {
