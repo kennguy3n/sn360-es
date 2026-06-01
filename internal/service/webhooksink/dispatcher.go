@@ -204,7 +204,7 @@ func (d *Dispatcher) DispatchVerdict(ctx context.Context, res *dto.EvaluateResul
 	if event.OccurredAt.IsZero() {
 		event.OccurredAt = d.now().UTC()
 	}
-	d.dispatchToSinks(ctx, sinks, event, false /* test */)
+	d.dispatchToSinks(ctx, sinks, event)
 	return nil
 }
 
@@ -257,19 +257,27 @@ func (d *Dispatcher) DispatchTestEvent(ctx context.Context, sink *repository.Web
 // connections per verdict.
 const maxConcurrentDispatch = 8
 
-// dispatchToSinks is the common fan-out used by both the verdict
-// and the manual-test paths. Each sink is dispatched concurrently
-// up to maxConcurrentDispatch in flight; filter / rate-limit
-// rejections short-circuit without consuming a worker slot. The
-// bool toggles the per-sink rate-limit gate: synthetic test events
-// skip it because the operator deliberately wants to verify the
-// endpoint regardless of the production rate budget.
+// dispatchToSinks is the verdict-path fan-out: every sink is
+// dispatched concurrently up to maxConcurrentDispatch in flight,
+// with per-sink filter and rate-limit rejections short-circuiting
+// before a worker slot is consumed.
+//
+// The synthetic-test path is NOT routed through here — it is a
+// single-sink, return-the-PublishResult-to-the-caller flow served
+// directly by DispatchTestEvent (which bypasses both the filter
+// and the rate budget by design, since the operator wants
+// end-to-end connectivity verification regardless of either gate).
+// dispatchToSinks therefore unconditionally consults
+// skipBySinkFilter and takeRateBudget; if a future test-style
+// caller needs the bypass, route it through DispatchTestEvent or
+// introduce a dedicated entry point rather than threading a flag
+// through here.
 //
 // The function blocks until every dispatch completes (success or
 // failure) so the caller's context lifetime spans the full fan-out
 // — best-effort semantics still hold because dispatchOne itself
 // swallows per-sink errors into audit + DLQ paths.
-func (d *Dispatcher) dispatchToSinks(ctx context.Context, sinks []repository.WebhookSink, event *webhook.Event, isTest bool) {
+func (d *Dispatcher) dispatchToSinks(ctx context.Context, sinks []repository.WebhookSink, event *webhook.Event) {
 	if len(sinks) == 0 {
 		return
 	}
@@ -288,7 +296,7 @@ func (d *Dispatcher) dispatchToSinks(ctx context.Context, sinks []repository.Web
 			d.metrics.WebhookDispatched(sink.TenantID, sink.ID, "filtered")
 			continue
 		}
-		if !isTest && !d.takeRateBudget(ctx, sink) {
+		if !d.takeRateBudget(ctx, sink) {
 			d.metrics.WebhookDispatched(sink.TenantID, sink.ID, "rate_limited")
 			d.logger.WarnContext(ctx, "webhooksink: rate-limited",
 				slog.String("tenant_id", sink.TenantID),
