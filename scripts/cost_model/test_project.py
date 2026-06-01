@@ -249,11 +249,23 @@ class TestCostModel(unittest.TestCase):
              cheaper than levers-on at 5k by accident, which
              would invert the WS-2c delta sign).
 
-        The assertion is on the **ratio** rather than an absolute
-        dollar figure so a cloud-price refresh that lifts the
-        whole curve uniformly doesn't drift this test out from
-        under the model — the proportional WS-2a/2b win is what
-        the WS-2c recalibration claims.
+        The assertion is on the **ratio** against the frozen
+        pre-WS-2 anchor (``PRE_WS2_LEVERS_ON_5K_ENTERPRISE_USD``),
+        not against a dynamically-rederived baseline. The ratio
+        framing is narrower than an absolute-dollar floor would
+        be — it measures the *proportional* WS-2a/2b win against
+        the pre-WS-2 state, which is what the WS-2c recalibration
+        claims to deliver. A uniform cloud-price refresh that
+        lifts the whole curve will eventually push the projection
+        past the ratio's pass band (the assertion fails once
+        ``post_ws2_cost > anchor * (1 - 0.08) = $105.91`` at the
+        current 8 % floor), at which point the right response is
+        to publish a fresh anchor + delta floor alongside the
+        price refresh — not to silently relax the floor. The
+        companion absolute-dollar ceiling assertion below ($110)
+        sits in a wider tolerance band and catches the orthogonal
+        regression class where anchor and projection are silently
+        co-mutated to keep the ratio passing.
         """
         enterprise = project.PROFILES["enterprise"]
         post_ws2 = project.project_one(
