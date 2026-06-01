@@ -151,6 +151,23 @@ func (a *application) handleSOCIncidentResolved(ctx context.Context, msg events.
 	}
 	outcome, err := a.escalationResolver.Reconcile(ctx, env)
 	if err != nil {
+		// Permanent payload defects (missing required
+		// fields, invalid resolution token) cannot be
+		// fixed by redelivery — they would fail
+		// validation identically every time. Drop the
+		// poison pill at the handler boundary so we don't
+		// burn the MaxDeliver=5 redelivery budget on it.
+		// The resolver tags these failures with
+		// ErrInvalidPayload so the handler can distinguish
+		// them from transient repo / NATS errors.
+		if errors.Is(err, escalation.ErrInvalidPayload) {
+			a.logger.WarnContext(ctx, "sn360-es: soc.incident.resolved: invalid payload — dropping",
+				slog.Any("error", err),
+				slog.String("incident_id", env.IncidentID),
+				slog.String("tenant_id", env.TenantID),
+				slog.String("dedup_id", env.DedupID))
+			return nil
+		}
 		// Surface to JetStream so it redelivers up to
 		// MaxDeliver. The resolver only returns errors
 		// for transient / retry-worthy conditions; all

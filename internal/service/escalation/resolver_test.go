@@ -637,6 +637,15 @@ func TestReconcile_InputValidation(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("err = %q; want it to contain %q", err.Error(), tc.want)
 			}
+			// All validation failures MUST wrap
+			// escalation.ErrInvalidPayload so the consumer
+			// handler can distinguish them from transient
+			// repo / NATS errors and drop the poison pill
+			// without burning the JetStream MaxDeliver
+			// budget.
+			if !errors.Is(err, escalation.ErrInvalidPayload) {
+				t.Errorf("err = %v; want errors.Is(err, ErrInvalidPayload) to be true", err)
+			}
 		})
 	}
 }
@@ -672,15 +681,25 @@ func TestReconcile_ReopenerFailure_NonFatal(t *testing.T) {
 }
 
 // -- correlation_id-only lookup falls back to the ListRecent
-// scan when pseudo_message_id is empty.
+// scan when pseudo_message_id is empty. The seeded banner_state
+// row is keyed by the evaluation_results.message_id_hash bytes
+// ("msg-12"); the inbound payload only carries the
+// correlation_id ("corr-abc"). The reopener MUST be invoked
+// with the message-id-hash bytes (the banner_state key) and
+// NOT the correlation_id — earlier revisions of the resolver
+// re-derived the reopen id from the payload, which silently
+// broke the correlation-ID fallback path because the
+// reopener's own banner_state.Get would miss. This test pins
+// the contract.
 func TestReconcile_CorrelationIDFallback(t *testing.T) {
 	fx := newFixture(t)
 	const (
-		tenantID = "tenant-k"
+		tenantID  = "tenant-k"
+		messageID = "msg-12"
 	)
 	r := &repository.EvaluationResult{
 		TenantID:      tenantID,
-		MessageIDHash: []byte("msg-12"),
+		MessageIDHash: []byte(messageID),
 		Tier:          string(constant.TierCaution),
 		Primary:       "Phishing",
 		CorrelationID: "corr-abc",
@@ -689,6 +708,11 @@ func TestReconcile_CorrelationIDFallback(t *testing.T) {
 	if err := fx.repos.EvaluationResults.Create(context.Background(), r); err != nil {
 		t.Fatalf("create eval: %v", err)
 	}
+	// Seed a delivered banner under the message-id-hash key
+	// so the resolver's gate check (banners.Get with
+	// messageIDHash) finds a delivered row and the reopen
+	// path fires.
+	fx.seedBanner(t, tenantID, messageID)
 
 	ev := escalation.IncidentResolved{
 		IncidentID: "inc-12",
@@ -710,6 +734,22 @@ func TestReconcile_CorrelationIDFallback(t *testing.T) {
 	}
 	if out.NewVerdict != "malicious" {
 		t.Errorf("NewVerdict = %q; want malicious", out.NewVerdict)
+	}
+	if !out.BannerReopened {
+		t.Errorf("BannerReopened = false; want true (correlation-ID fallback must still reopen)")
+	}
+	// Pin the reopen MessageID contract: it MUST be the
+	// banner_state lookup key (the evaluation_results
+	// message_id_hash bytes), NOT the correlation_id from
+	// the payload. A regression that re-derives the id from
+	// the payload would pass "corr-abc" here and miss the
+	// banner_state row keyed by "msg-12".
+	calls := fx.reopener.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("reopener.calls = %d; want 1", len(calls))
+	}
+	if got := calls[0].MessageID; got != messageID {
+		t.Errorf("reopener call MessageID = %q; want %q (banner_state key, not correlation_id)", got, messageID)
 	}
 }
 

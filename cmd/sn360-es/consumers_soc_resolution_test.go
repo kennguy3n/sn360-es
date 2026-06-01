@@ -215,6 +215,45 @@ func TestHandleSOCIncidentResolved_NoResolver_Drops(t *testing.T) {
 	}
 }
 
+// -- a payload that the JSON unmarshal accepts but the
+// resolver's validateInput rejects (e.g. empty ResolvedBy,
+// missing DedupID, zero ResolvedAt) MUST drop at the handler
+// boundary with err == nil so the broker advances past the
+// poison pill. Returning the validation error would tell
+// JetStream to redeliver, but the message will fail
+// validation identically every time — burning the
+// MaxDeliver=5 budget on a permanent payload defect.
+//
+// The resolver tags such failures with
+// escalation.ErrInvalidPayload; the handler checks
+// errors.Is and demotes to a drop.
+func TestHandleSOCIncidentResolved_PermanentValidationError_Drops(t *testing.T) {
+	app, spy := buildEscalationApp(t)
+	// ResolvedBy is empty — passes JSON unmarshal and the
+	// handler's own IsValidResolution gate, fails the
+	// resolver's validateInput path.
+	payload := escalation.IncidentResolved{
+		IncidentID: "inc-ipv",
+		TenantID:   "tenant-ipv",
+		Resolution: escalation.ResolutionConfirmedThreat,
+		ResolvedAt: time.Now().UTC(),
+		ResolvedBy: "",
+		DedupID:    "dedup-ipv",
+		RelatedEmail: &escalation.EmailLink{
+			PseudoMessageID: "msg-ipv",
+		},
+	}
+	if err := app.handleSOCIncidentResolved(context.Background(), payloadMessage{
+		data:    mustMarshal(t, payload),
+		subject: socResolutionSubject,
+	}); err != nil {
+		t.Errorf("err = %v; want nil for permanent validation defect", err)
+	}
+	if len(spy.calls) != 0 {
+		t.Errorf("reopener calls = %d; want 0 (resolver should reject before side effects)", len(spy.calls))
+	}
+}
+
 // -- duplicate redelivery: same DedupID twice. First call
 // flips, second call short-circuits to OutcomeDuplicate
 // without re-invoking the reopener. This exercises the

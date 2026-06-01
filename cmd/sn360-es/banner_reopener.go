@@ -64,14 +64,21 @@ func newBannerReopener(logger *slog.Logger, banners repository.BannerStateReposi
 
 // ReopenBanner implements escalation.BannerReopener.
 //
-// reopenMessageID is the producer-stamped pseudonymised id
-// (the same value the resolver derives from the IncidentResolved
-// EmailLink). The reopener looks up the stored banner_state row
-// to recover the plaintext provider message-id + recipient
-// mailbox; if neither is present the reopen is a no-op
-// (because there's no way to target the provider call without
-// them). The pseudo IS NOT used as the provider-side MessageID
-// because providers don't accept opaque pseudonyms.
+// reopenMessageID is the same bytes the banner_state row is
+// keyed by — i.e. the evaluation_results.message_id_hash the
+// resolver's locateEvaluation returned. The resolver passes
+// string(messageIDHash) so the lookup here observes the
+// identical row the resolver's own gate check succeeded on.
+// (Earlier revisions re-derived the id from the inbound
+// IncidentResolved payload, which silently broke the
+// correlation-id fallback path because the payload-derived
+// value diverges from the message_id_hash.) The reopener uses
+// this key to look up the stored banner_state row and recover
+// the plaintext provider message-id + recipient mailbox; if
+// either is missing the reopen is a no-op (because there's no
+// way to target the provider call without them). The lookup
+// key IS NOT used as the provider-side MessageID — providers
+// don't accept opaque pseudonyms.
 func (b *bannerReopener) ReopenBanner(ctx context.Context, tenantID, reopenMessageID, reason string) error {
 	if tenantID == "" {
 		return errors.New("banner_reopener: tenant_id required")

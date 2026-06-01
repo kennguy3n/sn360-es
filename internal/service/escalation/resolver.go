@@ -235,16 +235,22 @@ func (r *Resolver) Reconcile(ctx context.Context, ev IncidentResolved) (Outcome,
 			)
 		default:
 			reopenReason := composeBannerReason(ev.Resolution, ev.AnalystNotes)
-			// MessageID for the reopener is the producer-stamped
-			// pseudonym (or the row's stored CorrelationID when
-			// the pseudo is empty). The reopener implementation
-			// is responsible for resolving the pseudonym back to
-			// the provider-side mailbox identifier; see
-			// cmd/sn360-es/banner_reopener.go.
-			reopenMessageID := pseudoMessageIDFor(ev)
-			if reopenMessageID == "" {
-				reopenMessageID = evalRow.CorrelationID
-			}
+			// MessageID for the reopener MUST be the same
+			// banner_state lookup key the gate check above
+			// (banners.Get) succeeded on — i.e. the bytes
+			// that evaluation_results.message_id_hash is
+			// keyed by. Earlier revisions of this code path
+			// re-derived the reopen id from the inbound
+			// IncidentResolved payload (pseudo or
+			// correlation_id), which silently broke the
+			// correlation-id fallback path: locateEvaluation
+			// returns the message-id-hash bytes (e.g.
+			// []byte("msg-12")), but the payload-derived id
+			// is the correlation_id (e.g. "corr-abc"), and
+			// the reopener's own banner_state.Get would miss.
+			// Pass the canonical key the gate check already
+			// resolved so the reopener observes the same row.
+			reopenMessageID := string(messageIDHash)
 			if rerr := r.reopener.ReopenBanner(ctx, evalRow.TenantID, reopenMessageID, reopenReason); rerr != nil {
 				// Non-fatal: the audit row + verdict flip
 				// already landed. Operator can manually
@@ -310,21 +316,33 @@ func pseudoMessageIDFor(ev IncidentResolved) string {
 	return strings.TrimSpace(ev.RelatedEmail.CorrelationID)
 }
 
+// ErrInvalidPayload tags the validateInput failures emitted by
+// Reconcile so the consumer-side handler can distinguish
+// permanent payload defects (which redelivery cannot fix) from
+// transient repository / NATS errors (which should be retried).
+//
+// Use errors.Is(err, ErrInvalidPayload) at the call site. The
+// JetStream handler returns nil for ErrInvalidPayload to drop
+// the poison pill immediately rather than burning the
+// MaxDeliver=5 redelivery budget on a message that will fail
+// validation identically every time.
+var ErrInvalidPayload = errors.New("escalation: invalid payload")
+
 func validateInput(ev IncidentResolved) error {
 	if ev.IncidentID == "" {
-		return errors.New("escalation: incident_id required")
+		return fmt.Errorf("%w: incident_id required", ErrInvalidPayload)
 	}
 	if ev.TenantID == "" {
-		return errors.New("escalation: tenant_id required")
+		return fmt.Errorf("%w: tenant_id required", ErrInvalidPayload)
 	}
 	if !IsValidResolution(ev.Resolution) {
-		return fmt.Errorf("escalation: invalid resolution %q", ev.Resolution)
+		return fmt.Errorf("%w: invalid resolution %q", ErrInvalidPayload, ev.Resolution)
 	}
 	if ev.ResolvedAt.IsZero() {
-		return errors.New("escalation: resolved_at required")
+		return fmt.Errorf("%w: resolved_at required", ErrInvalidPayload)
 	}
 	if ev.DedupID == "" {
-		return errors.New("escalation: dedup_id required")
+		return fmt.Errorf("%w: dedup_id required", ErrInvalidPayload)
 	}
 	// ResolvedBy is enforced by the audit repository at INSERT
 	// time (both Postgres and memory backends require a non-empty
@@ -337,7 +355,7 @@ func validateInput(ev IncidentResolved) error {
 	// but no audit trail until the message DLQs. Reject at the
 	// boundary so we never produce side effects we can't audit.
 	if ev.ResolvedBy == "" {
-		return errors.New("escalation: resolved_by required")
+		return fmt.Errorf("%w: resolved_by required", ErrInvalidPayload)
 	}
 	return nil
 }
