@@ -1,7 +1,7 @@
 {
   "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
   "manifestVersion": "1.16",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "id": "8cdd9e69-680e-40d1-9bb7-7dfa0bb33165",
   "developer": {
     "name": "SN360",
@@ -35,7 +35,7 @@
       "requirements": {
         "scopes": ["mail"],
         "capabilities": [
-          { "name": "Mailbox", "minVersion": "1.10" }
+          { "name": "Mailbox", "minVersion": "1.11" }
         ]
       },
       "runtimes": [
@@ -51,7 +51,8 @@
             {
               "id": "sn360-on-message-send",
               "type": "executeFunction",
-              "displayName": "SN360 Pre-Send Check"
+              "displayName": "SN360 Pre-Send Check",
+              "supportsNoItemContext": false
             },
             {
               "id": "sn360-on-message-recipients-changed",
@@ -81,7 +82,13 @@
       "autoRunEvents": [
         {
           "events": [
-            { "type": "messageSending",  "actionId": "sn360-on-message-send" },
+            {
+              "type": "messageSending",
+              "actionId": "sn360-on-message-send",
+              "options": {
+                "sendMode": "promptUser"
+              }
+            },
             { "type": "messageRecipientsChanged", "actionId": "sn360-on-message-recipients-changed" },
             { "type": "messageRead",     "actionId": "sn360-on-message-read" }
           ]

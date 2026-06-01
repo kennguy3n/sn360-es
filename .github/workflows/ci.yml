@@ -263,6 +263,40 @@ jobs:
           ignore-unfixed: true
           vuln-type: os,library
 
+  addin-tests:
+    name: Add-in Tests (Outlook + Gmail)
+    # WS-7b: pre-send Office.js (Outlook) and Apps Script (Gmail)
+    # add-ins. The Outlook suite uses Node's built-in test runner
+    # plus office-addin-mock to simulate the Office.js context; the
+    # Gmail suite loads the .gs source through vm.runInContext with
+    # hand-stubbed Apps Script globals (Session / Utilities /
+    # UrlFetchApp / GmailApp / Gmail / CardService / CacheService).
+    # Both exercise the three pre-send flows (recipient risk,
+    # lookalike, external-thread) with table-driven cases.
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          # Hash the lockfile so the npm cache invalidates whenever a
+          # locked dependency version changes — hashing package.json
+          # alone would let semver-range patch updates ride on a stale
+          # node_modules cache.
+          cache-dependency-path: deployments/addins/package-lock.json
+
+      - name: Install add-in test deps
+        working-directory: deployments/addins
+        run: npm install --no-audit --no-fund
+
+      - name: Run add-in tests
+        working-directory: deployments/addins
+        run: npm test
+
   build:
     name: Build & Publish
     runs-on: ubuntu-latest
@@ -291,7 +325,7 @@ jobs:
     # green license verdict. One CI surface for static-analysis
     # gates (matching what contributors run locally) is the
     # correct shape.
-    needs: [lint, test, test-integration, migrate-check-online, cost-model, security-scan]
+    needs: [lint, test, test-integration, migrate-check-online, cost-model, security-scan, addin-tests]
     steps:
       - uses: actions/checkout@v4
 

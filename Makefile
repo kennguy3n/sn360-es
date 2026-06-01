@@ -89,6 +89,14 @@ license-check:
 test-e2e:
 	$(GO) test $(GOTEST_FLAGS) -tags=e2e -timeout 300s ./tests/e2e/...
 
+.PHONY: test-addins
+# WS-7b add-in test harness: Office.js (Outlook) + Apps Script (Gmail)
+# pre-send handlers. Installs dev deps in deployments/addins/ and
+# runs the Node-based test suite for both platforms. Mirrors the
+# CI job `addin-tests`.
+test-addins:
+	cd deployments/addins && npm install --no-audit --no-fund && npm test
+
 .PHONY: load-smoke
 load-smoke:
 	k6 run tests/load/smoke.js
