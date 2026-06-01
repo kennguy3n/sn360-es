@@ -4,6 +4,12 @@ coverage.out
 *.test
 *.out
 
+# Bare cmd binaries when someone runs `go build ./cmd/...` from the
+# repo root instead of using `make build` (which writes into bin/).
+/sn360-es
+/sn360-es-migrate
+/sn360-es-loadgen
+
 # Go module cache (just in case)
 /vendor/
 
@@ -61,3 +67,8 @@ __pycache__/
 # (testdata/corpus-eval/synthetic.jsonl) are committed; the
 # per-run reports are local artifacts.
 testdata/corpus-eval/reports/
+
+# WS-6a load-test result artefacts and bootstrap manifests are
+# regenerated on every `make load-*` run. Keep the README/grafana
+# templates checked in but not the per-run JSON output.
+tests/load/results/*.json

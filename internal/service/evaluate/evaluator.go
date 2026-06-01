@@ -442,7 +442,16 @@ func (e *Evaluator) Evaluate(ctx context.Context, req dto.EvaluateRequest, signa
 			hint = *res.Tier1
 		}
 		start := time.Now()
+		// Track in-flight Tier 2 SLM call concurrency. The WS-6a
+		// load harness reads `sn360_es_tier2_inflight_requests`
+		// during scenario runs to capture SLM call concurrency;
+		// the Inc/Dec must straddle the actual call (not the
+		// outer escalation decision) so the gauge reflects real
+		// upstream load and not the Tier-0 / Tier-1 work that
+		// precedes it.
+		e.cfg.Observer.ObserveTier2InflightDelta(1)
 		outcome, err := e.runTier2(cctx, req, hint)
+		e.cfg.Observer.ObserveTier2InflightDelta(-1)
 		cancel()
 		if err != nil {
 			degraded = append(degraded, "tier2")
