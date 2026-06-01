@@ -339,6 +339,32 @@ class CostLevers:
         Tier 1, naive per-row pruning, in-memory rate limiter, no
         role split, no KEDA, no PgBouncer).
       * `levers_on`: post-PR #46 with every documented lever active.
+
+    Modelling axis: the levers above describe *configuration*
+    choices (Tier 0 cache on/off, batch on/off, partition retention
+    strategy, role-split on/off, etc.), NOT the underlying
+    infrastructure shape. The per-role compute coefficients
+    ``API_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY`` and
+    ``CONSUMER_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY`` are derived
+    against the *current* infrastructure (HASH-partitioned
+    ``communication_histories`` from WS-2b PR #58, read-replica
+    routing from WS-2a PR #57) and apply unconditionally in
+    ``cost_compute()`` regardless of which ``CostLevers`` snapshot
+    is fed in. Concretely: the ``baseline_off`` row models "what
+    would today's deployment cost if we turned off the PR #44–#46
+    levers but kept the WS-2 infrastructure", not "what cost looked
+    like historically before any of these PRs landed". This is
+    deliberate — the cost model is a configuration counterfactual,
+    not a historical reconstruction; the comparison the headline
+    table wants is "the levers vs no levers", holding everything
+    else constant. The asymmetry is mirrored on the storage and
+    write-I/O lines, where ``partitioning_active`` does gate the
+    multiplier — there, ``partitioning_active`` is itself a
+    retention-strategy lever (DROP PARTITION vs row-by-row DELETE)
+    on top of the WS-2b HASH layout. See the
+    ``# Modelling axis (compute coefficients vs partitioning lever)``
+    comment block in ``cost_compute()`` for the line-level
+    derivation.
     """
 
     label: str
@@ -360,6 +386,12 @@ class CostLevers:
 
     @classmethod
     def baseline_off(cls) -> "CostLevers":
+        # Label preserved verbatim across regressions, JSON output,
+        # and COST_MODEL.md cross-references — it identifies the
+        # *lever configuration* snapshot, not the infrastructure
+        # vintage. See the ``CostLevers`` class docstring for why
+        # the compute coefficients applied against this snapshot
+        # are the current-infrastructure (post-WS-2) values.
         return cls(
             label="baseline (pre-PR #44)",
             tier0_bypass_hit_rate=0.10,
@@ -471,6 +503,25 @@ def cost_compute(profile: TrafficProfile, levers: CostLevers) -> Dict[str, float
     # the per-tenant message-rate scaling factor. See the
     # `*_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY` constants at the top of
     # the file for the dimensional analysis behind the coefficients.
+    #
+    # Modelling axis (compute coefficients vs partitioning lever):
+    # the *_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY values above
+    # capture the per-role vCPU consumption of the *current*
+    # infrastructure — i.e. WS-2a read-replica routing (PR #57) and
+    # WS-2b HASH-partitioned ``communication_histories`` (PR #58)
+    # are baked into them and apply unconditionally below. They
+    # are NOT gated on a CostLevers field. The CostLevers snapshots
+    # are configuration counterfactuals (Tier 0 cache on/off,
+    # batch on/off, role-split on/off, retention strategy, ...)
+    # held against this fixed infrastructure substrate; the
+    # `baseline (pre-PR #44)` row therefore models "PR #44–#46
+    # levers off on top of today's WS-2 infrastructure" rather
+    # than a historical reconstruction of pre-WS-2 wall-clock
+    # spend. The cost_postgres storage / write-I/O multipliers
+    # ARE gated behind ``partitioning_active`` because that lever
+    # itself describes the retention strategy (DROP PARTITION vs
+    # row-by-row DELETE) layered on the partitioned table; see
+    # the CostLevers class docstring for the full rationale.
     kmsg_per_day = profile.messages_per_tenant_per_day / 1000.0
     api_vcpu_h = API_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY * kmsg_per_day
     consumer_vcpu_h = CONSUMER_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY * kmsg_per_day

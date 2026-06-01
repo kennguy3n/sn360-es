@@ -253,6 +253,37 @@ future cloud-price refresh that compresses the delta below 8 %
 must update the floor (and the comment trail at the top of
 `test_project.py`) deliberately, not silently.
 
+**What the "Baseline (pre-PR #44)" column actually models.** The
+two columns in the headline table are *configuration*
+counterfactuals against a single fixed *infrastructure* baseline,
+not a historical reconstruction of pre-WS-2 wall-clock spend.
+Specifically:
+
+- The per-role compute coefficients in `cost_compute()`
+  (`API_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY` and
+  `CONSUMER_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY`) bake in the
+  current infrastructure shape — WS-2a read-replica routing
+  and WS-2b HASH-partitioned `communication_histories` — and
+  apply unconditionally to *both* columns. The "Baseline
+  (pre-PR #44)" column therefore answers "what would today's
+  deployment cost if we turned off the PR #44–#46 levers but
+  kept the WS-2 infrastructure?", not "what did this cost in
+  2025 before any of those PRs landed?".
+- The `partitioning_active` lever, by contrast, *does* gate
+  the `cost_postgres` storage (0.72×) and write-I/O (0.70×)
+  multipliers conditionally — because that lever describes a
+  *retention strategy* (DROP PARTITION versus row-by-row
+  DELETE) which can be toggled independently of the underlying
+  partition layout.
+
+This asymmetry is intentional: the comparison the table is
+designed for is "levers vs no levers" holding the WS-2
+infrastructure constant, which is the decision a deployment
+operator actually makes today. The `CostLevers` class
+docstring and the `# Modelling axis (...)` comment block in
+`cost_compute()` in `scripts/cost_model/project.py` carry the
+in-code restatement of this contract.
+
 **Tenant density**: shared infrastructure (Redis, PG instance
 baseline, NAT GW) is amortised across a default 1 000 tenants
 per deployment. This is the tier we've designed the role-split
