@@ -119,6 +119,12 @@ jobs:
           exit 1
 
       - name: Apply migrations
+        # The compose-installed Postgres image does not have SSL
+        # enabled, so we must force `sslmode=disable` in the DSN;
+        # without it the default sn360-es-migrate config negotiates
+        # SSL and the connection fails with "SSL is not enabled".
+        env:
+          MIGRATIONS_DSN: postgres://sn360es:sn360es@127.0.0.1:5432/sn360es?sslmode=disable
         run: make migrate-up
 
       - name: Bootstrap a 32-tenant pool
@@ -246,6 +252,8 @@ jobs:
           exit 1
 
       - name: Apply migrations
+        env:
+          MIGRATIONS_DSN: postgres://sn360es:sn360es@127.0.0.1:5432/sn360es?sslmode=disable
         run: make migrate-up
 
       - name: Bootstrap tenant pool
