@@ -374,7 +374,7 @@ class CostLevers:
     @classmethod
     def levers_on(cls) -> "CostLevers":
         return cls(
-            label="all levers on (post-PR #46)",
+            label="all levers on (post-WS-2b)",
             tier0_bypass_hit_rate=0.68,
             tier1_batch_efficiency=0.30,
             partitioning_active=True,
