@@ -80,17 +80,6 @@ func (a *application) handleEvaluateRequest(ctx context.Context, msg events.Mess
 	if err != nil {
 		return fmt.Errorf("evaluate: %w", err)
 	}
-	// WS-4a hot path: publish the per-message sighting onto
-	// es.management.comm_history.update so the management Postgres
-	// consumer can atomically increment communication_histories
-	// without waiting for the 4-hour relationship_worker cycle.
-	// The publish is best-effort: a failure to enqueue the sighting
-	// is logged and swallowed so a transient bus blip cannot fail
-	// the evaluate-request consumer (which would NAK + retry the
-	// upstream envelope and produce a duplicate evaluate.result).
-	// The worker's next cycle will recompute counts from persisted
-	// rows anyway, so a dropped sighting is recovered within 4h.
-	a.publishCommHistoryUpdate(ctx, req)
 	dto.BackfillRoutingFields(&result, req)
 	payload, err := json.Marshal(result)
 	if err != nil {
@@ -105,8 +94,34 @@ func (a *application) handleEvaluateRequest(ctx context.Context, msg events.Mess
 		events.WithEventType("evaluate.result"),
 		events.WithTraceContext(ctx),
 	); err != nil {
+		// Result publish failed: return so JetStream NAKs and
+		// redelivers. We deliberately have NOT yet published the
+		// WS-4a sighting — see the contract block immediately
+		// below.
 		return fmt.Errorf("publish evaluate.result: %w", err)
 	}
+	// WS-4a hot path: publish the per-message sighting onto
+	// es.management.comm_history.update so the management Postgres
+	// consumer can atomically increment communication_histories
+	// without waiting for the 4-hour relationship_worker cycle.
+	//
+	// Ordering contract: the sighting publish lives AFTER the
+	// evaluate.result publish succeeds, mirroring the batch path's
+	// finalisePending tail (internal/service/evaluate/batch.go).
+	// Putting the sighting publish here — not before the result —
+	// closes the "orphaned sighting" failure mode caught in Devin
+	// Review round 2: if the result publish fails, the sighting is
+	// never emitted, so JetStream redelivery sees a clean slate and
+	// emits the (result, sighting) pair as a unit on retry.
+	//
+	// The publish itself is best-effort: PublishCommHistoryUpdate
+	// swallows every error so a transient management-bus blip after
+	// the result has already landed cannot NAK the evaluate-request
+	// envelope (which would produce a duplicate evaluate.result on
+	// the next redelivery). On the rare case where the sighting is
+	// dropped, the relationship_worker's next 4h cycle recomputes
+	// counts from persisted rows and recovers the drift.
+	a.publishCommHistoryUpdate(ctx, req)
 	return nil
 }
 

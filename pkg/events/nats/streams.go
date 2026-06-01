@@ -328,6 +328,8 @@ func isResultFilter(subj string) bool {
 //   - es.onboarding.>                → StreamOnboarding
 //   - es.education.>                 → StreamEducation
 //   - es.action.>                    → StreamAction
+//   - es.management.>                → StreamManagement (WS-4a + future
+//     management-domain work queues)
 //
 // Any other es.evaluate.* subject (e.g. a hypothetical
 // es.evaluate.status) is treated as unrouted and returns "" rather
@@ -348,6 +350,8 @@ func StreamForSubject(subject string) string {
 		return StreamEducation
 	case strings.HasPrefix(subject, "es.action."):
 		return StreamAction
+	case strings.HasPrefix(subject, "es.management."):
+		return StreamManagement
 	default:
 		return ""
 	}
