@@ -1,0 +1,11 @@
+{
+  "more": false,
+  "objects": [
+    {
+      "type": "indicator",
+      "id": "indicator--5",
+      "pattern": "[domain-name:value = 'lastpage.example']",
+      "confidence": 50
+    }
+  ]
+}

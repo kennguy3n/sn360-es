@@ -1,0 +1,6 @@
+domain,severity_hint,notes
+malicious.example,high,first
+phish.test,med,
+# This is a comment row
+typo-squatter.example,med,
+,blank,

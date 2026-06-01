@@ -1,0 +1,9 @@
+# URLhaus Database Dump (CSV - recent URLs only)
+# Last updated: 2024-01-15 13:00:00 UTC
+#
+# id,dateadded,url,url_status,last_online,threat,tags,urlhaus_link,reporter
+#
+"3000001","2024-01-15 12:55:00","http://Evil.Example.COM/payload.exe","online","2024-01-15 12:59:00","malware_download","emotet,exe","https://urlhaus.abuse.ch/url/3000001/","Cryptolaemus1"
+"3000002","2024-01-15 12:50:00","https://qakbot.example.org/c2","online","2024-01-15 12:58:00","malware_download","qakbot","https://urlhaus.abuse.ch/url/3000002/","abuse_ch"
+"3000003","2024-01-15 12:45:00","http://offline.example.net/old","offline","2024-01-14 02:00:00","malware_download","","https://urlhaus.abuse.ch/url/3000003/","reporter1"
+"3000004","2024-01-15 12:40:00","not a url at all","online","","unknown","","https://urlhaus.abuse.ch/url/3000004/","reporter2"
