@@ -82,37 +82,6 @@ func ClaimsFromContext(ctx context.Context) *privacy.ActionClaims {
 	return v
 }
 
-// ContextWithClaims returns a copy of ctx with claims attached
-// under the same keys JWTAuth uses, so downstream handlers see
-// them via ClaimsFromContext AND TenantIDFromContext. Both keys
-// are set together — never set just one — to preserve the
-// invariant established by JWTAuth.ServeHTTP that claims and
-// tenantID move in lockstep.
-//
-// Use cases:
-//   - Tests that exercise a handler in isolation without spinning
-//     up the JWT middleware (the JWT signer + key material would
-//     otherwise need to be reproduced in every handler test).
-//   - Internal callers (e.g. async tasks fan-ed out by a handler
-//     after the response is written) that need to propagate the
-//     auth principal into a derived context.
-//
-// Production callers outside those two cases MUST go through the
-// JWTAuth middleware so the signature is verified — setting
-// claims here bypasses signature validation.
-//
-// If claims is nil, ctx is returned unchanged so a misconfigured
-// caller can't accidentally null out a real claims set already on
-// the context.
-func ContextWithClaims(ctx context.Context, claims *privacy.ActionClaims) context.Context {
-	if claims == nil {
-		return ctx
-	}
-	ctx = context.WithValue(ctx, ctxKeyClaims, claims)
-	ctx = context.WithValue(ctx, ctxKeyTenantID, claims.TenantID)
-	return ctx
-}
-
 // JWTAuthConfig wires JWTAuth.
 type JWTAuthConfig struct {
 	// Issuer verifies tokens. Must be non-nil.
