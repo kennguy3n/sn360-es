@@ -1,6 +1,10 @@
 package config
 
-import "time"
+import (
+	"time"
+
+	"github.com/kennguy3n/sn360-es/pkg/inference/slm"
+)
 
 // Rspamd configures the Rspamd HTTP client.
 type Rspamd struct {
@@ -20,19 +24,79 @@ func loadRspamd() Rspamd {
 }
 
 // AI configures the Tier 2 LLM client.
+//
+// The Tier 2 provider is selected via TIER2_PROVIDER (default
+// "ternarybonsai"). URL / APIKey / Model / Timeout / MaxTokens /
+// Temperature carry the deployment default's configuration; the
+// selected provider's factory in pkg/inference/slm/providers/* maps
+// these onto its native config. Provider-specific knobs (vLLM
+// "n_gpu_layers", OpenAI "max_retries", llama-server
+// "auth_header_name", etc.) live in ProviderOpts.
+//
+// Per-tenant override is enabled by the presence of a non-NULL
+// tier2_provider on the tenant's score_engine row (see migration
+// 0023); the deployment-default config above is still consulted as
+// the construction inputs (URL, Model, etc.) so an override only
+// needs to declare which provider to use, not duplicate the
+// connection details.
 type AI struct {
 	URL      string
 	APIKey   string
+	Model    string
 	Timeout  time.Duration
 	CacheTTL time.Duration
+
+	// Provider names the registered Tier 2 provider (see
+	// pkg/inference/slm/registry.go). Defaults to "ternarybonsai"
+	// so the existing AI_URL / AI_API_KEY deployments retain
+	// bit-for-bit production behaviour.
+	Provider string
+
+	// ProviderOpts is the parsed TIER2_PROVIDER_OPTS k=v,k=v
+	// payload. nil when the env var is unset / empty so callers
+	// can rely on "no opts" being represented uniformly.
+	ProviderOpts map[string]string
+
+	// MaxTokens caps the response token budget. Defaults to 0
+	// (which each provider interprets as its own documented
+	// default — Ternary-Bonsai uses 512 to match historical
+	// behaviour).
+	MaxTokens int
+
+	// Temperature controls sampling diversity. nil means
+	// "TIER2_TEMPERATURE was not set, let the provider apply its
+	// documented default" (typically 0.1 for classifier use). A
+	// non-nil pointer is honoured verbatim, including 0.0 for
+	// deterministic argmax sampling. The pointer type exists
+	// specifically so an operator that runs A/B experiments with
+	// TIER2_TEMPERATURE=0 is not silently overridden to 0.1.
+	Temperature *float64
+}
+
+// ParseProviderOpts is exported so callers (Validate, tests, the
+// composition root) can re-parse the env var when AI is constructed
+// outside loadAI (e.g. injected from a test fixture).
+//
+// The parsing rule lives in the slm package so any future tweak
+// (escape rules, alternative separators, etc.) lands in one place
+// instead of drifting between config and slm. This thin shim is
+// kept so existing config-package callers do not have to learn
+// about slm.
+func ParseProviderOpts(raw string) map[string]string {
+	return slm.ParseProviderOpts(raw)
 }
 
 func loadAI() AI {
 	return AI{
-		URL:      getStr("AI_URL", "http://127.0.0.1:9000"),
-		APIKey:   getStr("AI_API_KEY", ""),
-		Timeout:  getDuration("AI_TIMEOUT", 30*time.Second),
-		CacheTTL: getDuration("AI_CACHE_TTL", time.Hour),
+		URL:          getStr("AI_URL", "http://127.0.0.1:9000"),
+		APIKey:       getStr("AI_API_KEY", ""),
+		Model:        getStr("AI_MODEL", ""),
+		Timeout:      getDuration("AI_TIMEOUT", 30*time.Second),
+		CacheTTL:     getDuration("AI_CACHE_TTL", time.Hour),
+		Provider:     getStr("TIER2_PROVIDER", "ternarybonsai"),
+		ProviderOpts: ParseProviderOpts(getStr("TIER2_PROVIDER_OPTS", "")),
+		MaxTokens:    getInt("TIER2_MAX_TOKENS", 0),
+		Temperature:  getFloatPtr("TIER2_TEMPERATURE"),
 	}
 }
 

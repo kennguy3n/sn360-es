@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -122,6 +123,38 @@ func issueSelfReleaseToken(t *testing.T, issuer *privacy.JWTIssuer, tenant, pmid
 		t.Fatalf("issue: %v", err)
 	}
 	return tok
+}
+
+// tamperJWTSignature returns tok with its signature mutated so the
+// JWT no longer verifies. Implemented by base64URL-decoding the
+// signature, flipping the first signature byte, and re-encoding.
+//
+// Naive last-character tampering ("change the final base64 char")
+// is unreliable: for an HS256 signature (32 bytes = 43 base64URL
+// chars unpadded) the last base64 character carries only 4 real
+// bits, so each "top-4-bits" group of four base64URL chars decodes
+// to the same trailing 4-bit sequence. For example {w, x, y, z} all
+// decode to top-4-bits 0b1100, so swapping one of {w, y, z} for "x"
+// produces a *different* base64 string that decodes to the *same*
+// signature and verifies cleanly — meaning the test's "invalid
+// signature" assertion only fires ~96% of the time. Flipping a
+// decoded byte avoids that whole class of issue.
+func tamperJWTSignature(tb testing.TB, tok string) string {
+	tb.Helper()
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		tb.Fatalf("tamperJWTSignature: token has %d parts, want 3", len(parts))
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		tb.Fatalf("tamperJWTSignature: decode signature: %v", err)
+	}
+	if len(sig) == 0 {
+		tb.Fatalf("tamperJWTSignature: empty signature")
+	}
+	sig[0] ^= 0xFF
+	parts[2] = base64.RawURLEncoding.EncodeToString(sig)
+	return strings.Join(parts, ".")
 }
 
 // postForm is the canonical way the banner posts to the endpoint
@@ -349,10 +382,7 @@ func TestSelfReleaseHandler_AuthFailuresDoNotBurnRateLimit(t *testing.T) {
 		// The handler decodes claims from the unverified
 		// payload to audit the auth failure, so each call
 		// writes one `invalid_token` row.
-		tampered := tok[:len(tok)-1] + "x"
-		if tampered == tok {
-			tampered = tok[:len(tok)-1] + "X"
-		}
+		tampered := tamperJWTSignature(t, tok)
 		rec := postForm(t, h, tampered)
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("spray %d: expected 401, got %d body=%s", i, rec.Code, rec.Body.String())
@@ -519,10 +549,7 @@ func TestSelfReleaseHandler_InvalidSignature(t *testing.T) {
 
 	tok := issueSelfReleaseToken(t, fx.issuer, "acme", "pmid-1", recipientHashHex)
 	// Tamper the signature.
-	tampered := tok[:len(tok)-1] + "x"
-	if tampered == tok {
-		tampered = tok[:len(tok)-1] + "X"
-	}
+	tampered := tamperJWTSignature(t, tok)
 	rec := postForm(t, h, tampered)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d", rec.Code)

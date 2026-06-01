@@ -497,11 +497,28 @@ type tenantScoringConfigAdapter struct {
 
 	mu    sync.RWMutex
 	cache map[string]tenantScoringConfigCacheEntry
+
+	// onInvalidate is called (without holding mu) for every
+	// Invalidate(tenantID) call. The slm.Router registers its
+	// Invalidate method here so per-tenant Tier 2 client caches are
+	// cleared at the same time as the scoring-config cache —
+	// without this hook the Router would keep handing back a stale
+	// override client after an admin flips score_engine.tier2_provider.
+	// Composition root sets the hook after both the adapter and
+	// router exist; nil is fine, the adapter just skips the call.
+	onInvalidate func(tenantID string)
 }
 
 type tenantScoringConfigCacheEntry struct {
-	value     evaluate.TenantScoringConfig
-	expiresAt time.Time
+	value evaluate.TenantScoringConfig
+	// tier2Provider is the per-tenant Tier 2 (SLM) provider name
+	// override loaded from score_engine.tier2_provider. The empty
+	// string means "no override, use the deployment default".
+	// Cached alongside value so a single score_engine load
+	// services both the scoring-config lookup AND the Tier 2
+	// provider lookup without two round trips per tenant.
+	tier2Provider string
+	expiresAt     time.Time
 }
 
 // newTenantScoringConfigAdapter constructs an adapter with the
@@ -530,23 +547,41 @@ func (a *tenantScoringConfigAdapter) LoadTenantScoringConfig(ctx context.Context
 	if cached, ok := a.lookup(tenantID); ok {
 		return cached, nil
 	}
+	tc, _, err := a.loadAndCacheTenantRow(ctx, tenantID)
+	return tc, err
+}
+
+// loadAndCacheTenantRow is the single source of truth for hydrating
+// the per-tenant cache from a score_engine row. It is called by both
+// LoadTenantScoringConfig and LoadTenantTier2Provider so the DB-to-
+// cache derivation lives in one place; schema additions (new
+// columns, new derived fields) propagate to both callers
+// automatically and there is no chance of lockstep mutation bugs
+// where one method updates the derivation logic and the other
+// silently keeps the old shape.
+//
+// On ErrNotFound the helper caches a "no row" sentinel (zero config,
+// empty tier2Provider) so we don't hammer Postgres for every
+// evaluation of an unconfigured tenant, and reports no error — the
+// evaluator's static defaults are the documented contract for that
+// state. Other DB errors are surfaced so the caller can decide
+// whether to fail open (Router) or propagate (LoadTenantScoringConfig).
+func (a *tenantScoringConfigAdapter) loadAndCacheTenantRow(
+	ctx context.Context, tenantID string,
+) (evaluate.TenantScoringConfig, string, error) {
 	row, err := a.repo.Get(ctx, tenantID)
 	if err != nil {
 		if errors.Is(err, repository.ErrNotFound) {
-			// Cache the "no row" sentinel so we don't hammer
-			// Postgres for every evaluation of an unconfigured
-			// tenant. The zero value is what the evaluator wants
-			// in that case.
-			a.store(tenantID, evaluate.TenantScoringConfig{})
-			return evaluate.TenantScoringConfig{}, nil
+			a.storeFull(tenantID, evaluate.TenantScoringConfig{}, "")
+			return evaluate.TenantScoringConfig{}, "", nil
 		}
-		return evaluate.TenantScoringConfig{}, err
+		return evaluate.TenantScoringConfig{}, "", err
 	}
 	// score_engine columns are NOT NULL so a found row always
-	// carries thresholds; populate the pointers from the row so the
-	// evaluator distinguishes "row exists with PassBelow=0" from
-	// "no row at all" instead of collapsing both onto the static
-	// defaults.
+	// carries thresholds; populate the pointers from the row so
+	// the evaluator distinguishes "row exists with PassBelow=0"
+	// from "no row at all" instead of collapsing both onto the
+	// static defaults.
 	pass := row.ThresholdTier1PassBelow
 	flag := row.ThresholdTier1FlagAbove
 	tc := evaluate.TenantScoringConfig{
@@ -559,8 +594,50 @@ func (a *tenantScoringConfigAdapter) LoadTenantScoringConfig(ctx context.Context
 		Tier1PassThreshold: &pass,
 		Tier1FlagThreshold: &flag,
 	}
-	a.store(tenantID, tc)
-	return tc, nil
+	tier2Provider := ""
+	if row.Tier2Provider != nil {
+		tier2Provider = *row.Tier2Provider
+	}
+	a.storeFull(tenantID, tc, tier2Provider)
+	return tc, tier2Provider, nil
+}
+
+// LoadTenantTier2Provider implements slm.TenantProviderLoader. It
+// resolves the per-tenant Tier 2 provider override from the same
+// score_engine row that LoadTenantScoringConfig consults; an empty
+// return value means "no override, use the deployment default",
+// which is the steady-state expectation for the majority of
+// tenants.
+//
+// Errors are surfaced upstream so the slm.Router can log them and
+// fall back to the deployment default — a transient DB blip never
+// fails Tier 2 evaluation outright.
+func (a *tenantScoringConfigAdapter) LoadTenantTier2Provider(ctx context.Context, tenantID string) (string, error) {
+	if a == nil || a.repo == nil || tenantID == "" {
+		return "", nil
+	}
+	if cached, ok := a.lookupTier2Provider(tenantID); ok {
+		return cached, nil
+	}
+	_, tier2Provider, err := a.loadAndCacheTenantRow(ctx, tenantID)
+	return tier2Provider, err
+}
+
+// lookupTier2Provider returns the cached tier2Provider string for
+// tenantID and whether the entry was a live (non-expired) cache hit.
+// Distinguishes "miss" (load required) from "hit with empty
+// override" (use deployment default) via the bool.
+func (a *tenantScoringConfigAdapter) lookupTier2Provider(tenantID string) (string, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	entry, ok := a.cache[tenantID]
+	if !ok {
+		return "", false
+	}
+	if time.Now().After(entry.expiresAt) {
+		return "", false
+	}
+	return entry.tier2Provider, true
 }
 
 func (a *tenantScoringConfigAdapter) lookup(tenantID string) (evaluate.TenantScoringConfig, bool) {
@@ -576,12 +653,22 @@ func (a *tenantScoringConfigAdapter) lookup(tenantID string) (evaluate.TenantSco
 	return entry.value, true
 }
 
-func (a *tenantScoringConfigAdapter) store(tenantID string, tc evaluate.TenantScoringConfig) {
+// storeFull writes both the scoring config and the Tier 2 provider
+// override for tenantID under the cache's TTL. There is no
+// single-arg store(...) shortcut by design: every caller must be
+// explicit about whether it knows the tier2Provider value, because
+// passing the wrong default (e.g. "") on a code path that has a
+// real row would silently cache an empty override and make the
+// Router fall through to the deployment default until the TTL
+// elapsed. The ErrNotFound path in LoadTenantScoringConfig is the
+// only caller that should pass "".
+func (a *tenantScoringConfigAdapter) storeFull(tenantID string, tc evaluate.TenantScoringConfig, tier2Provider string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.cache[tenantID] = tenantScoringConfigCacheEntry{
-		value:     tc,
-		expiresAt: time.Now().Add(a.ttl),
+		value:         tc,
+		tier2Provider: tier2Provider,
+		expiresAt:     time.Now().Add(a.ttl),
 	}
 }
 
@@ -649,6 +736,29 @@ func (a *tenantScoringConfigAdapter) Invalidate(tenantID string) {
 	}
 	a.mu.Lock()
 	delete(a.cache, tenantID)
+	hook := a.onInvalidate
+	a.mu.Unlock()
+	// Call the downstream hook (e.g. slm.Router.Invalidate) outside
+	// the lock so it cannot deadlock against any goroutine that
+	// re-enters the adapter while invalidation propagates.
+	if hook != nil {
+		hook(tenantID)
+	}
+}
+
+// SetOnInvalidate installs a callback fired (without holding the
+// adapter's lock) for every Invalidate(tenantID). Used by the
+// composition root to wire slm.Router.Invalidate so a tuning write —
+// or any future admin write that calls Invalidate — clears both
+// caches together. Passing nil clears any prior hook. Safe for
+// concurrent calls with Invalidate; the hook is read under the same
+// lock that protects the cache map.
+func (a *tenantScoringConfigAdapter) SetOnInvalidate(hook func(tenantID string)) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	a.onInvalidate = hook
 	a.mu.Unlock()
 }
 

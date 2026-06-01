@@ -454,15 +454,24 @@ func (p *pgScoreEngines) Get(ctx context.Context, tenantID string) (*ScoreEngine
 SELECT tenant_id, score_base, weight_ai, weight_rspamd, weight_attachments, weight_links,
        threshold_blocked, threshold_high, threshold_warning, threshold_caution, threshold_info,
        threshold_tier1_pass_below, threshold_tier1_flag_above,
-       subject_tag_enabled, subject_tag_prefix, updated_at
+       subject_tag_enabled, subject_tag_prefix, tier2_provider, updated_at
   FROM score_engine WHERE tenant_id=$1`, tenantID)
 	var s ScoreEngine
+	// tier2_provider is nullable so scan into sql.NullString and
+	// promote to *string only when the row carries a value. Empty
+	// strings are treated the same as NULL ("no override") because
+	// they have no operational meaning at provider-resolution time.
+	var tier2Provider sql.NullString
 	err := row.Scan(&s.TenantID, &s.ScoreBase, &s.WeightAI, &s.WeightRspamd, &s.WeightAttachments, &s.WeightLinks,
 		&s.ThresholdBlocked, &s.ThresholdHigh, &s.ThresholdWarning, &s.ThresholdCaution, &s.ThresholdInfo,
 		&s.ThresholdTier1PassBelow, &s.ThresholdTier1FlagAbove,
-		&s.SubjectTagEnabled, &s.SubjectTagPrefix, &s.UpdatedAt)
+		&s.SubjectTagEnabled, &s.SubjectTagPrefix, &tier2Provider, &s.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
+	}
+	if tier2Provider.Valid && tier2Provider.String != "" {
+		v := tier2Provider.String
+		s.Tier2Provider = &v
 	}
 	return &s, err
 }
@@ -530,12 +539,20 @@ UPDATE score_engine SET
 }
 
 func (p *pgScoreEngines) Upsert(ctx context.Context, s *ScoreEngine) error {
+	// Marshal *string → sql.NullString so a nil Tier2Provider
+	// inserts as SQL NULL (which the column is documented to mean
+	// "use the deployment default"). Empty strings collapse to
+	// NULL too because they carry no operational meaning.
+	var tier2Provider sql.NullString
+	if s.Tier2Provider != nil && *s.Tier2Provider != "" {
+		tier2Provider = sql.NullString{String: *s.Tier2Provider, Valid: true}
+	}
 	_, err := p.db.ExecContext(ctx, `
 INSERT INTO score_engine (tenant_id, score_base, weight_ai, weight_rspamd, weight_attachments, weight_links,
                           threshold_blocked, threshold_high, threshold_warning, threshold_caution, threshold_info,
                           threshold_tier1_pass_below, threshold_tier1_flag_above,
-                          subject_tag_enabled, subject_tag_prefix)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+                          subject_tag_enabled, subject_tag_prefix, tier2_provider)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 ON CONFLICT (tenant_id) DO UPDATE SET
     score_base=EXCLUDED.score_base,
     weight_ai=EXCLUDED.weight_ai,
@@ -551,12 +568,13 @@ ON CONFLICT (tenant_id) DO UPDATE SET
     threshold_tier1_flag_above=EXCLUDED.threshold_tier1_flag_above,
     subject_tag_enabled=EXCLUDED.subject_tag_enabled,
     subject_tag_prefix=EXCLUDED.subject_tag_prefix,
+    tier2_provider=EXCLUDED.tier2_provider,
     updated_at=NOW()
 `,
 		s.TenantID, s.ScoreBase, s.WeightAI, s.WeightRspamd, s.WeightAttachments, s.WeightLinks,
 		s.ThresholdBlocked, s.ThresholdHigh, s.ThresholdWarning, s.ThresholdCaution, s.ThresholdInfo,
 		s.ThresholdTier1PassBelow, s.ThresholdTier1FlagAbove,
-		s.SubjectTagEnabled, s.SubjectTagPrefix,
+		s.SubjectTagEnabled, s.SubjectTagPrefix, tier2Provider,
 	)
 	return err
 }
