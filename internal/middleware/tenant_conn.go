@@ -146,15 +146,29 @@ func (t *TenantConnBinder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	t.next.ServeHTTP(w, r.WithContext(ctx))
 }
 
+// noopReleaseFunc is returned on every error path from bind / BindTenant so
+// callers can unconditionally `defer release()` without nil-checking the
+// release function — matching the convention enforced by
+// (*postgres.DB).WithTenant / WithCrossTenant and
+// (*postgres.RegionalDB).WithTenantInRegion (see noopRelease in
+// pkg/storage/postgres/tenant_context.go:237). The middleware package
+// can't reference the unexported noopRelease in postgres, so we declare
+// a local equivalent — both forms compile to the same nil-error no-op.
+func noopReleaseFunc() error { return nil }
+
 // bind dispatches between the single-region path (t.db.WithTenant) and
 // the multi-region path (resolve region -> t.regional.WithTenantInRegion).
 // Extracted so the consumer-side wrapper in cmd/sn360-es/consumers.go
 // can share the same routing decision via BindTenant.
+//
+// Returns noopReleaseFunc on every error path so callers may
+// unconditionally `defer release()` — matches the postgres-layer
+// convention used by WithTenant / WithCrossTenant / WithTenantInRegion.
 func (t *TenantConnBinder) bind(ctx context.Context, tenantID string) (context.Context, postgres.ReleaseFunc, error) {
 	if t.regional != nil && t.resolver != nil {
 		region, err := t.resolver.ResolveRegion(ctx, tenantID)
 		if err != nil {
-			return ctx, nil, err
+			return ctx, noopReleaseFunc, err
 		}
 		return t.regional.WithTenantInRegion(ctx, region, tenantID)
 	}
@@ -165,10 +179,11 @@ func (t *TenantConnBinder) bind(ctx context.Context, tenantID string) (context.C
 // (the NATS consumer wrapper in cmd/sn360-es/consumers.go in
 // particular) so HTTP and consumer paths route through the same
 // single-region / multi-region branch. The signature mirrors
-// (*postgres.DB).WithTenant exactly.
+// (*postgres.DB).WithTenant exactly — including the contract that
+// the returned ReleaseFunc is non-nil even on error.
 func (t *TenantConnBinder) BindTenant(ctx context.Context, tenantID string) (context.Context, postgres.ReleaseFunc, error) {
 	if t == nil {
-		return ctx, nil, errors.New("middleware: TenantConnBinder is nil")
+		return ctx, noopReleaseFunc, errors.New("middleware: TenantConnBinder is nil")
 	}
 	return t.bind(ctx, tenantID)
 }

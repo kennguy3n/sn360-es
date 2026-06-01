@@ -255,7 +255,12 @@ func (c Config) validate() error {
 		// to the primary guard above. Only kicks in when the
 		// operator actually wired a region map; the empty / nil
 		// map (single-region default) leaves the loop a no-op.
-		for region, pg := range c.Postgres.RegionMap {
+		// Iterate in lex-sorted key order so the first error an
+		// operator sees is stable across boots — matches the
+		// deterministic-ordering convention used by the regional
+		// pool open loop in cmd/sn360-es/app.go.
+		for _, region := range sortedRegionKeys(c.Postgres.RegionMap) {
+			pg := c.Postgres.RegionMap[region]
 			if strings.EqualFold(strings.TrimSpace(pg.SSLMode), "disable") {
 				return fmt.Errorf("PG_REGION_MAP[%s]: sslmode=disable is not allowed in production environments (UAT/prod); set sslmode=require or sslmode=verify-full on the connection URL", region)
 			}
