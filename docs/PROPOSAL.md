@@ -606,11 +606,11 @@ patterns with two design choices that are particular to this product:
 
 Score → tier mapping is configurable per tenant via the score engine.
 Defaults are sourced from
-[`internal/service/action/tier_decider.go`](../service/action/tier_decider.go)
+[`internal/service/action/tier_decider.go`](../internal/service/action/tier_decider.go)
 (`DefaultTierThresholds`: Blocked=85, HighRisk=70, Warning=50,
 Caution=30, Informational=15, FirstContactFloor=`Informational`). Tier
 identifiers are defined in
-[`internal/constant/tiers.go`](../constant/tiers.go) as typed
+[`internal/constant/tiers.go`](../internal/constant/tiers.go) as typed
 `Tier string` constants — the native label is computed as
 `SN360 / {tier}` by `Tier.LabelName()`.
 
@@ -639,7 +639,7 @@ include up to two secondary categories:
 | `NEWSLETTER` | Bulk sender / list-unsubscribe present | "Newsletter / mailing list" |
 
 The canonical category constants are defined in
-[`internal/constant/categories.go`](../constant/categories.go).
+[`internal/constant/categories.go`](../internal/constant/categories.go).
 
 ### Banner Anatomy
 

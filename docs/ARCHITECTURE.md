@@ -820,7 +820,7 @@ in parallel per result:
 Tier identifiers are typed `string` (not `int iota`) so they remain
 stable across services, persisted records, and the NATS payload. The
 canonical definitions live in
-[`internal/constant/tiers.go`](../constant/tiers.go):
+[`internal/constant/tiers.go`](../internal/constant/tiers.go):
 
 ```go
 type Tier string

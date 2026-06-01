@@ -3,7 +3,7 @@
 
 // Package chaos is the WS-6b chaos engineering regression suite. The
 // tests in this directory exercise the four documented degradation
-// paths in [`internal/docs/DEGRADATION_MODES.md`] (Tier 2 SLM failure,
+// paths in [`docs/DEGRADATION_MODES.md`] (Tier 2 SLM failure,
 // NATS single-node failure, Postgres primary failover, Redis eviction
 // storm) against the real sn360-es production binary, with each
 // failure injected at the actual upstream dependency (not at the

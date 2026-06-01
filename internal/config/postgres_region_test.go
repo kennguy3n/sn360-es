@@ -277,7 +277,7 @@ func TestValidate_NATSSuperclusterEmptyIsOK(t *testing.T) {
 // reach the same Postgres as the primary PG_HOST/PG_PORT — the
 // primary pool doubles as the home-region pool, so a mismatch
 // would silently leave the home entry's URL parsed-but-unused. Doc
-// invariant in internal/docs/MULTI_REGION.md:54-58 is now enforced
+// invariant in docs/MULTI_REGION.md:54-58 is now enforced
 // in code.
 func TestValidate_HomeRegionEntryMustMatchPrimaryHost(t *testing.T) {
 	cfg := validProdConfig()

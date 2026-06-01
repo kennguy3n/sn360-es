@@ -32,7 +32,7 @@ type NATS struct {
 	// binary only talks to the local-region NATS server
 	// (NATS_URL) and no cross-region publishing is wired — the
 	// default for single-region deployments. See
-	// internal/docs/MULTI_REGION.md for the deployment topology
+	// docs/MULTI_REGION.md for the deployment topology
 	// and pkg/events/nats/supercluster.go for the option
 	// builder.
 	Supercluster map[string]string

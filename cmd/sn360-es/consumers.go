@@ -656,7 +656,7 @@ func (a *application) handleOnboarding(ctx context.Context, msg events.Message) 
 					// of the `tenants` table to each
 					// regional pool, or via pre-seeding in
 					// provisioning scripts. See
-					// internal/docs/MULTI_REGION.md
+					// docs/MULTI_REGION.md
 					// "Tenant-row provisioning across
 					// regional pools".
 					boundCtx, release, berr := a.tenantBoundConn(bgCtx, env.TenantID)

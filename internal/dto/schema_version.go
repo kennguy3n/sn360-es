@@ -27,5 +27,5 @@ package dto
 // type does not change, and every downstream consumer that has
 // already been taught about `"v2"` keeps validating against the
 // versions it knows about. Cutover details are documented in
-// internal/docs/SCHEMA_VERSIONING.md.
+// docs/SCHEMA_VERSIONING.md.
 const SchemaVersionV1 = "v1"

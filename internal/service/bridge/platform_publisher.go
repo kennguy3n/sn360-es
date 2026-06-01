@@ -1051,7 +1051,7 @@ type Envelope struct {
 	// (services/correlation-engine, services/playbook-engine)
 	// unmarshals into its own Event shape and runs the same
 	// (subject, version) validation contract documented in
-	// internal/docs/SCHEMA_VERSIONING.md. Pre-WS-7c bridge
+	// docs/SCHEMA_VERSIONING.md. Pre-versioning bridge
 	// publishers without this field are accepted as v1 on the
 	// platform side so the rollout does not require a lockstep
 	// flip.

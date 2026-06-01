@@ -20,7 +20,7 @@
 // new Go type. The validator dispatches per-version, so v1 and
 // v2 publishers continue to coexist on the wire and the broker
 // dedup window is unchanged. Document the cutover in
-// internal/docs/SCHEMA_VERSIONING.md.
+// docs/SCHEMA_VERSIONING.md.
 package eventsschema
 
 import (

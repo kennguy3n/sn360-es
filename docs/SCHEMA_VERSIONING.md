@@ -103,7 +103,7 @@ Public API:
 | `schema.DLQSubject(origin) -> string` | Map a subject to its schema-mismatch DLQ subject. |
 
 The canonical sn360-es registry lives in
-[`internal/eventsschema`](../eventsschema/registry.go). Every
+[`internal/eventsschema`](../internal/eventsschema/registry.go). Every
 subject the binary publishes or subscribes to is bound there;
 unregistered subjects pass through (the validator is opt-in).
 
@@ -165,7 +165,7 @@ NOT made. The error carries `Subject`, `ResolvedVersion`,
 via `errors.As(err, &target)`.
 
 The platform-bridge publisher
-([`internal/service/bridge/platform_publisher.go`](../service/bridge/platform_publisher.go))
+([`internal/service/bridge/platform_publisher.go`](../internal/service/bridge/platform_publisher.go))
 is the one exception: a mismatch logs a warn, increments the
 metric, and STILL publishes the payload. The bridge cannot
 afford to drop a verdict because a hot-rolled `v2` envelope

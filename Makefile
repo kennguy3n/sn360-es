@@ -32,7 +32,7 @@ test-integration:
 # Chaos engineering regression suite (WS-6b).
 #
 # Exercises the four documented degradation paths in
-# internal/docs/DEGRADATION_MODES.md by spinning real
+# docs/DEGRADATION_MODES.md by spinning real
 # testcontainers (NATS, Postgres, Redis) and injecting transient
 # failures mid-stream. Build-tagged so it never runs as part of
 # `make test`; the GitHub Actions workflow `chaos.yml` schedules

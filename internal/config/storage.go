@@ -39,7 +39,7 @@ type Postgres struct {
 	// run against PG_HOST / PG_READ_HOST unchanged (the
 	// default for every existing deployment). See
 	// internal/config/postgres.go and
-	// internal/docs/MULTI_REGION.md for the contract.
+	// docs/MULTI_REGION.md for the contract.
 	RegionMap map[string]Postgres
 }
 

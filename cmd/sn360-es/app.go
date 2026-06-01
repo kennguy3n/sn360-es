@@ -91,7 +91,7 @@ type application struct {
 	// every code path that needs to bind a tenant connection
 	// goes through tenantBinder, which uses regional when set
 	// and falls back to pgDB.WithTenant when nil. See
-	// internal/docs/MULTI_REGION.md.
+	// docs/MULTI_REGION.md.
 	regional *postgres.RegionalDB
 	// tenantBinder is the shared single-region / multi-region
 	// tenant-context binder used by both the HTTP middleware and
@@ -1008,7 +1008,7 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	// shared CircuitBreaker primitive so a sustained downstream
 	// outage opens the breaker and subsequent requests
 	// short-circuit to the evaluator's degraded path (see
-	// internal/docs/DEGRADATION_MODES.md §Tier 2 SLM unreachable —
+	// docs/DEGRADATION_MODES.md §Tier 2 SLM unreachable —
 	// the chaos regression in tests/chaos/tier2_failure_test.go
 	// pins the closed → open transition). Thresholds come from
 	// the shared CB_* env vars (see internal/config/scoring.go),
