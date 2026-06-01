@@ -58,8 +58,10 @@ const (
 	// update-in-place semantic.
 	//
 	// WS-5A.6 subscribes the durable consumer
-	// "soc-resolution-reconciler" to soc.incident.resolved on this
-	// stream. Future cross-repo SOC envelopes
+	// "ws5a6-escalation-sync" (see
+	// cmd/sn360-es/consumers_soc_resolution.go's
+	// socResolutionDurable const) to soc.incident.resolved on
+	// this stream. Future cross-repo SOC envelopes
 	// (soc.incident.created, soc.incident.assigned, ...) can land
 	// here without provisioning another stream and tripping
 	// JetStream's "subjects overlap with an existing stream" guard.
