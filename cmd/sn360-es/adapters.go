@@ -1139,7 +1139,7 @@ func (a intelWorkerMetricsAdapter) ObserveIntelGC(deleted int) {
 	if a.m == nil || a.m.IntelGCDeleted == nil || deleted == 0 {
 		return
 	}
-	a.m.IntelGCDeleted.WithLabelValues().Add(float64(deleted))
+	a.m.IntelGCDeleted.Add(float64(deleted))
 }
 
 // ingestionLockAdapter adapts *redis.DistributedLock to the

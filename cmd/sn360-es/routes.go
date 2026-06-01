@@ -120,7 +120,21 @@ func buildMux(app *application) (http.Handler, error) {
 	// failed to wire (e.g. Postgres down at boot) the handler
 	// still mounts and renders 503 so operators see a clear
 	// readiness signal rather than a 404.
-	intelH := handler.NewIntelFeedsHandler(logger, app.intelStore, app.intelJob)
+	//
+	// app.intelJob is a *worker.IntelJob (concrete pointer). When
+	// the intel worker is disabled (WORKER_INTEL_ENABLED=false, the
+	// default) it stays nil. Passing a typed-nil pointer to a
+	// parameter typed as the IntelFeedRefresher interface produces
+	// a non-nil interface value carrying a nil dynamic value, which
+	// the handler's `h.refresher == nil` guard does not catch and
+	// would panic on the first /refresh call. Convert the pointer
+	// to an interface explicitly so a nil refresher stays a nil
+	// interface (and the handler renders 501 instead).
+	var intelRefresher handler.IntelFeedRefresher
+	if app.intelJob != nil {
+		intelRefresher = app.intelJob
+	}
+	intelH := handler.NewIntelFeedsHandler(logger, app.intelStore, intelRefresher)
 	mux.HandleFunc("/v1/intel/feeds", intelH.ServeFeeds)
 	mux.HandleFunc("/v1/intel/feeds/", intelH.ServeFeeds)
 	mux.HandleFunc("/v1/intel/indicators", intelH.ServeIndicators)

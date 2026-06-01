@@ -413,6 +413,24 @@ pgbouncer:
     serverLifetime: 3600
   labels: {}
 
+# Optional periodic workers that are NOT started by default in
+# every deployment. The Go process gates each on the matching
+# environment variable (see internal/config/pipeline.go); the
+# chart-level toggles below are consumed only by the PrometheusRule
+# template so the catch-all "worker stalled" alert does not fire a
+# false page when the worker was never configured to run.
+#
+# When you enable a worker here, also set the corresponding
+# WORKER_*_ENABLED=true on the workers pod (via env, secret, or
+# config map) so the Go process actually starts it.
+worker:
+  intel:
+    # Set to true ONLY when WORKER_INTEL_ENABLED=true is also set
+    # on the workers pod. If the chart enables the alert but the
+    # Go process never starts the worker, the absent_over_time
+    # leg will page critical 30 minutes after boot.
+    enabled: false
+
 # PrometheusRule for autonomous-ops alerting. Emits a PrometheusRule
 # resource grouping the alerts the AI agent in
 # `internal/service/agent/alerts/` routes off of. The rules reference
