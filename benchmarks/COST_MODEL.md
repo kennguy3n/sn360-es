@@ -115,8 +115,10 @@ components, in order of contribution to the high-cohort total:
    cuts this directly.
 2. **postgres** — RDS instance + gp3 storage. PgBouncer cuts the
    shared-instance baseline by ~60% on idle connection budget;
-   native partitioning takes 20% off the write I/O budget by
-   eliminating the full-table cleanup-worker scan.
+   native partitioning takes 30% off the write I/O budget — the
+   PR #45 cleanup-worker no-longer-scans-the-entire-table effect
+   (20%) compounded with WS-2b HASH partition pruning keeping
+   each Upsert's read side hot in cache (≈12.5%).
 3. **s3** — Object storage for raw email blobs. Lever-independent
    in this model (no PR #44–#46 lever changes the retention
    curve), but a large absolute line item at high traffic. A
