@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
@@ -116,5 +117,39 @@ func TestNewTenantConnBinder_AcceptsBothSet(t *testing.T) {
 		Resolver: stubResolver{},
 	}); err != nil {
 		t.Fatalf("multi-region binder rejected: %v", err)
+	}
+}
+
+// TestBindTenant_NoDBReturnsMiddlewareError pins the symmetry-with-
+// ServeHTTP guard added in round 5: a single-region binder
+// constructed without a DB returns a middleware-level error instead
+// of relying on (*postgres.DB).WithTenant's nil-receiver handling.
+// ServeHTTP passes through unbound on the same misconfig (the right
+// behaviour for HTTP middleware in dev / test wiring); BindTenant
+// has no "pass through" notion — callers asking for a bound conn
+// either get one or a clear, middleware-level error naming the
+// missing-DB misconfig.
+func TestBindTenant_NoDBReturnsMiddlewareError(t *testing.T) {
+	t.Parallel()
+
+	b, err := NewTenantConnBinder(nil, TenantConnConfig{})
+	if err != nil {
+		t.Fatalf("NewTenantConnBinder(no DB) returned err=%v; want construction to succeed", err)
+	}
+	ctx, release, berr := b.BindTenant(context.Background(), "tenant-1")
+	if berr == nil {
+		t.Fatal("BindTenant on no-DB binder returned err=nil; want middleware-level error")
+	}
+	if !strings.Contains(berr.Error(), "no DB configured") {
+		t.Fatalf("err = %q; want middleware-level missing-DB error", berr.Error())
+	}
+	if ctx == nil {
+		t.Fatal("BindTenant returned ctx=nil; want input ctx echoed back")
+	}
+	if release == nil {
+		t.Fatal("BindTenant returned release=nil; release must be non-nil on every error path")
+	}
+	if relErr := release(); relErr != nil {
+		t.Fatalf("noop release() returned err=%v, want nil", relErr)
 	}
 }

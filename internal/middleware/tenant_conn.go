@@ -180,6 +180,18 @@ func (t *TenantConnBinder) bind(ctx context.Context, tenantID string) (context.C
 		}
 		return t.regional.WithTenantInRegion(ctx, region, tenantID)
 	}
+	// Single-region path. ServeHTTP guards t.db == nil at line 128
+	// by passing the request through unbound (the right behaviour
+	// for dev / unit-test wiring with no real DB); BindTenant has
+	// no "pass through" notion — a caller asking for a bound conn
+	// expects either one or a clear error. Surface the missing-DB
+	// misconfig as a middleware-level error instead of relying on
+	// (*postgres.DB).WithTenant's nil-receiver handling, so the
+	// error message identifies the actual problem (no DB wired)
+	// rather than the symptom (nil receiver method call).
+	if t.db == nil {
+		return ctx, noopReleaseFunc, errors.New("middleware: TenantConnBinder has no DB configured")
+	}
 	return t.db.WithTenant(ctx, tenantID)
 }
 
