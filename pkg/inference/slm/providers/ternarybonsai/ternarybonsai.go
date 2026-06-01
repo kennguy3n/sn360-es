@@ -61,12 +61,17 @@ const DefaultTemperature = 0.1
 // (Tier2HTTPConfig type alias) preserves the old API without
 // dragging a private struct through the alias boundary.
 type Config struct {
-	URL         string
-	APIKey      string
-	Model       string
-	Timeout     time.Duration
-	MaxTokens   int
-	Temperature float64
+	URL       string
+	APIKey    string
+	Model     string
+	Timeout   time.Duration
+	MaxTokens int
+	// Temperature is *float64 so the caller can distinguish
+	// "unset, use DefaultTemperature" (nil) from "explicitly
+	// chose 0.0 for greedy argmax sampling" (non-nil pointer to
+	// 0). See pkg/inference/slm/config.go ProviderConfig.Temperature
+	// for the rationale.
+	Temperature *float64
 	// HTTPClient lets tests inject a custom transport. Defaults
 	// to a freshly constructed http.Client with the configured
 	// Timeout.
@@ -104,8 +109,9 @@ func NewClient(cfg Config) (*Client, error) {
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = DefaultMaxTokens
 	}
-	if cfg.Temperature <= 0 {
-		cfg.Temperature = DefaultTemperature
+	temperature := DefaultTemperature
+	if cfg.Temperature != nil {
+		temperature = *cfg.Temperature
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: cfg.Timeout}
@@ -116,7 +122,7 @@ func NewClient(cfg Config) (*Client, error) {
 		model:       cfg.Model,
 		timeout:     cfg.Timeout,
 		maxTokens:   cfg.MaxTokens,
-		temperature: cfg.Temperature,
+		temperature: temperature,
 		http:        cfg.HTTPClient,
 	}, nil
 }

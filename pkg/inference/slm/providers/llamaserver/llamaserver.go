@@ -78,12 +78,16 @@ const (
 
 // Config configures the llama-server client.
 type Config struct {
-	URL         string
-	APIKey      string
-	Model       string
-	Timeout     time.Duration
-	MaxTokens   int
-	Temperature float64
+	URL       string
+	APIKey    string
+	Model     string
+	Timeout   time.Duration
+	MaxTokens int
+	// Temperature is *float64 so the caller can distinguish
+	// "unset, use DefaultTemperature" (nil) from "explicitly
+	// chose 0.0" (non-nil pointer to 0). See
+	// pkg/inference/slm/config.go ProviderConfig.Temperature.
+	Temperature *float64
 	HTTPClient  *http.Client
 
 	// AuthHeader names the header used for API-key auth. Defaults
@@ -125,8 +129,9 @@ func NewClient(cfg Config) (*Client, error) {
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = DefaultMaxTokens
 	}
-	if cfg.Temperature <= 0 {
-		cfg.Temperature = DefaultTemperature
+	temperature := DefaultTemperature
+	if cfg.Temperature != nil {
+		temperature = *cfg.Temperature
 	}
 	if cfg.AuthHeader == "" {
 		cfg.AuthHeader = DefaultAuthHeader
@@ -149,7 +154,7 @@ func NewClient(cfg Config) (*Client, error) {
 		model:       cfg.Model,
 		timeout:     cfg.Timeout,
 		maxTokens:   cfg.MaxTokens,
-		temperature: cfg.Temperature,
+		temperature: temperature,
 		authHeader:  cfg.AuthHeader,
 		authScheme:  cfg.AuthScheme,
 		http:        cfg.HTTPClient,

@@ -88,6 +88,33 @@ func getFloat(key string, def float64) float64 {
 	return def
 }
 
+// getFloatPtr returns nil when the env var is unset, empty, or
+// unparseable, and a pointer to the parsed float64 otherwise. This
+// is the variant used for "tri-state" tunables where an unset
+// value MUST be distinguishable from an explicit zero — e.g.
+// TIER2_TEMPERATURE=0 means "force greedy/argmax decoding" and
+// must not collapse onto the provider's documented default of
+// 0.1. See pkg/inference/slm/config.go ProviderConfig.Temperature
+// for the downstream consumer of this distinction.
+//
+// Unparseable values are treated as unset (returns nil) rather
+// than failing boot, matching the lenient policy of getFloat. The
+// strict variant (boot failure on bad input) is not currently
+// needed for any tri-state tunable, but mirroring getIntStrict /
+// getDurationStrict would be straightforward if a future caller
+// requires it.
+func getFloatPtr(key string) *float64 {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return nil
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return nil
+	}
+	return &f
+}
+
 func getDuration(key string, def time.Duration) time.Duration {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		d, err := time.ParseDuration(v)

@@ -189,6 +189,35 @@ func TestEvaluate_PreservesDefaultsOnZeroValues(t *testing.T) {
 	}
 }
 
+// TestEvaluate_TemperatureZeroHonoured pins the Temperature=0
+// distinction. Setting Config.Temperature to a non-nil pointer to
+// 0.0 means "force greedy/argmax sampling" and MUST flow through to
+// the wire request unchanged. Earlier code collapsed 0 onto
+// DefaultTemperature via `if cfg.Temperature <= 0` which silently
+// rewrote the operator's choice to 0.1 — see Devin Review round 2.
+func TestEvaluate_TemperatureZeroHonoured(t *testing.T) {
+	var got float64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req slm.ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		got = req.Temperature
+		_ = writeChat(w, `{"score": 0}`)
+	}))
+	defer srv.Close()
+
+	zero := 0.0
+	c, err := NewClient(Config{URL: srv.URL, Timeout: 5 * time.Second, Temperature: &zero})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if _, err := c.Evaluate(context.Background(), dto.EvaluateRequest{}, dto.Tier1Outcome{}); err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if got != 0.0 {
+		t.Errorf("wire Temperature = %f, want 0.0 (greedy)", got)
+	}
+}
+
 // --- helpers --------------------------------------------------------------
 
 // writeChat encodes content as the message of a single-choice

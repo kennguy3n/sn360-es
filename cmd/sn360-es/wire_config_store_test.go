@@ -569,15 +569,15 @@ func TestPostgresConfigStore_UpdateInvalidatesCache(t *testing.T) {
 // (mirrors memoryLabelCache.sweepExpired). Without this sweep, a
 // multi-tenant SaaS with churn would accumulate entries for
 // deactivated tenants indefinitely — the cache map only ever grows
-// because store() overwrites the same slot it occupied before.
+// because storeFull() overwrites the same slot it occupied before.
 func TestTenantScoringConfigAdapter_SweepExpired(t *testing.T) {
 	repo := newFakeScoreEngineRepo()
 	a := newTenantScoringConfigAdapter(repo, 100*time.Millisecond)
 
 	// Seed three entries: two will expire, one is fresh.
-	a.store("tenant-old-1", evaluate.TenantScoringConfig{})
-	a.store("tenant-old-2", evaluate.TenantScoringConfig{})
-	a.store("tenant-fresh", evaluate.TenantScoringConfig{})
+	a.storeFull("tenant-old-1", evaluate.TenantScoringConfig{}, "")
+	a.storeFull("tenant-old-2", evaluate.TenantScoringConfig{}, "")
+	a.storeFull("tenant-fresh", evaluate.TenantScoringConfig{}, "")
 	if got := len(a.cache); got != 3 {
 		t.Fatalf("setup: cache has %d entries, want 3", got)
 	}

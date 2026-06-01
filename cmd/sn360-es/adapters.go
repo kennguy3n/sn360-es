@@ -553,8 +553,10 @@ func (a *tenantScoringConfigAdapter) LoadTenantScoringConfig(ctx context.Context
 			// Cache the "no row" sentinel so we don't hammer
 			// Postgres for every evaluation of an unconfigured
 			// tenant. The zero value is what the evaluator wants
-			// in that case.
-			a.store(tenantID, evaluate.TenantScoringConfig{})
+			// in that case, and an empty tier2Provider is the
+			// correct cached state for a tenant that has no
+			// score_engine row at all.
+			a.storeFull(tenantID, evaluate.TenantScoringConfig{}, "")
 			return evaluate.TenantScoringConfig{}, nil
 		}
 		return evaluate.TenantScoringConfig{}, err
@@ -659,14 +661,15 @@ func (a *tenantScoringConfigAdapter) lookup(tenantID string) (evaluate.TenantSco
 	return entry.value, true
 }
 
-func (a *tenantScoringConfigAdapter) store(tenantID string, tc evaluate.TenantScoringConfig) {
-	a.storeFull(tenantID, tc, "")
-}
-
 // storeFull writes both the scoring config and the Tier 2 provider
-// override for tenantID under the cache's TTL. The plain store
-// helper forwards here with an empty provider to preserve its
-// existing semantics (no Tier 2 override known yet).
+// override for tenantID under the cache's TTL. There is no
+// single-arg store(...) shortcut by design: every caller must be
+// explicit about whether it knows the tier2Provider value, because
+// passing the wrong default (e.g. "") on a code path that has a
+// real row would silently cache an empty override and make the
+// Router fall through to the deployment default until the TTL
+// elapsed. The ErrNotFound path in LoadTenantScoringConfig is the
+// only caller that should pass "".
 func (a *tenantScoringConfigAdapter) storeFull(tenantID string, tc evaluate.TenantScoringConfig, tier2Provider string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

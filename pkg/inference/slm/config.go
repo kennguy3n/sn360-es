@@ -45,10 +45,18 @@ type ProviderConfig struct {
 	// defaults apply when zero.
 	MaxTokens int
 
-	// Temperature controls sampling diversity. Provider-specific
-	// defaults apply when zero (most providers default to 0.1 — Tier 2
-	// is a classifier, so low variance is preferred).
-	Temperature float64
+	// Temperature controls sampling diversity. The pointer type
+	// distinguishes "operator did not configure a value, let the
+	// provider apply its documented default" (nil) from "operator
+	// explicitly chose this value, including 0.0 for greedy
+	// decoding" (non-nil). Collapsing the two cases onto float64
+	// would silently override TIER2_TEMPERATURE=0 to 0.1 for
+	// every provider, which prevents experiments that need
+	// deterministic argmax sampling.
+	//
+	// Provider defaults (typically 0.1 — Tier 2 is a classifier,
+	// so low variance is preferred) apply when this is nil.
+	Temperature *float64
 
 	// ProviderOpts carries provider-specific knobs as a flat
 	// string→string map (e.g. vLLM "n_gpu_layers", Bedrock

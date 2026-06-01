@@ -85,10 +85,34 @@ type Router struct {
 }
 
 // routerEntry is the cached resolution result for one tenant.
-// Exactly one of (client, fellThroughToDefault) is meaningful; err
-// is non-nil only when construction failed and we want subsequent
-// requests for the same tenant to surface the same failure mode
-// rather than papering over it with the default.
+// Exactly one of (client, fellThroughToDefault) is meaningful:
+//
+//   - client != nil, fellThroughToDefault == false: the tenant has
+//     a working per-tenant override; serve requests with client.
+//   - client == nil, fellThroughToDefault == true: the Router will
+//     serve requests through Router.defaultClient.
+//
+// fellThroughToDefault is the cached outcome for several distinct
+// situations — Loader returned "" (no override configured),
+// ResolveConfig is nil, ResolveConfig errored, or slm.New errored.
+// All four collapse to the same runtime behaviour (use the
+// deployment default) because the Router is built to degrade
+// gracefully: a typo in score_engine.tier2_provider or a transient
+// construction failure must not lock a tenant out of Tier 2
+// evaluation. The branch is preserved as data on the entry —
+// overrideProviderName + constructionError — so log lines that
+// fire on resolution explain WHY a tenant fell through, and so
+// future code that wants to surface this in /healthz or metrics
+// can read it without re-running the loader.
+//
+// Cache entries for failed construction are NOT auto-evicted; the
+// admin write path that updates score_engine.tier2_provider must
+// call Router.Invalidate(tenantID) to clear the entry. This is
+// already wired through tenantScoringConfigAdapter.SetOnInvalidate
+// → Router.Invalidate in the composition root, so a
+// `postgresConfigStore.invalidate` call (today: tuning writes;
+// future: an admin endpoint that changes the provider) drops the
+// stale entry for the next request.
 type routerEntry struct {
 	client               Client
 	fellThroughToDefault bool

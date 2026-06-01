@@ -63,10 +63,14 @@ type AI struct {
 	// behaviour).
 	MaxTokens int
 
-	// Temperature controls sampling diversity. Defaults to 0
-	// (which each provider interprets as its own documented
-	// default — typically 0.1 for classifier-style use).
-	Temperature float64
+	// Temperature controls sampling diversity. nil means
+	// "TIER2_TEMPERATURE was not set, let the provider apply its
+	// documented default" (typically 0.1 for classifier use). A
+	// non-nil pointer is honoured verbatim, including 0.0 for
+	// deterministic argmax sampling. The pointer type exists
+	// specifically so an operator that runs A/B experiments with
+	// TIER2_TEMPERATURE=0 is not silently overridden to 0.1.
+	Temperature *float64
 }
 
 // ParseProviderOpts is exported so callers (Validate, tests, the
@@ -92,7 +96,7 @@ func loadAI() AI {
 		Provider:     getStr("TIER2_PROVIDER", "ternarybonsai"),
 		ProviderOpts: ParseProviderOpts(getStr("TIER2_PROVIDER_OPTS", "")),
 		MaxTokens:    getInt("TIER2_MAX_TOKENS", 0),
-		Temperature:  getFloat("TIER2_TEMPERATURE", 0.0),
+		Temperature:  getFloatPtr("TIER2_TEMPERATURE"),
 	}
 }
 

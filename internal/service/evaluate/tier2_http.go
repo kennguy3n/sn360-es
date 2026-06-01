@@ -36,9 +36,12 @@ type Tier2HTTPConfig struct {
 	// MaxTokens caps the response length. Defaults to
 	// ternarybonsai.DefaultMaxTokens.
 	MaxTokens int
-	// Temperature controls sampling diversity. Defaults to
-	// ternarybonsai.DefaultTemperature.
-	Temperature float64
+	// Temperature controls sampling diversity. nil means
+	// "unset, use ternarybonsai.DefaultTemperature"; a non-nil
+	// pointer (including to 0.0) is honoured verbatim so callers
+	// can request deterministic argmax sampling. See
+	// pkg/inference/slm/config.go ProviderConfig.Temperature.
+	Temperature *float64
 	// HTTPClient lets tests inject a custom transport.
 	HTTPClient *http.Client
 }
