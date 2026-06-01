@@ -1018,8 +1018,15 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		logger.Warn("sn360-es: webhook fan-out disabled — encryptor init failed",
 			slog.Any("error", werr))
 	} else if app.repos != nil && app.repos.WebhookSinks != nil && app.eventBus != nil {
-		app.encryptor = wenc
-		app.webhookPublisher = webhook.NewHTTPPublisher(webhook.HTTPPublisherConfig{
+		// Atomic wiring: build encryptor, publisher, and dispatcher
+		// into LOCAL variables first; only commit them to the
+		// application struct once webhooksink.New has succeeded. A
+		// half-wired state (encryptor set, dispatcher nil) would let
+		// routes.go mount the CRUD endpoints — operators could then
+		// create sinks the dispatcher will never fan out, and the
+		// /test endpoint would 503. Failing closed here keeps the
+		// API absent until the underlying issue is resolved.
+		publisher := webhook.NewHTTPPublisher(webhook.HTTPPublisherConfig{
 			Timeout: webhooksink.DefaultPublishTimeout,
 		})
 		var limiter webhooksink.RateLimiter
@@ -1037,15 +1044,17 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		dispatcher, derr := webhooksink.New(webhooksink.Config{
 			Repo:      app.repos.WebhookSinks,
 			Encryptor: wenc,
-			Publisher: app.webhookPublisher,
+			Publisher: publisher,
 			Bus:       app.eventBus,
 			Limiter:   limiter,
 			Logger:    logger,
 		})
 		if derr != nil {
-			logger.Warn("sn360-es: webhook dispatcher init failed",
+			logger.Warn("sn360-es: webhook dispatcher init failed; sink API not mounted",
 				slog.Any("error", derr))
 		} else {
+			app.encryptor = wenc
+			app.webhookPublisher = publisher
 			app.webhookDispatcher = dispatcher
 			logger.Info("sn360-es: webhook dispatcher wired (WS-5B.2)")
 		}

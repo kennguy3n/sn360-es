@@ -273,10 +273,59 @@ func TestHandleWebhookDLQ_FinalDeliveryWritesTerminalAudit_OncePerEnvelope(t *te
 		t.Fatalf("ListAudit: %v", err)
 	}
 	// Dedup is enforced at the repository layer via
-	// WebhookSinkAuditEntry.DedupID; a second appendDLQAudit with
-	// the same (sink, event, attempt, reason) tuple must collapse
-	// to one row.
+	// WebhookSinkAuditEntry.DedupID; a second appendDLQAudit for
+	// the same envelope identity (sink, event, attempt) — even
+	// with a slightly different reason string — must collapse to
+	// one row.
 	if len(auditRows) != 1 {
 		t.Errorf("audit row count across duplicate final deliveries: got %d, want 1 (dedup must collapse)", len(auditRows))
+	}
+}
+
+// TestAppendDLQAudit_DedupIgnoresReasonText guards the dedup-key
+// shape directly: two appendDLQAudit calls for the SAME envelope
+// identity (tenant, sink, event, attempt) with DIFFERENT reason
+// strings must still collapse to a single audit row. This protects
+// against an Ack-loss + JetStream redelivery where the customer
+// endpoint returns slightly different error bodies on retry (e.g.
+// embedded timestamps, retry-ids, request-ids) — the bounded
+// `result.Cause` snippet flows into the audit Reason column, but
+// MUST NOT be folded into the dedup key, or a duplicate
+// `dispatch_failed` row appears for the same logical event.
+func TestAppendDLQAudit_DedupIgnoresReasonText(t *testing.T) {
+	fx := newDLQTestFixture(t)
+	env := &webhook.DLQEnvelope{
+		SchemaVersion: webhook.DLQEnvelopeSchemaVersion,
+		SinkID:        fx.sinkID,
+		TenantID:      fx.tenantID,
+		SinkName:      "primary",
+		URL:           "https://siem.example.com/ingest",
+		Format:        repository.WebhookSinkFormatECS,
+		EventType:     webhook.EventTypeEmailEvaluation,
+		EventID:       "evt-reason-drift",
+		OccurredAt:    time.Now().UTC(),
+		Attempt:       1,
+	}
+
+	// First terminal observation — represents the originally-Ack'd
+	// permanent-failure path with the customer's first response body.
+	fx.app.appendDLQAudit(context.Background(), env, "permanent: http 500 upstream timeout at t=1700000001")
+	// JetStream Ack-loss → handler runs again on redelivery. The
+	// customer endpoint returns a slightly different body on retry,
+	// which would (under a reason-inclusive dedup key) produce a
+	// second row.
+	fx.app.appendDLQAudit(context.Background(), env, "permanent: http 500 upstream timeout at t=1700000037")
+
+	auditRows, err := fx.app.repos.WebhookSinks.ListAudit(context.Background(), fx.tenantID, 10)
+	if err != nil {
+		t.Fatalf("ListAudit: %v", err)
+	}
+	if len(auditRows) != 1 {
+		t.Fatalf("audit row count with reason-drift redelivery: got %d, want 1 (reason MUST NOT be in dedup key)", len(auditRows))
+	}
+	// The first-writer-wins row is preserved; the second call is a
+	// no-op so the original Reason text survives.
+	if got, want := auditRows[0].Reason, "dlq permanent: http 500 upstream timeout at t=1700000001"; got != want {
+		t.Errorf("preserved Reason: got %q, want %q (first-writer-wins)", got, want)
 	}
 }

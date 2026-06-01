@@ -360,10 +360,19 @@ func (a *application) appendDLQAudit(ctx context.Context, env *webhook.DLQEnvelo
 		SinkName: env.SinkName,
 		Action:   repository.WebhookSinkAuditActionDispatchFailed,
 		Reason:   bound("dlq " + reason),
-		// Deterministic dedup so JetStream re-delivery of the
-		// SAME envelope on the SAME (event, attempt) collapses
-		// to one audit row.
-		DedupID: env.SinkID + "|" + env.EventID + "|attempt=" + strconv.Itoa(env.Attempt) + "|reason=" + reason,
+		// One terminal audit row per envelope. The dedup key is
+		// (sink, event, attempt) and INTENTIONALLY excludes the
+		// reason string — `reason` may include result.Cause for
+		// permanent-failure rows, which is a snippet of the
+		// customer endpoint's HTTP response body and CAN vary
+		// across JetStream redeliveries (different timestamp,
+		// different retry-id, etc.). Folding reason into the key
+		// would let an Ack-loss + slightly-different response
+		// body write a duplicate `dispatch_failed` row for the
+		// same logical event. The full cause text is still
+		// recorded in the Reason column for forensics; only the
+		// dedup identity is reason-independent.
+		DedupID: env.SinkID + "|" + env.EventID + "|attempt=" + strconv.Itoa(env.Attempt),
 	}
 	if err := a.repos.WebhookSinks.AppendAudit(ctx, entry); err != nil {
 		a.logger.WarnContext(ctx, "webhook-dlq: audit append failed",
