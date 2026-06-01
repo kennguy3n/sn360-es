@@ -390,13 +390,20 @@ func (j *IntelJob) recordFailure(ctx context.Context, feed intel.Feed, start tim
 		// alert is only emitted on the cross). The next success
 		// resets ConsecutiveFailures to 0 so a re-failure will
 		// re-trigger the alert.
+		//
+		// Use updated.Name (post-read) rather than feed.Name (pre-poll
+		// snapshot) so a concurrent PATCH that renamed the feed
+		// between the poll and the re-read is reflected in both the
+		// audit row and the Prometheus label — operators consult those
+		// surfaces by current name, not by the name in effect at
+		// scheduler-tick time. feed.ID is the primary key either way.
 		now := j.clock()
-		if err := j.store.RecordStaleAlert(ctx, feed.ID, feed.Name, updated.ConsecutiveFailures, pollErr.Error(), now); err != nil {
+		if err := j.store.RecordStaleAlert(ctx, feed.ID, updated.Name, updated.ConsecutiveFailures, pollErr.Error(), now); err != nil {
 			logger.Warn("worker.intel: stale alert write failed",
 				slog.Any("error", err))
 		}
 		if j.metrics != nil {
-			j.metrics.ObserveIntelStale(feed.Name)
+			j.metrics.ObserveIntelStale(updated.Name)
 		}
 		logger.Error("worker.intel: feed stale",
 			slog.Int("consecutive_failures", updated.ConsecutiveFailures))
