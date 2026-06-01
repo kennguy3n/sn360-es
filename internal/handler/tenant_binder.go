@@ -5,7 +5,7 @@ import "context"
 // TenantBinder pins a Postgres connection to a tenant_id session
 // GUC for the lifetime of one request, activating the row-level
 // security policy installed by migration 0018 (and the per-table
-// CREATE POLICY in later migrations like 0021's
+// CREATE POLICY in later migrations like 0022's
 // `quarantine_release_audit`).
 //
 // The QuarantineHandler uses it on the WS-3a self-service path

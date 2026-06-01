@@ -1,4 +1,4 @@
--- 0021_quarantine_release_audit.up.sql
+-- 0022_quarantine_release_audit.up.sql
 --
 -- WS-3a Quarantine self-service.
 --

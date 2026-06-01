@@ -14,7 +14,7 @@ import (
 // DefaultQuarantineSelfReleasePerHour is the per-recipient hourly cap
 // applied when a tenant has no row in `tenant_release_policies` —
 // 5 releases per recipient per hour. Matches the DEFAULT clause on
-// the column in migration 0021. The constant exists in Go too so the
+// the column in migration 0022. The constant exists in Go too so the
 // memory repository and the handler share the same source of truth
 // when a tenant hasn't customised the policy.
 const DefaultQuarantineSelfReleasePerHour = 5

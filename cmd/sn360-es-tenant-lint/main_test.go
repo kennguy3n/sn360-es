@@ -423,7 +423,7 @@ func TestCollectExemptionLines_RequiresJustification(t *testing.T) {
 //
 // Why we concatenate every *.up.sql under migrations/ instead of
 // reading just 0018: when a later migration introduces a new
-// tenant-scoped table (e.g. 0021 `quarantine_release_audit`), the
+// tenant-scoped table (e.g. 0022 `quarantine_release_audit`), the
 // RLS hookup lives in THAT migration, not in 0018. A test that only
 // reads 0018 would force every new-table migration to also patch
 // 0018, which would inflate the diff and re-issue ALTER statements

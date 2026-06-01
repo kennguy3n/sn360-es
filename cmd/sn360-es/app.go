@@ -22,6 +22,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/cache"
 	"github.com/kennguy3n/sn360-es/internal/service/dashboard"
 	"github.com/kennguy3n/sn360-es/internal/service/education"
+	"github.com/kennguy3n/sn360-es/internal/service/escalation"
 	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
 	"github.com/kennguy3n/sn360-es/internal/service/ingestion"
 	"github.com/kennguy3n/sn360-es/internal/service/investigation"
@@ -113,6 +114,19 @@ type application struct {
 	openSvc             *predict.OpenService
 	escalationSvc       *agent.EscalationService
 
+	// escalationResolver implements the WS-5A.6 consumer-side
+	// cross-repo reconciliation loop: takes IncidentResolved
+	// payloads emitted by sn360-security-platform's soc-triage
+	// service, looks up the matching EvaluationResult, flips
+	// the analyst-overridable final_verdict, fires a banner
+	// reopen when the original banner was actually delivered,
+	// and persists one audit row per invocation. Nil when the
+	// Postgres registry is unavailable (memory-only
+	// deployments); the soc.incident.resolved subscription is
+	// suppressed in that case so the audit-row invariant is
+	// not silently violated.
+	escalationResolver *escalation.Resolver
+
 	// investigationSvc backs the WS-3b operator investigation API
 	// (GET /v1/investigation/message/{pseudo_id} +
 	// GET /v1/investigation/sender/{sender_hash}). Nil when the
@@ -189,6 +203,18 @@ type application struct {
 	subsMu  sync.Mutex
 	closers []func() error
 	dlqProc *service.DLQProcessor
+
+	// WS-5A.6: the SOC resolution durable consumer is wired
+	// best-effort (a failure does not stop the binary — see
+	// the comment block above startSOCResolutionConsumer in
+	// consumers.go for the rationale). To keep that
+	// "best-effort" from being silent, the boot attempt
+	// records its outcome here so /readyz's
+	// "escalation_sync" checker can surface the dark loop
+	// to operators. A non-nil pointer means the boot
+	// subscribe failed and the cross-repo reconciliation
+	// loop is currently dark on this instance.
+	socResolutionSubErr atomic.Pointer[error]
 
 	bgWG     sync.WaitGroup
 	draining atomic.Bool
@@ -574,6 +600,37 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 			app.investigationSvc = inv
 		} else {
 			logger.Warn("sn360-es: investigation service init failed", slog.Any("error", ierr))
+		}
+	}
+
+	// WS-5A.6 escalation resolver. Requires the four
+	// repositories that back the cross-repo reconciliation
+	// loop: EvaluationResults (for the verdict lookup +
+	// SetFinalVerdict flip), EmailVerdictAudits (for the
+	// audit-row INSERT-ON-CONFLICT idempotency key), and
+	// BannerStates (for the "delivered_at IS NOT NULL"
+	// reopen gate). Memory-only deployments without
+	// Postgres skip this wiring — the soc.incident.resolved
+	// consumer detects the nil resolver and drops at the
+	// subscription boundary so the audit-row invariant is
+	// not violated by a partially-wired path.
+	if app.repos != nil &&
+		app.repos.EvaluationResults != nil &&
+		app.repos.EmailVerdictAudits != nil &&
+		app.repos.BannerStates != nil {
+		reopener, rerr := newBannerReopener(logger, app.repos.BannerStates, app.providers)
+		if rerr != nil {
+			logger.Warn("sn360-es: banner reopener init failed", slog.Any("error", rerr))
+		} else if res, eerr := escalation.New(
+			app.repos.EvaluationResults,
+			app.repos.EmailVerdictAudits,
+			app.repos.BannerStates,
+			reopener,
+			logger,
+		); eerr != nil {
+			logger.Warn("sn360-es: escalation resolver init failed", slog.Any("error", eerr))
+		} else {
+			app.escalationResolver = res
 		}
 	}
 

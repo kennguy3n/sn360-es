@@ -115,7 +115,7 @@ var tenantScopedTables = map[string]struct{}{
 	"sync_checkpoints":          {},
 	"user_behavioral_baselines": {},
 	"org_graphs":                {},
-	// WS-3a quarantine self-service tables (migration 0021).
+	// WS-3a quarantine self-service tables (migration 0022).
 	"quarantine_release_audit": {},
 	"tenant_release_policies":  {},
 }

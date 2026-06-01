@@ -13,14 +13,14 @@ import (
 
 // TestQuarantineReleaseOutcome_EnumMatchesMigrationCheckConstraint
 // is a drift guard: the Go enum and the SQL `CHECK (outcome IN
-// (...))` literal in `migrations/0021_quarantine_release_audit.up.sql`
+// (...))` literal in `migrations/0022_quarantine_release_audit.up.sql`
 // must list the same set of outcomes, in either order. Any addition
 // to one without the other will fail this test and prevent a half-
 // landed enum extension from sneaking into a release.
 func TestQuarantineReleaseOutcome_EnumMatchesMigrationCheckConstraint(t *testing.T) {
 	_, thisFile, _, _ := runtime.Caller(0)
 	migrationsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
-	body, err := os.ReadFile(filepath.Join(migrationsDir, "0021_quarantine_release_audit.up.sql"))
+	body, err := os.ReadFile(filepath.Join(migrationsDir, "0022_quarantine_release_audit.up.sql"))
 	if err != nil {
 		t.Fatalf("read migration: %v", err)
 	}

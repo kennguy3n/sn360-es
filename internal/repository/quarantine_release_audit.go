@@ -15,7 +15,7 @@ import (
 
 // QuarantineReleaseOutcome is the closed enum the WS-3a self-service
 // release flow writes to `quarantine_release_audit.outcome`. The Go
-// constants mirror the CHECK constraint installed by migration 0021
+// constants mirror the CHECK constraint installed by migration 0022
 // — adding a new state requires both an enum constant here and a
 // CHECK literal in the up migration. Tests assert the two stay in
 // sync.
@@ -204,7 +204,7 @@ func NewPgQuarantineReleaseAudit(db *postgres.DB) QuarantineReleaseAuditReposito
 	return &pgQuarantineReleaseAudit{db: db}
 }
 
-// Record inserts one row. The CHECK constraint in migration 0021
+// Record inserts one row. The CHECK constraint in migration 0022
 // validates the outcome enum at the DB layer — an invalid outcome
 // surfaces as a 23514 (check_violation), which we wrap so callers
 // can distinguish "bad input" from "bad infra".
@@ -251,7 +251,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 }
 
 // CountRecentByRecipient runs the rate-limit count query. The index
-// `idx_qra_tenant_recipient_requested` from migration 0021 makes
+// `idx_qra_tenant_recipient_requested` from migration 0022 makes
 // this an index-only scan on the hot partition. The
 // `outcome NOT IN (...)` predicate filters out the auth-failure
 // outcomes whose rows were written from unverified JWT claims; see
@@ -280,7 +280,7 @@ WHERE tenant_id = $1
 }
 
 // ListByMessage returns audit rows newest first. The index
-// `idx_qra_tenant_message_requested` from migration 0021 makes the
+// `idx_qra_tenant_message_requested` from migration 0022 makes the
 // ORDER BY + LIMIT N a pure index scan with no separate sort node.
 func (p *pgQuarantineReleaseAudit) ListByMessage(ctx context.Context, tenantID, pseudoMessageID string, limit int) ([]QuarantineReleaseAuditEntry, error) {
 	if tenantID == "" {

@@ -20,11 +20,29 @@ type HealthChecker interface {
 	Check(ctx context.Context) error
 }
 
+// AdvisoryChecker is an optional extension of HealthChecker.
+// A checker that returns true from Advisory() is reported in the
+// /readyz response body but does NOT 503 the endpoint on failure.
+// Used for dependencies whose outage is visible-but-not-fatal —
+// e.g. WS-5A.6's cross-repo SOC escalation consumer: the email
+// security hot path must keep serving even if the cross-repo
+// reconciliation loop is dark, but operators MUST still see the
+// degraded state in dashboards instead of having to grep boot
+// logs for a one-shot WARN.
+type AdvisoryChecker interface {
+	Advisory() bool
+}
+
 // HealthCheckerFunc adapts a plain function to the HealthChecker
 // interface. The first argument is the name reported in /readyz output.
+//
+// Set Adv=true to mark the check as advisory (see AdvisoryChecker):
+// the result appears in the /readyz JSON body but does not 503 the
+// endpoint on error.
 type HealthCheckerFunc struct {
-	N string
-	F func(context.Context) error
+	N   string
+	F   func(context.Context) error
+	Adv bool
 }
 
 // Name implements HealthChecker.
@@ -37,6 +55,9 @@ func (f HealthCheckerFunc) Check(ctx context.Context) error {
 	}
 	return f.F(ctx)
 }
+
+// Advisory implements AdvisoryChecker.
+func (f HealthCheckerFunc) Advisory() bool { return f.Adv }
 
 // HealthHandler serves /healthz and /readyz.
 //
@@ -99,9 +120,10 @@ func (h *HealthHandler) Readiness(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		wg     sync.WaitGroup
-		mu     sync.Mutex
-		failed bool
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		failed    bool
+		anyAdvErr bool
 	)
 	for _, c := range h.checkers {
 		c := c
@@ -112,12 +134,24 @@ func (h *HealthHandler) Readiness(w http.ResponseWriter, r *http.Request) {
 			defer cancel()
 			start := time.Now()
 			err := c.Check(ctx)
-			result := readinessCheck{LatencyMs: time.Since(start).Milliseconds()}
+			advisory := false
+			if adv, ok := c.(AdvisoryChecker); ok {
+				advisory = adv.Advisory()
+			}
+			result := readinessCheck{LatencyMs: time.Since(start).Milliseconds(), Advisory: advisory}
 			if err != nil {
-				result.Status = "error"
+				// "advisory_error" is a distinct status from
+				// "error" so dashboards can filter on it
+				// (visible-but-not-fatal degradation).
+				if advisory {
+					result.Status = "advisory_error"
+				} else {
+					result.Status = "error"
+				}
 				result.Err = err.Error()
 				h.logger.WarnContext(ctx, "readyz: check failed",
 					slog.String("check", c.Name()),
+					slog.Bool("advisory", advisory),
 					slog.Any("error", err))
 			} else {
 				result.Status = "ok"
@@ -125,7 +159,11 @@ func (h *HealthHandler) Readiness(w http.ResponseWriter, r *http.Request) {
 			mu.Lock()
 			resp.Checks[c.Name()] = result
 			if err != nil {
-				failed = true
+				if advisory {
+					anyAdvErr = true
+				} else {
+					failed = true
+				}
 			}
 			mu.Unlock()
 		}()
@@ -135,6 +173,13 @@ func (h *HealthHandler) Readiness(w http.ResponseWriter, r *http.Request) {
 		resp.Status = "degraded"
 		resp.encode(w, http.StatusServiceUnavailable)
 		return
+	}
+	// Advisory-only failures still flag the response body
+	// with status="advisory" but return 200 so load
+	// balancers don't pull the pod out — the hot path is
+	// fine, only the visible-but-non-fatal probe failed.
+	if anyAdvErr {
+		resp.Status = "advisory"
 	}
 	resp.encode(w, http.StatusOK)
 }
@@ -148,6 +193,11 @@ type readinessCheck struct {
 	Status    string `json:"status"`
 	Err       string `json:"error,omitempty"`
 	LatencyMs int64  `json:"latency_ms"`
+	// Advisory marks a check whose failure does not 503
+	// /readyz. Surfaces in the JSON so dashboards can
+	// distinguish "the binary is down" from "a non-fatal
+	// dependency probe failed".
+	Advisory bool `json:"advisory,omitempty"`
 }
 
 func (r readinessResponse) encode(w http.ResponseWriter, status int) {

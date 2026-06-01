@@ -1,6 +1,6 @@
--- 0021_quarantine_release_audit.down.sql
+-- 0022_quarantine_release_audit.down.sql
 --
--- Reverses 0021 by dropping the two tables and all of their
+-- Reverses 0022 by dropping the two tables and all of their
 -- partitions, indexes, FKs, and RLS policies. DROP TABLE on the
 -- partitioned parent cascades into every child partition, so we
 -- don't need to enumerate the 32 `quarantine_release_audit_pNN`

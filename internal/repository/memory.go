@@ -34,6 +34,8 @@ func NewInMemoryRegistry() *Registry {
 		OrgGraphs:              newMemoryOrgGraphs(),
 		QuarantineReleaseAudit: NewMemoryQuarantineReleaseAudit(),
 		TenantReleasePolicies:  NewMemoryTenantReleasePolicy(),
+		EmailVerdictAudits:     newMemoryEmailVerdictAudits(),
+		BannerStates:           newMemoryBannerStates(),
 	}
 }
 
@@ -631,6 +633,35 @@ func (m *memoryEvalResults) ListBySender(_ context.Context, tenantID string, sen
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// SetFinalVerdict mirrors the Postgres backend's update path.
+// Validates the verdict against the schema's CHECK constraint
+// values, then mutates the in-memory row in place. Returns
+// ErrNotFound when no row matches (tenantID, messageIDHash) so
+// the resolver's skip-with-reason path stays identical between
+// the in-memory tests and the production backend.
+func (m *memoryEvalResults) SetFinalVerdict(_ context.Context, tenantID string, messageIDHash []byte, verdict string) error {
+	switch verdict {
+	case "", "malicious", "suspicious", "benign":
+	default:
+		return errors.New("repository: SetFinalVerdict: invalid verdict")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Use the byHash secondary index rather than a linear scan
+	// so the in-memory backend matches the production backend's
+	// algorithmic shape (Postgres uses the same (tenant_id,
+	// message_id_hash) UNIQUE index for its UPDATE WHERE). Every
+	// other read path on memoryEvalResults already keys through
+	// byHash; the early implementation here was a leftover from
+	// before the index existed.
+	idx, ok := m.byHash[tenantID+":"+hex.EncodeToString(messageIDHash)]
+	if !ok {
+		return ErrNotFound
+	}
+	m.rows[idx].FinalVerdict = verdict
+	return nil
 }
 
 // --- communication histories --------------------------------------------
@@ -1234,4 +1265,191 @@ func (m *memoryOrgGraphs) GetByTenant(_ context.Context, tenantID string) (*OrgG
 		return nil, ErrNotFound
 	}
 	return &s, nil
+}
+
+// --- email verdict audits + banner state (WS-5A.6) ---------------------
+
+type memoryEmailVerdictAudits struct {
+	mu   sync.RWMutex
+	rows map[string]EmailVerdictAudit // keyed by tenantID + "\x00" + dedupID
+}
+
+func newMemoryEmailVerdictAudits() *memoryEmailVerdictAudits {
+	return &memoryEmailVerdictAudits{rows: map[string]EmailVerdictAudit{}}
+}
+
+func emailAuditKey(tenantID, dedupID string) string {
+	return tenantID + "\x00" + dedupID
+}
+
+func (m *memoryEmailVerdictAudits) Insert(_ context.Context, row *EmailVerdictAudit) (bool, error) {
+	if row == nil {
+		return false, errors.New("repository: EmailVerdictAudits.Insert: row is nil")
+	}
+	if row.TenantID == "" {
+		return false, errors.New("repository: EmailVerdictAudits.Insert: tenant_id required")
+	}
+	if row.DedupID == "" {
+		return false, errors.New("repository: EmailVerdictAudits.Insert: dedup_id required")
+	}
+	if row.Resolution == "" {
+		return false, errors.New("repository: EmailVerdictAudits.Insert: resolution required")
+	}
+	if row.ResolvedBy == "" {
+		return false, errors.New("repository: EmailVerdictAudits.Insert: resolved_by required")
+	}
+	if row.SourceIncidentID == "" {
+		return false, errors.New("repository: EmailVerdictAudits.Insert: source_incident_id required")
+	}
+	if row.ResolvedAt.IsZero() {
+		return false, errors.New("repository: EmailVerdictAudits.Insert: resolved_at required")
+	}
+	if row.ID == "" {
+		row.ID = uuid.NewString()
+	}
+	if row.CreatedAt.IsZero() {
+		row.CreatedAt = time.Now().UTC()
+	}
+	row.ResolvedAt = row.ResolvedAt.UTC()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := emailAuditKey(row.TenantID, row.DedupID)
+	if existing, exists := m.rows[key]; exists {
+		// Surface the existing row's identity back to the
+		// caller so the resolver can report the
+		// duplicate's AuditID in its Outcome — matches the
+		// Postgres backend's RETURNING-id-on-conflict
+		// contract.
+		row.ID = existing.ID
+		row.CreatedAt = existing.CreatedAt
+		return false, nil
+	}
+	m.rows[key] = *row
+	return true, nil
+}
+
+func (m *memoryEmailVerdictAudits) GetByDedupID(_ context.Context, tenantID, dedupID string) (*EmailVerdictAudit, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	r, ok := m.rows[emailAuditKey(tenantID, dedupID)]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return &r, nil
+}
+
+type memoryBannerStates struct {
+	mu   sync.RWMutex
+	rows map[string]BannerState // keyed by tenantID + "\x00" + hex(messageIDHash)
+}
+
+func newMemoryBannerStates() *memoryBannerStates {
+	return &memoryBannerStates{rows: map[string]BannerState{}}
+}
+
+func bannerKey(tenantID string, messageIDHash []byte) string {
+	return tenantID + "\x00" + hex.EncodeToString(messageIDHash)
+}
+
+func (m *memoryBannerStates) Get(_ context.Context, tenantID string, messageIDHash []byte) (*BannerState, error) {
+	if tenantID == "" {
+		return nil, errors.New("repository: BannerStates.Get: tenant_id required")
+	}
+	if len(messageIDHash) == 0 {
+		return nil, errors.New("repository: BannerStates.Get: message_id_hash required")
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	r, ok := m.rows[bannerKey(tenantID, messageIDHash)]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	// Defensive copy of the time pointers so callers can't
+	// mutate the in-memory row through the returned aliases.
+	out := r
+	if r.DeliveredAt != nil {
+		t := *r.DeliveredAt
+		out.DeliveredAt = &t
+	}
+	if r.ReopenedAt != nil {
+		t := *r.ReopenedAt
+		out.ReopenedAt = &t
+	}
+	return &out, nil
+}
+
+func (m *memoryBannerStates) MarkDelivered(_ context.Context, in MarkDeliveredInput) error {
+	if in.TenantID == "" {
+		return errors.New("repository: BannerStates.MarkDelivered: tenant_id required")
+	}
+	if len(in.MessageIDHash) == 0 {
+		return errors.New("repository: BannerStates.MarkDelivered: message_id_hash required")
+	}
+	at := in.At
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := bannerKey(in.TenantID, in.MessageIDHash)
+	row, ok := m.rows[key]
+	if !ok {
+		row = BannerState{
+			ID:            uuid.NewString(),
+			TenantID:      in.TenantID,
+			MessageIDHash: append([]byte(nil), in.MessageIDHash...),
+			CreatedAt:     time.Now().UTC(),
+		}
+	}
+	if row.DeliveredAt == nil {
+		t := at.UTC()
+		row.DeliveredAt = &t
+	}
+	if in.Reason != "" {
+		row.LastReason = in.Reason
+	}
+	if in.Provider != "" {
+		row.Provider = in.Provider
+	}
+	if in.DeliveredMessageID != "" {
+		row.DeliveredMessageID = in.DeliveredMessageID
+	}
+	if in.DeliveredEmail != "" {
+		row.DeliveredEmail = in.DeliveredEmail
+	}
+	row.UpdatedAt = time.Now().UTC()
+	m.rows[key] = row
+	return nil
+}
+
+func (m *memoryBannerStates) MarkReopened(_ context.Context, tenantID string, messageIDHash []byte, at time.Time, reason string) error {
+	if tenantID == "" {
+		return errors.New("repository: BannerStates.MarkReopened: tenant_id required")
+	}
+	if len(messageIDHash) == 0 {
+		return errors.New("repository: BannerStates.MarkReopened: message_id_hash required")
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := bannerKey(tenantID, messageIDHash)
+	row, ok := m.rows[key]
+	if !ok {
+		row = BannerState{
+			ID:            uuid.NewString(),
+			TenantID:      tenantID,
+			MessageIDHash: append([]byte(nil), messageIDHash...),
+			CreatedAt:     time.Now().UTC(),
+		}
+	}
+	t := at.UTC()
+	row.ReopenedAt = &t
+	if reason != "" {
+		row.LastReason = reason
+	}
+	row.UpdatedAt = time.Now().UTC()
+	m.rows[key] = row
+	return nil
 }

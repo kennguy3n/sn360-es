@@ -907,3 +907,208 @@ func TestMemoryCommHistory_RecordSighting_RejectsInvalidInput(t *testing.T) {
 		})
 	}
 }
+
+// -- WS-5A.6: EmailVerdictAudit round-trip + INSERT-ON-CONFLICT
+// idempotency.
+//
+// First insert produces inserted=true; subsequent inserts with
+// the same (tenant_id, dedup_id) tuple return inserted=false
+// without mutating the existing row.
+func TestMemoryEmailVerdictAudit_InsertOnConflict(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+
+	row := &EmailVerdictAudit{
+		TenantID:         "t-1",
+		DedupID:          "dd-1",
+		PseudoMessageID:  "pmid-1",
+		OriginalVerdict:  "benign",
+		NewVerdict:       "malicious",
+		Resolution:       "confirmed_threat",
+		ResolvedBy:       "analyst-x",
+		ResolvedAt:       time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC),
+		SourceIncidentID: "inc-1",
+		Reason:           "phishing kit hash match",
+	}
+	inserted, err := r.EmailVerdictAudits.Insert(ctx, row)
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if !inserted {
+		t.Errorf("first Insert returned inserted=false; want true")
+	}
+	if row.ID == "" {
+		t.Errorf("ID was not assigned by Insert")
+	}
+	firstID := row.ID
+
+	// Second Insert with same dedup_id — must collapse.
+	conflict := &EmailVerdictAudit{
+		TenantID:         "t-1",
+		DedupID:          "dd-1",
+		PseudoMessageID:  "pmid-1",
+		OriginalVerdict:  "benign",
+		NewVerdict:       "suspicious", // attempt to overwrite
+		Resolution:       "false_positive",
+		ResolvedBy:       "analyst-y",
+		ResolvedAt:       time.Now().UTC(),
+		SourceIncidentID: "inc-1",
+		Reason:           "should not overwrite",
+	}
+	inserted2, err := r.EmailVerdictAudits.Insert(ctx, conflict)
+	if err != nil {
+		t.Fatalf("Insert (dup): %v", err)
+	}
+	if inserted2 {
+		t.Errorf("dup Insert returned inserted=true; want false")
+	}
+	if conflict.ID != firstID {
+		t.Errorf("conflict.ID = %q; want existing row %q", conflict.ID, firstID)
+	}
+
+	// Fetch by dedup ensures original row survived.
+	got, err := r.EmailVerdictAudits.GetByDedupID(ctx, "t-1", "dd-1")
+	if err != nil {
+		t.Fatalf("GetByDedupID: %v", err)
+	}
+	if got.NewVerdict != "malicious" {
+		t.Errorf("NewVerdict = %q; want malicious (original survived conflict)", got.NewVerdict)
+	}
+}
+
+func TestMemoryEmailVerdictAudit_GetByDedupID_NotFound(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+	_, err := r.EmailVerdictAudits.GetByDedupID(ctx, "t-2", "missing")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v; want ErrNotFound", err)
+	}
+}
+
+func TestMemoryBannerState_DeliveredAndReopen(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+
+	mid := []byte("m-1")
+	delAt := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+	if err := r.BannerStates.MarkDelivered(ctx, MarkDeliveredInput{
+		TenantID:           "t-bs",
+		MessageIDHash:      mid,
+		At:                 delAt,
+		Reason:             "automated",
+		Provider:           "gmail",
+		DeliveredMessageID: "m-1",
+		DeliveredEmail:     "recip@example.test",
+	}); err != nil {
+		t.Fatalf("MarkDelivered: %v", err)
+	}
+	bs, err := r.BannerStates.Get(ctx, "t-bs", mid)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if bs.DeliveredAt == nil || !bs.DeliveredAt.Equal(delAt) {
+		t.Errorf("DeliveredAt = %v; want %v", bs.DeliveredAt, delAt)
+	}
+	if bs.Provider != "gmail" {
+		t.Errorf("Provider = %q; want gmail", bs.Provider)
+	}
+	if bs.DeliveredMessageID != "m-1" {
+		t.Errorf("DeliveredMessageID = %q; want m-1", bs.DeliveredMessageID)
+	}
+	if bs.DeliveredEmail != "recip@example.test" {
+		t.Errorf("DeliveredEmail = %q; want recip@example.test", bs.DeliveredEmail)
+	}
+	if bs.LastReason != "automated" {
+		t.Errorf("LastReason = %q; want automated", bs.LastReason)
+	}
+
+	// Reopen — sets reopened_at + updates last_reason.
+	reopenAt := delAt.Add(24 * time.Hour)
+	if err := r.BannerStates.MarkReopened(ctx, "t-bs", mid, reopenAt, "Updated by SOC analyst"); err != nil {
+		t.Fatalf("MarkReopened: %v", err)
+	}
+	bs2, _ := r.BannerStates.Get(ctx, "t-bs", mid)
+	if bs2.ReopenedAt == nil || !bs2.ReopenedAt.Equal(reopenAt) {
+		t.Errorf("ReopenedAt = %v; want %v", bs2.ReopenedAt, reopenAt)
+	}
+	if bs2.LastReason != "Updated by SOC analyst" {
+		t.Errorf("LastReason after reopen = %q; want updated", bs2.LastReason)
+	}
+	// DeliveredAt should remain unchanged (first-delivery
+	// preservation contract).
+	if bs2.DeliveredAt == nil || !bs2.DeliveredAt.Equal(delAt) {
+		t.Errorf("DeliveredAt after reopen = %v; want preserved %v", bs2.DeliveredAt, delAt)
+	}
+}
+
+func TestMemoryBannerState_GetNotFound(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+	_, err := r.BannerStates.Get(ctx, "t-bs", []byte("none"))
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v; want ErrNotFound", err)
+	}
+}
+
+func TestMemoryBannerState_MarkDeliveredPreservesFirstAt(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+
+	mid := []byte("m-keep")
+	first := time.Date(2025, 1, 15, 8, 0, 0, 0, time.UTC)
+	if err := r.BannerStates.MarkDelivered(ctx, MarkDeliveredInput{
+		TenantID: "t", MessageIDHash: mid, At: first, Reason: "first",
+		Provider: "gmail", DeliveredMessageID: "m-keep", DeliveredEmail: "a@b.c",
+	}); err != nil {
+		t.Fatalf("first MarkDelivered: %v", err)
+	}
+	second := first.Add(2 * time.Hour)
+	if err := r.BannerStates.MarkDelivered(ctx, MarkDeliveredInput{
+		TenantID: "t", MessageIDHash: mid, At: second, Reason: "second",
+		Provider: "gmail", DeliveredMessageID: "m-keep", DeliveredEmail: "a@b.c",
+	}); err != nil {
+		t.Fatalf("second MarkDelivered: %v", err)
+	}
+	bs, _ := r.BannerStates.Get(ctx, "t", mid)
+	if !bs.DeliveredAt.Equal(first) {
+		t.Errorf("DeliveredAt = %v; want preserved first time %v", bs.DeliveredAt, first)
+	}
+	if bs.LastReason != "second" {
+		t.Errorf("LastReason = %q; want updated to 'second'", bs.LastReason)
+	}
+}
+
+func TestMemoryEvalResults_SetFinalVerdict(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+	er := &EvaluationResult{
+		TenantID:      "t-fv",
+		MessageIDHash: []byte("hash-fv"),
+		Tier:          "Caution",
+		Primary:       "Phishing",
+		EvaluatedAt:   time.Now().UTC(),
+	}
+	if err := r.EvaluationResults.Create(ctx, er); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := r.EvaluationResults.SetFinalVerdict(ctx, "t-fv", []byte("hash-fv"), "malicious"); err != nil {
+		t.Fatalf("SetFinalVerdict: %v", err)
+	}
+	got, err := r.EvaluationResults.GetByMessageHash(ctx, "t-fv", []byte("hash-fv"))
+	if err != nil {
+		t.Fatalf("GetByMessageHash: %v", err)
+	}
+	if got.FinalVerdict != "malicious" {
+		t.Errorf("FinalVerdict = %q; want malicious", got.FinalVerdict)
+	}
+
+	// Verdict validation: invalid token rejected.
+	if err := r.EvaluationResults.SetFinalVerdict(ctx, "t-fv", []byte("hash-fv"), "BOGUS"); err == nil {
+		t.Errorf("SetFinalVerdict invalid = nil; want error")
+	}
+
+	// Missing row → ErrNotFound.
+	if err := r.EvaluationResults.SetFinalVerdict(ctx, "t-fv", []byte("absent"), "malicious"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetFinalVerdict missing = %v; want ErrNotFound", err)
+	}
+}

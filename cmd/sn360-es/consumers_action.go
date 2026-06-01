@@ -9,9 +9,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/constant"
 	"github.com/kennguy3n/sn360-es/internal/dto"
+	"github.com/kennguy3n/sn360-es/internal/repository"
 	"github.com/kennguy3n/sn360-es/internal/service/action"
 	"github.com/kennguy3n/sn360-es/internal/service/bridge"
 	"github.com/kennguy3n/sn360-es/pkg/events"
@@ -159,6 +161,35 @@ func (a *application) handleActionBanner(ctx context.Context, msg events.Message
 		slog.String("tenant_id", env.TenantID),
 		slog.String("provider", string(kind)),
 		slog.Int("html_bytes", len(env.HTML)))
+
+	// Stamp banner_state for the WS-5A.6 reopen path.
+	// `delivered_at` is the WS-5A.6 reopen gate; without
+	// this stamp the resolver would skip the reopen even
+	// after a successful injection. The message_id_hash is
+	// the same raw-bytes-of-plaintext-message-id convention
+	// consumers_evaluate.go uses when it writes
+	// evaluation_results.message_id_hash; both call sites
+	// must stay in lockstep so the resolver's lookup keys
+	// agree.
+	if a.repos != nil && a.repos.BannerStates != nil {
+		if err := a.repos.BannerStates.MarkDelivered(ctx, repository.MarkDeliveredInput{
+			TenantID:           env.TenantID,
+			MessageIDHash:      []byte(env.MessageID),
+			At:                 time.Now().UTC(),
+			Reason:             "automated banner injection",
+			Provider:           string(kind),
+			DeliveredMessageID: env.MessageID,
+			DeliveredEmail:     env.Email,
+		}); err != nil {
+			// Non-fatal: the banner was delivered, just
+			// the WS-5A.6 reopen gate can't be updated.
+			// Ops can still see the original banner
+			// landed via the DEBUG log above.
+			a.logger.WarnContext(ctx, "sn360-es: action.banner: banner_state stamp failed (non-fatal)",
+				slog.String("tenant_id", env.TenantID),
+				slog.Any("error", err))
+		}
+	}
 	return nil
 }
 
