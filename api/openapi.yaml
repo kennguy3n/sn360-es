@@ -1053,7 +1053,7 @@ components:
         Compact projection of one communication_histories row. Used
         as both the per-message join target and as one element of
         the per-sender recipient fan-out.
-      required: [sender_hash, recipient_hash, count_7d, count_30d, typical_hour, first_seen_at, last_seen_at]
+      required: [sender_hash, recipient_hash, count_7d, count_30d, first_seen_at, last_seen_at]
       properties:
         sender_hash:
           type: string
@@ -1070,6 +1070,15 @@ components:
           type: integer
           minimum: 0
           maximum: 23
+          description: |
+            Hour-of-day bucket (UTC) when this (sender, recipient) pair
+            most frequently exchanges traffic. Populated by the
+            relationship worker's CAS cycle after enough observations
+            accumulate. Optional / omitted on the wire when the worker
+            has not yet produced a baseline (internal sentinel
+            TypicalHourUnset = -1); the handler suppresses the field
+            instead of emitting -1 so spec validators do not reject
+            the response.
         relationship:
           type: string
         first_seen_at:

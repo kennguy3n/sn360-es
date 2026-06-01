@@ -720,6 +720,17 @@ func (p *pgEvalResults) Create(ctx context.Context, r *EvaluationResult) error {
 	// `[]byte{}` to NULL on the way in keeps the index
 	// authoritative and matches the memory backend's ListBySender
 	// short-circuit on len(senderHash)==0.
+	//
+	// The explicit `::bytea` cast on $4/$5 pins the parameter type
+	// at plan time. Without it, OCTET_LENGTH is polymorphic over
+	// text/bytea so the planner falls back to text — lib/pq then
+	// sends the []byte payload as text and the INSERT fails with
+	// 42804 (bytea column / text expression). Casting both the
+	// length probe and the value branch makes the inference
+	// unambiguous and works for nil, []byte{}, and populated
+	// inputs alike (OCTET_LENGTH(NULL::bytea) returns NULL, NULL
+	// > 0 is NULL, so the CASE correctly falls to the ELSE-NULL
+	// branch).
 	_, err := p.db.ExecContext(ctx, `
 INSERT INTO evaluation_results (id, tenant_id, message_id_hash, sender_hash, recipient_hash,
                                 correlation_id, score, tier,
@@ -728,8 +739,8 @@ INSERT INTO evaluation_results (id, tenant_id, message_id_hash, sender_hash, rec
                                 tier0_outcome, tier1_outcome, tier2_outcome, rspamd_outcome,
                                 evaluated_at)
 VALUES ($1,$2,$3,
-        CASE WHEN OCTET_LENGTH($4) > 0 THEN $4 ELSE NULL END,
-        CASE WHEN OCTET_LENGTH($5) > 0 THEN $5 ELSE NULL END,
+        CASE WHEN OCTET_LENGTH($4::bytea) > 0 THEN $4::bytea ELSE NULL END,
+        CASE WHEN OCTET_LENGTH($5::bytea) > 0 THEN $5::bytea ELSE NULL END,
         NULLIF($6,''),$7,$8,NULLIF($9,''),$10,$11,$12,$13,
         NULLIF($14,'')::JSONB, NULLIF($15,'')::JSONB, NULLIF($16,'')::JSONB, NULLIF($17,'')::JSONB,
         COALESCE($18, NOW()))

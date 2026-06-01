@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -359,3 +360,111 @@ func TestParseSenderTrailOptions(t *testing.T) {
 // _ ensures the middleware package is used even on builds where
 // none of the handler tests above happen to exercise it directly.
 var _ = middleware.ContextWithTenantID
+
+// TestTypicalHourForJSON_RepositorySentinelDoesNotLeak pins the
+// public-contract invariant from BUG_0001 (round 2 Devin Review): the
+// repository's internal TypicalHourUnset (-1) sentinel must NEVER
+// reach the wire as the literal -1, because the OpenAPI schema
+// declares typical_hour as integer in 0..23. The handler projects
+// out-of-range values to nil so the field is omitted entirely.
+func TestTypicalHourForJSON_RepositorySentinelDoesNotLeak(t *testing.T) {
+	cases := []struct {
+		in   int
+		want *int
+		name string
+	}{
+		{repository.TypicalHourUnset, nil, "TypicalHourUnset_sentinel"},
+		{-2, nil, "negative_other"},
+		{24, nil, "above_range"},
+		{99, nil, "well_above_range"},
+		{0, ptrInt(0), "midnight_lower_bound"},
+		{12, ptrInt(12), "noon_middle"},
+		{23, ptrInt(23), "last_hour_upper_bound"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := typicalHourForJSON(tc.in)
+			if (got == nil) != (tc.want == nil) {
+				t.Fatalf("typicalHourForJSON(%d) = %v, want %v", tc.in, ptrIntString(got), ptrIntString(tc.want))
+			}
+			if got != nil && *got != *tc.want {
+				t.Errorf("typicalHourForJSON(%d) = %d, want %d", tc.in, *got, *tc.want)
+			}
+		})
+	}
+}
+
+// TestServeMessage_TypicalHourOmittedWhenUnset asserts the
+// end-to-end JSON wire shape: a comm_history row whose TypicalHour
+// is the repository sentinel renders with the typical_hour field
+// completely absent from the JSON body (not present-as-zero,
+// not present-as-negative-one). This is the property a spec-strict
+// client validator depends on.
+func TestServeMessage_TypicalHourOmittedWhenUnset(t *testing.T) {
+	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	r := repository.NewInMemoryRegistry()
+	ctx := context.Background()
+	if err := r.EvaluationResults.Create(ctx, &repository.EvaluationResult{
+		TenantID: "acme", MessageIDHash: []byte("msg-th"),
+		SenderHash: []byte("s-TH"), RecipientHash: []byte("r-1"),
+		Score: 10, Tier: "info",
+		EvaluatedAt: now.Add(-1 * time.Hour),
+	}); err != nil {
+		t.Fatalf("seed eval: %v", err)
+	}
+	// Seed a comm_history with the sentinel value as a concrete
+	// model of the post-Upsert pre-worker state.
+	if err := r.CommunicationHistories.Upsert(ctx, &repository.CommunicationHistory{
+		TenantID:      "acme",
+		SenderHash:    []byte("s-TH"),
+		RecipientHash: []byte("r-1"),
+		Count7d:       2,
+		Count30d:      5,
+		TypicalHour:   repository.TypicalHourUnset,
+		FirstSeenAt:   now.Add(-30 * 24 * time.Hour),
+		LastSeenAt:    now.Add(-1 * time.Hour),
+	}); err != nil {
+		t.Fatalf("seed comm history: %v", err)
+	}
+	svc, err := investigation.NewService(investigation.ServiceConfig{
+		EvaluationResults:      r.EvaluationResults,
+		CommunicationHistories: r.CommunicationHistories,
+		Logger:                 slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:                  func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	h := NewInvestigationHandler(nil, svc)
+	req := withTenant(httptest.NewRequest(http.MethodGet, "/v1/investigation/message/msg-th", nil), "acme")
+	rec := httptest.NewRecorder()
+	h.ServeMessage(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// Assert the field's absence at the raw-JSON level — a typed
+	// decode would silently materialise nil and obscure the bug.
+	if strings.Contains(rec.Body.String(), "typical_hour") {
+		t.Errorf("typical_hour must be omitted when repository value is TypicalHourUnset; got body=%s", rec.Body.String())
+	}
+	// And cross-check the typed decode for completeness.
+	var resp messageTrailResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.CommunicationHistory == nil {
+		t.Fatalf("missing comm history join")
+	}
+	if resp.CommunicationHistory.TypicalHour != nil {
+		t.Errorf("typed TypicalHour: got %d, want nil", *resp.CommunicationHistory.TypicalHour)
+	}
+}
+
+func ptrInt(v int) *int { return &v }
+
+func ptrIntString(p *int) string {
+	if p == nil {
+		return "nil"
+	}
+	return strconv.Itoa(*p)
+}

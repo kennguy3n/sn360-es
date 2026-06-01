@@ -293,15 +293,31 @@ type evaluationResultJSON struct {
 }
 
 type communicationHistoryJSON struct {
-	SenderHash    string    `json:"sender_hash"`
-	RecipientHash string    `json:"recipient_hash"`
-	SenderDomain  string    `json:"sender_domain,omitempty"`
-	Count7d       int       `json:"count_7d"`
-	Count30d      int       `json:"count_30d"`
-	TypicalHour   int       `json:"typical_hour"`
-	Relationship  string    `json:"relationship,omitempty"`
-	FirstSeenAt   time.Time `json:"first_seen_at"`
-	LastSeenAt    time.Time `json:"last_seen_at"`
+	SenderHash    string `json:"sender_hash"`
+	RecipientHash string `json:"recipient_hash"`
+	SenderDomain  string `json:"sender_domain,omitempty"`
+	Count7d       int    `json:"count_7d"`
+	Count30d      int    `json:"count_30d"`
+	// TypicalHour is *int so we can faithfully represent the
+	// repository's three-valued state on the wire:
+	//
+	//   nil               → JSON field omitted via omitempty;
+	//                       means "no baseline yet" (the worker
+	//                       has not produced one). Mirrors the
+	//                       repository's TypicalHourUnset (-1)
+	//                       sentinel.
+	//   &h where 0..23    → valid baseline; emitted as an integer.
+	//
+	// We deliberately do NOT emit -1: the OpenAPI schema declares
+	// typical_hour with minimum:0/maximum:23, so a client validating
+	// against the spec would reject -1. The JSON-omitted shape is
+	// the only way to truthfully say "no baseline yet" without
+	// breaking that contract. See investigation.go BUG_0001
+	// round 2 fix.
+	TypicalHour  *int      `json:"typical_hour,omitempty"`
+	Relationship string    `json:"relationship,omitempty"`
+	FirstSeenAt  time.Time `json:"first_seen_at"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
 }
 
 type senderTrailAggregateJSON struct {
@@ -368,11 +384,31 @@ func newCommunicationHistoryJSON(h repository.CommunicationHistory) communicatio
 		SenderDomain:  h.SenderDomain,
 		Count7d:       h.Count7d,
 		Count30d:      h.Count30d,
-		TypicalHour:   h.TypicalHour,
+		TypicalHour:   typicalHourForJSON(h.TypicalHour),
 		Relationship:  h.Relationship,
 		FirstSeenAt:   h.FirstSeenAt,
 		LastSeenAt:    h.LastSeenAt,
 	}
+}
+
+// typicalHourForJSON projects the repository's internal
+// TypicalHour value (int, with -1 as the TypicalHourUnset sentinel
+// per internal/repository/types.go) onto the public investigation
+// API contract (typical_hour: integer 0..23, optional per the
+// OpenAPI spec).
+//
+// Any value outside 0..23 is treated as "no baseline yet" and the
+// field is omitted (nil → JSON omission via omitempty). This covers
+// the canonical -1 sentinel, defends against any future drift if a
+// migration introduces a different out-of-band value, and stays
+// truthful to the spec without inventing a fake 0 placeholder (0 is
+// itself a valid hour, so substituting it would conflate "midnight
+// is the busy hour" with "we don't know yet").
+func typicalHourForJSON(h int) *int {
+	if h < 0 || h > 23 {
+		return nil
+	}
+	return &h
 }
 
 func encodeHashOrEmpty(b []byte) string {
