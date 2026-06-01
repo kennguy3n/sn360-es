@@ -326,6 +326,36 @@ bench-all: gen-corpus bench bench-accuracy bench-profile
 	@echo ""
 	@echo "Benchmarks complete. Artefacts in $(BENCH_DIR)/."
 
+# WS-4b corpus-eval harness. The detection-quality regression
+# pipeline: regenerate the synthetic corpus (if you want), evaluate
+# the production Tier 0/(1)/2 cascade against it, and diff against
+# the committed baseline. The harness honours SN360_ENCODER_URL
+# (Tier 1) when set; Tier 2 is skipped by default because it needs a
+# local SLM process.
+.PHONY: corpus-eval-gen
+corpus-eval-gen:
+	$(GO) run ./cmd/corpus-eval gen-synthetic \
+		-out=testdata/corpus-eval/synthetic.jsonl
+
+.PHONY: corpus-eval
+corpus-eval:
+	mkdir -p testdata/corpus-eval/reports
+	$(GO) run ./cmd/corpus-eval \
+		-corpus=testdata/corpus-eval/synthetic.jsonl \
+		-baseline=testdata/corpus-eval/baseline.json \
+		-tolerance=0.05
+
+# Regenerate the committed baseline. Use this AFTER you have
+# deliberately changed the detector behaviour and want to bless
+# the new metrics as the new floor — never run this to "fix" a
+# CI regression without first justifying the new numbers.
+.PHONY: corpus-eval-baseline
+corpus-eval-baseline:
+	$(GO) run ./cmd/corpus-eval \
+		-corpus=testdata/corpus-eval/synthetic.jsonl \
+		-baseline= \
+		-out=testdata/corpus-eval/baseline.json
+
 $(BENCH_DIR):
 	@mkdir -p $(BENCH_DIR)
 
