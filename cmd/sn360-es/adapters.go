@@ -500,8 +500,15 @@ type tenantScoringConfigAdapter struct {
 }
 
 type tenantScoringConfigCacheEntry struct {
-	value     evaluate.TenantScoringConfig
-	expiresAt time.Time
+	value evaluate.TenantScoringConfig
+	// tier2Provider is the per-tenant Tier 2 (SLM) provider name
+	// override loaded from score_engine.tier2_provider. The empty
+	// string means "no override, use the deployment default".
+	// Cached alongside value so a single score_engine load
+	// services both the scoring-config lookup AND the Tier 2
+	// provider lookup without two round trips per tenant.
+	tier2Provider string
+	expiresAt     time.Time
 }
 
 // newTenantScoringConfigAdapter constructs an adapter with the
@@ -559,8 +566,74 @@ func (a *tenantScoringConfigAdapter) LoadTenantScoringConfig(ctx context.Context
 		Tier1PassThreshold: &pass,
 		Tier1FlagThreshold: &flag,
 	}
-	a.store(tenantID, tc)
+	tier2Provider := ""
+	if row.Tier2Provider != nil {
+		tier2Provider = *row.Tier2Provider
+	}
+	a.storeFull(tenantID, tc, tier2Provider)
 	return tc, nil
+}
+
+// LoadTenantTier2Provider implements slm.TenantProviderLoader. It
+// resolves the per-tenant Tier 2 provider override from the same
+// score_engine row that LoadTenantScoringConfig consults; an empty
+// return value means "no override, use the deployment default",
+// which is the steady-state expectation for the majority of
+// tenants.
+//
+// Errors are surfaced upstream so the slm.Router can log them and
+// fall back to the deployment default — a transient DB blip never
+// fails Tier 2 evaluation outright.
+func (a *tenantScoringConfigAdapter) LoadTenantTier2Provider(ctx context.Context, tenantID string) (string, error) {
+	if a == nil || a.repo == nil || tenantID == "" {
+		return "", nil
+	}
+	if cached, ok := a.lookupTier2Provider(tenantID); ok {
+		return cached, nil
+	}
+	row, err := a.repo.Get(ctx, tenantID)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			a.storeFull(tenantID, evaluate.TenantScoringConfig{}, "")
+			return "", nil
+		}
+		return "", err
+	}
+	tier2Provider := ""
+	if row.Tier2Provider != nil {
+		tier2Provider = *row.Tier2Provider
+	}
+	pass := row.ThresholdTier1PassBelow
+	flag := row.ThresholdTier1FlagAbove
+	tc := evaluate.TenantScoringConfig{
+		Weights: evaluate.Weights{
+			AI:          float64(row.WeightAI) / 100.0,
+			Rspamd:      float64(row.WeightRspamd) / 100.0,
+			Attachments: float64(row.WeightAttachments) / 100.0,
+			Links:       float64(row.WeightLinks) / 100.0,
+		},
+		Tier1PassThreshold: &pass,
+		Tier1FlagThreshold: &flag,
+	}
+	a.storeFull(tenantID, tc, tier2Provider)
+	return tier2Provider, nil
+}
+
+// lookupTier2Provider returns the cached tier2Provider string for
+// tenantID and whether the entry was a live (non-expired) cache hit.
+// Distinguishes "miss" (load required) from "hit with empty
+// override" (use deployment default) via the bool.
+func (a *tenantScoringConfigAdapter) lookupTier2Provider(tenantID string) (string, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	entry, ok := a.cache[tenantID]
+	if !ok {
+		return "", false
+	}
+	if time.Now().After(entry.expiresAt) {
+		return "", false
+	}
+	return entry.tier2Provider, true
 }
 
 func (a *tenantScoringConfigAdapter) lookup(tenantID string) (evaluate.TenantScoringConfig, bool) {
@@ -577,11 +650,20 @@ func (a *tenantScoringConfigAdapter) lookup(tenantID string) (evaluate.TenantSco
 }
 
 func (a *tenantScoringConfigAdapter) store(tenantID string, tc evaluate.TenantScoringConfig) {
+	a.storeFull(tenantID, tc, "")
+}
+
+// storeFull writes both the scoring config and the Tier 2 provider
+// override for tenantID under the cache's TTL. The plain store
+// helper forwards here with an empty provider to preserve its
+// existing semantics (no Tier 2 override known yet).
+func (a *tenantScoringConfigAdapter) storeFull(tenantID string, tc evaluate.TenantScoringConfig, tier2Provider string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.cache[tenantID] = tenantScoringConfigCacheEntry{
-		value:     tc,
-		expiresAt: time.Now().Add(a.ttl),
+		value:         tc,
+		tier2Provider: tier2Provider,
+		expiresAt:     time.Now().Add(a.ttl),
 	}
 }
 
