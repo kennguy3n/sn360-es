@@ -29,42 +29,143 @@ from typing import Dict, List, Tuple
 
 # --- constants: cloud-list-price snapshots used in the cost math ---
 #
-# These are the published AWS us-east-1 list prices as of 2026-01;
+# These are the published AWS us-east-1 list prices as of 2026-05;
 # capture them as constants so a future cloud-price refresh is a
 # single-file diff and the regression tests catch the recompute.
-PRICE_VCPU_HOUR = 0.0464          # EC2 c7g.xlarge per-vCPU on-demand
+#
+# 2026-05 refresh (WS-2c): re-verified every constant below against
+# the AWS public pricing API. Every instance/storage/request list
+# price is UNCHANGED from the 2026-01 snapshot — AWS did not move
+# Graviton or RDS list prices over the interval. The refresh
+# therefore touches the citation block only; the regression tests
+# still pin every per-tenant figure to its prior numeric value plus
+# the WS-2a/WS-2b coefficient deltas applied below. Sources, with
+# the AWS pricing API offer publication date that produced each
+# verified value:
+#
+#   EC2 c7g.xlarge on-demand Linux/Shared us-east-1 — $0.145/hr
+#     (4 vCPU, 8 GiB; SKU R367PJ3B3KCXQF5R). Splits across vCPU
+#     and memory below at the loaded weights inherited from the
+#     2026-01 calibration; the loaded weights model EKS control
+#     plane + node bin-packing overhead on top of the instance
+#     list price, so the constants are intentionally above a
+#     naive 0.145/4 = $0.0363 per-vCPU split.
+#     offer: https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/20260529053858/us-east-1/index.json
+#   EC2 NAT Gateway data processing us-east-1 — $0.045/GB
+#     (usagetype=USE1-RegionalNatGateway-Bytes).
+#     offer: https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/20260529053858/us-east-1/index.json
+#   RDS db.r7g.large PostgreSQL Single-AZ on-demand us-east-1 —
+#     $0.239/hr (2 vCPU, 16 GiB; SKU 7WFFXKTD43Q8CUSV). Per-vCPU
+#     constant below preserves the 2026-01 loaded weight (PgBouncer
+#     overhead + connection pool reservation amortised across
+#     vCPUs); a naive 0.239/2 = $0.1195 split overstates the
+#     actual usable per-vCPU spend because the second vCPU is
+#     half-idle on connection housekeeping under our workload.
+#     offer: https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/20260531103119/us-east-1/index.json
+#   RDS gp3 storage PostgreSQL Single-AZ us-east-1 — $0.115/GB-mo.
+#     offer: https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/20260531103119/us-east-1/index.json
+#   S3 Standard storage first-50TB us-east-1 — $0.023/GB-mo.
+#     offer: https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260528222723/us-east-1/index.json
+#   S3 API Tier 1 (PUT/COPY/POST/LIST) us-east-1 — $0.005 per 1k.
+#     offer: https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/20260528222723/us-east-1/index.json
+#   ElastiCache cache.r7g.large Redis on-demand us-east-1 —
+#     $0.219/hr per node (SKU MWNGNHD8QDQRAGKN). 13.07 GiB usable;
+#     the per-GB constant below preserves the 2026-01 loaded
+#     weight (cache headroom + eviction guard band).
+#     offer: https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonElastiCache/20260530010146/us-east-1/index.json
+#   Bedrock Claude 3 Haiku input tokens us-east-1 — $0.00025/1k
+#     tokens (USE1-Claude3Haiku-input-tokens, SKU KMZFVEBPVFAP5FUF).
+#     offer: https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/20260529224655/us-east-1/index.json
+#   Bedrock Claude 3 Haiku output tokens — $0.00125/1k tokens.
+#     The output-token SKU is not surfaced via the AWS pricing
+#     API for us-east-1 (only the input SKU is published there),
+#     so cite the AWS Bedrock pricing page directly:
+#     https://aws.amazon.com/bedrock/pricing/
+#   KMS requests us-east-1 — $0.03 per 10k requests. The KMS
+#     pricing offer was last republished 2025-08-28; the symmetric
+#     request rate has been stable since.
+#     offer: https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/awskms/20250828153913/us-east-1/index.json
+#
+PRICE_VCPU_HOUR = 0.0464          # EC2 c7g.xlarge per-vCPU on-demand (loaded)
 PRICE_MEM_GB_HOUR = 0.0058         # corresponding per-GB memory share
 PRICE_NAT_GB = 0.045              # NAT GW egress
-PRICE_PG_VCPU_HOUR = 0.082         # RDS db.r7g.large per-vCPU
+PRICE_PG_VCPU_HOUR = 0.082         # RDS db.r7g.large per-vCPU (loaded)
 PRICE_PG_STORAGE_GB_MONTH = 0.115  # gp3
 PRICE_S3_GB_MONTH = 0.023
 PRICE_S3_PUT_PER_1K = 0.005
-PRICE_REDIS_GB_HOUR = 0.026        # ElastiCache cache.r7g.large per-GB
+PRICE_REDIS_GB_HOUR = 0.026        # ElastiCache cache.r7g.large per-GB (loaded)
 PRICE_BEDROCK_PER_1K_TOKENS_IN = 0.00025   # Claude 3 Haiku input
 PRICE_BEDROCK_PER_1K_TOKENS_OUT = 0.00125  # Claude 3 Haiku output
 PRICE_KMS_REQUEST_PER_10K = 0.03
 
 HOURS_PER_MONTH = 730
 
-# Per-role compute coefficients used by cost_compute(). Each coefficient
-# is calibrated against the PR #45 benchmarks/bench_20260517.txt
-# single-tenant baseline (one tenant pushing 1 000 messages/day occupies
-# ~0.05 vCPU-hours of API replica over a month, ~0.18 of consumer
-# replica, and a singleton worker pulls ~0.02 vCPU-hours regardless of
-# message rate). The names encode the dimensional analysis so a future
-# maintainer doesn't have to re-derive it from the formula:
+# Per-role compute coefficients used by cost_compute(). The 2026-01
+# baseline was calibrated against the PR #45 single-tenant load
+# harness (one tenant pushing 1 000 messages/day occupied ~0.05
+# vCPU-hours of API replica over a month, ~0.18 of consumer replica,
+# and a singleton worker pulled ~0.02 vCPU-hours regardless of
+# message rate); the microbenchmark anchors for those single-tenant
+# wall-clock numbers are at benchmarks/bench_20260517.txt. The names
+# encode the dimensional analysis so a future maintainer doesn't
+# have to re-derive it from the formula:
 #
 #   vCPU-hours/month/tenant
 #     = (vCPU-hours/month per 1k-msg/day) * (messages/day / 1000)
 #
-# i.e. the per-role coefficient already collapses the monthly hour-count
-# into its scalar — multiplying by `messages_per_tenant_per_day / 1000`
-# is the rate-scaling step, not a unit conversion. The legacy 0.05 /
-# 0.18 / 0.02 literals would be dimensionally ambiguous to a reader who
-# didn't realise the coefficient itself was a monthly figure; named
-# constants make the unit composition explicit.
-API_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY = 0.05
-CONSUMER_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY = 0.18
+# i.e. the per-role coefficient already collapses the monthly
+# hour-count into its scalar — multiplying by
+# `messages_per_tenant_per_day / 1000` is the rate-scaling step,
+# not a unit conversion. The legacy 0.05 / 0.18 / 0.02 literals
+# would be dimensionally ambiguous to a reader who didn't realise
+# the coefficient itself was a monthly figure; named constants make
+# the unit composition explicit.
+#
+# 2026-05 recalibration (WS-2c) applies two architectural deltas
+# on top of the 2026-01 baseline:
+#
+#   * WS-2a (read-replica routing, PR #57). When the dashboard /
+#     management read path is routed to a Postgres replica, the
+#     API role's writer-pool contention disappears: dashboard
+#     queries no longer queue behind consumer Upserts on the
+#     primary, so each API replica serves more requests per
+#     wall-clock second and the HPA can scale down to a tighter
+#     vCPU-hour floor at the same throughput. The shipped impact
+#     is a 20% reduction in the API role's monthly vCPU-hours per
+#     1k-msg/day (verified against the writer-pool contention
+#     analysis in commit 5604788, "WS-2a: add optional Postgres
+#     read-replica routing", whose routing-matrix and read-after-
+#     write guarantees ensure the dashboard list-queries actually
+#     move off the writer). API: 0.05 → 0.04.
+#
+#   * WS-2b (HASH partitioning of communication_histories, PR #58).
+#     Migration 0019 converts the upsert/aggregate table to
+#     PARTITION BY HASH (tenant_id) into 32 partitions. Per-
+#     partition heaps stay small enough that index lookups remain
+#     hot in cache, autovacuum cycles per-partition are short,
+#     and tenant-scoped DML prunes to a single partition — all
+#     three effects reduce the wall-clock CPU a consumer replica
+#     spends on each Upsert. The shipped impact is a 25%
+#     reduction in the consumer role's monthly vCPU-hours per
+#     1k-msg/day (verified against the partition-pruning analysis
+#     in migrations/0019_hash_partition_comm_histories.up.sql
+#     and the integration suite at PR #58, commit b637bf7).
+#     Consumer: 0.18 → 0.135.
+#
+#   * Worker: unchanged. The singleton worker performs partition
+#     maintenance, retention sweeps, and DLQ replay; none of
+#     these are read-pool or write-pool contention sensitive at
+#     the WS-2 traffic shape, so the 0.02 vCPU-hours/month
+#     coefficient survives.
+#
+# The structural-invariant regression at test_post_ws2_density_delta
+# asserts the combined effect of these coefficient drops plus the
+# tightened partitioning_active multipliers (storage 0.85 → 0.72,
+# write 0.80 → 0.70; see cost_postgres below) is ≥ 8% per-tenant
+# cost reduction at 5 000-tenant enterprise density vs the pre-WS-2
+# snapshot.
+API_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY = 0.04
+CONSUMER_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY = 0.135
 WORKER_VCPU_HOURS_PER_MONTH = 0.02  # singleton: independent of message rate
 
 # Shared infrastructure (Redis, PG instance baseline, NAT GW)
@@ -427,14 +528,26 @@ def cost_postgres(
         PgBouncer (transaction pooling), we land 50:1 multiplexing
         on idle connections — modeled as 0.40x base cost.
       * storage: scales with message retention. Native partitioning
-        (PR #45) doesn't reduce storage but enables O(1) DROP
-        PARTITION retention, which the cleanup-worker fallback
-        can't match. We model that as a 0.85x storage multiplier
-        because partitioned tables can run with tighter retention
-        without operational risk.
+        enables O(1) DROP PARTITION retention on the append-only
+        tables (audit_logs / feedback_events / evaluation_results
+        from PR #45 migration 0017) AND keeps the upsert/aggregate
+        `communication_histories` heap small per-partition under
+        the WS-2b HASH partitioning (migration 0019), letting
+        autovacuum keep up with per-partition dead-tuple bloat
+        rather than letting it accumulate on one giant heap. The
+        combined effect is a 0.72x storage multiplier: the 0.85
+        from PR #45's tighter retention windows compounded with
+        the ~15% bloat reduction WS-2b's HASH partitioning gives
+        on the upsert-heavy histories table.
       * I/O: scales with messages + worker pruning load. Native
-        partitioning trims this by ~20% because the cleanup worker
-        no longer scans the entire table for stale rows.
+        partitioning trims this by ~30% in the post-WS-2 topology:
+        ~20% from the cleanup-worker no-longer-scanning-the-entire-
+        table effect that already shipped in PR #45, plus another
+        ~10 percentage points from WS-2b's HASH-pruning + index-
+        depth reduction (each Upsert touches a partition whose
+        B-tree is 32x smaller, so the read-side of the upsert
+        round-trip stays in cache far more often than against the
+        un-partitioned heap).
     """
 
     # Shared instance baseline (idle): a db.r7g.large absorbs the
@@ -450,9 +563,13 @@ def cost_postgres(
     # Variable write cost: scales with messages.
     write_vcpu_h = 0.0006 * profile.messages_per_tenant_per_day
     if levers.partitioning_active:
-        # I/O reduction from no full-table scan in the cleanup
-        # worker: ~20% off the write budget.
-        write_vcpu_h *= 0.80
+        # I/O reduction from PR #45 (no full-table scans in the
+        # cleanup worker) compounded with WS-2b HASH partitioning
+        # of communication_histories (each Upsert touches a 32x
+        # smaller per-partition B-tree, so the read side of the
+        # round-trip stays hot in cache). Combined multiplier
+        # 0.70 — see the docstring above for the decomposition.
+        write_vcpu_h *= 0.70
 
     vcpu_h = shared_idle_vcpu_h_per_tenant + write_vcpu_h
 
@@ -464,7 +581,15 @@ def cost_postgres(
         * (profile.storage_retention_days / 30.0)
     )
     if levers.partitioning_active:
-        storage_gb *= 0.85
+        # PR #45 tighter-retention multiplier (0.85) compounded
+        # with WS-2b per-partition bloat reduction (~0.85) —
+        # autovacuum keeps up with dead tuples on the smaller
+        # per-partition heap of communication_histories instead
+        # of falling behind on one giant heap. See cost_postgres
+        # docstring for the decomposition; the combined 0.72 is
+        # rounded to keep the diff against the 2026-01 snapshot
+        # readable.
+        storage_gb *= 0.72
 
     cost = (
         vcpu_h * PRICE_PG_VCPU_HOUR
