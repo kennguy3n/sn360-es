@@ -841,9 +841,12 @@ func (p *pgEvalResults) SetFinalVerdict(ctx context.Context, tenantID string, me
 	}
 	// NULLIF(<param>,'') maps the empty-string clear to a SQL
 	// NULL UPDATE so the CHECK constraint is happy on the
-	// clear path. The RETURNING clause + RowsAffected is the
-	// cheapest portable way to surface a "no row matched" as
-	// ErrNotFound — Postgres won't error on a no-op UPDATE.
+	// clear path. RowsAffected from the ExecContext result is
+	// the cheapest portable way to surface a "no row matched"
+	// as ErrNotFound — Postgres won't error on a no-op UPDATE
+	// even if the WHERE clause excludes every row, so we have
+	// to inspect RowsAffected ourselves instead of relying on
+	// the driver's error surface.
 	res, err := p.db.ExecContext(ctx, `
 		UPDATE evaluation_results
 		   SET final_verdict = NULLIF($3,'')

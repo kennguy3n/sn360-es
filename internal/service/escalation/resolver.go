@@ -179,7 +179,7 @@ func (r *Resolver) Reconcile(ctx context.Context, ev IncidentResolved) (Outcome,
 
 	out := Outcome{
 		OriginalVerdict: original,
-		Reason:          composeReason(ev.AnalystNotes, ev.Resolution),
+		Reason:          composeReason(ev.Resolution, ev.AnalystNotes),
 	}
 
 	if !flip {
@@ -537,10 +537,14 @@ func flipFor(resolution, automated string) (string, bool) {
 }
 
 // composeReason builds the audit-row `reason` field from
-// the analyst notes + the resolution token. Format keeps the
+// the resolution token + the analyst notes. Format keeps the
 // resolution at the front so a fan-out search (SELECT … LIKE
 // 'confirmed_threat%') stays cheap.
-func composeReason(notes, resolution string) string {
+//
+// Parameter order is (resolution, notes) so it matches
+// composeBannerReason — keeping both helpers aligned avoids the
+// argument-swap foot-gun that a future caller might trip over.
+func composeReason(resolution, notes string) string {
 	notes = strings.TrimSpace(notes)
 	if notes == "" {
 		return resolution
@@ -593,7 +597,7 @@ func (r *Resolver) persistSkip(ctx context.Context, ev IncidentResolved, _ []byt
 	if reason == "" {
 		reason = "no findable evaluation row"
 	}
-	full := composeReason(ev.AnalystNotes, ev.Resolution) + " [skip: " + reason + "]"
+	full := composeReason(ev.Resolution, ev.AnalystNotes) + " [skip: " + reason + "]"
 	row := &repository.EmailVerdictAudit{
 		TenantID:         ev.TenantID,
 		DedupID:          ev.DedupID,
