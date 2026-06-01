@@ -50,6 +50,24 @@ const (
 	// double-count at the consumer.
 	StreamManagement = "ES_MANAGEMENT"
 	StreamDLQ        = "ES_DLQ"
+	// StreamPlatform owns the cross-repo `soc.>` namespace. The
+	// producer side lives in kennguy3n/sn360-security-platform
+	// services/soc-triage, which declares the same name + dedup
+	// window in deploy/nats/streams.json — both sides converge on
+	// the identical JetStream config via EnsureStream's
+	// update-in-place semantic.
+	//
+	// WS-5A.6 subscribes the durable consumer
+	// "soc-resolution-reconciler" to soc.incident.resolved on this
+	// stream. Future cross-repo SOC envelopes
+	// (soc.incident.created, soc.incident.assigned, ...) can land
+	// here without provisioning another stream and tripping
+	// JetStream's "subjects overlap with an existing stream" guard.
+	// The 600s duplicate window matches the producer's FU-B
+	// convention; the consumer-side INSERT-ON-CONFLICT on
+	// email_verdict_audit (tenant_id, dedup_id) UNIQUE provides
+	// defence-in-depth beyond the broker window.
+	StreamPlatform = "sn360-platform"
 )
 
 // StreamSpec describes a JetStream stream that SN360-ES requires.
@@ -178,6 +196,32 @@ func DefaultStreamSpecs(cfg Config) []StreamSpec {
 			Replicas:    replicas,
 			Discard:     jetstream.DiscardOld,
 			Description: "SN360-ES dead-letter queue (failed events)",
+		},
+		{
+			Name: StreamPlatform,
+			// Cross-repo `soc.>` namespace. The producer side
+			// (kennguy3n/sn360-security-platform) declares the
+			// identical stream in deploy/nats/streams.json; both
+			// sides converge on the same JetStream config via
+			// EnsureStream's update-in-place semantic. The
+			// wildcard root accommodates future cross-repo SOC
+			// envelopes without provisioning another stream and
+			// tripping JetStream's subject-overlap guard.
+			Subjects:  []string{"soc.>"},
+			Retention: jetstream.LimitsPolicy,
+			Storage:   storage,
+			// 24h matches the producer-side stream config.
+			MaxAge: 24 * time.Hour,
+			// WS-5A.6: 600s duplicate window mirrors FU-B's
+			// sn360-events convention on the producer side. The
+			// producer stamps Nats-Msg-Id with a length-prefixed
+			// sha256(incident_id|resolved_at_unix_nano), so a
+			// re-emit within this window is dropped at the
+			// broker.
+			DedupWindow: orDefault(cfg.DedupWindow, 600*time.Second),
+			Replicas:    replicas,
+			Discard:     jetstream.DiscardOld,
+			Description: "SN360 cross-repo SOC platform events (e.g. soc.incident.resolved from sn360-security-platform soc-triage)",
 		},
 	}
 }
@@ -330,6 +374,8 @@ func isResultFilter(subj string) bool {
 //   - es.action.>                    → StreamAction
 //   - es.management.>                → StreamManagement (WS-4a + future
 //     management-domain work queues)
+//   - soc.>                          → StreamPlatform (cross-repo SOC
+//     envelopes from sn360-security-platform, e.g. WS-5A.6 IncidentResolved)
 //
 // Any other es.evaluate.* subject (e.g. a hypothetical
 // es.evaluate.status) is treated as unrouted and returns "" rather
@@ -352,6 +398,8 @@ func StreamForSubject(subject string) string {
 		return StreamAction
 	case strings.HasPrefix(subject, "es.management."):
 		return StreamManagement
+	case subject == "soc" || strings.HasPrefix(subject, "soc."):
+		return StreamPlatform
 	default:
 		return ""
 	}

@@ -429,6 +429,17 @@ func (a *application) StartConsumers(ctx context.Context) error {
 			errors.Join(critErrs...))
 	}
 
+	// WS-5A.6 soc.incident.resolved durable consumer — best
+	// effort. A failure here is non-critical (a temporary
+	// drop of the cross-repo reconciliation loop is recoverable
+	// via DLQ replay once the binary restarts), so we surface
+	// the error in the log only and continue to the optional
+	// orchestrator + DLQ wiring below.
+	if err := a.startSOCResolutionConsumer(ctx); err != nil {
+		a.logger.Warn("sn360-es: soc.incident.resolved durable subscribe failed",
+			slog.Any("error", err))
+	}
+
 	// Optional Tier 1 batch orchestrator.
 	if a.batchOrch != nil {
 		a.batchOrch.Start(ctx)
