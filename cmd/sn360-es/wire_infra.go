@@ -743,13 +743,22 @@ func buildPushSignatureVerifier(cfg *config.Config, receivers []ingestion.PushRe
 // ---------------------------------------------------------------------
 
 func buildWorkers(cfg *config.Config, logger *slog.Logger, app *application) (*worker.Runner, *worker.Runner, *worker.Runner, *worker.Runner, *worker.Runner, *worker.Runner) {
-	if app.repos == nil {
-		logger.Info("sn360-es: periodic workers skipped; repository registry not wired")
-		return nil, nil, nil, nil, nil, nil
-	}
-
 	lockFactory := buildWorkerLockFactory(cfg, logger, app)
 	metricsRec := workerMetricsAdapter{m: app.metrics}
+
+	// The intel worker is deployment-scoped: it only depends on
+	// app.intelStore (NOT on app.repos / tenant-scoped registry),
+	// so it MUST be wired independently of the early-return below.
+	// In practice the in-memory IntelStore fallback in app.go means
+	// the runner can come up even without Postgres, which is
+	// important for dev / preview environments where the rest of
+	// the periodic-worker fleet stays disabled.
+	intelRunner := buildIntelRunner(cfg, logger, app, lockFactory, metricsRec)
+
+	if app.repos == nil {
+		logger.Info("sn360-es: periodic workers skipped; repository registry not wired")
+		return nil, nil, nil, nil, nil, intelRunner
+	}
 
 	relRunner := buildRelationshipRunner(cfg, logger, app, lockFactory, metricsRec)
 	vendorRunner := buildVendorRunner(cfg, logger, app, lockFactory, metricsRec)
@@ -767,7 +776,6 @@ func buildWorkers(cfg *config.Config, logger *slog.Logger, app *application) (*w
 	partitionRunner := buildPartitionRunner(cfg, logger, app, lockFactory, metricsRec)
 	cleanupRunner := buildCleanupRunner(cfg, logger, app, lockFactory, metricsRec, partitionRunner)
 	dirSyncRunner := buildDirectorySyncRunner(cfg, logger, app, lockFactory, metricsRec)
-	intelRunner := buildIntelRunner(cfg, logger, app, lockFactory, metricsRec)
 
 	return relRunner, vendorRunner, cleanupRunner, dirSyncRunner, partitionRunner, intelRunner
 }

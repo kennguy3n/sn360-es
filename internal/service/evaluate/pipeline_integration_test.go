@@ -33,6 +33,14 @@ func (f fakeTier0) Apply(req dto.EvaluateRequest, signals dto.RiskSignals) dto.T
 	return f.apply(req, signals)
 }
 
+// ApplyWithContext satisfies the evaluate.Tier0Gate interface that
+// gained a context-aware variant in WS-5B.3 (ti_match wiring). The
+// fake ignores ctx because every existing pipeline_integration_test
+// case is heuristic-only and doesn't exercise the threat-intel path.
+func (f fakeTier0) ApplyWithContext(_ context.Context, req dto.EvaluateRequest, signals dto.RiskSignals) dto.Tier0Outcome {
+	return f.apply(req, signals)
+}
+
 type fakeTier1 struct {
 	score      int
 	confidence float64

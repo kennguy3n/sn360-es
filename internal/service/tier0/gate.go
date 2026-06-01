@@ -216,26 +216,28 @@ func (g *Gate) ApplyWithContext(ctx context.Context, req dto.EvaluateRequest, si
 	return out
 }
 
-// applyTIMatch issues a threat-intel lookup and returns an outcome
-// when the strongest match has severity >= 50 (quarantine threshold).
-// Lower severity returns (zero, false) so the caller continues
-// through the relationship-based bypass path AND keeps the
-// ti_match reason code attached to the Tier0Outcome.
+// applyTIMatch issues a threat-intel lookup and returns
+// (outcome, applied) describing the gate's action. applied=true
+// is returned for EVERY match — including flag-only matches with
+// severity <50 — because once we have evidence that an IOC is on
+// the message we must skip the heuristic-bypass paths
+// (vendor_trusted, internal_trusted, recurring_service, relationship
+// modifiers) that would otherwise classify the message as benign.
+// Bypassing those paths is the whole point of having Tier 0 honour
+// threat intel: a flagged sender on a trusted-vendor list should
+// still get a ti_match reason code and forced escalation, not be
+// rubber-stamped through.
 //
-// The (Tier0Outcome, true) return shape is reserved for the
-// short-circuit case: the match was severe enough to overwrite
-// every downstream classification. Lower-severity matches don't
-// short-circuit — they are folded into a downstream-only reason
-// code addition (the caller drops the outcome on the floor and we
-// rely on the Tier0Outcome.TIMatch field being attached for the
-// flag-only case via the surrounding caller).
+// applied=false is reserved for the no-evidence cases: the checker
+// is not wired, the lookup errored (soft-fail), or no IOC matched.
+// In those cases ApplyWithContext falls through to the existing
+// heuristic + relationship paths exactly as before.
 //
-// In practice the caller (ApplyWithContext) only treats applied=true
-// as "skip the heuristic gates". When the match is flag-only (<50)
-// we still want the reason code captured, so applied=false is
-// paired with a non-nil Tier0Outcome that the caller MERGES into
-// its accumulating outcome. See the explicit merge in
-// ApplyWithContext for the contract.
+// Severity tiering when applied=true:
+//
+//	>=75: Bypass + SkipML + ForcedCategory=LikelyPhishing  (block)
+//	50-74: Bypass + SkipML + ForcedCategory=SuspiciousURL  (quarantine)
+//	<50:  ForceEscalate (Tier 2 corroboration)             (flag)
 func (g *Gate) applyTIMatch(ctx context.Context, req dto.EvaluateRequest, signals dto.RiskSignals) (dto.Tier0Outcome, bool) {
 	if g.ti == nil {
 		return dto.Tier0Outcome{}, false

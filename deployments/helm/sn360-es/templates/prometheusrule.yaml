@@ -196,7 +196,7 @@ spec:
           annotations:
             summary: "Worker {{`{{ $labels.worker }}`}} has not completed a cycle in 30m"
             description: |
-              The cleanup, directory-sync, partition_maintenance,
+              The cleanup, directory-sync, intel, partition_maintenance,
               relationship-aggregation, and vendor-discovery workers
               each emit a counter on
               cycle completion. A flatline (rate==0) indicates the

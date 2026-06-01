@@ -140,6 +140,16 @@ func (s *StoreTIChecker) Check(ctx context.Context, req dto.EvaluateRequest, sig
 	// Cache lookup short-circuits hashes that the cache has
 	// already classified. We split into resolved-via-cache and
 	// hashes-still-to-query.
+	//
+	// In-place filter: toQuery aliases the same backing array as
+	// hashes (toQuery := hashes ; toQuery = toQuery[:0]) and
+	// subsequent appends overwrite slots that the loop has already
+	// read. This is safe ONLY because the read index i is
+	// monotonically increasing and len(toQuery) <= i at every step,
+	// i.e. writes never overtake reads. If the loop body is ever
+	// refactored to access hashes[j] out of order (e.g. a
+	// look-ahead optimisation) this invariant breaks — allocate a
+	// fresh slice instead.
 	var resolved []intel.MatchedIndicator
 	toQuery := hashes
 	if s.Cache != nil {

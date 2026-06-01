@@ -330,6 +330,17 @@ func (s *PgIntelStore) FindByIndicator(ctx context.Context, indicator string) ([
 // captures the feed id/name, failure count and most recent error
 // so operators can pivot from the Prometheus alert to the audit
 // trail by `action='intel.feed.stale'`.
+//
+// audit_logs has FORCE ROW LEVEL SECURITY (migration 0018) with a
+// WITH CHECK policy that demands EITHER `sn360.tenant_id` matches
+// the row OR `sn360.cross_tenant = 'on'` on the connection. The
+// intel store is deployment-scoped, so it has no tenant id to bind;
+// we instead acquire a cross-tenant-pinned conn for the lifetime of
+// the INSERT, satisfying the OR-branch of the policy and writing
+// the audit row with tenant_id=NULL. Without this binding the
+// INSERT would silently be rejected by the policy (the worker would
+// see a logged error but operators would never see the audit
+// trail).
 func (s *PgIntelStore) RecordStaleAlert(ctx context.Context, feedID, feedName string, failures int, lastError string, occurredAt time.Time) error {
 	meta, err := json.Marshal(map[string]any{
 		"feed_id":    feedID,
@@ -343,11 +354,15 @@ func (s *PgIntelStore) RecordStaleAlert(ctx context.Context, feedID, feedName st
 		// safe fallback for hypothetical future fields.
 		meta = []byte(`{}`)
 	}
-	_, err = s.db.ExecContext(ctx, `
+	ctxCT, release, err := s.db.WithCrossTenant(ctx)
+	if err != nil {
+		return fmt.Errorf("intel: record stale alert: bind cross-tenant: %w", err)
+	}
+	defer func() { _ = release() }()
+	if _, err := s.db.ExecContext(ctxCT, `
 INSERT INTO audit_logs (id, tenant_id, actor, action, target_type, target_hash, correlation_id, metadata, created_at)
 VALUES (gen_random_uuid(), NULL, 'intel-worker', 'intel.feed.stale', 'intel_feed', NULL, $1, $2::jsonb, $3)`,
-		feedID, meta, occurredAt)
-	if err != nil {
+		feedID, meta, occurredAt); err != nil {
 		return fmt.Errorf("intel: record stale alert: %w", err)
 	}
 	return nil
