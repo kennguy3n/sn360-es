@@ -19,13 +19,16 @@ import { runScenario } from "./lib/scenario.js";
 // (it has already snapshotted the options) and would also leave
 // the executor's `rate` un-divided by batchSize, producing
 // 4× the intended msg/s.
+// durationMin is intentionally not passed; loadConfig reads
+// LOAD_DURATION_MIN itself and falls back to the per-scenario
+// defaultDurationMin in SCENARIOS. batchSize defaults to 4 here
+// but LOAD_BATCH_SIZE still wins (handled inside loadConfig via
+// numEnv), so an operator can fall back to one-HTTP-call-per-
+// message without editing the script.
 const scenario = runScenario({
   name: "peak",
-  durationMin: Number(__ENV.LOAD_DURATION_MIN || 10),
   seed: 42,
-  // LOAD_BATCH_SIZE wins if set so an operator can fall back to
-  // one-HTTP-call-per-message without editing the script.
-  batchSize: Number(__ENV.LOAD_BATCH_SIZE || 4),
+  batchSize: 4,
 });
 
 export const options = scenario.options;

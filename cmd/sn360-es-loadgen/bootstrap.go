@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -283,7 +284,9 @@ func writeManifest(path string, m bootstrapManifest) error {
 	}
 	// The manifest contains tenant UUIDs only; not secret, but
 	// the directory should be group-restricted on a CI runner.
-	if err := os.MkdirAll(dirOf(path), 0o750); err != nil {
+	// filepath.Dir handles all edge cases (root, relative, no-sep)
+	// correctly, so we lean on it instead of a hand-rolled walk.
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
 	body, err := json.MarshalIndent(m, "", "  ")
@@ -310,16 +313,4 @@ func redactedDSN(raw string) string {
 		}
 	}
 	return raw
-}
-
-// dirOf is a tiny wrapper around filepath.Dir that returns "." when
-// path has no directory component, which is the contract os.MkdirAll
-// expects (it returns an error on the empty string).
-func dirOf(path string) string {
-	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] == '/' || path[i] == '\\' {
-			return path[:i]
-		}
-	}
-	return "."
 }

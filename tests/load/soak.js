@@ -10,9 +10,14 @@
 
 import { runScenario } from "./lib/scenario.js";
 
+// Override the typical scenario's defaultDurationMin (10) to 30
+// for the long-running soak. LOAD_DURATION_MIN still wins because
+// loadConfig consults the env var ahead of the override, so an
+// operator can stretch or shrink the soak without editing this
+// file.
 const scenario = runScenario({
   name: "typical",
-  durationMin: Number(__ENV.LOAD_DURATION_MIN || 30),
+  durationMin: 30,
   // Default to the full 5000-tenant pool for soak — anyone who
   // wants to soak against a smaller pool can override via the
   // LOAD_TENANTS env var.

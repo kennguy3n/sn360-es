@@ -74,21 +74,6 @@ func TestRedactedDSN(t *testing.T) {
 	}
 }
 
-func TestDirOf(t *testing.T) {
-	cases := map[string]string{
-		"":                  ".",
-		"file.json":         ".",
-		"./file.json":       ".",
-		"results/file.json": "results",
-		"/abs/dir/x.json":   "/abs/dir",
-	}
-	for in, want := range cases {
-		if got := dirOf(in); got != want {
-			t.Fatalf("dirOf(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestIsLoopbackBind(t *testing.T) {
 	loopback := []string{"127.0.0.1:9099", "[::1]:9099", "localhost:9099"}
 	for _, b := range loopback {

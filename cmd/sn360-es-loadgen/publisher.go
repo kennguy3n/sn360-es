@@ -103,7 +103,15 @@ func runPublisher(ctx context.Context, logger *slog.Logger, args []string) error
 		// other streams (results, onboarding, soc) are owned
 		// by sn360-es itself and the load harness does not
 		// produce on them.
-		if err := ensureEvaluateStream(connCtx, js, logger); err != nil {
+		//
+		// Use a fresh timeout derived from the parent ctx (not
+		// connCtx) so a slow dial can't eat into the budget
+		// available for stream provisioning, which is its own
+		// round-trip set.
+		streamCtx, streamCancel := context.WithTimeout(ctx, *natsConnTimeout)
+		err := ensureEvaluateStream(streamCtx, js, logger)
+		streamCancel()
+		if err != nil {
 			return fmt.Errorf("ensure ES_EVALUATE stream: %w", err)
 		}
 	}
@@ -278,6 +286,11 @@ func (s *publisherServer) publishWith(timeout time.Duration, batch bool) http.Ha
 			msgs = []dto.EvaluateRequest{single}
 		}
 
+		// Increment publishOK as each message lands so partial
+		// batch failures still credit the messages that NATS
+		// actually accepted. The /stats endpoint then reflects
+		// the true number of payloads on the stream, which is
+		// what a scenario debugging a regression cares about.
 		published := 0
 		for i := range msgs {
 			if err := s.publishOne(r.Context(), &msgs[i], timeout); err != nil {
@@ -286,6 +299,7 @@ func (s *publisherServer) publishWith(timeout time.Duration, batch bool) http.Ha
 				s.lastError.Store(&errMsg)
 				s.logger.Warn("publish failed",
 					slog.Int("index", i),
+					slog.Int("already_published", published),
 					slog.String("message_id", msgs[i].MessageID),
 					slog.Any("error", err),
 				)
@@ -298,9 +312,9 @@ func (s *publisherServer) publishWith(timeout time.Duration, batch bool) http.Ha
 					http.StatusBadGateway)
 				return
 			}
+			s.publishOK.Add(1)
 			published++
 		}
-		s.publishOK.Add(uint64(published))
 
 		w.Header().Set("content-type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{

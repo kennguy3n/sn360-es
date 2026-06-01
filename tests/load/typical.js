@@ -7,9 +7,11 @@
 
 import { runScenario } from "./lib/scenario.js";
 
+// durationMin is intentionally not passed; loadConfig reads
+// LOAD_DURATION_MIN itself and falls back to the per-scenario
+// defaultDurationMin in SCENARIOS.
 const scenario = runScenario({
   name: "typical",
-  durationMin: Number(__ENV.LOAD_DURATION_MIN || 10),
   seed: 42,
 });
 

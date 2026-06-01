@@ -45,6 +45,11 @@ export const SCENARIOS = {
     costModelProfile: "low",
     msgsPerTenantPerDay: 200,
     defaultTenants: 5000,
+    // defaultDurationMin is the scenario-shaped fallback when
+    // LOAD_DURATION_MIN is unset. Centralising the default here
+    // (instead of having each scenario script read __ENV and
+    // pass `durationMin`) keeps the env-var path single-source.
+    defaultDurationMin: 10,
     // Reasonable bounds for release-over-release comparison; CI
     // sanity-checks against these in the smoke job, the soak job
     // logs them for context.
@@ -56,6 +61,7 @@ export const SCENARIOS = {
     costModelProfile: "medium",
     msgsPerTenantPerDay: 1200,
     defaultTenants: 5000,
+    defaultDurationMin: 10,
     expectedP99Ms: 2500,
     expectedNATSLagBound: 1500,
   },
@@ -64,6 +70,7 @@ export const SCENARIOS = {
     costModelProfile: "high",
     msgsPerTenantPerDay: 8500,
     defaultTenants: 5000,
+    defaultDurationMin: 10,
     expectedP99Ms: 4000,
     expectedNATSLagBound: 10000,
   },
@@ -103,7 +110,15 @@ export function loadConfig(scenarioKey, overrides = {}) {
     overrides.msgsPerTenantPerDay ?? base.msgsPerTenantPerDay,
   );
   const msgsPerSec = messagesPerSecond(tenants, msgsPerTenantPerDay);
-  const durationMin = numEnv("LOAD_DURATION_MIN", overrides.durationMin ?? 2);
+  // Resolution order: explicit overrides (e.g. smoke.js pins 2)
+  // -> per-scenario defaultDurationMin -> hardcoded 2-minute
+  // floor. LOAD_DURATION_MIN env var trumps all of the above so
+  // the soak runner can stretch any scenario without editing
+  // the scripts.
+  const durationMin = numEnv(
+    "LOAD_DURATION_MIN",
+    overrides.durationMin ?? base.defaultDurationMin ?? 2,
+  );
   return {
     scenario: base.name,
     costModelProfile: base.costModelProfile,

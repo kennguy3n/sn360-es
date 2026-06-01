@@ -167,6 +167,15 @@ jobs:
         # must carry all six captured metric families plus a
         # k6_summary block so a reviewer can diff against an
         # earlier release.
+        #
+        # The `has(...)` check below asserts shape only — the
+        # smoke CI runs without Prometheus, so readPromVector in
+        # tests/load/lib/metrics.js sets each family value to
+        # null. That's intentional: smoke validates that the
+        # capture path runs end-to-end, while the full scenarios
+        # (baseline / typical / peak), the soak job, and the
+        # Grafana dashboard validate the values themselves
+        # against a real metrics backend.
         run: |
           set -euo pipefail
           latest=$(ls -1t tests/load/results/smoke-*.json | head -n1)
@@ -176,15 +185,17 @@ jobs:
             .scenario == "baseline"
             and .config.msgs_per_sec != null
             and .k6_summary.loadgen_publish_latency_ms != null
-            and (.metrics_snapshot.families | keys) as $f
-            | ([
+            and (.metrics_snapshot.families | type == "object")
+            and (
+              [
                 "nats_consumer_lag",
                 "pg_client_connections",
                 "redis_memory_bytes",
                 "tier1_queue_depth",
                 "tier2_queue_depth",
                 "tier2_inflight_requests"
-              ] | all(. as $k | $f | index($k) != null))
+              ] | all(. as $k | (.metrics_snapshot.families | has($k)))
+            )
           ' "$latest"
 
       - name: Stop publisher
