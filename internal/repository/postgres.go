@@ -37,6 +37,8 @@ func NewPostgresRegistry(db *postgres.DB) *Registry {
 		SyncCheckpoints:        &pgSyncCheckpoints{db: db},
 		BehavioralBaselines:    &pgBehavioralBaselines{db: db},
 		OrgGraphs:              &pgOrgGraphs{db: db},
+		EmailVerdictAudits:     &pgEmailVerdictAudits{db: db},
+		BannerStates:           &pgBannerStates{db: db},
 	}
 }
 
@@ -820,6 +822,50 @@ func (p *pgEvalResults) ListBySender(ctx context.Context, tenantID string, sende
 	return out, rows.Err()
 }
 
+// SetFinalVerdict assigns the analyst-driven override on the
+// evaluation_results row keyed by (tenant_id, message_id_hash).
+// Validation happens here (rather than relying solely on the
+// CHECK constraint) so the resolver can react to a domain error
+// without unwinding a Postgres-level FK / CHECK violation.
+//
+// `verdict == ""` clears the override (UPDATE sets NULL). The
+// resolver doesn't take this path on the hot loop, but the
+// method must accept it so the in-memory backend stays
+// behaviourally identical and an operator "undo analyst flip"
+// admin path can land later without a new method.
+func (p *pgEvalResults) SetFinalVerdict(ctx context.Context, tenantID string, messageIDHash []byte, verdict string) error {
+	switch verdict {
+	case "", "malicious", "suspicious", "benign":
+	default:
+		return fmt.Errorf("repository: SetFinalVerdict: invalid verdict %q", verdict)
+	}
+	// NULLIF(<param>,'') maps the empty-string clear to a SQL
+	// NULL UPDATE so the CHECK constraint is happy on the
+	// clear path. RowsAffected from the ExecContext result is
+	// the cheapest portable way to surface a "no row matched"
+	// as ErrNotFound — Postgres won't error on a no-op UPDATE
+	// even if the WHERE clause excludes every row, so we have
+	// to inspect RowsAffected ourselves instead of relying on
+	// the driver's error surface.
+	res, err := p.db.ExecContext(ctx, `
+		UPDATE evaluation_results
+		   SET final_verdict = NULLIF($3,'')
+		 WHERE tenant_id = $1
+		   AND message_id_hash = $2`,
+		tenantID, messageIDHash, verdict)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // evalResultSelect is the canonical column projection shared by
 // every read path on pgEvalResults. Keeping it as a const guarantees
 // the SELECT column order and the scan-into-struct order in scanEval
@@ -832,7 +878,7 @@ SELECT id, tenant_id, message_id_hash, sender_hash, recipient_hash,
        COALESCE(primary_category,''), secondary_categories, reason_codes, degraded, degraded_services,
        COALESCE(tier0_outcome::text,''), COALESCE(tier1_outcome::text,''),
        COALESCE(tier2_outcome::text,''), COALESCE(rspamd_outcome::text,''),
-       evaluated_at, created_at`
+       evaluated_at, created_at, COALESCE(final_verdict,'')`
 
 // populateEvalJSON fills in the optional JSON / string-array fields
 // on an EvaluationResult after the caller has Scanned the row into
@@ -866,7 +912,7 @@ func scanEval(row *sql.Row) (*EvaluationResult, error) {
 	err := row.Scan(&r.ID, &r.TenantID, &r.MessageIDHash, &r.SenderHash, &r.RecipientHash,
 		&r.CorrelationID, &r.Score, &r.Tier,
 		&r.Primary, &secondary, &reasons, &r.Degraded, &degSvcs, &t0, &t1, &t2, &rsp,
-		&r.EvaluatedAt, &r.CreatedAt)
+		&r.EvaluatedAt, &r.CreatedAt, &r.FinalVerdict)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -886,7 +932,7 @@ func scanEvalRows(rows *sql.Rows) (*EvaluationResult, error) {
 	if err := rows.Scan(&r.ID, &r.TenantID, &r.MessageIDHash, &r.SenderHash, &r.RecipientHash,
 		&r.CorrelationID, &r.Score, &r.Tier,
 		&r.Primary, &secondary, &reasons, &r.Degraded, &degSvcs, &t0, &t1, &t2, &rsp,
-		&r.EvaluatedAt, &r.CreatedAt); err != nil {
+		&r.EvaluatedAt, &r.CreatedAt, &r.FinalVerdict); err != nil {
 		return nil, err
 	}
 	populateEvalJSON(&r, secondary, reasons, degSvcs, t0, t1, t2, rsp)
@@ -1511,4 +1557,240 @@ func stringOrEmpty(b []byte) string {
 		return ""
 	}
 	return string(b)
+}
+
+// --- email verdict audits + banner state (WS-5A.6) ---------------------
+
+type pgEmailVerdictAudits struct{ db *postgres.DB }
+
+// Insert persists an audit row via INSERT … ON CONFLICT
+// (tenant_id, dedup_id) DO NOTHING. The boolean return value
+// surfaces "this invocation was the first observation" so the
+// resolver can short-circuit verdict-flip + banner-reopen on
+// the duplicate path.
+//
+// The ON CONFLICT DO NOTHING + RETURNING construction is the
+// portable way to atomically discriminate insert-vs-conflict.
+// With DO NOTHING, RETURNING yields zero rows on conflict, so
+// rows.Next() == false is the durable conflict signal.
+func (p *pgEmailVerdictAudits) Insert(ctx context.Context, row *EmailVerdictAudit) (bool, error) {
+	if row == nil {
+		return false, errors.New("repository: EmailVerdictAudits.Insert: row is nil")
+	}
+	if row.TenantID == "" {
+		return false, errors.New("repository: EmailVerdictAudits.Insert: tenant_id required")
+	}
+	if row.DedupID == "" {
+		return false, errors.New("repository: EmailVerdictAudits.Insert: dedup_id required")
+	}
+	if row.Resolution == "" {
+		return false, errors.New("repository: EmailVerdictAudits.Insert: resolution required")
+	}
+	if row.ResolvedBy == "" {
+		return false, errors.New("repository: EmailVerdictAudits.Insert: resolved_by required")
+	}
+	if row.SourceIncidentID == "" {
+		return false, errors.New("repository: EmailVerdictAudits.Insert: source_incident_id required")
+	}
+	if row.ResolvedAt.IsZero() {
+		return false, errors.New("repository: EmailVerdictAudits.Insert: resolved_at required")
+	}
+	if row.ID == "" {
+		row.ID = uuid.NewString()
+	}
+	// The schema defines pseudo_message_id NOT NULL DEFAULT ''.
+	// Send the empty string explicitly so the Go layer's
+	// "field unset" maps cleanly to the schema's "no message
+	// found / skip path" convention.
+	pmid := row.PseudoMessageID
+	// NULLIF on original_verdict, new_verdict, reason lets the
+	// nil-vs-empty discrimination on the Go side flow through
+	// to SQL NULLs in the schema; downstream readers see NULL,
+	// not the empty string sentinel.
+	//
+	// CTE pattern surfaces the existing row's id on the
+	// duplicate path so the WS-5A.6 resolver can return the
+	// stable AuditID in its Outcome — matches the memory
+	// backend's "rewrite row.ID on conflict" contract.
+	var (
+		gotID        string
+		gotCreatedAt time.Time
+		isInsert     bool
+	)
+	err := p.db.QueryRowContext(ctx, `
+		WITH ins AS (
+		    INSERT INTO email_verdict_audit (
+		        id, tenant_id, dedup_id, pseudo_message_id,
+		        original_verdict, new_verdict, resolution,
+		        resolved_by, resolved_at, source_incident_id, reason,
+		        created_at
+		    ) VALUES (
+		        $1, $2, $3, $4,
+		        NULLIF($5,''), NULLIF($6,''), $7,
+		        $8, $9, $10, NULLIF($11,''),
+		        COALESCE($12, NOW())
+		    )
+		    ON CONFLICT (tenant_id, dedup_id) DO NOTHING
+		    RETURNING id, created_at, TRUE AS inserted
+		)
+		SELECT id, created_at, inserted FROM ins
+		UNION ALL
+		SELECT id, created_at, FALSE AS inserted
+		  FROM email_verdict_audit
+		 WHERE tenant_id=$2 AND dedup_id=$3
+		 LIMIT 1`,
+		row.ID, row.TenantID, row.DedupID, pmid,
+		row.OriginalVerdict, row.NewVerdict, row.Resolution,
+		row.ResolvedBy, row.ResolvedAt.UTC(), row.SourceIncidentID, row.Reason,
+		nullableTime(row.CreatedAt),
+	).Scan(&gotID, &gotCreatedAt, &isInsert)
+	if err != nil {
+		return false, err
+	}
+	row.ID = gotID
+	row.CreatedAt = gotCreatedAt
+	return isInsert, nil
+}
+
+func (p *pgEmailVerdictAudits) GetByDedupID(ctx context.Context, tenantID, dedupID string) (*EmailVerdictAudit, error) {
+	row := p.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, dedup_id, COALESCE(pseudo_message_id,''),
+		       COALESCE(original_verdict,''), COALESCE(new_verdict,''), resolution,
+		       resolved_by, resolved_at, source_incident_id, COALESCE(reason,''),
+		       created_at
+		  FROM email_verdict_audit
+		 WHERE tenant_id=$1 AND dedup_id=$2`, tenantID, dedupID)
+	var a EmailVerdictAudit
+	err := row.Scan(&a.ID, &a.TenantID, &a.DedupID, &a.PseudoMessageID,
+		&a.OriginalVerdict, &a.NewVerdict, &a.Resolution,
+		&a.ResolvedBy, &a.ResolvedAt, &a.SourceIncidentID, &a.Reason,
+		&a.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+type pgBannerStates struct{ db *postgres.DB }
+
+// Get returns the BannerState for (tenant, message_id_hash), or
+// ErrNotFound. The WS-5A.6 resolver uses the returned
+// DeliveredAt to decide whether to fire a reopen — a nil
+// DeliveredAt means the user hasn't observed the original
+// banner, so the reopen path stays silent per spec.
+func (p *pgBannerStates) Get(ctx context.Context, tenantID string, messageIDHash []byte) (*BannerState, error) {
+	if tenantID == "" {
+		return nil, errors.New("repository: BannerStates.Get: tenant_id required")
+	}
+	if len(messageIDHash) == 0 {
+		return nil, errors.New("repository: BannerStates.Get: message_id_hash required")
+	}
+	row := p.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, message_id_hash, delivered_at, reopened_at,
+		       COALESCE(last_reason,''),
+		       COALESCE(provider,''),
+		       COALESCE(delivered_message_id,''),
+		       COALESCE(delivered_email,''),
+		       created_at, updated_at
+		  FROM banner_state
+		 WHERE tenant_id=$1 AND message_id_hash=$2`, tenantID, messageIDHash)
+	var (
+		bs                      BannerState
+		deliveredAt, reopenedAt sql.NullTime
+	)
+	err := row.Scan(&bs.ID, &bs.TenantID, &bs.MessageIDHash, &deliveredAt, &reopenedAt,
+		&bs.LastReason, &bs.Provider, &bs.DeliveredMessageID, &bs.DeliveredEmail,
+		&bs.CreatedAt, &bs.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if deliveredAt.Valid {
+		t := deliveredAt.Time
+		bs.DeliveredAt = &t
+	}
+	if reopenedAt.Valid {
+		t := reopenedAt.Time
+		bs.ReopenedAt = &t
+	}
+	return &bs, nil
+}
+
+// MarkDelivered upserts the BannerState row and stamps
+// delivered_at = `at` IF NOT ALREADY STAMPED. The COALESCE on
+// the EXCLUDED side preserves the first-delivery timestamp on
+// re-runs so the audit trail records the genuine
+// user-observation time rather than the most-recent retry.
+func (p *pgBannerStates) MarkDelivered(ctx context.Context, in MarkDeliveredInput) error {
+	if in.TenantID == "" {
+		return errors.New("repository: BannerStates.MarkDelivered: tenant_id required")
+	}
+	if len(in.MessageIDHash) == 0 {
+		return errors.New("repository: BannerStates.MarkDelivered: message_id_hash required")
+	}
+	at := in.At
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO banner_state (
+		    tenant_id, message_id_hash, delivered_at,
+		    last_reason, provider, delivered_message_id, delivered_email
+		) VALUES (
+		    $1, $2, $3,
+		    NULLIF($4,''), NULLIF($5,''), NULLIF($6,''), NULLIF($7,'')
+		)
+		ON CONFLICT (tenant_id, message_id_hash) DO UPDATE
+		   SET delivered_at         = COALESCE(banner_state.delivered_at, EXCLUDED.delivered_at),
+		       last_reason          = COALESCE(NULLIF(EXCLUDED.last_reason,''),          banner_state.last_reason),
+		       provider             = COALESCE(NULLIF(EXCLUDED.provider,''),             banner_state.provider),
+		       delivered_message_id = COALESCE(NULLIF(EXCLUDED.delivered_message_id,''), banner_state.delivered_message_id),
+		       delivered_email      = COALESCE(NULLIF(EXCLUDED.delivered_email,''),      banner_state.delivered_email),
+		       updated_at           = NOW()`,
+		in.TenantID, in.MessageIDHash, at.UTC(),
+		in.Reason, in.Provider, in.DeliveredMessageID, in.DeliveredEmail)
+	return err
+}
+
+// MarkReopened upserts the BannerState row and stamps
+// reopened_at = `at`. Unlike MarkDelivered, the reopened
+// timestamp is a moving target — every WS-5A.6 reopen replaces
+// the previous one so the most-recent analyst action wins.
+// `last_reason` always carries the most-recent reason text.
+//
+// MarkReopened deliberately does NOT also stamp delivered_at:
+// the resolver's gating contract is "only fire reopen if a row
+// already exists with delivered_at IS NOT NULL", so by the
+// time this method is called the row is guaranteed to exist
+// and delivered_at is already populated. The defensive insert
+// here is a safety net (e.g. a race where a delete fired
+// between the gate check and the write) — the existence path
+// is the dominant one.
+func (p *pgBannerStates) MarkReopened(ctx context.Context, tenantID string, messageIDHash []byte, at time.Time, reason string) error {
+	if tenantID == "" {
+		return errors.New("repository: BannerStates.MarkReopened: tenant_id required")
+	}
+	if len(messageIDHash) == 0 {
+		return errors.New("repository: BannerStates.MarkReopened: message_id_hash required")
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO banner_state (
+		    tenant_id, message_id_hash, reopened_at, last_reason
+		) VALUES (
+		    $1, $2, $3, NULLIF($4,'')
+		)
+		ON CONFLICT (tenant_id, message_id_hash) DO UPDATE
+		   SET reopened_at = EXCLUDED.reopened_at,
+		       last_reason = COALESCE(NULLIF(EXCLUDED.last_reason,''), banner_state.last_reason),
+		       updated_at  = NOW()`,
+		tenantID, messageIDHash, at.UTC(), reason)
+	return err
 }

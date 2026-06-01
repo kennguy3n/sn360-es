@@ -168,6 +168,12 @@ type EvaluationResult struct {
 	RspamdOutcomeJSON []byte
 	EvaluatedAt       time.Time
 	CreatedAt         time.Time
+	// FinalVerdict is the analyst-driven override populated by
+	// the WS-5A.6 escalation consumer (migration 0021). The empty
+	// string means "no override — the platform's automated
+	// verdict derived from Tier + Primary is authoritative".
+	// Schema-validated against {"malicious","suspicious","benign"}.
+	FinalVerdict string
 }
 
 // FeedbackEvent is a single verified banner-action click. Rows live
@@ -417,6 +423,150 @@ type EvaluationResultRepository interface {
 	// the Postgres backend where the partial index excludes the
 	// NULL-sender rows.
 	ListBySender(ctx context.Context, tenantID string, senderHash []byte, limit int) ([]EvaluationResult, error)
+	// SetFinalVerdict assigns the analyst-driven verdict
+	// override slot added by migration 0021 (the
+	// `evaluation_results.final_verdict` column). `verdict`
+	// must be one of "malicious", "suspicious", or "benign";
+	// implementations MUST validate before issuing the UPDATE
+	// so a typo from the WS-5A.6 escalation path can't poison
+	// the column. Returns ErrNotFound when no row matches
+	// (tenantID, messageIDHash); the resolver treats this as a
+	// skip-with-reason rather than a hard error so the
+	// consumer-side audit row still persists.
+	//
+	// `verdict == ""` is a no-op clear of the override — the
+	// platform's automated verdict (Tier + primary_category)
+	// becomes authoritative again. Reserved for an admin
+	// "undo last analyst flip" path; not used on the hot
+	// resolver path.
+	SetFinalVerdict(ctx context.Context, tenantID string, messageIDHash []byte, verdict string) error
+}
+
+// EmailVerdictAudit is one row of the WS-5A.6 cross-repo
+// escalation audit trail (migration 0021). Exactly one row is
+// persisted per consumer invocation — success or
+// skip-with-reason — keyed off the producer's length-prefixed
+// SHA-256 DedupID via UNIQUE(tenant_id, dedup_id) so
+// re-deliveries that escape the JetStream 600s duplicate
+// window collapse to a single durable record.
+type EmailVerdictAudit struct {
+	ID               string
+	TenantID         string
+	DedupID          string
+	PseudoMessageID  string
+	OriginalVerdict  string
+	NewVerdict       string
+	Resolution       string
+	ResolvedBy       string
+	ResolvedAt       time.Time
+	SourceIncidentID string
+	Reason           string
+	CreatedAt        time.Time
+}
+
+// EmailVerdictAuditRepository persists EmailVerdictAudit rows
+// for the WS-5A.6 consumer.
+//
+// The single Insert method intentionally collapses
+// "insert-or-skip" into one round-trip via an
+// INSERT … ON CONFLICT (tenant_id, dedup_id) DO NOTHING. The
+// boolean return value distinguishes "this invocation is the
+// first observation" (true) from "we've already audited this
+// resolution" (false) so the resolver can short-circuit the
+// verdict-flip + banner-reopen side effects on the duplicate
+// path without burning a second audit row.
+type EmailVerdictAuditRepository interface {
+	// Insert attempts to persist `row` and returns inserted=true
+	// when the (tenant_id, dedup_id) tuple was previously
+	// unseen, inserted=false on a no-op conflict.
+	//
+	// The row's ID is auto-generated when empty so the
+	// resolver doesn't have to thread a UUID factory through.
+	// CreatedAt is filled by the database when unset so audit
+	// timestamps reflect commit time, not call-site time.
+	Insert(ctx context.Context, row *EmailVerdictAudit) (inserted bool, err error)
+	// GetByDedupID returns the audit row for (tenantID, dedupID),
+	// or ErrNotFound. Exposed so the consumer's debug /
+	// reconciliation tooling can inspect a specific
+	// disposition without a fan-out scan.
+	GetByDedupID(ctx context.Context, tenantID, dedupID string) (*EmailVerdictAudit, error)
+}
+
+// BannerState is the per-(tenant, message_id_hash) record of
+// whether a phishing banner was rendered, delivered, and (per
+// WS-5A.6) reopened. Lives in `banner_state` (migration 0021).
+//
+// The DeliveredAt invariant is the cornerstone of the
+// banner-reopen gate: the WS-5A.6 resolver only triggers a
+// reopen when DeliveredAt is non-nil (the user has actually
+// observed the original banner). For email that the provider
+// quarantined / rejected / silent-dropped before delivery,
+// reopening would push a "banner update" notification for a
+// message the user has never seen — confusing at best,
+// alerting at worst. The gate keeps the user-facing surface
+// faithful to the user's actual mailbox state.
+type BannerState struct {
+	ID            string
+	TenantID      string
+	MessageIDHash []byte
+	DeliveredAt   *time.Time
+	ReopenedAt    *time.Time
+	LastReason    string
+	// Provider records the LabelProviderKind that injected
+	// the banner (e.g. "gmail", "microsoft"). Persisted so
+	// the WS-5A.6 reopen path can route the re-injection
+	// through the same provider without re-deriving it from
+	// tenant config.
+	Provider string
+	// DeliveredMessageID is the plaintext provider message-id
+	// captured at delivery time. The reopen path passes it to
+	// the BannerInjector so the provider re-targets the same
+	// mail item without consulting the pseudonym.
+	DeliveredMessageID string
+	// DeliveredEmail is the recipient mailbox the banner was
+	// originally injected against. Required by provider
+	// InjectBanner calls; stamped alongside DeliveredMessageID
+	// by the original banner injection path.
+	DeliveredEmail string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// BannerStateRepository persists BannerState rows.
+//
+// The three writes the WS-5A.6 + action.banner code paths
+// need:
+//
+//   - MarkDelivered: stamped by the existing handleActionBanner
+//     path (cmd/sn360-es/consumers_action.go) after the
+//     provider InjectBanner returns success. Upserts a row
+//     keyed on (tenant_id, message_id_hash) and sets
+//     delivered_at = NOW() if it was null.
+//   - MarkReopened: stamped by the WS-5A.6 resolver when it
+//     re-injects a banner with an "Updated by SOC analyst"
+//     reason. Sets reopened_at = NOW() and last_reason in a
+//     single UPDATE.
+//   - Get: read-side surface for the resolver's
+//     "delivered_at IS NOT NULL" gate. Returns ErrNotFound
+//     when no row exists.
+
+// MarkDeliveredInput packages the delivery-stamp arguments. A
+// dedicated input struct keeps the BannerStateRepository
+// signature stable as new provider-tracking fields land.
+type MarkDeliveredInput struct {
+	TenantID           string
+	MessageIDHash      []byte
+	At                 time.Time
+	Reason             string
+	Provider           string
+	DeliveredMessageID string
+	DeliveredEmail     string
+}
+
+type BannerStateRepository interface {
+	Get(ctx context.Context, tenantID string, messageIDHash []byte) (*BannerState, error)
+	MarkDelivered(ctx context.Context, in MarkDeliveredInput) error
+	MarkReopened(ctx context.Context, tenantID string, messageIDHash []byte, at time.Time, reason string) error
 }
 
 // CommHistoryListByTenantMaxLimit is the hard cap on the number of
@@ -696,4 +846,14 @@ type Registry struct {
 	SyncCheckpoints        SyncCheckpointRepository
 	BehavioralBaselines    UserBehavioralBaselineRepository
 	OrgGraphs              OrgGraphRepository
+	// EmailVerdictAudits backs the WS-5A.6 cross-repo
+	// escalation consumer (cmd/sn360-es/consumers_soc_resolution.go).
+	EmailVerdictAudits EmailVerdictAuditRepository
+	// BannerStates tracks per-(tenant, message_id_hash)
+	// banner delivery + reopen state. The action.banner
+	// consumer stamps delivered_at; the WS-5A.6 resolver
+	// gates banner-reopen on delivered_at being non-nil so
+	// the reopened banner is only injected for email the
+	// user has actually seen.
+	BannerStates BannerStateRepository
 }

@@ -36,6 +36,8 @@ func TestStreamForSubject_CoversAllDefaultStreamSpecs(t *testing.T) {
 		{"action", "es.action.deliver", StreamAction},
 		{"management WS-4a comm_history.update", "es.management.comm_history.update", StreamManagement},
 		{"management future subjects", "es.management.something.else", StreamManagement},
+		{"platform WS-5A.6 incident_resolved", "soc.incident.resolved", StreamPlatform},
+		{"platform future soc envelopes", "soc.incident.assigned", StreamPlatform},
 
 		// Negative cases: subjects outside the declared mapping must
 		// return "" so DLQ replay surfaces the routing miss instead
@@ -46,6 +48,14 @@ func TestStreamForSubject_CoversAllDefaultStreamSpecs(t *testing.T) {
 		{"unrouted: empty", "", ""},
 		{"unrouted: foreign prefix", "foo.bar.baz", ""},
 		{"unrouted: prefix collision (es.managementx)", "es.managementx.foo", ""},
+		// "soc" bare token (no trailing dot) is intentionally
+		// claimed by StreamPlatform so a producer-side typo that
+		// drops the suffix is at least routable. A foreign prefix
+		// like "socx.foo" must still be unrouted; this case pins
+		// that asymmetry against future maintainers widening the
+		// prefix match to `socx.` by accident.
+		{"platform bare token", "soc", StreamPlatform},
+		{"unrouted: socx prefix collision", "socx.foo", ""},
 	}
 	for _, c := range cases {
 		c := c
