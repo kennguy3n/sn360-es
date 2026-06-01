@@ -197,6 +197,41 @@ func TestPickStrongest_MultiFeed(t *testing.T) {
 	}
 }
 
+// TestHostFromURL_HandlesIPv6AndNonHTTPSchemes locks the behaviour of
+// the URL → host extractor used by ExtractCandidates. The earlier
+// hand-rolled version walked the separator list (/ : ? #) in order
+// and broke on the first `:` inside the bracket pair of an IPv6 host,
+// producing the nonsense host `[` for any IPv6 URL. Switching to
+// net/url.Parse fixes that without losing the scheme guard that keeps
+// mailto:/ftp:/file: out of the indicator candidate list.
+func TestHostFromURL_HandlesIPv6AndNonHTTPSchemes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"http", "http://example.com/path", "example.com"},
+		{"https with port", "https://Bad.Example.com:8443/x", "bad.example.com"},
+		{"https with userinfo", "https://user:pw@example.com/x", "example.com"},
+		{"http ipv4 with port", "http://1.2.3.4:80/z", "1.2.3.4"},
+		{"http ipv6", "http://[::1]:8080/path", "::1"},
+		{"https ipv6", "https://[2001:db8::1]/q?x=1", "2001:db8::1"},
+		{"non-http scheme", "ftp://example.com/file", ""},
+		{"mailto", "mailto:user@example.com", ""},
+		{"malformed", "::not-a-url", ""},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := hostFromURL(tc.in); got != tc.want {
+				t.Errorf("hostFromURL(%q) = %q; want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestExtractCandidates_BodyAndSender(t *testing.T) {
 	t.Parallel()
 	req := dto.EvaluateRequest{

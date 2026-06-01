@@ -3,6 +3,7 @@ package tier0
 import (
 	"context"
 	"net/mail"
+	neturl "net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -326,27 +327,29 @@ func domainFromAddress(addr string) string {
 }
 
 // hostFromURL extracts the host portion of a URL. Returns the empty
-// string when the URL does not parse.
+// string when the URL does not parse, or when the scheme is anything
+// other than http(s) (so mailto:, file:, and other non-network schemes
+// do not pollute the indicator candidate list).
+//
+// Uses net/url.Parse so bracketed IPv6 hosts (e.g. http://[::1]:8080/)
+// are extracted correctly. The earlier hand-rolled parser walked the
+// separator list (/ : ? #) in order and broke on the first `:` it saw
+// inside the bracket pair, yielding a nonsensical `[` host string. The
+// extra allocation that url.Parse costs is negligible against the
+// LookupByHash that follows — the canonicalisation cap in Check()
+// keeps the total candidate count bounded.
 func hostFromURL(raw string) string {
-	const httpsPrefix, httpPrefix = "https://", "http://"
-	switch {
-	case strings.HasPrefix(raw, httpsPrefix):
-		raw = raw[len(httpsPrefix):]
-	case strings.HasPrefix(raw, httpPrefix):
-		raw = raw[len(httpPrefix):]
+	u, err := neturl.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	switch u.Scheme {
+	case "http", "https":
 	default:
 		return ""
 	}
-	// Strip user-info, port, path, query, fragment.
-	if at := strings.IndexByte(raw, '@'); at >= 0 {
-		raw = raw[at+1:]
-	}
-	for _, sep := range []byte{'/', ':', '?', '#'} {
-		if i := strings.IndexByte(raw, sep); i >= 0 {
-			raw = raw[:i]
-		}
-	}
-	return strings.ToLower(raw)
+	host := u.Hostname() // strips port AND the IPv6 brackets
+	return strings.ToLower(host)
 }
 
 // SeverityTier maps an intel match's [0,100] severity to the gate
