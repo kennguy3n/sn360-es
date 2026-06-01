@@ -74,10 +74,22 @@ func (a *application) handleEvaluateRequest(ctx context.Context, msg events.Mess
 	// (internal/service/evaluate/batch.go) makes the same
 	// guarantee, keeping the per-message and batch paths
 	// symmetric.
-	result, err := a.evaluator.Evaluate(ctx, req, a.signalEnricher.Enrich(ctx, req, req.Signals))
+	signals := a.signalEnricher.Enrich(ctx, req, req.Signals)
+	result, err := a.evaluator.Evaluate(ctx, req, signals)
 	if err != nil {
 		return fmt.Errorf("evaluate: %w", err)
 	}
+	// WS-4a hot path: publish the per-message sighting onto
+	// es.management.comm_history.update so the management Postgres
+	// consumer can atomically increment communication_histories
+	// without waiting for the 4-hour relationship_worker cycle.
+	// The publish is best-effort: a failure to enqueue the sighting
+	// is logged and swallowed so a transient bus blip cannot fail
+	// the evaluate-request consumer (which would NAK + retry the
+	// upstream envelope and produce a duplicate evaluate.result).
+	// The worker's next cycle will recompute counts from persisted
+	// rows anyway, so a dropped sighting is recovered within 4h.
+	a.publishCommHistoryUpdate(ctx, req)
 	dto.BackfillRoutingFields(&result, req)
 	payload, err := json.Marshal(result)
 	if err != nil {
@@ -95,6 +107,123 @@ func (a *application) handleEvaluateRequest(ctx context.Context, msg events.Mess
 		return fmt.Errorf("publish evaluate.result: %w", err)
 	}
 	return nil
+}
+
+// handleCommHistoryUpdate is the WS-4a consumer side of the
+// incremental-baselines pipeline. It unmarshals a CommHistoryUpdate
+// envelope, validates it, and applies it atomically to
+// communication_histories via the repository's RecordSighting
+// method. Idempotency is upstream (JetStream's dedup window collapses
+// redeliveries of the same (tenant, sender_hash, recipient_hash,
+// message_id) tuple at the broker); RecordSighting is a best-effort
+// monotonic increment, not exactly-once.
+//
+// Error semantics:
+//   - terminal-bad-message (Validate failure, unmarshal error): log
+//     and return nil so JetStream does NOT redeliver. The envelope
+//     cannot become valid on retry; redelivering would burn the
+//     max-deliver budget on a poisoned message.
+//   - transient repository error: return the error so JetStream
+//     redelivers within the dedup window. After 3 deliveries the
+//     consumer abandons the sighting (relationship_worker recovers
+//     it on its next 4h cycle).
+func (a *application) handleCommHistoryUpdate(ctx context.Context, msg events.Message) error {
+	if a.repos == nil || a.repos.CommunicationHistories == nil {
+		return nil
+	}
+	var upd dto.CommHistoryUpdate
+	if err := json.Unmarshal(msg.Data(), &upd); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: comm_history.update unmarshal failed",
+			slog.Any("error", err))
+		return nil
+	}
+	if err := upd.Validate(); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: comm_history.update validate failed",
+			slog.String("tenant_id", upd.TenantID),
+			slog.String("message_id", upd.MessageID),
+			slog.Any("error", err))
+		return nil
+	}
+	sighting := repository.Sighting{
+		TenantID:         upd.TenantID,
+		SenderHash:       upd.SenderHash,
+		RecipientHash:    upd.RecipientHash,
+		SenderDomainHash: upd.SenderDomainHash,
+		SenderDomain:     upd.SenderDomain,
+		SentAt:           upd.SentAt,
+	}
+	if err := a.repos.CommunicationHistories.RecordSighting(ctx, sighting); err != nil {
+		// Surface as a redeliverable error: a Postgres blip
+		// should not silently lose the sighting. JetStream
+		// honours MaxDeliver=3 and falls back to the DLQ
+		// processor on the third failure.
+		a.logger.ErrorContext(ctx, "sn360-es: persist comm_history.update failed",
+			slog.String("tenant_id", upd.TenantID),
+			slog.String("message_id", upd.MessageID),
+			slog.Any("error", err))
+		return fmt.Errorf("persist comm_history.update: %w", err)
+	}
+	return nil
+}
+
+// publishCommHistoryUpdate is the WS-4a producer side of the
+// incremental-baselines pipeline. It derives the per-message sighting
+// from the request (via the SignalEnricher's SightingFor helper,
+// which shares the read-side normalisation so the (tenant, sender,
+// recipient) triple matches the row keys the read-side enricher's
+// Get() targets), marshals it, and publishes it onto
+// es.management.comm_history.update with the deterministic dedup id
+// bound to (tenant, sender_hash, recipient_hash, message_id).
+//
+// The function intentionally swallows all errors: failure to
+// produce a sighting must NEVER block the evaluate.request handler,
+// because that would NAK the upstream envelope and produce a
+// duplicate evaluate.result on the next redelivery. The
+// relationship_worker's 4-hour recomputation cycle recovers any
+// dropped sighting from the persisted communication_histories
+// rows, so the worst case here is a 4h staleness window on the
+// incremental counters.
+func (a *application) publishCommHistoryUpdate(ctx context.Context, req dto.EvaluateRequest) {
+	if a.signalEnricher == nil || a.eventBus == nil {
+		return
+	}
+	upd, ok := a.signalEnricher.SightingFor(ctx, req)
+	if !ok {
+		// SightingFor returns false on the same short-circuits
+		// Enrich applies (empty tenant / sender / recipient /
+		// message-id). No need to log; the read path will have
+		// already short-circuited in Enrich with the same
+		// triple, and a per-message warning would spam the log
+		// for every Tier-0 reject.
+		return
+	}
+	if err := upd.Validate(); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: comm_history.update derived but failed validate",
+			slog.String("tenant_id", upd.TenantID),
+			slog.String("message_id", upd.MessageID),
+			slog.Any("error", err))
+		return
+	}
+	payload, err := json.Marshal(upd)
+	if err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: comm_history.update marshal failed",
+			slog.String("tenant_id", upd.TenantID),
+			slog.String("message_id", upd.MessageID),
+			slog.Any("error", err))
+		return
+	}
+	if err := a.eventBus.Publish(ctx, dto.CommHistoryUpdateSubject, payload,
+		events.WithMessageID(upd.DedupID()),
+		events.WithCorrelationID(req.CorrelationID),
+		events.WithTenantID(upd.TenantID),
+		events.WithEventType("management.comm_history.update"),
+		events.WithTraceContext(ctx),
+	); err != nil {
+		a.logger.WarnContext(ctx, "sn360-es: publish comm_history.update failed",
+			slog.String("tenant_id", upd.TenantID),
+			slog.String("message_id", upd.MessageID),
+			slog.Any("error", err))
+	}
 }
 
 // evaluateResultRow projects a DTO into the repository row shape.
