@@ -216,6 +216,16 @@ func (h *IntelFeedsHandler) createFeed(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	// Trim before the empty check so a whitespace-only payload also
+	// short-circuits with a clear 400 in both backends. PgIntelStore
+	// would catch an empty URL via the CHECK (length(url) > 0)
+	// constraint on intel_feeds (returning a 500) but would happily
+	// store a whitespace-only one; MemoryIntelStore would accept
+	// either silently. The patch path applies the same trim — see
+	// patchFeed below.
+	req.Name = strings.TrimSpace(req.Name)
+	req.Provider = strings.TrimSpace(req.Provider)
+	req.URL = strings.TrimSpace(req.URL)
 	if req.Name == "" || req.Provider == "" || req.URL == "" {
 		writeError(w, http.StatusBadRequest, "name_provider_url_required")
 		return
@@ -280,7 +290,21 @@ func (h *IntelFeedsHandler) patchFeed(w http.ResponseWriter, r *http.Request, id
 	}
 	patch := intel.FeedPatch{}
 	if req.URL != nil {
-		patch.URL = req.URL
+		// Reject empty/whitespace URLs at the handler so the dev/test
+		// in-memory backend and production Postgres backend behave
+		// identically. PgIntelStore would otherwise return a 500 from
+		// the CHECK (length(url) > 0) constraint on intel_feeds
+		// (migrations/0024_threat_intel_feeds.up.sql) while
+		// MemoryIntelStore silently accepted the empty URL, creating
+		// a feed the worker could never poll. Trim whitespace too so
+		// the more obvious "URL is just spaces" case also short-
+		// circuits with a clear 400.
+		trimmed := strings.TrimSpace(*req.URL)
+		if trimmed == "" {
+			writeError(w, http.StatusBadRequest, "url_empty")
+			return
+		}
+		patch.URL = &trimmed
 	}
 	if req.FetchIntervalSec != nil {
 		// Same OpenAPI minimum (60s) the create path enforces.

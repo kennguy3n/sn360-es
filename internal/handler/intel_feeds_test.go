@@ -145,6 +145,15 @@ func TestIntelFeeds_PatchValidation(t *testing.T) {
 		{"below_minimum", `{"fetch_interval_sec":30}`, http.StatusBadRequest},
 		{"exact_minimum_ok", `{"fetch_interval_sec":60}`, http.StatusOK},
 		{"large_ok", `{"fetch_interval_sec":86400}`, http.StatusOK},
+		// URL guards: PgIntelStore would have rejected the empty
+		// string via the CHECK (length(url) > 0) constraint on
+		// intel_feeds (returning a 500) and stored the whitespace-
+		// only one; MemoryIntelStore would accept either silently.
+		// The handler trims+validates so both backends produce the
+		// same 400 in this case.
+		{"url_empty", `{"url":""}`, http.StatusBadRequest},
+		{"url_whitespace_only", `{"url":"   "}`, http.StatusBadRequest},
+		{"url_valid", `{"url":"https://example.com/new.csv"}`, http.StatusOK},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

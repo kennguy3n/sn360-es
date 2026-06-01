@@ -223,11 +223,39 @@ WHERE id = $4`
 	return nil
 }
 
-// UpsertIndicators applies INSERT … ON CONFLICT for each Indicator
-// in a single statement using the standard multi-row VALUES form.
+// upsertRowCols is the number of placeholders the multi-row INSERT
+// uses per indicator (hash, indicator, indicator_type, feed_id,
+// severity, tags, last_seen). Postgres' wire protocol caps a single
+// statement at 65,535 bound parameters; with 7 columns we could
+// theoretically pack ~9,362 rows into one INSERT. The constant is
+// kept next to upsertBatchSize so a future schema change that adds
+// a column forces the batch ceiling down in lockstep.
+const upsertRowCols = 7
+
+// upsertBatchSize is the maximum rows packed into one
+// UpsertIndicators round-trip. 5,000 × 7 = 35,000 placeholders —
+// well under the Postgres 65,535 limit, leaving headroom for both
+// schema growth (new columns) and any future call site that
+// pre-pends bookkeeping rows to the same statement. Bumped from
+// "unbounded single statement" to a batched loop because URLhaus
+// downloads can swell past 10k rows during incident-response
+// surges, and a generic CSV provider has no a priori cap on row
+// count. With the cap, a 100k-row feed becomes 20 round-trips
+// inside a single transaction — still atomic, never exceeds the
+// parameter limit.
+const upsertBatchSize = 5000
+
+// UpsertIndicators applies INSERT … ON CONFLICT for each Indicator.
 // The hot-path constraint is correctness rather than throughput:
 // the scheduler dispatches one poller at a time per feed, so a
-// single round-trip per feed is acceptable.
+// handful of round-trips per feed is acceptable.
+//
+// Large feeds (URLhaus during surges, generic CSV providers) are
+// chunked into batches of upsertBatchSize and wrapped in a single
+// transaction so a partial batch failure rolls back the whole feed
+// — preserving the all-or-nothing semantic of the previous
+// single-statement implementation. Small feeds (≤ upsertBatchSize)
+// skip the transaction overhead and execute as one statement.
 //
 // ON CONFLICT updates last_seen to now and bumps severity via
 // GREATEST so a higher-confidence republish wins. first_seen and
@@ -240,20 +268,62 @@ func (s *PgIntelStore) UpsertIndicators(ctx context.Context, feedID string, indi
 	if len(indicators) == 0 {
 		return 0, nil
 	}
+	now := s.now()
+	if len(indicators) <= upsertBatchSize {
+		return s.upsertIndicatorsBatch(ctx, s.db, feedID, indicators, now)
+	}
+	// Multi-batch path — wrap in a transaction so partial failures
+	// don't leave the feed half-updated.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("intel: upsert indicators: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+	total := 0
+	for start := 0; start < len(indicators); start += upsertBatchSize {
+		end := start + upsertBatchSize
+		if end > len(indicators) {
+			end = len(indicators)
+		}
+		n, err := s.upsertIndicatorsBatch(ctx, tx, feedID, indicators[start:end], now)
+		if err != nil {
+			return 0, err
+		}
+		total += n
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("intel: upsert indicators: commit: %w", err)
+	}
+	return total, nil
+}
+
+// indicatorUpsertExecer abstracts ExecContext so upsertIndicatorsBatch
+// can run against either the raw *postgres.DB (single-batch path)
+// or a *sql.Tx (multi-batch transactional path) without duplicating
+// the statement builder.
+type indicatorUpsertExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// upsertIndicatorsBatch issues one INSERT … ON CONFLICT round-trip
+// over `chunk`. Caller must ensure len(chunk) ≤ upsertBatchSize.
+func (s *PgIntelStore) upsertIndicatorsBatch(ctx context.Context, exec indicatorUpsertExecer, feedID string, chunk []intel.Indicator, now time.Time) (int, error) {
+	if len(chunk) == 0 {
+		return 0, nil
+	}
 	// Build a multi-row VALUES statement. We use $1, $2, … placeholders
 	// rather than COPY because Postgres' ON CONFLICT semantics on COPY
 	// require an intermediate table and we want the single-statement
 	// shape.
-	const rowCols = 7
 	var b strings.Builder
+	b.Grow(96 + len(chunk)*40) // small heuristic; avoids repeated grows
 	b.WriteString(`INSERT INTO intel_indicators (hash, indicator, indicator_type, feed_id, severity, tags, last_seen) VALUES `)
-	args := make([]any, 0, len(indicators)*rowCols)
-	now := s.now()
-	for i, ind := range indicators {
+	args := make([]any, 0, len(chunk)*upsertRowCols)
+	for i, ind := range chunk {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		base := i * rowCols
+		base := i * upsertRowCols
 		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, $%d, $%d)",
 			base+1, base+2, base+3, base+4, base+5, base+6, base+7)
 		args = append(args,
@@ -273,7 +343,7 @@ SET indicator = EXCLUDED.indicator,
     last_seen = EXCLUDED.last_seen,
     severity = GREATEST(intel_indicators.severity, EXCLUDED.severity),
     tags = EXCLUDED.tags`)
-	res, err := s.db.ExecContext(ctx, b.String(), args...)
+	res, err := exec.ExecContext(ctx, b.String(), args...)
 	if err != nil {
 		return 0, fmt.Errorf("intel: upsert indicators: %w", err)
 	}
