@@ -326,7 +326,16 @@ func splitSubjectBody(rfc822 string) (subject, body string) {
 	}
 	header := rfc822[:idx]
 	body = rfc822[idx+len(sep):]
-	for _, line := range strings.Split(header, "\r\n") {
+	// Match `reassemble`'s splitting strategy: fall back to LF
+	// when CRLF produces a single element so an LF-only fixture
+	// doesn't silently blank out the Subject. Currently
+	// unreachable on the synthetic corpus (every fixture is
+	// CRLF) but defensive for any future LF-only corpus.
+	lines := strings.Split(header, "\r\n")
+	if len(lines) == 1 {
+		lines = strings.Split(header, "\n")
+	}
+	for _, line := range lines {
 		if strings.HasPrefix(strings.ToLower(line), "subject:") {
 			subject = strings.TrimSpace(line[len("subject:"):])
 			break

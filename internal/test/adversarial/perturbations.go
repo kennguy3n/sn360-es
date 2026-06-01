@@ -351,9 +351,14 @@ func MIMEMultipartSmuggle(rfc822 string, rng *rand.Rand) string {
 	outer := boundaries[rng.IntN(len(boundaries))]
 	inner := boundaries[rng.IntN(len(boundaries))]
 	// Force outer != inner so the smuggled boundary is always
-	// genuinely conflicting.
-	if inner == outer {
-		inner = boundaries[(rng.IntN(len(boundaries))+1)%len(boundaries)]
+	// genuinely conflicting. Loop until distinct: the previous
+	// single-retry fallback (`(rng.IntN(N)+1)%N`) was also
+	// uniform over all indices, so it had a 1/N chance of
+	// landing back on `outer` — producing matching boundaries
+	// ~1/6 of iterations and silently degrading the smuggling
+	// scenario the test is supposed to exercise.
+	for inner == outer {
+		inner = boundaries[rng.IntN(len(boundaries))]
 	}
 
 	idx := strings.Index(rfc822, "\r\n\r\n")
