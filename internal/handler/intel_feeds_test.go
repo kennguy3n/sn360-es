@@ -345,3 +345,59 @@ func TestIntelFeeds_MethodNotAllowed(t *testing.T) {
 		t.Error("Allow header missing")
 	}
 }
+
+// TestIntelFeeds_ContentTypeValidation pins the decodeJSON contract:
+// admin POST / PATCH endpoints accept only application/json (with
+// optional charset and other params), return 415 with Accept-Post
+// pointing at the right type for explicit non-JSON content types, and
+// stay tolerant of a missing Content-Type header so curl ergonomics
+// don't suffer. Without this guard, a form-encoded POST got a vague
+// "invalid_json" 400 instead of an actionable "wrong content type"
+// 415 — and the doc comment on decodeJSON used to claim Content-Type
+// validation it didn't actually perform.
+func TestIntelFeeds_ContentTypeValidation(t *testing.T) {
+	t.Parallel()
+	body := `{"name":"ct-test","provider":"csv","url":"https://example.com/x.csv"}`
+	cases := []struct {
+		name           string
+		contentType    string
+		wantStatus     int
+		wantAcceptPost bool
+	}{
+		{"missing_ok", "", http.StatusCreated, false},
+		{"application_json_ok", "application/json", http.StatusCreated, false},
+		{"json_with_charset_ok", "application/json; charset=utf-8", http.StatusCreated, false},
+		{"form_encoded_415", "application/x-www-form-urlencoded", http.StatusUnsupportedMediaType, true},
+		{"text_plain_415", "text/plain", http.StatusUnsupportedMediaType, true},
+		{"malformed_415", "application/json;;", http.StatusUnsupportedMediaType, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// Each case constructs its own handler with a fresh
+			// store so a successful CREATE in one subtest doesn't
+			// produce a 409 dup on the next. Cheaper than parallel
+			// stores anyway since the in-memory store is ns-scale.
+			h, _ := newTestHandler(nil)
+			req := httptest.NewRequest(http.MethodPost,
+				"/v1/intel/feeds",
+				bytes.NewReader([]byte(body)))
+			if c.contentType != "" {
+				req.Header.Set("Content-Type", c.contentType)
+			}
+			req = req.WithContext(adminCtx(req.Context(), privacy.ScopeAdminAPI))
+			rec := httptest.NewRecorder()
+			h.ServeFeeds(rec, req)
+			if rec.Code != c.wantStatus {
+				t.Fatalf("status = %d; want %d (body=%s)",
+					rec.Code, c.wantStatus, rec.Body.String())
+			}
+			gotAcceptPost := rec.Header().Get("Accept-Post")
+			if c.wantAcceptPost && gotAcceptPost != "application/json" {
+				t.Errorf("Accept-Post = %q; want application/json", gotAcceptPost)
+			}
+			if !c.wantAcceptPost && gotAcceptPost != "" {
+				t.Errorf("Accept-Post = %q; want empty for non-415", gotAcceptPost)
+			}
+		})
+	}
+}

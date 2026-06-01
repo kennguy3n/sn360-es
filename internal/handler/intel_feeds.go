@@ -14,6 +14,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -426,9 +427,29 @@ type wireError string
 
 func (e wireError) Error() string { return string(e) }
 
-// decodeJSON validates Content-Type and decodes into out. Returns
-// false when the response was already written (caller short-circuits).
+// decodeJSON validates the Content-Type header, decodes the body into
+// `out`, and rejects unknown fields. Returns false when the response
+// was already written (caller short-circuits).
+//
+// Content-Type handling. We require `application/json` (charset and
+// other parameters are tolerated, e.g. `application/json; charset=utf-8`)
+// and return 415 Unsupported Media Type when a request body is supplied
+// under a non-JSON content type. An entirely missing Content-Type
+// header is permitted so the endpoint stays curl-friendly when the
+// caller forgot the `-H` flag — the json decoder will still reject any
+// non-JSON payload below with a 400. The 415 path matters because the
+// admin API is occasionally hit by misconfigured automations that POST
+// form-encoded bodies; without the explicit check those got a vague
+// "invalid_json" instead of an actionable "wrong content type".
 func decodeJSON(w http.ResponseWriter, r *http.Request, out any) bool {
+	if ct := r.Header.Get("Content-Type"); ct != "" {
+		mediaType, _, err := mime.ParseMediaType(ct)
+		if err != nil || !strings.EqualFold(mediaType, "application/json") {
+			w.Header().Set("Accept-Post", "application/json")
+			writeError(w, http.StatusUnsupportedMediaType, "unsupported_media_type")
+			return false
+		}
+	}
 	const limit = 1 << 20 // 1 MiB cap on admin bodies
 	body, err := io.ReadAll(io.LimitReader(r.Body, limit))
 	if err != nil {

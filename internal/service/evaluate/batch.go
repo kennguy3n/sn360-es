@@ -413,6 +413,7 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 			t.PassBelow = pendings[idx].tier0Outcome.Tier1ThresholdOverride
 		}
 		verdict := t.Decision(resp.Score)
+		tier0 := pendings[idx].tier0Outcome
 		res := dto.EvaluateResult{
 			TenantID:      pendings[idx].req.TenantID,
 			MessageID:     pendings[idx].req.MessageID,
@@ -436,8 +437,17 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 		// skipped aggregateLightweight when Fallback was wired but
 		// returned an error — the exact degraded-mode scenario where
 		// downstream consumers still need a fully-formed verdict.
+		//
+		// Escalation conditions mirror the per-message path's
+		// shouldRunTier2 (evaluator.go:521-535): Tier 1 said escalate
+		// OR Tier 0 set ForceEscalate (e.g. flag-only ti_match where
+		// severity < 50). Without honouring ForceEscalate, a Tier 0
+		// IOC hit that lands on a benign-looking subject would skip
+		// Tier 2 entirely in the batch path — diverging from the
+		// per-message verdict and dropping the LLM corroboration the
+		// gate documents at tier0/gate.go:306.
 		fallbackRan := false
-		if verdict == tier1.VerdictEscalate && o.cfg.Fallback != nil {
+		if shouldFallbackToTier2(verdict, tier0) && o.cfg.Fallback != nil {
 			full, err := o.cfg.Fallback.Evaluate(ctx, pendings[idx].req, pendings[idx].sig)
 			if err == nil {
 				res = full
@@ -462,6 +472,16 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 			// evaluator.Evaluate (evaluator.go:278-288).
 			o.aggregateLightweight(&res, pendings[idx].sig, tenantWeights)
 		}
+		// Propagate the captured Tier 0 outcome onto the result
+		// (matching evaluator.go:294's res.Tier0 = &tier0) so
+		// downstream consumers see the same TIMatch metadata struct
+		// in both batch and per-message paths. Fallback may have
+		// already set res.Tier0 from its own Tier 0 re-classification;
+		// in that case we leave the Fallback's outcome alone since it
+		// reflects the same gate but with potentially fresher state
+		// (e.g. an indicator GC'd between the batch's Tier 0 check
+		// and Fallback's re-check would correctly clear the match).
+		propagateTier0OntoResult(&res, tier0)
 		o.finalisePending(ctx, pendings[idx].msg, pendings[idx].req, res, "evaluate: publish result failed")
 	}
 
@@ -631,6 +651,60 @@ func (o *BatchOrchestrator) resolveTenantConfig(ctx context.Context, tenantID st
 		thresholds.FlagAbove = *tc.Tier1FlagThreshold
 	}
 	return weights, thresholds
+}
+
+// shouldFallbackToTier2 mirrors evaluator.shouldRunTier2 for the batch
+// non-bypass path: the orchestrator hands the message to the Tier 2
+// Fallback (the per-message Evaluator) when Tier 1 said escalate OR
+// Tier 0 set ForceEscalate. Bypass / SkipML / RspamdOnly cases never
+// reach this code because they short-circuit at the top of processOnce
+// via tier0BypassResult, so the helper only handles the surviving
+// non-bypass outcomes.
+//
+// Keeping the rule in one helper (with a unit test that asserts it
+// agrees with shouldRunTier2 across the relevant outcomes) prevents
+// the batch and per-message paths from silently diverging the next
+// time someone touches one but not the other — which is exactly the
+// drift that produced the ForceEscalate-drop bug this helper fixes.
+func shouldFallbackToTier2(verdict tier1.Verdict, tier0 dto.Tier0Outcome) bool {
+	if tier0.ForceEscalate {
+		return true
+	}
+	return verdict == tier1.VerdictEscalate
+}
+
+// propagateTier0OntoResult attaches the batch path's Tier 0 outcome to
+// `res` and surfaces the gate's symbolic reason code (e.g. "ti_match")
+// in res.ReasonCodes when it's not already present. It is the
+// non-bypass counterpart to tier0BypassResult and exists so the batch
+// Tier 1 path matches evaluator.go:294's `res.Tier0 = &tier0`
+// behaviour without re-implementing the reason-code merge logic at
+// each call site.
+//
+// Both safeguards (the nil-check and the contains-check) cover the
+// case where the Fallback evaluator already populated res.Tier0 / the
+// gate's reason code via its own Tier 0 pass — we don't want to
+// stomp the fresher Fallback outcome with the batch's snapshot, but we
+// DO want to repair the result when Fallback was nil / errored or
+// when there was no Tier 0 hit at all (in which case outcome.Reason
+// is empty and this is effectively a no-op).
+func propagateTier0OntoResult(res *dto.EvaluateResult, outcome dto.Tier0Outcome) {
+	if res.Tier0 == nil {
+		// Copy outcome to a fresh address so callers mutating
+		// pendings[idx].tier0Outcome after publish cannot
+		// retroactively change res.Tier0.
+		captured := outcome
+		res.Tier0 = &captured
+	}
+	if outcome.Reason == "" {
+		return
+	}
+	for _, code := range res.ReasonCodes {
+		if code == outcome.Reason {
+			return
+		}
+	}
+	res.ReasonCodes = append(res.ReasonCodes, outcome.Reason)
 }
 
 // tier0BypassResult converts a Tier 0 bypass outcome into the published
