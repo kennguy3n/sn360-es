@@ -83,6 +83,24 @@ func (c Config) validate() error {
 			return fmt.Errorf("PG_REGION_MAP must contain an entry for PG_HOME_REGION=%q; got regions %v", c.Postgres.HomeRegion, sortedRegionKeys(c.Postgres.RegionMap))
 		}
 	}
+	// WS-7a: NATS super-cluster mirrors the PG_REGION_MAP guard
+	// above. The NATS client's home-region check in
+	// pkg/events/nats/supercluster.go:resolveSuperclusterServers
+	// also fails at boot, but centralising the check in validate()
+	// catches the misconfig before bus.New attempts any
+	// infrastructure connection — the operator's error experience
+	// is consistent between PG and NATS supercluster misconfig.
+	// NATS HomeRegion is sourced from Postgres.HomeRegion at
+	// wiring time (cmd/sn360-es/wire_infra.go:103), so the same
+	// home-region label drives both validators.
+	if len(c.NATS.Supercluster) > 0 {
+		if c.Postgres.HomeRegion == "" {
+			return errors.New("PG_HOME_REGION must be set when NATS_SUPERCLUSTER is configured (the home-region label is shared across PG and NATS super-cluster routing)")
+		}
+		if _, ok := c.NATS.Supercluster[c.Postgres.HomeRegion]; !ok {
+			return fmt.Errorf("NATS_SUPERCLUSTER must contain an entry for PG_HOME_REGION=%q; got regions %v", c.Postgres.HomeRegion, sortedRegionKeys(c.NATS.Supercluster))
+		}
+	}
 	// TIER1_SUPPRESS_PARTNER is the (typically negative) offset
 	// applied to Tier1 PassBelow / FlagAbove for Partner / Customer
 	// senders. .env.example documents the contract as "Must be <= 0"

@@ -54,6 +54,13 @@ func parseNATSSuperclusterMap(raw string) (map[string]string, error) {
 		if trimmed == "" {
 			return nil, errors.New("NATS_SUPERCLUSTER: region name must not be empty")
 		}
+		// Reject duplicate-after-trim keys for the same reason
+		// parsePostgresRegionMap does: Go's randomised map
+		// iteration order would otherwise pick a non-deterministic
+		// surviving URL list across boots. Fail loud at boot.
+		if _, dup := out[trimmed]; dup {
+			return nil, fmt.Errorf("NATS_SUPERCLUSTER: duplicate region key %q (after whitespace trim)", trimmed)
+		}
 		canonical, err := canonicaliseURLList(urls)
 		if err != nil {
 			return nil, fmt.Errorf("NATS_SUPERCLUSTER[%s]: %w", trimmed, err)

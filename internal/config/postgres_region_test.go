@@ -233,3 +233,41 @@ func TestParsePostgresRegionMap_RejectsDuplicateAfterTrim(t *testing.T) {
 		t.Fatalf("error = %q; want substring %q", err.Error(), wantSubstr)
 	}
 }
+
+// TestValidate_NATSSuperclusterRequiresHomeRegionEntry pins the
+// boot-time guard that mirrors the PG_REGION_MAP/PG_HOME_REGION
+// invariant: when NATS_SUPERCLUSTER is configured, it must
+// contain an entry for the deployment's home region (NATS
+// HomeRegion is sourced from Postgres.HomeRegion in
+// cmd/sn360-es/wire_infra.go, so the same label drives both
+// guards). The check ran inside the NATS client before but is
+// now centralised in validate() so the operator catches the
+// misconfig before any infrastructure connection is attempted.
+func TestValidate_NATSSuperclusterRequiresHomeRegionEntry(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Postgres.HomeRegion = "ap-southeast-1"
+	cfg.NATS.Supercluster = map[string]string{
+		"us-east-1": "nats://us-1:4222",
+	}
+	err := cfg.validate()
+	if err == nil {
+		t.Fatal("validate() must reject NATS_SUPERCLUSTER without home-region entry")
+	}
+	if !strings.Contains(err.Error(), "NATS_SUPERCLUSTER must contain an entry for PG_HOME_REGION") {
+		t.Fatalf("error = %q; want NATS supercluster home-region complaint", err.Error())
+	}
+}
+
+// TestValidate_NATSSuperclusterEmptyIsOK confirms the guard is a
+// no-op for single-region deployments (the default). Without
+// this test a future tightening could accidentally make the
+// validator demand an empty-NATS_SUPERCLUSTER deployment carry
+// a home-region entry it does not need.
+func TestValidate_NATSSuperclusterEmptyIsOK(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Postgres.HomeRegion = "ap-southeast-1"
+	cfg.NATS.Supercluster = nil
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() must accept empty NATS_SUPERCLUSTER; got %v", err)
+	}
+}

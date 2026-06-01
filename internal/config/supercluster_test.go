@@ -105,3 +105,23 @@ func TestParseNATSSuperclusterMap_RejectsEmptyURLList(t *testing.T) {
 		})
 	}
 }
+
+// TestParseNATSSuperclusterMap_RejectsDuplicateAfterTrim pins the
+// fail-loud contract on whitespace-padded duplicate region keys.
+// Without the guard, Go's randomised map iteration order would pick
+// a non-deterministic surviving URL list across process boots —
+// the operator's intent is ambiguous, so fail boot. Mirrors the
+// equivalent test for parsePostgresRegionMap.
+func TestParseNATSSuperclusterMap_RejectsDuplicateAfterTrim(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"ap-southeast-1": "nats://a:4222", " ap-southeast-1": "nats://b:4222"}`
+	_, err := parseNATSSuperclusterMap(raw)
+	if err == nil {
+		t.Fatalf("parseNATSSuperclusterMap() err = nil; want duplicate-region error")
+	}
+	wantSubstr := `duplicate region key "ap-southeast-1"`
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Fatalf("error = %q; want substring %q", err.Error(), wantSubstr)
+	}
+}
