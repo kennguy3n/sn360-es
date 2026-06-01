@@ -40,6 +40,30 @@ import (
 // Implementations MUST be safe for concurrent use.
 type SignalEnricher interface {
 	Enrich(ctx context.Context, req dto.EvaluateRequest, base dto.RiskSignals) dto.RiskSignals
+
+	// SightingFor derives the per-message CommHistoryUpdate event
+	// the WS-4a hot-path publishes onto
+	// es.management.comm_history.update after Enrich completes.
+	// The returned event encodes the same (tenant, sender,
+	// recipient) triple Enrich keys its repository lookup on, so
+	// the publisher cannot accidentally drift from the read-side
+	// normalisation (TrimSpace + ToLower + tenant-keyed BLAKE2)
+	// and break the symmetry that makes communication_histories
+	// rows match across reads and writes.
+	//
+	// The boolean is false when the triple is incomplete — the
+	// same short-circuit Enrich applies when tenant, sender, or
+	// recipient is empty after normalisation. NoopEnricher always
+	// returns false because a deployment without the repository or
+	// the PII hasher has nowhere to write the sighting; the
+	// caller is expected to skip the publish entirely in that
+	// case so the bus never carries an unpersisted event.
+	//
+	// The returned CommHistoryUpdate is the wire shape, not the
+	// repository Sighting shape. The consumer reconstructs the
+	// Sighting from the event and feeds it into
+	// CommunicationHistoryRepository.RecordSighting.
+	SightingFor(ctx context.Context, req dto.EvaluateRequest) (dto.CommHistoryUpdate, bool)
 }
 
 // NoopEnricher is the SignalEnricher the composition root
@@ -53,4 +77,14 @@ type NoopEnricher struct{}
 // Enrich returns base unchanged. NoopEnricher satisfies SignalEnricher.
 func (NoopEnricher) Enrich(_ context.Context, _ dto.EvaluateRequest, base dto.RiskSignals) dto.RiskSignals {
 	return base
+}
+
+// SightingFor returns (zero, false) so the publisher skips the
+// WS-4a hot-path publish entirely when the deployment is missing
+// the repository or the PII hasher (the same conditions that cause
+// the composition root to substitute NoopEnricher for the real
+// enricher). Without a repository to persist into, every produced
+// sighting would just queue up and time out at the broker.
+func (NoopEnricher) SightingFor(_ context.Context, _ dto.EvaluateRequest) (dto.CommHistoryUpdate, bool) {
+	return dto.CommHistoryUpdate{}, false
 }

@@ -49,6 +49,15 @@ func (f *fakeCommHistoryRepo) UpdateCountsIfFresh(_ context.Context, _ *reposito
 	panic("unexpected UpdateCountsIfFresh call in signal-enricher test")
 }
 
+func (f *fakeCommHistoryRepo) RecordSighting(_ context.Context, _ repository.Sighting) error {
+	// The signal-enricher Enrich() path is read-only against the
+	// repository; the WS-4a write path publishes asynchronously
+	// onto es.management.comm_history.update and is exercised by
+	// dedicated tests. A call here would mean the read-only
+	// contract has regressed.
+	panic("unexpected RecordSighting call in signal-enricher test")
+}
+
 func (f *fakeCommHistoryRepo) ListByTenant(_ context.Context, _ string, _ time.Time, _ int) ([]repository.CommunicationHistory, error) {
 	panic("unexpected ListByTenant call in signal-enricher test")
 }
@@ -353,6 +362,17 @@ func (r *recordingEnricher) Enrich(_ context.Context, req dto.EvaluateRequest, b
 		return base
 	}
 	return r.applyOverride(base)
+}
+
+// SightingFor implements the SightingFor half of the SignalEnricher
+// interface. The recording enricher exists to exercise the Enrich
+// path of handleEvaluateRequest, not the WS-4a sighting publish, so
+// this stub returns (zero, false) which the publisher treats as a
+// short-circuit (skip publish). Test files that exercise the
+// publish path should use a dedicated fake that returns a populated
+// CommHistoryUpdate.
+func (r *recordingEnricher) SightingFor(_ context.Context, _ dto.EvaluateRequest) (dto.CommHistoryUpdate, bool) {
+	return dto.CommHistoryUpdate{}, false
 }
 
 func (r *recordingEnricher) snapshot() []recordingEnricherCall {
