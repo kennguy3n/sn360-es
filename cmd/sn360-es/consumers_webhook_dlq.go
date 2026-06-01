@@ -71,8 +71,19 @@ func (a *application) startWebhookDLQConsumer(ctx context.Context) error {
 		a.logger.InfoContext(ctx, "sn360-es: startWebhookDLQConsumer: WebhookSinks repo not wired — skipping subscription")
 		return nil
 	}
+	// Wrap with tenantBoundMessageHandler so handleWebhookDLQ
+	// runs against a Postgres connection with the
+	// `sn360.tenant_id` GUC pinned to the message's tenant.
+	// Without this wrapper, the RLS policy on
+	// tenant_webhook_sinks / tenant_webhook_sink_audit
+	// (migration 0023) evaluates tenant_id = NULL and silently
+	// rejects every GetByID + AppendAudit — the DLQ consumer
+	// becomes a no-op that Acks every message as "sink missing".
+	// The dispatcher publishes DLQ envelopes with
+	// events.WithTenantID(sink.TenantID), so the wrapper reads
+	// the tenant from the verified header.
 	sub, err := a.eventBus.Subscribe(ctx, webhookDLQSubject,
-		a.handleWebhookDLQ,
+		a.tenantBoundMessageHandler(a.handleWebhookDLQ),
 		events.WithDurable(webhookDLQDurable),
 		events.WithAckWait(webhookDLQAckWait),
 		events.WithMaxDeliver(webhookDLQMaxDeliver),
@@ -141,8 +152,14 @@ func (a *application) handleWebhookDLQ(ctx context.Context, msg events.Message) 
 			return nil
 		}
 		// Transient repo error — request another delivery so the
-		// envelope survives a Postgres blip. We DON'T burn an
-		// attempt slot here because the failure is internal.
+		// envelope survives a Postgres blip. The Nak DOES count
+		// against MaxDeliver (JetStream increments NumDelivered on
+		// every redelivery regardless of cause); a Postgres outage
+		// lasting through all 5 attempts will end up dropping the
+		// envelope just like a real customer-endpoint failure.
+		// That's acceptable for a best-effort egress path —
+		// alternative (infinite redelivery) would let one tenant's
+		// flaky DB starve the rest of the stream.
 		logger.WarnContext(ctx, "webhook-dlq: sink lookup failed",
 			slog.Any("error", lookupErr))
 		_ = msg.Nak(webhookDLQBackoffs[0])

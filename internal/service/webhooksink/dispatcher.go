@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -188,6 +189,21 @@ func (d *Dispatcher) DispatchVerdict(ctx context.Context, res *dto.EvaluateResul
 	if event == nil {
 		return nil
 	}
+	// EventFromEvaluateResult deliberately leaves EventID +
+	// OccurredAt unset and expects callers to stamp them. The
+	// DedupID we compute downstream uses EventID, which feeds
+	// JetStream's 2-minute dedup window for the DLQ stream and
+	// the audit table's dedup_id; an unset EventID would collapse
+	// distinct messages onto the same key. Mint here so the
+	// dedup keys carry message-level uniqueness, not just
+	// (sink, attempt) which is constant across a torrent of
+	// retriable failures.
+	if event.EventID == "" {
+		event.EventID = uuid.NewString()
+	}
+	if event.OccurredAt.IsZero() {
+		event.OccurredAt = d.now().UTC()
+	}
 	d.dispatchToSinks(ctx, sinks, event, false /* test */)
 	return nil
 }
@@ -231,12 +247,41 @@ func (d *Dispatcher) DispatchTestEvent(ctx context.Context, sink *repository.Web
 	return result, nil
 }
 
-// dispatchToSinks is the common fan-out loop used by both the
-// verdict and the manual-test paths. The bool toggles the
-// per-sink rate-limit gate: synthetic test events skip it because
-// the operator deliberately wants to verify the endpoint
-// regardless of the production rate budget.
+// maxConcurrentDispatch caps the number of in-flight per-sink HTTP
+// requests for a single verdict fan-out. With a 5s publish budget,
+// dispatching N sinks sequentially adds up to N×5s to the
+// evaluation consumer's per-message latency; running them
+// concurrently bounds the worst case to ~5s regardless of N (modulo
+// goroutine overhead). The cap exists so a tenant configuring many
+// sinks can't spawn an unbounded burst of goroutines + HTTP
+// connections per verdict.
+const maxConcurrentDispatch = 8
+
+// dispatchToSinks is the common fan-out used by both the verdict
+// and the manual-test paths. Each sink is dispatched concurrently
+// up to maxConcurrentDispatch in flight; filter / rate-limit
+// rejections short-circuit without consuming a worker slot. The
+// bool toggles the per-sink rate-limit gate: synthetic test events
+// skip it because the operator deliberately wants to verify the
+// endpoint regardless of the production rate budget.
+//
+// The function blocks until every dispatch completes (success or
+// failure) so the caller's context lifetime spans the full fan-out
+// — best-effort semantics still hold because dispatchOne itself
+// swallows per-sink errors into audit + DLQ paths.
 func (d *Dispatcher) dispatchToSinks(ctx context.Context, sinks []repository.WebhookSink, event *webhook.Event, isTest bool) {
+	if len(sinks) == 0 {
+		return
+	}
+	// Bounded worker pool: a buffered chan acts as a counting
+	// semaphore so we never have more than
+	// maxConcurrentDispatch goroutines in dispatchOne at once.
+	limit := maxConcurrentDispatch
+	if limit > len(sinks) {
+		limit = len(sinks)
+	}
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
 	for i := range sinks {
 		sink := &sinks[i]
 		if d.skipBySinkFilter(sink, event) {
@@ -251,8 +296,26 @@ func (d *Dispatcher) dispatchToSinks(ctx context.Context, sinks []repository.Web
 				slog.String("sink_name", sink.Name))
 			continue
 		}
-		d.dispatchOne(ctx, sink, event)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(s *repository.WebhookSink) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			defer func() {
+				// dispatchOne is best-effort; a panic
+				// here must not leak into the caller's
+				// evaluation pipeline.
+				if rec := recover(); rec != nil {
+					d.logger.ErrorContext(ctx, "webhooksink: dispatch panic",
+						slog.String("tenant_id", s.TenantID),
+						slog.String("sink_id", s.ID),
+						slog.Any("panic", rec))
+				}
+			}()
+			d.dispatchOne(ctx, s, event)
+		}(sink)
 	}
+	wg.Wait()
 }
 
 // skipBySinkFilter applies the per-sink event_filters JSON: min_tier

@@ -247,7 +247,14 @@ func (h *WebhookSinksHandler) tenantBoundedAuthz(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusForbidden, "admin_required")
 		return false
 	}
-	if claims.TenantID != "" && claims.TenantID != pathTenant {
+	// Fail closed when the JWT carries no tenant binding at all
+	// or when it binds to a different tenant. JWTAuth rejects
+	// empty `tid` tokens upstream today, but treating an empty
+	// claim as "match anything" would silently re-open the
+	// cross-tenant boundary if that upstream invariant ever
+	// drifted (e.g. a new auth middleware that doesn't enforce
+	// tid, or a test injecting claims via ContextWithClaims).
+	if claims.TenantID == "" || claims.TenantID != pathTenant {
 		h.logger.WarnContext(r.Context(), "webhook_sinks: tenant claim mismatch",
 			slog.String("path_tenant", pathTenant),
 			slog.String("claim_tenant", claims.TenantID))
