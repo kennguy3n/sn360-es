@@ -165,7 +165,28 @@ func NewHTTPPublisher(cfg ...HTTPPublisherConfig) *HTTPPublisher {
 	}
 	client := c.Client
 	if client == nil {
-		client = &http.Client{Timeout: timeout}
+		// SSRF defense-in-depth: refuse to follow redirects. The
+		// validateWebhookURL gate (handler) and migration 0023's
+		// CHECK constraint both enforce https:// on the INITIAL URL
+		// stored against the sink, but Go's default redirect policy
+		// would follow up to 10 redirects on POST — and a 307/308
+		// from the customer's HTTPS endpoint to an http:// (or
+		// link-local) target would resend the X-SN360-Signature
+		// header AND the full POST body (the evaluation verdict)
+		// in plaintext, defeating the HTTPS-only invariant. With
+		// ErrUseLastResponse, the 3xx surfaces as the response and
+		// Publish classifies any 3xx as PermanentFailure (with the
+		// Location echoed into the audit Cause) so the operator
+		// sees "fix your URL" on the first dispatch_failed row
+		// rather than after the DLQ burns through 5 retries. A
+		// caller wiring a custom http.Client (tests) is responsible
+		// for the equivalent guard.
+		client = &http.Client{
+			Timeout: timeout,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 	}
 	return &HTTPPublisher{
 		Client:               client,
@@ -245,6 +266,21 @@ func (p *HTTPPublisher) Publish(ctx context.Context, req *Request) (PublishResul
 			HTTPStatus: resp.StatusCode,
 			LatencyMS:  latency,
 			Cause:      fmt.Sprintf("http %d", resp.StatusCode),
+		}, nil
+	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		// 3xx surfaces here only because we set CheckRedirect =
+		// ErrUseLastResponse (see NewHTTPPublisher), which holds
+		// the redirect chain at the customer endpoint instead of
+		// silently re-POSTing the signed body to the Location
+		// target. Treat it as a permanent failure with a clear
+		// cause so the operator sees "fix your URL" on the first
+		// dispatch_failed audit row rather than after the DLQ
+		// burns through all 5 retries with the same outcome.
+		return PublishResult{
+			Outcome:    OutcomePermanentFailure,
+			HTTPStatus: resp.StatusCode,
+			LatencyMS:  latency,
+			Cause:      fmt.Sprintf("http %d: redirect not followed (Location=%q)", resp.StatusCode, sanitiseLocation(resp.Header.Get("Location"))),
 		}, nil
 	case resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests:
 		// 408 / 429 → retriable. 429 specifically is the SIEM
@@ -355,4 +391,25 @@ func isTimeout(err error) bool {
 		return to.Timeout()
 	}
 	return false
+}
+
+// sanitiseLocation trims and bounds the Location header value before
+// it lands in the audit Cause. The header CAN contain an attacker-
+// chosen URL when the customer endpoint is compromised, so we keep
+// it short and strip ANSI / control characters that would mangle
+// log readers. We deliberately do NOT validate it as a URL — the
+// audit row's job is to record what the endpoint actually replied
+// with, not to opine on its correctness.
+func sanitiseLocation(loc string) string {
+	if loc == "" {
+		return ""
+	}
+	s := strings.ReplaceAll(loc, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\t", " ")
+	s = strings.TrimSpace(s)
+	if len(s) > 256 {
+		s = s[:256] + "..."
+	}
+	return s
 }

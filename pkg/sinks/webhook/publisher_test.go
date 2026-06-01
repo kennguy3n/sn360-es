@@ -184,6 +184,77 @@ func TestHTTPPublisher_Publish_RejectsHTTP(t *testing.T) {
 	}
 }
 
+// TestHTTPPublisher_Publish_DoesNotFollowRedirect locks in the SSRF
+// guard: the production NewHTTPPublisher must NOT follow a 3xx
+// from the customer endpoint. If Go's default redirect policy were
+// in effect, a 307 → http://forwarded-host would re-send the signed
+// body and headers over an attacker-controlled scheme, defeating the
+// HTTPS-only invariant the handler + migration 0023 CHECK constraint
+// enforce on the stored URL.
+//
+// The test wires TWO TLS servers and uses the production
+// NewHTTPPublisher (no custom Client) so the CheckRedirect-=-
+// ErrUseLastResponse branch in NewHTTPPublisher is exercised. We
+// flip InsecureSkipVerify on a freshly-built *http.Transport that's
+// installed on the production-built client via a small reflection-
+// free helper: we override the production client's Transport AFTER
+// construction. The CheckRedirect closure remains as built.
+func TestHTTPPublisher_Publish_DoesNotFollowRedirect(t *testing.T) {
+	t.Parallel()
+	var (
+		mu            sync.Mutex
+		forwardedHits int
+	)
+	forwarded := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		forwardedHits++
+		mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer forwarded.Close()
+	original := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", forwarded.URL+"/forwarded")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer original.Close()
+
+	// Build via the production constructor so we exercise the real
+	// CheckRedirect closure. Then swap in a TLS-skipping Transport
+	// on the same Client so the self-signed httptest cert is
+	// accepted; the CheckRedirect remains the production closure.
+	p := NewHTTPPublisher()
+	p.Client.Transport = &http.Transport{
+		Proxy:           nil,
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // test client only
+	}
+
+	res, err := p.Publish(context.Background(), &Request{
+		URL:       original.URL,
+		Format:    repository.WebhookSinkFormatECS,
+		Body:      []byte(`{"redirect":"test"}`),
+		Signature: "sha256=deadbeef",
+		EventType: EventTypeEmailEvaluation,
+		Attempt:   1,
+	})
+	if err != nil {
+		t.Fatalf("Publish error: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if forwardedHits != 0 {
+		t.Errorf("forwarded server saw %d hits; want 0 (redirect must not be followed)", forwardedHits)
+	}
+	if res.Outcome != OutcomePermanentFailure {
+		t.Errorf("Outcome = %v; want OutcomePermanentFailure on 3xx", res.Outcome)
+	}
+	if res.HTTPStatus != http.StatusTemporaryRedirect {
+		t.Errorf("HTTPStatus = %d; want 307", res.HTTPStatus)
+	}
+	if !strings.Contains(res.Cause, "redirect not followed") {
+		t.Errorf("Cause = %q; want substring \"redirect not followed\"", res.Cause)
+	}
+}
+
 func TestHTTPPublisher_Publish_NetworkErrorRetriable(t *testing.T) {
 	t.Parallel()
 	// Use a server we close before publishing so the net Dial fails.

@@ -526,8 +526,12 @@ func (h *WebhookSinksHandler) serveTest(w http.ResponseWriter, r *http.Request, 
 // validateWebhookURL accepts only well-formed https:// URLs. Localhost
 // and link-local addresses are accepted (operators may want to point
 // a sink at a docker-compose receiver during onboarding); the SSRF
-// surface is contained because the dispatcher posts JSON / CEF with
-// no follow-redirect and a hard 5s timeout.
+// surface is contained because the HTTPPublisher posts JSON / CEF
+// with no follow-redirect (CheckRedirect returns
+// http.ErrUseLastResponse, see pkg/sinks/webhook/publisher.go) and a
+// hard 5s timeout, so a 307/308 from the customer endpoint cannot
+// silently re-send the signed body over an attacker-controlled
+// http:// or link-local target.
 func validateWebhookURL(raw string) error {
 	if raw == "" {
 		return errors.New("url is required")

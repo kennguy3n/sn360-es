@@ -25,12 +25,14 @@ import (
 // the parent `sn360.dlq.webhook.>` wildcard so a single durable
 // services every tenant + sink.
 //
-// Retry schedule: exponential 1s, 5s, 30s, 5m, 1h. Up to 5
-// deliveries before the message is dropped + a `dispatch_failed`
-// audit row is written. AckWait must comfortably exceed the per-
-// publish HTTP budget (publishTimeout ≈ 5s) plus a small
-// processing margin so JetStream doesn't redeliver on every slow
-// customer endpoint.
+// Customer-facing retry schedule under MaxDeliver=5: the dispatcher's
+// synchronous publish counts as attempt 1; on retriable failure the
+// envelope lands on the DLQ stream and this consumer drives attempts
+// 2..5, separated by 1s → 5s → 30s → 5m. Delivery 5 here is the
+// final-fail Ack (no further POST, only the dispatch_failed audit row).
+// AckWait must comfortably exceed the per-publish HTTP budget
+// (publishTimeout ≈ 5s) plus a small processing margin so JetStream
+// doesn't redeliver on every slow customer endpoint.
 const (
 	webhookDLQSubject       = "sn360.dlq.webhook.>"
 	webhookDLQDurable       = "ws5b2-webhook-dlq-retrier"
@@ -40,10 +42,19 @@ const (
 )
 
 // webhookDLQBackoffs is the per-redelivery wait the consumer
-// requests via Nak(delay). Index n is the delay applied AFTER
-// the n-th delivery attempt fails (i.e. the wait before the
-// (n+1)-th attempt). Length must be >= webhookDLQMaxDeliver-1 so
-// every redelivery has a defined wait.
+// requests via Nak(delay). Indexed by backoffFor(deliveryAttempt) →
+// webhookDLQBackoffs[deliveryAttempt-1] where deliveryAttempt is
+// JetStream's NumDelivered for the DLQ envelope (1-based).
+//
+// Reachable entries under the current MaxDeliver=5: backoffs[0..3]
+// (1s, 5s, 30s, 5m) — the wait between DLQ-deliveries 1→2, 2→3, 3→4,
+// 4→5. Delivery 5 is the final-fail Ack, so backoffs[4]=1h is dead
+// code in normal flow today; it's retained as a no-op safety value
+// so bumping MaxDeliver to 6 later doesn't fall through to the
+// bounds-clamp in backoffFor (which would otherwise re-use 5m for
+// the 5→6 gap and silently halve the long-tail backoff). The
+// lookup-failure path in handleWebhookDLQ uses backoffs[0]=1s
+// directly for transient Postgres blips.
 var webhookDLQBackoffs = []time.Duration{
 	1 * time.Second,
 	5 * time.Second,
