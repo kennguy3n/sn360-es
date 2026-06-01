@@ -462,13 +462,7 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 			// evaluator.Evaluate (evaluator.go:278-288).
 			o.aggregateLightweight(&res, pendings[idx].sig, tenantWeights)
 		}
-		dto.BackfillRoutingFields(&res, pendings[idx].req)
-		if err := o.publishResult(ctx, res); err != nil {
-			o.log.Error("evaluate: publish result failed", slog.String("err", err.Error()))
-			_ = pendings[idx].msg.Nak(5 * time.Second)
-			continue
-		}
-		_ = pendings[idx].msg.Ack()
+		o.finalisePending(ctx, pendings[idx].msg, pendings[idx].req, res, "evaluate: publish result failed")
 	}
 
 	// Publish + ack the Tier 0 hits.
@@ -476,16 +470,48 @@ func (o *BatchOrchestrator) processOnce(ctx context.Context) error {
 		if !p.hit0 {
 			continue
 		}
-		t0 := p.tier0Result
-		dto.BackfillRoutingFields(&t0, p.req)
-		if err := o.publishResult(ctx, t0); err != nil {
-			o.log.Error("evaluate: publish tier0 result failed", slog.String("err", err.Error()))
-			_ = p.msg.Nak(5 * time.Second)
-			continue
-		}
-		_ = p.msg.Ack()
+		o.finalisePending(ctx, p.msg, p.req, p.tier0Result, "evaluate: publish tier0 result failed")
 	}
 	return nil
+}
+
+// finalisePending is the per-message tail of processOnce that both
+// Tier 0 short-circuit and Tier 1 surviving messages share. It runs
+// the same Backfill + publishResult + publishSighting + ack sequence
+// the per-message handler runs in cmd/sn360-es/consumers_evaluate.go
+// so the two paths stay in lockstep on:
+//
+//   - the routing-field backfill order (req → res) before publish.
+//   - the result publish + Nak-on-failure / Ack-on-success contract.
+//   - the WS-4a sighting publish on es.management.comm_history.update,
+//     keyed by the deterministic dedup id from
+//     SignalEnricher.SightingFor. Without this, batch-path messages
+//     would rely solely on the 4h relationship_worker cycle for
+//     incremental communication_histories updates while per-message
+//     ones got the inline hot path — a meaningful coverage gap when
+//     TIER1_BATCH_ENABLED is on at scale.
+//
+// The sighting publish is best-effort: PublishCommHistoryUpdate
+// swallows every error so a transient bus blip on the sighting
+// publish cannot NAK the upstream evaluate.request envelope (which
+// would produce a duplicate evaluate.result on the next redelivery).
+// The relationship_worker's next 4h cycle recomputes counts from
+// persisted rows, so a dropped sighting self-heals.
+func (o *BatchOrchestrator) finalisePending(
+	ctx context.Context,
+	msg events.Message,
+	req dto.EvaluateRequest,
+	res dto.EvaluateResult,
+	publishErrLabel string,
+) {
+	dto.BackfillRoutingFields(&res, req)
+	if err := o.publishResult(ctx, res); err != nil {
+		o.log.Error(publishErrLabel, slog.String("err", err.Error()))
+		_ = msg.Nak(5 * time.Second)
+		return
+	}
+	PublishCommHistoryUpdate(ctx, o.cfg.Sink, o.cfg.Enricher, o.log, req)
+	_ = msg.Ack()
 }
 
 // aggregateLightweight populates res.Score, res.Primary, res.Secondary,

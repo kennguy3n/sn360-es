@@ -175,6 +175,85 @@ func (e *commHistorySignalEnricher) Enrich(ctx context.Context, req dto.Evaluate
 	return out
 }
 
+// SightingFor derives the WS-4a CommHistoryUpdate event for a
+// request, sharing exactly the same TrimSpace + ToLower
+// normalisation Enrich applies on the read side. Keeping both
+// derivations on the same type means a future change to the
+// normalisation rule (e.g. NFKC unicode folding for IDNA-equivalent
+// domains, or stripping plus-suffixes from local parts) lands in
+// one place and stays symmetric between the consumer that updates
+// communication_histories and every other code path that looks
+// the same row up.
+//
+// Returned bool is false when any component of the
+// (tenant, sender, recipient) triple is empty after normalisation,
+// or when the PII hasher returns an empty digest. The handler
+// skips the publish in that case so the bus never carries an
+// envelope the consumer would reject in Validate().
+//
+// SentAt is sourced from req.ReceivedAt — the bridge stamps it at
+// ingestion time, so two redeliveries of the same envelope produce
+// the same SentAt. This determinism is what makes the
+// (tenant, sender, recipient, message_id)-keyed JetStream dedup
+// window collapse redeliveries at the broker instead of double-
+// counting at the consumer. Falling back to e.now() on an unset
+// ReceivedAt would break that property; the bridge guarantees
+// ReceivedAt is non-zero on every envelope, but the fallback is
+// retained because returning a zero SentAt would otherwise force
+// the consumer to NAK every envelope from a misconfigured
+// publisher and silently kill the WS-4a hot path. The fallback
+// trades determinism for liveness in the broken-publisher case.
+func (e *commHistorySignalEnricher) SightingFor(_ context.Context, req dto.EvaluateRequest) (dto.CommHistoryUpdate, bool) {
+	tenantID := strings.TrimSpace(req.TenantID)
+	sender := strings.TrimSpace(strings.ToLower(req.Sender))
+	recipient := strings.TrimSpace(strings.ToLower(primaryRecipient(req)))
+	if tenantID == "" || sender == "" || recipient == "" {
+		return dto.CommHistoryUpdate{}, false
+	}
+	if req.MessageID == "" {
+		// A sighting without a message id has no usable dedup
+		// key; publishing it would either collide with another
+		// envelope's dedup id (broker drops the second one) or
+		// receive a derived id that re-collides on every
+		// redelivery — either way the consumer either undercounts
+		// or double-counts. Refuse to publish.
+		return dto.CommHistoryUpdate{}, false
+	}
+	senderHash := []byte(e.hasher.HashPII(tenantID, sender))
+	recipientHash := []byte(e.hasher.HashPII(tenantID, recipient))
+	if len(senderHash) == 0 || len(recipientHash) == 0 {
+		return dto.CommHistoryUpdate{}, false
+	}
+	// SenderDomain is best-effort: the producer may have left it
+	// blank (e.g. malformed `From:`). The consumer treats an
+	// empty domain as "do not overwrite the persisted value", so
+	// emitting a blank here is safe and triggers the one-way
+	// backfill on the read side.
+	senderDomain := strings.TrimSpace(strings.ToLower(req.Signals.SenderDomain))
+	var senderDomainHash []byte
+	if senderDomain != "" {
+		senderDomainHash = []byte(e.hasher.HashPII(tenantID, senderDomain))
+	}
+	sentAt := req.ReceivedAt
+	if sentAt.IsZero() {
+		// Liveness fallback documented above. The consumer's
+		// LastSeenAt is GREATEST(persisted, sighting), so a
+		// non-deterministic wall-clock value here can only
+		// advance LastSeenAt forward — it cannot corrupt a
+		// stable baseline.
+		sentAt = e.now()
+	}
+	return dto.CommHistoryUpdate{
+		TenantID:         tenantID,
+		MessageID:        req.MessageID,
+		SenderHash:       senderHash,
+		RecipientHash:    recipientHash,
+		SenderDomainHash: senderDomainHash,
+		SenderDomain:     senderDomain,
+		SentAt:           sentAt.UTC(),
+	}, true
+}
+
 // deriveCurrentHourUTC prefers req.ReceivedAt (the arrival time
 // stamped by the ingestion pipeline) over wall-clock so the ATO
 // heuristic compares against the actual message hour rather than

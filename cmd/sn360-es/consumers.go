@@ -370,6 +370,37 @@ func (a *application) StartConsumers(ctx context.Context) error {
 		}
 	}
 
+	// es.management.comm_history.update → WS-4a incremental
+	// baselines. The signal-enricher hot path publishes per-message
+	// sightings onto this subject; this consumer applies them
+	// atomically to communication_histories via
+	// CommunicationHistories.RecordSighting so the next message
+	// from the same sender sees an up-to-date row without waiting
+	// for the 4-hour relationship_worker recompute cycle.
+	//
+	// Lives on ES_MANAGEMENT (work-queue retention with a 2m
+	// JetStream dedup window). A subscription failure here cannot
+	// cause interest-stream message loss (work-queue retention
+	// holds messages until explicitly acked), but it does silence
+	// the WS-4a incremental updates until the binary restarts.
+	// Surfaced via critErrs so the operator gets an explicit
+	// startup failure rather than a silent degrade — the
+	// relationship_worker will still recompute counts on its 4h
+	// cycle, but the incremental hot path is the whole point of
+	// WS-4a, so a degraded mode is not the same as a working one.
+	if a.repos != nil && a.repos.CommunicationHistories != nil {
+		sub, err := a.eventBus.Subscribe(ctx, dto.CommHistoryUpdateSubject, a.tenantBoundMessageHandler(a.handleCommHistoryUpdate),
+			events.WithDurable("comm-history-update"),
+			events.WithMaxDeliver(3))
+		if err != nil {
+			a.logger.Error("sn360-es: subscribe management.comm_history.update (comm-history-update) failed",
+				slog.Any("error", err))
+			critErrs = append(critErrs, fmt.Errorf("comm-history-update: %w", err))
+		} else {
+			a.trackSub(sub)
+		}
+	}
+
 	// es.action.escalation.> → fan escalation events into EscalationService.
 	if a.escalationSvc != nil {
 		sub, err := a.eventBus.Subscribe(ctx, "es.action.escalation.>", a.tenantBoundMessageHandler(a.handleEscalation),

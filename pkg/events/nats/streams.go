@@ -32,7 +32,24 @@ const (
 	StreamOnboarding     = "ES_ONBOARDING"
 	StreamEducation      = "ES_EDUCATION"
 	StreamAction         = "ES_ACTION"
-	StreamDLQ            = "ES_DLQ"
+	// StreamManagement is the work-queue stream that carries
+	// per-message updates into the management Postgres layer
+	// (es.management.*). The first consumer is WS-4a's
+	// comm-history-update, which records ingestion-time sightings
+	// of (tenant, sender, recipient) so the next message from the
+	// same sender sees an up-to-date `communication_histories`
+	// baseline without waiting for the 4-hour relationship_worker
+	// cycle. Work-queue retention is intentional: each sighting
+	// has exactly one writer (the in-process repository) and
+	// every other consumer of management state reads from
+	// Postgres, not from this stream. The dedup window pins
+	// idempotency on the Nats-Msg-Id (a deterministic
+	// per-(tenant, sender, recipient, message-id) hash assembled
+	// by the publisher) so a JetStream redelivery within the
+	// window is dropped at the broker rather than producing a
+	// double-count at the consumer.
+	StreamManagement = "ES_MANAGEMENT"
+	StreamDLQ        = "ES_DLQ"
 )
 
 // StreamSpec describes a JetStream stream that SN360-ES requires.
@@ -129,6 +146,23 @@ func DefaultStreamSpecs(cfg Config) []StreamSpec {
 			Replicas:    replicas,
 			Discard:     jetstream.DiscardOld,
 			Description: "SN360-ES post-evaluation action events",
+		},
+		{
+			Name:      StreamManagement,
+			Subjects:  []string{"es.management.>"},
+			Retention: jetstream.WorkQueuePolicy,
+			Storage:   storage,
+			// 24h is plenty for an incremental sighting to be
+			// re-delivered to the consumer; messages older than
+			// the worker's cycle (4h) are redundant anyway because
+			// the next relationship_worker pass will recompute
+			// authoritative counts from the persisted rows.
+			MaxAge:      24 * time.Hour,
+			MaxMsgSize:  64 * 1024,
+			DedupWindow: orDefault(cfg.DedupWindow, 2*time.Minute),
+			Replicas:    replicas,
+			Discard:     jetstream.DiscardOld,
+			Description: "SN360-ES management plane writes (work-queue, per-message)",
 		},
 		{
 			Name: StreamDLQ,
@@ -294,6 +328,8 @@ func isResultFilter(subj string) bool {
 //   - es.onboarding.>                → StreamOnboarding
 //   - es.education.>                 → StreamEducation
 //   - es.action.>                    → StreamAction
+//   - es.management.>                → StreamManagement (WS-4a + future
+//     management-domain work queues)
 //
 // Any other es.evaluate.* subject (e.g. a hypothetical
 // es.evaluate.status) is treated as unrouted and returns "" rather
@@ -314,6 +350,8 @@ func StreamForSubject(subject string) string {
 		return StreamEducation
 	case strings.HasPrefix(subject, "es.action."):
 		return StreamAction
+	case strings.HasPrefix(subject, "es.management."):
+		return StreamManagement
 	default:
 		return ""
 	}
