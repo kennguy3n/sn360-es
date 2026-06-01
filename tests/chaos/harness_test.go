@@ -453,6 +453,17 @@ type appEnv struct {
 // build produces a clean env slice for exec.Cmd.Env. We always
 // disable the dotenv loader by not exporting any of the file-based
 // env-vars; only the values the test sets are propagated.
+//
+// Override semantics: the base slice is appended FIRST and the
+// caller-supplied `extra` map is appended LAST. Per the
+// exec.Cmd.Env contract ("if Env contains duplicate environment
+// keys, only the last value in the slice for each duplicate key
+// is used"), any key the caller sets in `extra` wins over the
+// hardcoded default. The Redis durable-store scenario relies on
+// this to flip ENVIRONMENT=prod and PG_SSLMODE=require without
+// having to fork the helper. Do NOT switch to a map-merge here —
+// the explicit list-append is what makes the override path
+// auditable from the call site.
 func (e appEnv) build() []string {
 	env := []string{
 		"PATH=" + os.Getenv("PATH"),
