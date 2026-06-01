@@ -87,13 +87,19 @@ func NewTier2FallbackClient(cfg Tier2FallbackConfig) (*Tier2FallbackClient, erro
 		if model == "" {
 			model = "gpt-4o-mini"
 		}
+		// Temperature is left nil so the underlying
+		// ternarybonsai provider applies its DefaultTemperature
+		// (0.1, historically). Tier2FallbackConfig pre-dates the
+		// generic provider abstraction; new callers that want a
+		// different temperature should construct the fallback
+		// through slm.New directly and inject it via
+		// cfg.Fallback.
 		fb, err := NewTier2HTTPClient(Tier2HTTPConfig{
-			URL:         cfg.FallbackURL,
-			APIKey:      cfg.FallbackAPIKey,
-			Model:       model,
-			Timeout:     30 * time.Second,
-			MaxTokens:   512,
-			Temperature: 0.1,
+			URL:       cfg.FallbackURL,
+			APIKey:    cfg.FallbackAPIKey,
+			Model:     model,
+			Timeout:   30 * time.Second,
+			MaxTokens: 512,
 		})
 		if err != nil {
 			return nil, err

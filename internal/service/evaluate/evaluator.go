@@ -10,6 +10,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/constant"
 	"github.com/kennguy3n/sn360-es/internal/dto"
 	"github.com/kennguy3n/sn360-es/internal/service/tier1"
+	"github.com/kennguy3n/sn360-es/pkg/inference/slm"
 	"github.com/kennguy3n/sn360-es/pkg/telemetry"
 )
 
@@ -40,9 +41,14 @@ type Tier1Client interface {
 }
 
 // Tier2Client invokes the Tier 2 (LLM/SLM) inference service.
-type Tier2Client interface {
-	Evaluate(ctx context.Context, req dto.EvaluateRequest, hint dto.Tier1Outcome) (dto.Tier2Outcome, error)
-}
+//
+// As of WS-4c this is a type alias for slm.Client — the canonical
+// definition lives in pkg/inference/slm so any provider in the
+// registry can be plugged in via slm.New. The alias is retained so
+// existing references in this package (and across the codebase)
+// keep compiling unchanged. New call sites SHOULD reference
+// slm.Client directly.
+type Tier2Client = slm.Client
 
 // RspamdClient invokes Rspamd.
 type RspamdClient interface {

@@ -35,6 +35,12 @@ import (
 	"github.com/kennguy3n/sn360-es/pkg/events"
 	"github.com/kennguy3n/sn360-es/pkg/events/bus"
 	natsbus "github.com/kennguy3n/sn360-es/pkg/events/nats"
+
+	// Side-effect imports so every Tier 2 SLM provider self-registers
+	// with the slm registry at process boot. New providers added under
+	// pkg/inference/slm/providers/* are picked up by this aggregator —
+	// no further changes to the composition root are required.
+	_ "github.com/kennguy3n/sn360-es/pkg/inference/slm/all"
 	"github.com/kennguy3n/sn360-es/pkg/intel"
 	"github.com/kennguy3n/sn360-es/pkg/privacy"
 	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
@@ -728,22 +734,14 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		logger.Info("sn360-es: TIER1_URL not configured; tier1 encoder client disabled")
 	}
 
-	if cfg.AI.URL != "" {
-		t2, err := evaluate.NewTier2HTTPClient(evaluate.Tier2HTTPConfig{
-			URL:     cfg.AI.URL,
-			APIKey:  cfg.AI.APIKey,
-			Timeout: cfg.AI.Timeout,
-		})
-		if err != nil {
-			logger.Warn("sn360-es: tier2 client init failed; evaluator will skip LLM escalation",
-				slog.String("url", cfg.AI.URL),
-				slog.Any("error", err))
-		} else {
-			app.tier2Client = t2
-		}
-	} else {
-		logger.Info("sn360-es: AI_URL not configured; tier2 LLM client disabled")
-	}
+	// Initialise the tenant scoring-config adapter before the Tier 2
+	// client is constructed, because the slm.Router needs the adapter
+	// as its TenantProviderLoader so per-tenant overrides can resolve
+	// at evaluation time. The adapter is idempotent — buildAgents
+	// reuses the same instance via buildConfigStore.
+	ensureTenantScoringConfigAdapter(app)
+
+	app.tier2Client = buildTier2Client(app, cfg, logger)
 
 	if cfg.Rspamd.URL != "" {
 		rs, err := evaluate.NewRspamdHTTPClient(evaluate.RspamdHTTPConfig{
@@ -778,18 +776,14 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	tierDeciderAdapt := tierDeciderAdapter{decider: tierDecider}
 	weights := evaluate.DefaultWeights()
 
-	// Pre-build the shared tenantScoringConfig cache so NewEvaluator
-	// and NewBatchOrchestrator capture a non-nil
-	// app.tenantScoringConfig at construction time. buildAgents
-	// (called later, line ~741) reuses the same instance via
-	// buildConfigStore so the tuning agent's writes invalidate the
-	// same cache the evaluator reads from. Before this split,
-	// buildAgents ran AFTER the evaluator block here, so
-	// app.tenantScoringConfig was always nil when the evaluator
-	// captured it — silently collapsing every verdict back onto
-	// the static defaults and defeating the entire per-tenant
-	// scoring config feature.
-	ensureTenantScoringConfigAdapter(app)
+	// app.tenantScoringConfig is already populated at this point —
+	// the slm.Router setup above needs it as its
+	// TenantProviderLoader, so ensureTenantScoringConfigAdapter ran
+	// before buildTier2Client. ensureTenantScoringConfigAdapter is
+	// idempotent (early-returns when app.tenantScoringConfig is
+	// non-nil), so the original buildAgents-ordering protection
+	// described in the historical comment no longer needs a second
+	// call here.
 
 	// tenantScoringConfig is non-nil when score_engine is wired —
 	// in that case the same table the tuning agent writes to is

@@ -111,7 +111,17 @@ type ScoreEngine struct {
 	ThresholdTier1FlagAbove int
 	SubjectTagEnabled       bool
 	SubjectTagPrefix        string
-	UpdatedAt               time.Time
+	// Tier2Provider is the per-tenant override of the Tier 2
+	// (SLM) provider name. The value is one of the names
+	// registered in pkg/inference/slm (e.g. "ternarybonsai",
+	// "llamaserver", "openai"). Nil means "use the deployment
+	// default", which is the steady-state expectation for the
+	// vast majority of tenants. Validation of the value happens
+	// at provider-resolution time in slm.Router — a bogus value
+	// degrades to the deployment default, so a typo in this
+	// column never blocks Tier 2 evaluation. See migration 0023.
+	Tier2Provider *string
+	UpdatedAt     time.Time
 }
 
 // EmailClassification represents a domain-level classification list entry.
