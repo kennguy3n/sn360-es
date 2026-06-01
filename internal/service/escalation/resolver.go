@@ -189,6 +189,25 @@ func (r *Resolver) Reconcile(ctx context.Context, ev IncidentResolved) (Outcome,
 		out.Kind = OutcomeNoop
 	} else {
 		if err := r.evalResults.SetFinalVerdict(ctx, evalRow.TenantID, messageIDHash, newVerdict); err != nil {
+			// Narrow but real race: the eval row was deleted
+			// between locateEvaluation's read and this UPDATE
+			// (e.g. WS-3b retention sweep, manual operator
+			// purge). Returning the error bare would leak the
+			// "exactly one audit row per invocation" invariant
+			// — the resolver would have committed zero rows
+			// and JetStream would redeliver, which on retry
+			// takes the locateEvaluation==nil path and writes
+			// the audit-skip row late. Close that hole here by
+			// promoting the row-vanished case to a
+			// persistSkip path, so the FIRST invocation
+			// produces the audit row instead of the
+			// redelivery-after-the-fact.
+			if errors.Is(err, repository.ErrNotFound) {
+				return r.persistSkip(
+					ctx, ev, messageIDHash,
+					"evaluation_results row vanished between locate and SetFinalVerdict",
+				)
+			}
 			return Outcome{}, fmt.Errorf("escalation: SetFinalVerdict: %w", err)
 		}
 		out.Kind = OutcomeFlipped

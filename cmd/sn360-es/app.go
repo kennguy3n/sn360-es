@@ -202,6 +202,18 @@ type application struct {
 	closers []func() error
 	dlqProc *service.DLQProcessor
 
+	// WS-5A.6: the SOC resolution durable consumer is wired
+	// best-effort (a failure does not stop the binary — see
+	// the comment block above startSOCResolutionConsumer in
+	// consumers.go for the rationale). To keep that
+	// "best-effort" from being silent, the boot attempt
+	// records its outcome here so /readyz's
+	// "escalation_sync" checker can surface the dark loop
+	// to operators. A non-nil pointer means the boot
+	// subscribe failed and the cross-repo reconciliation
+	// loop is currently dark on this instance.
+	socResolutionSubErr atomic.Pointer[error]
+
 	bgWG     sync.WaitGroup
 	draining atomic.Bool
 }

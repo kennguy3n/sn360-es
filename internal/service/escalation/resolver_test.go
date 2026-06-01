@@ -753,6 +753,104 @@ func TestReconcile_CorrelationIDFallback(t *testing.T) {
 	}
 }
 
+// vanishingEvalRepo wraps an EvaluationResultRepository and
+// forces SetFinalVerdict to return ErrNotFound — simulating
+// the narrow race where the evaluation_results row is deleted
+// (WS-3b retention sweep, manual operator purge) between the
+// resolver's locateEvaluation read and SetFinalVerdict
+// UPDATE.
+//
+// GetByMessageHash, ListRecent, ListBySender, Create all
+// delegate to the inner backend. SetFinalVerdict returns
+// ErrNotFound regardless of input.
+type vanishingEvalRepo struct {
+	inner repository.EvaluationResultRepository
+}
+
+func (v *vanishingEvalRepo) Create(ctx context.Context, r *repository.EvaluationResult) error {
+	return v.inner.Create(ctx, r)
+}
+func (v *vanishingEvalRepo) GetByMessageHash(ctx context.Context, tenantID string, h []byte) (*repository.EvaluationResult, error) {
+	return v.inner.GetByMessageHash(ctx, tenantID, h)
+}
+func (v *vanishingEvalRepo) ListRecent(ctx context.Context, tenantID string, limit int) ([]repository.EvaluationResult, error) {
+	return v.inner.ListRecent(ctx, tenantID, limit)
+}
+func (v *vanishingEvalRepo) ListBySender(ctx context.Context, tenantID string, sender []byte, limit int) ([]repository.EvaluationResult, error) {
+	return v.inner.ListBySender(ctx, tenantID, sender, limit)
+}
+func (v *vanishingEvalRepo) SetFinalVerdict(_ context.Context, _ string, _ []byte, _ string) error {
+	return repository.ErrNotFound
+}
+
+// -- "row vanished between locate and SetFinalVerdict" race
+// produces an audit-skip row on the FIRST invocation rather
+// than a side-effect-free error. This preserves the
+// resolver's "exactly one audit row per invocation"
+// invariant — without the ErrNotFound branch in Reconcile,
+// the first attempt would return an error with no audit row
+// committed and JetStream would redeliver, leaking the
+// invariant to "audit row eventually lands on retry".
+func TestReconcile_SetFinalVerdictNotFound_PersistsSkipNotError(t *testing.T) {
+	repos := repository.NewInMemoryRegistry()
+	reopener := &fakeReopener{}
+	res, err := escalation.New(
+		&vanishingEvalRepo{inner: repos.EvaluationResults},
+		repos.EmailVerdictAudits,
+		repos.BannerStates,
+		reopener,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("escalation.New: %v", err)
+	}
+	const (
+		tenantID  = "tenant-vanish"
+		messageID = "msg-vanish"
+	)
+	// Seed the eval row on the inner backend so
+	// locateEvaluation finds it; the wrapper's
+	// SetFinalVerdict will still surface ErrNotFound.
+	if cerr := repos.EvaluationResults.Create(context.Background(), &repository.EvaluationResult{
+		TenantID:      tenantID,
+		MessageIDHash: []byte(messageID),
+		Tier:          string(constant.TierCaution),
+		Primary:       "Phishing",
+		EvaluatedAt:   time.Now().UTC(),
+	}); cerr != nil {
+		t.Fatalf("seed eval: %v", cerr)
+	}
+
+	ev := newIncidentResolved(tenantID, "inc-vanish", escalation.ResolutionConfirmedThreat, messageID)
+	out, err := res.Reconcile(context.Background(), ev)
+	if err != nil {
+		t.Fatalf("Reconcile returned error; want skip outcome: %v", err)
+	}
+	if out.Kind != escalation.OutcomeSkipped {
+		t.Errorf("Kind = %q; want %q", out.Kind, escalation.OutcomeSkipped)
+	}
+	if !strings.Contains(out.Reason, "vanished") {
+		t.Errorf("Reason = %q; want it to mention 'vanished'", out.Reason)
+	}
+	// Audit row was persisted (the whole point — the
+	// invariant is "exactly one audit row per invocation").
+	got, gerr := repos.EmailVerdictAudits.GetByDedupID(context.Background(), tenantID, ev.DedupID)
+	if gerr != nil {
+		t.Fatalf("GetByDedupID: %v", gerr)
+	}
+	if got == nil {
+		t.Fatal("audit row missing; resolver leaked the 'exactly one audit row' invariant")
+	}
+	if got.SourceIncidentID != ev.IncidentID {
+		t.Errorf("audit.SourceIncidentID = %q; want %q", got.SourceIncidentID, ev.IncidentID)
+	}
+	// Banner reopen MUST NOT have fired — the skip path
+	// short-circuits before banner gate evaluation.
+	if calls := reopener.snapshot(); len(calls) != 0 {
+		t.Errorf("reopener calls = %d; want 0 on row-vanished path", len(calls))
+	}
+}
+
 // -- IsValidResolution covers all four enum tokens and rejects
 // nonsense. Bouundary case for handler-side defensive parse.
 func TestIsValidResolution(t *testing.T) {

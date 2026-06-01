@@ -89,5 +89,23 @@ func buildHealthCheckers(app *application) []handler.HealthChecker {
 			return nil
 		}})
 	}
+	// WS-5A.6: advisory probe for the cross-repo SOC
+	// resolution durable consumer. Reports the boot
+	// subscribe error (if any) on /readyz without 503-ing
+	// the endpoint. Operators monitoring readiness
+	// dashboards see the dark loop immediately instead of
+	// having to grep boot logs for a one-shot WARN; the
+	// hot path (everything outside the cross-repo
+	// reconciliation loop) keeps serving normally.
+	checkers = append(checkers, handler.HealthCheckerFunc{
+		N:   "escalation_sync",
+		Adv: true,
+		F: func(_ context.Context) error {
+			if errp := app.socResolutionSubErr.Load(); errp != nil && *errp != nil {
+				return *errp
+			}
+			return nil
+		},
+	})
 	return checkers
 }

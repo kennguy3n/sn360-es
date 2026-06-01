@@ -83,6 +83,61 @@ func TestHealthHandler_OneCheckFails(t *testing.T) {
 	}
 }
 
+// Advisory check failure must be reported in the JSON body
+// but MUST NOT 503 /readyz. This is the WS-5A.6
+// cross-repo-SOC-loop visibility contract: a dark loop should
+// be observable but not pull the pod out of rotation.
+func TestHealthHandler_AdvisoryCheckFailure_DoesNot503(t *testing.T) {
+	h := NewHealthHandler(HealthConfig{
+		Checkers: []HealthChecker{
+			HealthCheckerFunc{N: "nats", F: func(context.Context) error { return nil }},
+			HealthCheckerFunc{
+				N:   "escalation_sync",
+				Adv: true,
+				F:   func(context.Context) error { return errors.New("subscribe failed") },
+			},
+		},
+	})
+	rec := httptest.NewRecorder()
+	h.Readiness(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d; want 200 (advisory failure must not 503)", rec.Code)
+	}
+	var resp readinessResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Status != "advisory" {
+		t.Errorf("Status=%q; want %q", resp.Status, "advisory")
+	}
+	if got := resp.Checks["escalation_sync"]; got.Status != "advisory_error" ||
+		!got.Advisory || got.Err == "" {
+		t.Errorf("escalation_sync check = %+v; want {Status:advisory_error Advisory:true Err:!=\"\"}", got)
+	}
+	if got := resp.Checks["nats"]; got.Status != "ok" {
+		t.Errorf("nats check = %+v; want ok", got)
+	}
+}
+
+// Mixed-failure: a hard check failing 503s the endpoint even
+// when an advisory check also failed. Confirms the advisory
+// flag does not weaken the hard-check semantics.
+func TestHealthHandler_AdvisoryAndHardFailure_503s(t *testing.T) {
+	h := NewHealthHandler(HealthConfig{
+		Checkers: []HealthChecker{
+			HealthCheckerFunc{N: "nats", F: func(context.Context) error { return errors.New("hard down") }},
+			HealthCheckerFunc{
+				N:   "escalation_sync",
+				Adv: true,
+				F:   func(context.Context) error { return errors.New("soft down") },
+			},
+		},
+	})
+	rec := httptest.NewRecorder()
+	h.Readiness(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d; want 503 (hard failure dominates)", rec.Code)
+	}
+}
+
 func TestHealthHandler_RespectsTimeout(t *testing.T) {
 	h := NewHealthHandler(HealthConfig{
 		Timeout: 25 * time.Millisecond,

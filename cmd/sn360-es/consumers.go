@@ -432,12 +432,32 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	// WS-5A.6 soc.incident.resolved durable consumer — best
 	// effort. A failure here is non-critical (a temporary
 	// drop of the cross-repo reconciliation loop is recoverable
-	// via DLQ replay once the binary restarts), so we surface
-	// the error in the log only and continue to the optional
-	// orchestrator + DLQ wiring below.
+	// via DLQ replay once the binary restarts) so we surface
+	// the error in the log AND on /readyz via the
+	// "escalation_sync" checker — rather than as a critErr
+	// that would couple this binary's boot success to
+	// cross-repo NATS state (e.g. the soc-triage producer
+	// stream's provisioning lag).
+	//
+	// Why /readyz and not /healthz: a dark cross-repo loop
+	// does not justify pod restarts (the symptom is delayed
+	// reopens, not unserviceable traffic) but it MUST be
+	// visible to whatever monitors readiness — otherwise a
+	// silent WARN log can leave the escalation loop dark
+	// for arbitrarily long.
 	if err := a.startSOCResolutionConsumer(ctx); err != nil {
 		a.logger.Warn("sn360-es: soc.incident.resolved durable subscribe failed",
 			slog.Any("error", err))
+		// atomic.Pointer.Store copies the error value into
+		// a fresh allocation we own. Health checks read it
+		// via Load() without locking.
+		errCopy := err
+		a.socResolutionSubErr.Store(&errCopy)
+	} else {
+		// Explicit nil store so a successful resubscribe
+		// (e.g. via a future reload path) clears stale
+		// boot-time failures from /readyz.
+		a.socResolutionSubErr.Store(nil)
 	}
 
 	// Optional Tier 1 batch orchestrator.
