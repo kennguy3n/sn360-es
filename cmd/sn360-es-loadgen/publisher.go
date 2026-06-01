@@ -259,6 +259,13 @@ func (s *publisherServer) publishWith(timeout time.Duration, batch bool) http.Ha
 		defer r.Body.Close()
 
 		dec := json.NewDecoder(r.Body)
+		// Strict decoding is intentional: tests/load/lib/corpus.js
+		// emits exactly the fields on dto.EvaluateRequest, so any
+		// payload drift between the k6 corpus and the Go DTO
+		// should fail loudly at scenario start (the 400 trips
+		// loadgen_publish_errors and surfaces in the smoke
+		// artefact) rather than silently dropping a field a
+		// regression depends on.
 		dec.DisallowUnknownFields()
 
 		var msgs []dto.EvaluateRequest
