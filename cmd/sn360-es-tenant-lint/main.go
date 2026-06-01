@@ -144,7 +144,7 @@ var tenantScopedTables = map[string]struct{}{
 	"banner_state":        {},
 	"email_verdict_audit": {},
 	// WS-5B.2 standalone-deployment webhook/SIEM export tables
-	// (migration 0023). tenant_webhook_sinks stores the per-tenant
+	// (migration 0025). tenant_webhook_sinks stores the per-tenant
 	// webhook configuration (URL, format, encrypted HMAC secret);
 	// tenant_webhook_sink_audit records CRUD + DLQ final-fail
 	// transitions. Both are RLS-protected by tenant_isolation

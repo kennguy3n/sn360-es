@@ -911,7 +911,6 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
 
-||||||| parent of 7f61d64 ([WS-5B.2] Per-tenant webhook sink for standalone SIEM egress)
   /v1/tenants/{tenant_id}/webhook-sinks:
     parameters:
       - $ref: "#/components/parameters/TenantIDPath"

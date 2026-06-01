@@ -189,7 +189,7 @@ func TestHTTPPublisher_Publish_RejectsHTTP(t *testing.T) {
 // from the customer endpoint. If Go's default redirect policy were
 // in effect, a 307 → http://forwarded-host would re-send the signed
 // body and headers over an attacker-controlled scheme, defeating the
-// HTTPS-only invariant the handler + migration 0023 CHECK constraint
+// HTTPS-only invariant the handler + migration 0025 CHECK constraint
 // enforce on the stored URL.
 //
 // The test wires TWO TLS servers and uses the production

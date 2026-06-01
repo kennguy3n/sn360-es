@@ -17,7 +17,7 @@ import (
 
 // WebhookSinkFormat is the closed set of formats a sink can publish.
 // Values mirror the SQL CHECK constraint on tenant_webhook_sinks.format
-// (migration 0023). Adding a value here requires a matching migration.
+// (migration 0025). Adding a value here requires a matching migration.
 type WebhookSinkFormat string
 
 const (
@@ -51,7 +51,7 @@ func (f WebhookSinkFormat) Valid() bool {
 
 // WebhookSinkAuditAction is the closed set of audit actions written
 // to tenant_webhook_sink_audit.action. Mirrors the SQL CHECK
-// constraint in migration 0023.
+// constraint in migration 0025.
 type WebhookSinkAuditAction string
 
 const (
@@ -97,7 +97,7 @@ func (a WebhookSinkAuditAction) Valid() bool {
 	return false
 }
 
-// WebhookSink is one row of `tenant_webhook_sinks` (migration 0023).
+// WebhookSink is one row of `tenant_webhook_sinks` (migration 0025).
 //
 // HMACSecretCiphertext is the AES-GCM envelope blob produced by
 // privacy.Encryptor under the tenant's KMS key. The plaintext
@@ -698,7 +698,7 @@ func (m *memoryWebhookSinks) AppendAudit(_ context.Context, e WebhookSinkAuditEn
 		return fmt.Errorf("repository: invalid webhook sink audit action %q", e.Action)
 	}
 	// Dedup is scoped to (tenant_id, dedup_id) to match the Postgres
-	// UNIQUE constraint in migration 0023. A global-on-dedup_id key
+	// UNIQUE constraint in migration 0025. A global-on-dedup_id key
 	// would silently swallow a second tenant emitting the same
 	// dedup string and produce diverging behavior under cross-tenant
 	// tests.

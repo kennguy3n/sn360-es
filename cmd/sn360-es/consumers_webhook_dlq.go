@@ -106,7 +106,7 @@ func (a *application) startWebhookDLQConsumer(ctx context.Context) error {
 	// `sn360.tenant_id` GUC pinned to the message's tenant.
 	// Without this wrapper, the RLS policy on
 	// tenant_webhook_sinks / tenant_webhook_sink_audit
-	// (migration 0023) evaluates tenant_id = NULL and silently
+	// (migration 0025) evaluates tenant_id = NULL and silently
 	// rejects every GetByID + AppendAudit — the DLQ consumer
 	// becomes a no-op that Acks every message as "sink missing".
 	// The dispatcher publishes DLQ envelopes with

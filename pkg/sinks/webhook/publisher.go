@@ -166,7 +166,7 @@ func NewHTTPPublisher(cfg ...HTTPPublisherConfig) *HTTPPublisher {
 	client := c.Client
 	if client == nil {
 		// SSRF defense-in-depth: refuse to follow redirects. The
-		// validateWebhookURL gate (handler) and migration 0023's
+		// validateWebhookURL gate (handler) and migration 0025's
 		// CHECK constraint both enforce https:// on the INITIAL URL
 		// stored against the sink, but Go's default redirect policy
 		// would follow up to 10 redirects on POST — and a 307/308
