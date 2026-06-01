@@ -85,6 +85,18 @@ const (
 // platform.
 const defaultPlatformStream = "sn360-events"
 
+// DefaultPublishTimeout and DefaultPublishRetries are the per-call
+// publish-window and per-event retry-count fallbacks applied in
+// (Config).withDefaults() when the operator leaves the corresponding
+// knob unset. They are exported so internal/config/validate.go can
+// mirror the exact same fallbacks when computing the dedup-budget
+// invariant — if either constant changes, both the runtime math and
+// the validator math move in lock-step instead of silently desyncing.
+const (
+	DefaultPublishTimeout = 3 * time.Second
+	DefaultPublishRetries = 3
+)
+
 // PlatformPublisher publishes terminal email-security events onto the
 // sn360-security-platform NATS bus. The interface keeps the call
 // sites simple and lets tests substitute a recording implementation
@@ -218,10 +230,10 @@ func (c Config) withDefaults() Config {
 		c.MaxReconnects = -1
 	}
 	if c.PublishTimeout <= 0 {
-		c.PublishTimeout = 3 * time.Second
+		c.PublishTimeout = DefaultPublishTimeout
 	}
 	if c.PublishRetries <= 0 {
-		c.PublishRetries = 3
+		c.PublishRetries = DefaultPublishRetries
 	}
 	if c.Stream == "" {
 		c.Stream = defaultPlatformStream

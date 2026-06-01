@@ -466,6 +466,176 @@ func TestValidate_OnboardingStateSecretLowEntropyRejected(t *testing.T) {
 	}
 }
 
+// validBridgePlatform returns a Platform struct with the WS-5A.1 bridge
+// enabled and every operator-tunable knob set to a known-good production
+// value matching the defaults from loadPlatform() + the FU-B platform-side
+// stream config. Tests for the FU-A bridge-validation rules mutate one
+// field at a time off this baseline so a failure clearly points at the
+// invariant under test, not at incidental field-zeroing.
+func validBridgePlatform() Platform {
+	return Platform{
+		NATSEnabled:        true,
+		NATSURLs:           "nats://platform.example.internal:4222",
+		NATSName:           "sn360-es-bridge",
+		NATSStream:         "sn360-events",
+		NATSReconnectWait:  2 * time.Second,
+		NATSMaxReconnects:  -1,
+		NATSPublishTimeout: 3 * time.Second,
+		NATSPublishRetries: 3,
+		NATSDedupWindow:    10 * time.Minute,
+	}
+}
+
+// TestValidate_PlatformNATSMaxReconnectsZeroRejectedWhenBridgeEnabled
+// pins the FU-A guard against the Go zero-value ambiguity surfaced
+// by PR #56 finding #3. Without this check, a deploy with
+// `PLATFORM_NATS_MAX_RECONNECTS=0` boots cleanly, the bridge silently
+// promotes the 0 to -1 ("retry forever") in withDefaults(), and the
+// operator's stated intent ("no reconnect") is silently inverted.
+// Refusing the value at boot forces the operator to choose between
+// -1 (infinite, the default) or a positive N.
+func TestValidate_PlatformNATSMaxReconnectsZeroRejectedWhenBridgeEnabled(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Platform = validBridgePlatform()
+	cfg.Platform.NATSMaxReconnects = 0
+	err := cfg.validate()
+	if err == nil {
+		t.Fatal("expected PLATFORM_NATS_MAX_RECONNECTS=0 to be rejected when PLATFORM_NATS_ENABLED=true")
+	}
+	if !strings.Contains(err.Error(), "PLATFORM_NATS_MAX_RECONNECTS") {
+		t.Errorf("error message should name the env var so the operator can find it: got %q", err.Error())
+	}
+}
+
+// TestValidate_PlatformNATSMaxReconnectsZeroIgnoredWhenBridgeDisabled
+// pins the gate: every bridge-related env var must be ignored when
+// the bridge itself is off so a stand-alone sn360-es deployment that
+// never publishes to the platform isn't punished for having
+// zero-valued bridge fields it doesn't use.
+func TestValidate_PlatformNATSMaxReconnectsZeroIgnoredWhenBridgeDisabled(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Platform = Platform{NATSEnabled: false, NATSMaxReconnects: 0}
+	if err := cfg.validate(); err != nil {
+		t.Errorf("validate() should ignore bridge fields when PLATFORM_NATS_ENABLED=false; got %v", err)
+	}
+}
+
+// TestValidate_PlatformNATSMaxReconnectsAcceptedValuesWhenBridgeEnabled
+// confirms the gate accepts every documented numeric posture: -1
+// (infinite, default), a positive N (bounded retries), and any
+// negative value (the NATS Go client maps every n < 0 to infinite).
+func TestValidate_PlatformNATSMaxReconnectsAcceptedValuesWhenBridgeEnabled(t *testing.T) {
+	for _, good := range []int{-1, -2, 1, 3, 100} {
+		cfg := validProdConfig()
+		cfg.Platform = validBridgePlatform()
+		cfg.Platform.NATSMaxReconnects = good
+		if err := cfg.validate(); err != nil {
+			t.Errorf("validate() rejected documented PLATFORM_NATS_MAX_RECONNECTS=%d: %v", good, err)
+		}
+	}
+}
+
+// TestValidate_PlatformDedupBudgetExceedsWindowRejectedWhenBridgeEnabled
+// pins the FU-A dedup-budget invariant: the bridge's per-call retry
+// budget (PublishTimeout × PublishRetries) MUST be ≤ NATSDedupWindow.
+// The pathological case in this test (60s × 20 = 1200s budget vs 600s
+// window) is exactly the scenario where a late-succeeding retry from
+// an earlier NATS redelivery lands after the platform-side JetStream
+// stream forgets the deterministic MsgID — producing a silent
+// duplicate downstream in the correlation engine and OpenSearch.
+func TestValidate_PlatformDedupBudgetExceedsWindowRejectedWhenBridgeEnabled(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Platform = validBridgePlatform()
+	cfg.Platform.NATSPublishTimeout = 60 * time.Second
+	cfg.Platform.NATSPublishRetries = 20
+	cfg.Platform.NATSDedupWindow = 600 * time.Second
+	err := cfg.validate()
+	if err == nil {
+		t.Fatal("expected PublishTimeout × PublishRetries > DedupWindow to be rejected")
+	}
+	for _, want := range []string{
+		"PLATFORM_NATS_PUBLISH_TIMEOUT",
+		"PLATFORM_NATS_PUBLISH_RETRIES",
+		"PLATFORM_NATS_DEDUP_WINDOW",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error message must name %s so the operator can find the offending knob: got %q", want, err.Error())
+		}
+	}
+}
+
+// TestValidate_PlatformDedupBudgetWithinWindowAcceptedWhenBridgeEnabled
+// confirms the default knobs from loadPlatform() (3s × 3 = 9s budget
+// vs 10m window) are correctly accepted, and so are realistic
+// boundary cases (budget == window).
+func TestValidate_PlatformDedupBudgetWithinWindowAcceptedWhenBridgeEnabled(t *testing.T) {
+	cases := []struct {
+		name     string
+		timeout  time.Duration
+		retries  int
+		dedupWin time.Duration
+	}{
+		{name: "defaults", timeout: 3 * time.Second, retries: 3, dedupWin: 10 * time.Minute},
+		{name: "budget_equals_window", timeout: 5 * time.Second, retries: 6, dedupWin: 30 * time.Second},
+		{name: "very_tight_window", timeout: 1 * time.Second, retries: 1, dedupWin: 1 * time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validProdConfig()
+			cfg.Platform = validBridgePlatform()
+			cfg.Platform.NATSPublishTimeout = tc.timeout
+			cfg.Platform.NATSPublishRetries = tc.retries
+			cfg.Platform.NATSDedupWindow = tc.dedupWin
+			if err := cfg.validate(); err != nil {
+				t.Errorf("validate() rejected within-budget config (timeout=%s retries=%d window=%s): %v", tc.timeout, tc.retries, tc.dedupWin, err)
+			}
+		})
+	}
+}
+
+// TestValidate_PlatformDedupBudgetUsesRuntimeDefaultsForUnsetKnobs
+// pins the contract that the validator mirrors
+// bridge.Config.withDefaults() exactly: when PublishTimeout or
+// PublishRetries is zero (operator left it unset), validate() must
+// substitute the same defaults the runtime uses (3s, 3) so the
+// validation math matches what actually runs. Without this, an
+// operator who only sets PLATFORM_NATS_DEDUP_WINDOW=5s (shorter than
+// the default 9s budget) would silently pass validation and then
+// produce duplicates at runtime.
+func TestValidate_PlatformDedupBudgetUsesRuntimeDefaultsForUnsetKnobs(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Platform = validBridgePlatform()
+	cfg.Platform.NATSPublishTimeout = 0            // unset → runtime default 3s
+	cfg.Platform.NATSPublishRetries = 0            // unset → runtime default 3
+	cfg.Platform.NATSDedupWindow = 5 * time.Second // shorter than 9s default budget
+	err := cfg.validate()
+	if err == nil {
+		t.Fatal("expected validate() to substitute runtime defaults for unset PublishTimeout/PublishRetries and reject DedupWindow=5s < 9s default budget")
+	}
+}
+
+// TestValidate_PlatformDedupBudgetIgnoredWhenWindowZero pins the
+// opt-in shape of the dedup-budget check: an operator who has
+// explicitly set PLATFORM_NATS_DEDUP_WINDOW=0s is opting out of the
+// validation entirely — there is no platform-side window value to
+// compare against. Note that 0 here means "explicitly opted out", NOT
+// "env var not set": loadPlatform() in internal/config/platform.go
+// defaults NATSDedupWindow to 10m when the env var is missing, so
+// reaching 0 in production requires the operator to write
+// `PLATFORM_NATS_DEDUP_WINDOW=0s` in their .env on purpose. The check
+// only fires once the operator has either left the documented default
+// in place or actively mirrored the platform-side stream config.
+func TestValidate_PlatformDedupBudgetIgnoredWhenWindowZero(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Platform = validBridgePlatform()
+	cfg.Platform.NATSDedupWindow = 0 // explicit opt-out (PLATFORM_NATS_DEDUP_WINDOW=0s)
+	cfg.Platform.NATSPublishTimeout = 1 * time.Hour
+	cfg.Platform.NATSPublishRetries = 100 // budget = 100h, would normally fail
+	if err := cfg.validate(); err != nil {
+		t.Errorf("validate() should skip dedup-budget check when DedupWindow=0 (explicit opt-out); got %v", err)
+	}
+}
+
 func TestIsLowEntropy(t *testing.T) {
 	tests := []struct {
 		name string

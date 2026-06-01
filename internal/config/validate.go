@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
+
+	"github.com/kennguy3n/sn360-es/internal/service/bridge"
 )
 
 // validate enforces minimal correctness invariants.
@@ -92,6 +95,73 @@ func (c Config) validate() error {
 	// floor + low-entropy check below to align with BANNER_TOKEN_SECRET.
 	if c.Ingestion.PushMicrosoftClientStateSecret != "" && len(c.Ingestion.PushMicrosoftClientStateSecret) < 16 {
 		return errors.New("INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET must be at least 16 bytes when set")
+	}
+	// FU-A: WS-5A.1 bridge — reject the zero-value MaxReconnects
+	// ambiguity ANY time the bridge is enabled. Go's int zero-value
+	// semantics make it impossible to distinguish "unset" from
+	// "explicit 0" at the config layer, so bridge.Config.withDefaults()
+	// maps 0 to -1 ("retry forever") — the SAFER default for
+	// fire-and-forget SOC publishing, but the OPPOSITE of what an
+	// operator expects when they explicitly set
+	// PLATFORM_NATS_MAX_RECONNECTS=0 intending "no reconnect". The
+	// NATS Go client itself treats every MaxReconnects < 0 as infinite
+	// (nats-io/nats.go conn.go: the reconnect loop only breaks when
+	// MaxReconnects >= 0 && i >= MaxReconnects), so there is NO numeric
+	// value that means "give up after the first disconnect" — and
+	// there should not be, because silently dropping every SOC event
+	// after a transient network blip is never an operationally-sensible
+	// posture for a security event bridge. Refusing 0 at boot forces
+	// the operator to make an explicit, documented choice: a positive
+	// N for N retries, or -1 for infinite. Surfaces the latent footgun
+	// from PR #56 finding #3.
+	//
+	// All bridge-related env validations below are gated behind
+	// NATSEnabled so a stand-alone sn360-es deployment that never
+	// publishes to the platform stream isn't punished for having
+	// zero-valued bridge fields it doesn't use.
+	if c.Platform.NATSEnabled {
+		if c.Platform.NATSMaxReconnects == 0 {
+			return errors.New("PLATFORM_NATS_MAX_RECONNECTS=0 is ambiguous and not allowed when PLATFORM_NATS_ENABLED=true: Go's int zero-value cannot be distinguished from \"unset\", and the NATS Go client has no value that means \"no reconnect\" — use -1 for infinite retries (default), or a positive N for N attempts; if you genuinely want the bridge to stop forwarding on the first disconnect, contact platform-eng (no operational reason currently exists)")
+		}
+		// FU-A: enforce the dedup-budget invariant. The platform-side
+		// `sn360-events` JetStream stream de-duplicates by the
+		// deterministic MsgID `<tenant>:<msgID>:<subject>` we set on
+		// every publish (see
+		// internal/service/bridge/platform_publisher.go dedupID()),
+		// but only within its configured `duplicate_window_seconds`
+		// (FU-B platform-side config — 600s on sn360-events). If THIS
+		// bridge's own per-call retry budget
+		// (PublishTimeout × PublishRetries) outlasts the platform dedup
+		// window, a late-succeeding retry from an earlier NATS
+		// redelivery would land AFTER the platform forgot the original
+		// MsgID and would be accepted as a fresh message — silently
+		// producing duplicates downstream in the correlation engine
+		// and every alert-forwarder OpenSearch index. Refuse the
+		// pathological config at boot. The check fires in every
+		// environment (not just prod) because duplicate alerts in
+		// dev/staging are still a misleading SOC-correctness regression,
+		// and the same .env file usually drives every tier.
+		if c.Platform.NATSDedupWindow > 0 {
+			// Mirror bridge.Config.withDefaults() exactly by
+			// pulling the runtime defaults from the bridge package's
+			// exported constants. This eliminates the silent-desync
+			// risk that would otherwise exist if the validator's
+			// floor and the runtime's floor were two unconnected
+			// magic numbers — if either default ever changes, both
+			// sites move together.
+			retries := c.Platform.NATSPublishRetries
+			if retries <= 0 {
+				retries = bridge.DefaultPublishRetries
+			}
+			timeout := c.Platform.NATSPublishTimeout
+			if timeout <= 0 {
+				timeout = bridge.DefaultPublishTimeout
+			}
+			budget := timeout * time.Duration(retries)
+			if budget > c.Platform.NATSDedupWindow {
+				return fmt.Errorf("PLATFORM_NATS_PUBLISH_TIMEOUT (%s) × PLATFORM_NATS_PUBLISH_RETRIES (%d) = %s exceeds PLATFORM_NATS_DEDUP_WINDOW (%s); a late-succeeding retry could land after the platform-side JetStream dedup window expires and be re-accepted as a fresh message, producing silent duplicates in the correlation engine and OpenSearch — either shorten the publish-retry budget or raise the dedup window to match the platform-side sn360-events stream's duplicate_window_seconds", timeout, retries, budget, c.Platform.NATSDedupWindow)
+			}
+		}
 	}
 	// B3 + B4: Production-only security validations (UAT + prod).
 	if c.Environment.IsProduction() {

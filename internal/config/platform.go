@@ -62,6 +62,32 @@ type Platform struct {
 	NATSMaxReconnects  int
 	NATSPublishTimeout time.Duration
 	NATSPublishRetries int
+
+	// NATSDedupWindow is the operator-declared mirror of the
+	// platform-side `sn360-events` stream's JetStream duplicate
+	// window (configured in sn360-security-platform under
+	// deploy/nats/streams.json as `duplicate_window_seconds`).
+	// It is NOT consumed by the publisher itself — dedup is enforced
+	// platform-side via the deterministic dedup ID
+	// `<tenant>:<msgID>:<subject>` set in MsgID headers. This
+	// declaration exists so validate() can refuse configurations
+	// where this bridge's own retry budget
+	// (NATSPublishTimeout * NATSPublishRetries) would outlast the
+	// dedup window: in that pathological setting, a late-succeeding
+	// retry from an earlier NATS redelivery would land AFTER the
+	// platform forgot the original MsgID and would be accepted as a
+	// fresh message instead of being de-duplicated, producing a
+	// silent duplicate downstream in the correlation engine and
+	// every alert-forwarder OpenSearch index.
+	//
+	// Default 10m matches the FU-B platform-side stream config
+	// (`duplicate_window_seconds: 600` on sn360-events) and leaves
+	// generous margin above the in-process consumer redelivery span
+	// for the bridge-publishing handlers in cmd/sn360-es/consumers*
+	// (MaxDeliver=3 × linear AckWait backoff: 30 + 60 + 90 = 180s,
+	// plus per-attempt publish window NATSPublishTimeout *
+	// NATSPublishRetries ≈ 9s).
+	NATSDedupWindow time.Duration
 }
 
 func loadPlatform() Platform {
@@ -81,5 +107,6 @@ func loadPlatform() Platform {
 		NATSMaxReconnects:  getInt("PLATFORM_NATS_MAX_RECONNECTS", -1),
 		NATSPublishTimeout: getDuration("PLATFORM_NATS_PUBLISH_TIMEOUT", 3*time.Second),
 		NATSPublishRetries: getInt("PLATFORM_NATS_PUBLISH_RETRIES", 3),
+		NATSDedupWindow:    getDuration("PLATFORM_NATS_DEDUP_WINDOW", 10*time.Minute),
 	}
 }
