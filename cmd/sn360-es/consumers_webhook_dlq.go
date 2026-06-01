@@ -28,8 +28,13 @@ import (
 // Customer-facing retry schedule under MaxDeliver=5: the dispatcher's
 // synchronous publish counts as attempt 1; on retriable failure the
 // envelope lands on the DLQ stream and this consumer drives attempts
-// 2..5, separated by 1s → 5s → 30s → 5m. Delivery 5 here is the
-// final-fail Ack (no further POST, only the dispatch_failed audit row).
+// 2..5, separated by 1s → 5s → 30s → 5m. The 5th JetStream delivery
+// here is the final-fail Ack — handleWebhookDLQ short-circuits BEFORE
+// the customer POST on that delivery and writes the dispatch_failed
+// audit row only. Total customer-facing POST attempts = 5 (1 dispatcher
+// + 4 DLQ retries), matching the documented budget; without the
+// short-circuit JetStream's terminal delivery would burn a 6th
+// customer RTT for no incremental information beyond the audit.
 // AckWait must comfortably exceed the per-publish HTTP budget
 // (publishTimeout ≈ 5s) plus a small processing margin so JetStream
 // doesn't redeliver on every slow customer endpoint.
@@ -48,13 +53,13 @@ const (
 //
 // Reachable entries under the current MaxDeliver=5: backoffs[0..3]
 // (1s, 5s, 30s, 5m) — the wait between DLQ-deliveries 1→2, 2→3, 3→4,
-// 4→5. Delivery 5 is the final-fail Ack, so backoffs[4]=1h is dead
-// code in normal flow today; it's retained as a no-op safety value
-// so bumping MaxDeliver to 6 later doesn't fall through to the
-// bounds-clamp in backoffFor (which would otherwise re-use 5m for
-// the 5→6 gap and silently halve the long-tail backoff). The
-// lookup-failure path in handleWebhookDLQ uses backoffs[0]=1s
-// directly for transient Postgres blips.
+// 4→5. Delivery 5 is the final-fail short-circuit (no POST, no Nak),
+// so backoffs[4]=1h is not consulted in normal flow today; it's
+// retained as a no-op safety value so bumping MaxDeliver to 6 later
+// doesn't fall through to the bounds-clamp in backoffFor (which
+// would otherwise re-use 5m for the 5→6 gap and silently halve the
+// long-tail backoff). The lookup-failure path in handleWebhookDLQ
+// uses backoffs[0]=1s directly for transient Postgres blips.
 var webhookDLQBackoffs = []time.Duration{
 	1 * time.Second,
 	5 * time.Second,
@@ -133,16 +138,21 @@ func (a *application) startWebhookDLQConsumer(ctx context.Context) error {
 //     sink stops receiving retries even if its envelope is in
 //     flight). If lookup fails or sink is gone: Ack + drop;
 //     audit reason "sink missing".
-//  3. Re-sign the original envelope body if the sink rotated its
+//  3. Final-fail short-circuit: if this is the terminal JetStream
+//     delivery (NumDelivered >= MaxDeliver), JetStream is about to
+//     stop redelivering regardless of our Ack/Nak choice. Skip the
+//     customer POST entirely and emit the dispatch_failed audit +
+//     Ack — POSTing here would burn a 6th customer-facing RTT past
+//     the documented 5-attempt budget (1 dispatcher + 4 DLQ).
+//  4. Re-sign the original envelope body if the sink rotated its
 //     HMAC secret between attempts; the body itself is always
 //     replayed verbatim in its original format (a format change
 //     on the live sink does NOT cause the in-flight envelope to
 //     be re-encoded — round-tripping a formatted body back to
 //     an Event is format-specific and brittle, see resignDLQEnvelope).
-//  4. POST. Success: Ack. PermanentFailure: audit + Ack. Retriable:
-//     Nak with the backoff matching the current attempt number.
-//  5. On the last delivery (NumDelivered >= MaxDeliver): audit
-//     final-fail + Ack so JetStream stops redelivering.
+//  5. POST. Success: Ack. PermanentFailure: audit + Ack. Retriable:
+//     Nak with the backoff matching the current delivery number
+//     (1s/5s/30s/5m for deliveries 1→2, 2→3, 3→4, 4→5).
 //
 // Returning an error from this handler tells the bus to Nak with
 // its default backoff — we explicitly Ack / Nak ourselves to
@@ -195,6 +205,32 @@ func (a *application) handleWebhookDLQ(ctx context.Context, msg events.Message) 
 	if !sink.Enabled {
 		logger.InfoContext(ctx, "webhook-dlq: sink disabled; dropping")
 		a.appendDLQAudit(ctx, env, "sink disabled")
+		_ = msg.Ack()
+		return nil
+	}
+
+	// Final-fail short-circuit. JetStream's MaxDeliver=5 means
+	// the 5th delivery is the LAST one we'll see for this
+	// envelope: Ack or Nak, JetStream removes it from the DLQ
+	// stream once this handler returns. POSTing on this final
+	// delivery would send a 6th customer-facing attempt past the
+	// documented retry budget (1 dispatcher publish + 4 DLQ
+	// retries on deliveries 1..4), with no chance for the
+	// customer's response to influence the outcome — even a 2xx
+	// here can't "save" the envelope, JetStream is done either
+	// way. Skip straight to the dispatch_failed audit + Ack so
+	// the operator sees the terminal row and we don't burn a
+	// pointless network RTT (or expose the signed body to a
+	// customer endpoint that's been refusing it for 4 attempts
+	// already). env.LastCause / env.LastStatus carry the most
+	// recent failure observed by the dispatcher or the previous
+	// DLQ retry, so the terminal audit row still names a cause
+	// even though no POST happens here.
+	if int(deliveryAttempt) >= webhookDLQMaxDeliver {
+		logger.WarnContext(ctx, "webhook-dlq: final fail after MaxDeliver; skipping POST",
+			slog.String("last_cause", env.LastCause),
+			slog.Int("last_status", env.LastStatus))
+		a.appendDLQAudit(ctx, env, "final fail after max attempts: "+env.LastCause)
 		_ = msg.Ack()
 		return nil
 	}
@@ -255,18 +291,12 @@ func (a *application) handleWebhookDLQ(ctx context.Context, msg events.Message) 
 		_ = msg.Ack()
 		return nil
 	default: // OutcomeRetriable / OutcomeUnknown
-		// We've exhausted the schedule when this is the last
-		// delivery JetStream will perform (NumDelivered >=
-		// MaxDeliver). Ack the message ourselves and emit the
-		// final-fail audit row + metric.
-		if int(deliveryAttempt) >= webhookDLQMaxDeliver {
-			logger.WarnContext(ctx, "webhook-dlq: final fail after MaxDeliver",
-				slog.Int("http_status", result.HTTPStatus),
-				slog.String("cause", result.Cause))
-			a.appendDLQAudit(ctx, env, "final fail: "+result.Cause)
-			_ = msg.Ack()
-			return nil
-		}
+		// Final-fail (NumDelivered >= MaxDeliver) is handled
+		// before the POST above, so a retriable outcome here
+		// always has at least one more JetStream delivery slot
+		// left — just compute the backoff and Nak. backoffFor
+		// is bounds-clamped against webhookDLQBackoffs so a
+		// future MaxDeliver bump can't index out of range.
 		delay := backoffFor(int(deliveryAttempt))
 		logger.InfoContext(ctx, "webhook-dlq: retriable; scheduling next delivery",
 			slog.Duration("next_in", delay),
