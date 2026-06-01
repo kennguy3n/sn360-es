@@ -29,6 +29,18 @@ test:
 test-integration:
 	$(GO) test $(GOTEST_FLAGS) -tags=integration ./...
 
+# Chaos engineering regression suite (WS-6b).
+#
+# Exercises the four documented degradation paths in
+# internal/docs/DEGRADATION_MODES.md by spinning real
+# testcontainers (NATS, Postgres, Redis) and injecting transient
+# failures mid-stream. Build-tagged so it never runs as part of
+# `make test`; the GitHub Actions workflow `chaos.yml` schedules
+# it nightly (and also exposes a workflow_dispatch trigger).
+.PHONY: chaos
+chaos:
+	$(GO) test -tags=chaos -timeout 600s ./tests/chaos/...
+
 .PHONY: cover
 cover:
 	$(GO) test $(GOTEST_FLAGS) -coverprofile=coverage.out ./...

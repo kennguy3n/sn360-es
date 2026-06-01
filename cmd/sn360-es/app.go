@@ -1004,6 +1004,35 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	// short-circuits.
 	app.signalEnricher = buildSignalEnricher(cfg, logger, app)
 
+	// BreakerSet wraps each Tier 1 / Tier 2 / Rspamd call in the
+	// shared CircuitBreaker primitive so a sustained downstream
+	// outage opens the breaker and subsequent requests
+	// short-circuit to the evaluator's degraded path (see
+	// internal/docs/DEGRADATION_MODES.md §Tier 2 SLM unreachable —
+	// the chaos regression in tests/chaos/tier2_failure_test.go
+	// pins the closed → open transition). Thresholds come from
+	// the shared CB_* env vars (see internal/config/scoring.go),
+	// so operators tune all three breakers from a single knob set.
+	pipelineObserver := app.metrics.PipelineObserver()
+	makeBreaker := func(name string) *evaluate.CircuitBreaker {
+		return evaluate.NewCircuitBreaker(evaluate.CircuitBreakerConfig{
+			Name:             name,
+			FailureThreshold: cfg.CB.FailureThreshold,
+			SuccessThreshold: cfg.CB.SuccessThreshold,
+			OpenTimeout:      cfg.CB.OpenTimeout,
+			OnStateChange: func(from, to evaluate.State) {
+				pipelineObserver.ObserveCircuitBreakerState(name, int(to))
+				logger.Info("sn360-es: circuit breaker transition",
+					slog.String("breaker", name),
+					slog.String("from", from.String()),
+					slog.String("to", to.String()))
+			},
+			OnShortCircuit: func() {
+				pipelineObserver.ObserveCircuitBreakerShortCircuit(name)
+			},
+		})
+	}
+
 	app.evaluator = evaluate.NewEvaluator(evaluate.Config{
 		Tier0:                app.tier0Gate,
 		Tier1:                app.tier1Client,
@@ -1020,7 +1049,12 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		RspamdTimeout:        cfg.Rspamd.Timeout,
 		TenantConfig:         tenantConfigLoader,
 		Logger:               logger,
-		Observer:             app.metrics.PipelineObserver(),
+		Observer:             pipelineObserver,
+		CB: evaluate.BreakerSet{
+			Tier1:  makeBreaker("tier1"),
+			Tier2:  makeBreaker("tier2"),
+			Rspamd: makeBreaker("rspamd"),
+		},
 	})
 
 	// Optional Tier 1 batch orchestrator.

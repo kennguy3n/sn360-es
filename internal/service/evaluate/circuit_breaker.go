@@ -50,6 +50,11 @@ type CircuitBreakerConfig struct {
 	// OnStateChange is invoked synchronously whenever the breaker
 	// transitions. Optional; primarily for metrics emission.
 	OnStateChange func(from, to State)
+	// OnShortCircuit is invoked synchronously every time Do skips
+	// the wrapped op because the breaker is open. Optional;
+	// primarily for metrics emission (operators alert on a
+	// sustained non-zero rate as the open-state signal).
+	OnShortCircuit func()
 }
 
 // CircuitBreaker is a small failure-isolation primitive used to wrap
@@ -99,6 +104,9 @@ func NewCircuitBreaker(cfg CircuitBreakerConfig) *CircuitBreaker {
 func (cb *CircuitBreaker) Do(ctx context.Context, op func(context.Context) error) error {
 	if !cb.allow() {
 		cb.totalShortCircuit.Add(1)
+		if cb.cfg.OnShortCircuit != nil {
+			cb.cfg.OnShortCircuit()
+		}
 		return ErrCircuitOpen
 	}
 	err := op(ctx)
