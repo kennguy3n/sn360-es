@@ -460,6 +460,16 @@ func (a *application) StartConsumers(ctx context.Context) error {
 		a.socResolutionSubErr.Store(nil)
 	}
 
+	// WS-5B.2 — durable retrier for sn360.dlq.webhook.>. Best-
+	// effort like the SOC resolution consumer: a failed subscribe
+	// is logged but does not block boot. Missing dispatcher
+	// wiring causes the function to no-op cleanly (memory-only
+	// deployments + dev builds without KMS).
+	if err := a.startWebhookDLQConsumer(ctx); err != nil {
+		a.logger.Warn("sn360-es: webhook DLQ durable subscribe failed",
+			slog.Any("error", err))
+	}
+
 	// Optional Tier 1 batch orchestrator.
 	if a.batchOrch != nil {
 		a.batchOrch.Start(ctx)

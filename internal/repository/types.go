@@ -875,4 +875,11 @@ type Registry struct {
 	// the reopened banner is only injected for email the
 	// user has actually seen.
 	BannerStates BannerStateRepository
+	// WebhookSinks backs WS-5B.2 per-tenant SIEM webhook
+	// configuration and the matching audit trail. Always
+	// populated by NewPostgresRegistry / NewInMemoryRegistry;
+	// callers that don't wire it (memory-only test fixtures
+	// that pre-date the registry helper) treat a nil
+	// repository as "no sinks for any tenant".
+	WebhookSinks WebhookSinkRepository
 }

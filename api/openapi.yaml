@@ -37,6 +37,7 @@ tags:
   - name: onboarding
   - name: vendor
   - name: investigation
+  - name: webhook-sinks
   - name: system
 
 paths:
@@ -910,6 +911,191 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
 
+  /v1/tenants/{tenant_id}/webhook-sinks:
+    parameters:
+      - $ref: "#/components/parameters/TenantIDPath"
+    get:
+      tags: [webhook-sinks]
+      summary: List webhook sinks for the tenant
+      description: |
+        Returns every non-deleted webhook sink configured for
+        the tenant. The plaintext HMAC secret is NEVER included
+        in this response — it is shown only once in the create
+        reply.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of webhook sinks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookSinkListResponse"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [webhook-sinks]
+      summary: Create a webhook sink
+      description: |
+        Creates a new sink for the tenant. The server generates a
+        32-byte HMAC secret and returns it ONCE in the response
+        body (`hmac_secret_b64`). The customer must persist this
+        secret on their side — it cannot be retrieved again. The
+        ciphertext (envelope-encrypted under the tenant KMS key)
+        is what the database stores.
+
+        The `url` MUST be `https://`. Plain HTTP is rejected.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookSinkCreateRequest"
+      responses:
+        "201":
+          description: Sink created — HMAC secret returned ONCE
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookSinkCreateResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+
+  /v1/tenants/{tenant_id}/webhook-sinks/{sink_id}:
+    parameters:
+      - $ref: "#/components/parameters/TenantIDPath"
+      - $ref: "#/components/parameters/SinkIDPath"
+    get:
+      tags: [webhook-sinks]
+      summary: Get one webhook sink
+      description: |
+        Returns the sink's current configuration. The HMAC secret
+        is never echoed.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Sink
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookSinkResponse"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    patch:
+      tags: [webhook-sinks]
+      summary: Update a webhook sink
+      description: |
+        Update one or more of `url`, `format`, `event_filters`,
+        `enabled`. Omitted fields are not touched. Renaming a
+        sink is intentionally not exposed — delete + recreate
+        instead.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookSinkUpdateRequest"
+      responses:
+        "200":
+          description: Updated sink
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookSinkResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [webhook-sinks]
+      summary: Soft-delete a webhook sink
+      description: |
+        Stamps `deleted_at` on the row and flips `enabled=false`.
+        The row is preserved for audit/forensic purposes; the
+        dispatcher's hot-path partial index stops returning it
+        immediately.
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /v1/tenants/{tenant_id}/webhook-sinks/{sink_id}/test:
+    parameters:
+      - $ref: "#/components/parameters/TenantIDPath"
+      - $ref: "#/components/parameters/SinkIDPath"
+    post:
+      tags: [webhook-sinks]
+      summary: Fire a synthetic test event to the sink
+      description: |
+        Builds a deterministic synthetic verdict (Tier=Caution,
+        Primary=NEWSLETTER, reason=synthetic_test), HMAC-signs it
+        under the sink's stored secret, POSTs it to the
+        configured URL, and returns the customer endpoint's
+        actual HTTP status code + latency. Use this immediately
+        after `POST /webhook-sinks` to verify end-to-end
+        connectivity.
+
+        The synthetic event carries `X-SN360-Event-Type:
+        email.evaluation` so a customer parser exercises the
+        same code path it would on a real verdict, but the body
+        is flagged with `synthetic_test: 1` so dashboards can
+        exclude it from real-traffic metrics.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Customer endpoint reply
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookSinkTestResponse"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          description: Sink is disabled — enable it first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Dispatcher not wired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /v1/org-graph:
     get:
       tags: [directory]
@@ -935,6 +1121,35 @@ paths:
           $ref: "#/components/responses/Error"
 
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Short-lived signed action token issued by `privacy.JWTIssuer`.
+        Webhook-sinks routes require the `role` claim to be `admin`
+        and the `tid` claim to match the `{tenant_id}` path
+        parameter; mismatches fail closed with 403.
+
+  parameters:
+    TenantIDPath:
+      in: path
+      name: tenant_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Tenant UUID. Must match the caller's `tid` claim.
+    SinkIDPath:
+      in: path
+      name: sink_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Webhook sink UUID returned by `POST /webhook-sinks`.
+
   responses:
     Error:
       description: Error envelope
@@ -950,6 +1165,163 @@ components:
       properties:
         error:
           type: string
+
+    WebhookSinkFilters:
+      type: object
+      description: |
+        Per-sink event filters. Unknown JSON keys are preserved
+        verbatim on a round-trip so a forward-rolling deployment
+        can write filter knobs an older dispatcher ignores
+        instead of clobbering them.
+      properties:
+        min_tier:
+          type: string
+          description: |
+            Lowest `Tier` (Informational < Caution < Warning <
+            HighRisk < Blocked) the sink will receive. Empty
+            means "all tiers".
+          enum:
+            - ""
+            - Informational
+            - Caution
+            - Warning
+            - HighRisk
+            - Blocked
+        categories:
+          type: array
+          description: |
+            If non-empty, only verdicts whose `primary` category
+            is in this list are published. Empty = no
+            restriction.
+          items:
+            type: string
+        rate_limit_per_minute:
+          type: integer
+          description: |
+            Per-sink rate limit override. 0 (or absent) =
+            dispatcher default of 100 req/min.
+          minimum: 0
+
+    WebhookSinkResponse:
+      type: object
+      required: [id, tenant_id, name, url, format, event_filters, enabled, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: Operator-chosen label. Unique per (tenant_id, name).
+        url:
+          type: string
+          format: uri
+          description: HTTPS endpoint the dispatcher POSTs to.
+        format:
+          type: string
+          enum: [ecs, cef]
+          description: |
+            Wire format: `ecs` = Elastic Common Schema 8.11 JSON,
+            `cef` = ArcSight Common Event Format v0 (pipe-
+            delimited; Splunk HEC + Sentinel Logic Apps accept
+            this).
+        event_filters:
+          $ref: "#/components/schemas/WebhookSinkFilters"
+        enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    WebhookSinkListResponse:
+      type: object
+      required: [sinks]
+      properties:
+        sinks:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebhookSinkResponse"
+
+    WebhookSinkCreateRequest:
+      type: object
+      required: [name, url]
+      properties:
+        name:
+          type: string
+        url:
+          type: string
+          format: uri
+          description: HTTPS URL. Plain `http://` is rejected.
+        format:
+          type: string
+          enum: [ecs, cef]
+          default: ecs
+        event_filters:
+          $ref: "#/components/schemas/WebhookSinkFilters"
+        enabled:
+          type: boolean
+          default: true
+
+    WebhookSinkCreateResponse:
+      allOf:
+        - $ref: "#/components/schemas/WebhookSinkResponse"
+        - type: object
+          required: [hmac_secret_b64]
+          properties:
+            hmac_secret_b64:
+              type: string
+              description: |
+                The 32-byte HMAC-SHA256 signing secret,
+                base64-encoded. **Shown ONCE only.** Subsequent
+                GETs and PATCHes do not echo this field. Persist
+                it on the customer side to verify the
+                `X-SN360-Signature` header on incoming events.
+
+    WebhookSinkUpdateRequest:
+      type: object
+      description: |
+        All fields are optional; omitted fields are not touched.
+        Renaming is not supported — delete + recreate instead.
+      properties:
+        url:
+          type: string
+          format: uri
+        format:
+          type: string
+          enum: [ecs, cef]
+        event_filters:
+          $ref: "#/components/schemas/WebhookSinkFilters"
+        enabled:
+          type: boolean
+
+    WebhookSinkTestResponse:
+      type: object
+      required: [outcome, http_status, latency_ms]
+      properties:
+        outcome:
+          type: string
+          enum: [success, permanent_failure, retriable, unknown]
+          description: |
+            How the dispatcher classified the customer reply.
+            `success` is any 2xx; `permanent_failure` is any 4xx
+            except 408 / 429; everything else is `retriable`.
+        http_status:
+          type: integer
+          description: |
+            The actual HTTP status code returned by the customer
+            endpoint. 0 indicates a network error before any
+            response was read.
+        latency_ms:
+          type: integer
+          format: int64
+        cause:
+          type: string
+          description: Short failure reason. Empty on success.
 
     ReadinessResponse:
       type: object

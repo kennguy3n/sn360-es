@@ -29,6 +29,14 @@ func TestRateLimitRouteLabel(t *testing.T) {
 		// Prometheus head series.
 		{"investigation message id collapses", "/v1/investigation/message/abcdef1234", "/v1/investigation/message/:pseudo_id"},
 		{"investigation sender hash collapses", "/v1/investigation/sender/AAAA-BBBB", "/v1/investigation/sender/:sender_hash"},
+		// WS-5B.2 webhook-sinks API: tenant_id AND sink_id are
+		// both per-customer UUIDs, so the parent prefix collapses
+		// every sub-resource (list, /<id>, /<id>/test) into a
+		// single Prometheus label. The `method` label preserves
+		// the verb distinction for dashboards.
+		{"webhook-sinks list collapses", "/v1/tenants/11111111-2222-3333-4444-555555555555/webhook-sinks", "/v1/tenants/:tenant_id/webhook-sinks"},
+		{"webhook-sinks item collapses", "/v1/tenants/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/webhook-sinks/ffffffff-1111-2222-3333-444444444444", "/v1/tenants/:tenant_id/webhook-sinks"},
+		{"webhook-sinks test collapses", "/v1/tenants/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/webhook-sinks/ffffffff-1111-2222-3333-444444444444/test", "/v1/tenants/:tenant_id/webhook-sinks"},
 		{"known exact preserved", "/v1/banner/action", "/v1/banner/action"},
 		{"known exact predict", "/v1/predict/open", "/v1/predict/open"},
 		// Random attacker paths bucket into "/other" rather than

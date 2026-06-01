@@ -477,6 +477,26 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 		}
 	}
 
+	// 6. WS-5B.2 — per-tenant standalone webhook fan-out. The
+	// dispatcher walks tenant_webhook_sinks for res.TenantID,
+	// applies per-sink event_filter (min_tier, categories), rate-
+	// limits, formats (ECS / CEF), HMAC-signs, and POSTs to the
+	// customer-configured HTTPS endpoint. Retriable failures route
+	// to sn360.dlq.webhook.<tenant>.<sink> for the DLQ consumer.
+	//
+	// Best-effort: a dispatch failure must never fail the
+	// originating evaluation (the verdict has already been
+	// applied locally above). The dispatcher logs per-sink
+	// errors itself; we only swallow the top-level ListEnabled
+	// failure here.
+	if a.webhookDispatcher != nil {
+		if derr := a.webhookDispatcher.DispatchVerdict(ctx, &res); derr != nil {
+			a.logger.WarnContext(ctx, "sn360-es: ingestion-action: webhook dispatch failed",
+				slog.String("tenant_id", res.TenantID),
+				slog.Any("error", derr))
+		}
+	}
+
 	return nil
 }
 

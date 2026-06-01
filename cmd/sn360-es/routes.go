@@ -230,6 +230,25 @@ func buildMux(app *application) (http.Handler, error) {
 		mux.Handle("/v1/org-graph", orgGraphH)
 	}
 
+	// WS-5B.2 — per-tenant standalone webhook sinks. Registered
+	// only when the repository + encryptor are wired. The handler
+	// itself does tenant-bound authz against the JWT's tid claim;
+	// RequireAdmin enforces the role gate so JWTAuth's tenant
+	// binding and the role check fail closed in lock-step.
+	if app.repos != nil && app.repos.WebhookSinks != nil && app.encryptor != nil {
+		whH, whErr := handler.NewWebhookSinksHandler(
+			logger,
+			app.repos.WebhookSinks,
+			app.encryptor,
+			app.webhookDispatcher,
+		)
+		if whErr != nil {
+			logger.Warn("sn360-es: webhook sinks handler init failed", slog.Any("error", whErr))
+		} else {
+			mux.Handle("/v1/tenants/", middleware.RequireAdmin(whH))
+		}
+	}
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		logger.Debug("http: unmatched route", slog.String("path", r.URL.Path))
 		w.WriteHeader(http.StatusNotFound)
@@ -448,6 +467,23 @@ func defaultRouteTemplates() []middleware.RoutePattern {
 		// hash, blowing up Prometheus head series.
 		{Prefix: "/v1/investigation/message/", Label: "/v1/investigation/message/:pseudo_id"},
 		{Prefix: "/v1/investigation/sender/", Label: "/v1/investigation/sender/:sender_hash"},
+		// WS-5B.2 webhook-sinks API — every URL under
+		// /v1/tenants/<tenant_uuid>/webhook-sinks[/<sink_uuid>[/test]]
+		// carries TWO high-cardinality path segments (tenant + sink
+		// IDs), each grown by every customer admin who creates a
+		// sink. Without collapsing here, telemetry.normaliseRoute
+		// would emit a fresh http_requests_total time-series per
+		// (tenant, sink, method, status) tuple — exactly the
+		// unbounded-series shape the WS-3b investigation routes
+		// above guard against. The label only captures the parent
+		// collection (sub-resources /<id> and /<id>/test still hash
+		// onto the same series); the `method` label preserves the
+		// list/create/get/update/delete/test distinction, which is
+		// what dashboards actually care about. The handler itself
+		// is mounted at the broad /v1/tenants/ prefix so any future
+		// /v1/tenants/<tid>/<other-resource> additions also fall
+		// under this label until they get their own entry.
+		{Prefix: "/v1/tenants/", Label: "/v1/tenants/:tenant_id/webhook-sinks"},
 	}
 }
 
