@@ -391,10 +391,32 @@ func TestSelfReleaseHandler_AuthFailuresDoNotBurnRateLimit(t *testing.T) {
 	}
 }
 
-// TestSelfReleaseHandler_AlreadyReleasedReturns200 is the
-// idempotency case: a second click on a released message returns
-// 200 + already_released, no provider mutation.
-func TestSelfReleaseHandler_AlreadyReleasedReturns200(t *testing.T) {
+// TestSelfReleaseHandler_SecondClickAfterReleaseReturnsNotFound
+// covers the sequential-replay path: once a token has driven a
+// release through to completion, the quarantine record is cleared,
+// so a second POST with the SAME token observes "no record" at
+// lookup time and the state machine emits `not_found` → HTTP 404.
+//
+// This is distinct from the `already_released` outcome, which only
+// fires on the *concurrent* ClaimReference race (two clicks reach
+// the runner before either marks the reference as claimed). The
+// race path is covered at the service layer by
+// TestService_RunnerOutcomeMapping/already_done -> already_released
+// in internal/service/selfrelease/service_test.go (the runner
+// returns ReleaseAlreadyDone, the service translates it to
+// QuarantineReleaseOutcomeAlreadyReleased, and the handler maps
+// that to HTTP 200). Splitting the coverage by layer is
+// intentional: the concurrent race needs the action.QuarantineService
+// fencing primitive to fire deterministically, which is easier to
+// set up at the service level than at the handler level. The
+// handler-level guarantee being asserted here is the sequential
+// idempotency contract — same token, repeated, produces the
+// closed-set outcome rather than e.g. re-invoking the provider.
+//
+// The previous name (TestSelfReleaseHandler_AlreadyReleasedReturns200)
+// confusingly suggested this was the already_released path; rename
+// applied to match the actual assertion.
+func TestSelfReleaseHandler_SecondClickAfterReleaseReturnsNotFound(t *testing.T) {
 	fx := newSelfReleaseFixture(t,
 		dto.EvaluateResult{Tier: constant.TierInformational}, false,
 		repository.TenantReleasePolicy{TenantID: "acme", QuarantineSelfReleasePerHour: 5})
