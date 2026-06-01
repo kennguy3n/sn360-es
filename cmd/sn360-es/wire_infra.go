@@ -93,6 +93,15 @@ func factoryConfigFromAppConfig(cfg *config.Config) bus.Config {
 			Storage:              cfg.NATS.Storage,
 			FetchBatchSize:       cfg.NATS.FetchBatchSize,
 			FetchMaxWait:         cfg.NATS.FetchMaxWait,
+			// WS-7a: forward the multi-region home region
+			// + super-cluster map so the NATS client can
+			// fail over to leaf-cluster URLs in the same
+			// region. Both default to zero values
+			// (HomeRegion="" via natsbus default, nil
+			// Supercluster) when the operator left
+			// NATS_SUPERCLUSTER unset.
+			HomeRegion:   cfg.Postgres.HomeRegion,
+			Supercluster: cfg.NATS.Supercluster,
 		},
 		Redis: redisbus.Config{
 			Addr:           cfg.Redis.Addr,
@@ -863,9 +872,26 @@ func buildWorkerLockFactory(cfg *config.Config, logger *slog.Logger, app *applic
 // directly even though both releases are zero-arg, error-returning
 // closures. Conversion via `worker.TenantConnReleaseFunc(r)` keeps
 // the worker package free of any concrete-storage import.
-type pgWorkerBinder struct{ db *postgres.DB }
+//
+// WS-7a: when the app is running in multi-region mode the shared
+// `*middleware.TenantConnBinder` (which carries the RegionalDB +
+// CachedRegionResolver) is threaded in via `binder` and the
+// per-tenant WithTenant calls route through it — otherwise
+// background workers iterating non-home tenants would silently
+// bind them to the home-region pool and the data-residency
+// promise breaks. Cross-tenant ops are NOT region-routed: the
+// catalog (`tenants` table) is on the home pool by convention
+// and is the only table a cross-tenant scope reads.
+type pgWorkerBinder struct {
+	db     *postgres.DB
+	binder *middleware.TenantConnBinder
+}
 
 func (b pgWorkerBinder) WithTenant(ctx context.Context, tenantID string) (context.Context, worker.TenantConnReleaseFunc, error) {
+	if b.binder != nil {
+		c, r, e := b.binder.BindTenant(ctx, tenantID)
+		return c, worker.TenantConnReleaseFunc(r), e
+	}
 	c, r, e := b.db.WithTenant(ctx, tenantID)
 	return c, worker.TenantConnReleaseFunc(r), e
 }
@@ -879,11 +905,17 @@ func (b pgWorkerBinder) WithCrossTenant(ctx context.Context) (context.Context, w
 // Postgres handle; nil otherwise (in-memory mode). The worker
 // configs treat a nil binder as a valid no-op so unit tests with
 // in-memory repositories continue to pass unchanged.
+//
+// WS-7a: when app.tenantBinder is wired with RegionalDB +
+// CachedRegionResolver, this binder threads the same shared
+// binder into pgWorkerBinder so per-tenant operations route to
+// the correct regional pool. Without it, background workers
+// would route non-home tenants to the home pool.
 func workerTenantBinder(app *application) worker.TenantBinder {
 	if app == nil || app.pgDB == nil {
 		return nil
 	}
-	return pgWorkerBinder{db: app.pgDB}
+	return pgWorkerBinder{db: app.pgDB, binder: app.tenantBinder}
 }
 
 // pgQuarantineBinder adapts *postgres.DB to handler.TenantBinder.
@@ -896,9 +928,25 @@ func workerTenantBinder(app *application) worker.TenantBinder {
 // quarantine-release endpoint never needs cross-tenant scope
 // (every operation is implicitly tenant-scoped via the JWT's
 // verified `tid` claim).
-type pgQuarantineBinder struct{ db *postgres.DB }
+// WS-7a: when running multi-region, the shared TenantConnBinder
+// (carrying RegionalDB + CachedRegionResolver) is threaded in via
+// `binder` so the quarantine self-release endpoint — reached via
+// signed JWT outside the HTTP TenantConnBinder middleware (the
+// route is in defaultAuthSkipPaths) — still routes the JWT's
+// `tid` claim to the correct regional pool. Without it,
+// a tenant in a non-home region would bind to the home pool and
+// the RLS guard would reject the audit insert (different region's
+// data wouldn't be present).
+type pgQuarantineBinder struct {
+	db     *postgres.DB
+	binder *middleware.TenantConnBinder
+}
 
 func (b pgQuarantineBinder) WithTenant(ctx context.Context, tenantID string) (context.Context, handler.TenantBinderReleaseFunc, error) {
+	if b.binder != nil {
+		c, r, e := b.binder.BindTenant(ctx, tenantID)
+		return c, handler.TenantBinderReleaseFunc(r), e
+	}
 	c, r, e := b.db.WithTenant(ctx, tenantID)
 	return c, handler.TenantBinderReleaseFunc(r), e
 }
@@ -923,7 +971,7 @@ func quarantineTenantBinder(app *application) handler.TenantBinder {
 	if app == nil || app.pgDB == nil {
 		return handler.NopTenantBinder{}
 	}
-	return pgQuarantineBinder{db: app.pgDB}
+	return pgQuarantineBinder{db: app.pgDB, binder: app.tenantBinder}
 }
 
 func buildRelationshipRunner(cfg *config.Config, logger *slog.Logger, app *application, locks worker.LockFactory, metrics worker.MetricsRecorder) *worker.Runner {

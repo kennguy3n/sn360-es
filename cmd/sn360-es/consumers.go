@@ -29,6 +29,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/agent"
 	"github.com/kennguy3n/sn360-es/internal/service/bridge"
 	"github.com/kennguy3n/sn360-es/pkg/events"
+	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
 )
 
 // StartConsumers subscribes to the event subjects this binary handles.
@@ -635,7 +636,30 @@ func (a *application) handleOnboarding(ctx context.Context, msg events.Message) 
 				// in-memory mode is treated as a no-op (the agent's DB
 				// dependencies are also nil in that mode).
 				if a.pgDB != nil {
-					boundCtx, release, berr := a.pgDB.WithTenant(bgCtx, env.TenantID)
+					// WS-7a: use the shared region-aware
+					// binder so a tenant in a non-home
+					// region runs the onboarding agent
+					// against its regional pool. In
+					// single-region mode this falls back
+					// to pgDB.WithTenant verbatim.
+					//
+					// Deployment contract: the `tenants`
+					// row for env.TenantID MUST exist in
+					// the target regional pool before this
+					// handler fires for non-home regions —
+					// every tenant-scoped insert below
+					// (PersistDiscoveredUsers, etc.) has
+					// FK references to `tenants.id` in the
+					// *regional* pool's schema, not the
+					// home pool's catalog row. Operators
+					// satisfy this via logical replication
+					// of the `tenants` table to each
+					// regional pool, or via pre-seeding in
+					// provisioning scripts. See
+					// internal/docs/MULTI_REGION.md
+					// "Tenant-row provisioning across
+					// regional pools".
+					boundCtx, release, berr := a.tenantBoundConn(bgCtx, env.TenantID)
 					if berr != nil {
 						a.logger.Error("sn360-es: onboarding agent — tenant bind failed",
 							slog.String("tenant_id", env.TenantID),
@@ -737,7 +761,13 @@ func (a *application) tenantBoundMessageHandler(inner func(context.Context, even
 		if tenantID == "" {
 			return inner(ctx, msg)
 		}
-		boundCtx, release, err := a.pgDB.WithTenant(ctx, tenantID)
+		// WS-7a: route the tenant binding through the shared
+		// TenantConnBinder so multi-region deployments hit the
+		// correct regional pool. In single-region mode the
+		// binder falls back to pgDB.WithTenant which is the
+		// pre-WS-7a code path verbatim.
+		bind := a.tenantBoundConn
+		boundCtx, release, err := bind(ctx, tenantID)
 		if err != nil {
 			a.logger.WarnContext(ctx, "sn360-es: consumer tenant_conn bind failed",
 				slog.String("tenant_id", tenantID),
@@ -837,4 +867,30 @@ func (a *application) handleEscalation(ctx context.Context, msg events.Message) 
 			slog.String("subject", subject))
 	}
 	return nil
+}
+
+// tenantBoundConn is the application-wide adapter that routes tenant
+// binding through the shared *middleware.TenantConnBinder when one is
+// wired (which is when pgDB is non-nil) and falls back to
+// pgDB.WithTenant otherwise. Centralising the decision here ensures
+// every consumer call-site (the generic wrapper, the long-lived
+// onboarding agent goroutine, future workers) lands on the same
+// single-region vs multi-region branch without having to know about
+// the binder type.
+//
+// In single-region deployments app.tenantBinder is constructed with
+// nil Regional + nil Resolver and the binder forwards every call to
+// pgDB.WithTenant verbatim — bit-for-bit equivalent to the pre-WS-7a
+// code path.
+func (a *application) tenantBoundConn(ctx context.Context, tenantID string) (context.Context, postgres.ReleaseFunc, error) {
+	if a.tenantBinder != nil {
+		return a.tenantBinder.BindTenant(ctx, tenantID)
+	}
+	if a.pgDB == nil {
+		// Empty release matches the noop ReleaseFunc the
+		// postgres package returns on error paths so callers
+		// can defer release() unconditionally.
+		return ctx, func() error { return nil }, errors.New("consumers: tenantBoundConn: pgDB not wired")
+	}
+	return a.pgDB.WithTenant(ctx, tenantID)
 }

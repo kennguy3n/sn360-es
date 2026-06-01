@@ -182,6 +182,32 @@ func Load() (Config, error) {
 		return cfg, errors.Join(strictErrs...)
 	}
 
+	// WS-7a multi-region routing: PG_REGION_MAP is parsed AFTER
+	// loadPostgres so the regional URLs can inherit pool-shape
+	// fields (MaxOpenConns / MaxIdleConns / ConnMaxLifetime) from
+	// the primary Postgres struct. Empty / unset returns (nil,
+	// nil) and the binary continues running single-pool against
+	// PG_HOST — backwards-compatible default for single-region
+	// deployments.
+	rm, err := parsePostgresRegionMap(getStr("PG_REGION_MAP", ""), cfg.Postgres)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.Postgres.RegionMap = rm
+
+	// WS-7a multi-region routing: NATS_SUPERCLUSTER carries the
+	// region -> leaf-cluster URL mapping used by the cross-region
+	// SOC bridge publisher / subscriber. Empty / unset returns
+	// (nil, nil); the binary still connects to the primary
+	// NATS_URL for its in-region traffic. Malformed JSON or an
+	// empty region entry fails boot here instead of at first
+	// cross-region publish.
+	sc, err := parseNATSSuperclusterMap(getStr("NATS_SUPERCLUSTER", ""))
+	if err != nil {
+		return cfg, err
+	}
+	cfg.NATS.Supercluster = sc
+
 	if err := cfg.validate(); err != nil {
 		return cfg, err
 	}

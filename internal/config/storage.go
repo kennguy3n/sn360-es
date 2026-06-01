@@ -25,6 +25,22 @@ type Postgres struct {
 	// wrapper opens a second pool against the replica and routes
 	// unbound reads (no tenant-context conn binding) to it.
 	Read PostgresRead
+
+	// HomeRegion names the region whose tenants are served by
+	// the primary (PG_HOST) pool. Loaded from PG_HOME_REGION;
+	// defaults to "ap-southeast-1" to match the `tenants.region`
+	// column default in migrations/0001_init.up.sql:25. Has no
+	// effect when RegionMap is empty (single-region deployment).
+	HomeRegion string
+
+	// RegionMap is the parsed PG_REGION_MAP env var: a mapping
+	// of region name -> Postgres connection settings. Empty /
+	// nil means single-region mode and the binary continues to
+	// run against PG_HOST / PG_READ_HOST unchanged (the
+	// default for every existing deployment). See
+	// internal/config/postgres.go and
+	// internal/docs/MULTI_REGION.md for the contract.
+	RegionMap map[string]Postgres
 }
 
 // PostgresRead carries connection settings for the optional read
@@ -72,8 +88,18 @@ func loadPostgres() Postgres {
 		MaxOpenConns:    getInt("PG_MAX_OPEN_CONNS", 40),
 		MaxIdleConns:    getInt("PG_MAX_IDLE_CONNS", 10),
 		ConnMaxLifetime: getDuration("PG_CONN_MAX_LIFETIME", time.Hour),
+		// WS-7a multi-region routing: defaults match the
+		// tenants.region column default in
+		// migrations/0001_init.up.sql:25 so single-region
+		// deployments (PG_REGION_MAP unset) and the home-region
+		// branch of multi-region deployments agree on the same
+		// region name without operator config.
+		HomeRegion: getStr("PG_HOME_REGION", "ap-southeast-1"),
 	}
 	primary.Read = loadPostgresRead(primary)
+	// RegionMap is populated by Load() after the strict numeric
+	// re-parse — parsing PG_REGION_MAP can fail and Load is the
+	// only call-site that propagates the error to callers.
 	return primary
 }
 

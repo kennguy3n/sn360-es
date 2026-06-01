@@ -63,6 +63,15 @@ func NewClient(ctx context.Context, cfg Config, logger *slog.Logger) (*Client, e
 	}
 	c := &Client{cfg: cfg, logger: logger}
 
+	// WS-7a: when NATS_SUPERCLUSTER is configured, merge the
+	// home-region URL list into the primary URL so nats.Connect
+	// will fail over to the configured leaf-cluster URLs. The
+	// helper returns cfg.URL unchanged when Supercluster is
+	// empty (single-region default).
+	connectURL, err := resolveSuperclusterServers(cfg)
+	if err != nil {
+		return nil, err
+	}
 	opts, err := cfg.natsOptions()
 	if err != nil {
 		return nil, err
@@ -85,9 +94,9 @@ func NewClient(ctx context.Context, cfg Config, logger *slog.Logger) (*Client, e
 		}),
 	)
 
-	nc, err := nats.Connect(cfg.URL, opts...)
+	nc, err := nats.Connect(connectURL, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("nats: connect %s: %w", cfg.URL, err)
+		return nil, fmt.Errorf("nats: connect %s: %w", connectURL, err)
 	}
 
 	js, err := jetstream.New(nc)

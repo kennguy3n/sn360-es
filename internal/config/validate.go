@@ -65,6 +65,63 @@ func (c Config) validate() error {
 		c.Score.Caution <= c.Score.Info {
 		return errors.New("SCORE_*_THRESHOLD must be strictly decreasing: blocked > high > warning > caution > info")
 	}
+	// WS-7a multi-region routing: every multi-region deployment must
+	// carry a PG_REGION_MAP entry for its home region so the primary
+	// PG_HOST pool maps cleanly into the regional router. Without
+	// this check, a tenant whose `tenants.region` equals
+	// PG_HOME_REGION would have no pool to bind to and every request
+	// for that tenant would fail closed at the middleware boundary —
+	// a fail-fast at boot is more useful than fail-closed-at-runtime
+	// because the operator catches the misconfig before any traffic
+	// arrives. Empty / nil RegionMap (single-region default) leaves
+	// the guard a no-op.
+	if len(c.Postgres.RegionMap) > 0 {
+		if c.Postgres.HomeRegion == "" {
+			return errors.New("PG_HOME_REGION must be set when PG_REGION_MAP is configured (it names which region the primary PG_HOST pool serves)")
+		}
+		homePG, ok := c.Postgres.RegionMap[c.Postgres.HomeRegion]
+		if !ok {
+			return fmt.Errorf("PG_REGION_MAP must contain an entry for PG_HOME_REGION=%q; got regions %v", c.Postgres.HomeRegion, sortedRegionKeys(c.Postgres.RegionMap))
+		}
+		// WS-7a: the primary pool (PG_HOST/PG_PORT/PG_DATABASE)
+		// doubles as the home-region pool —
+		// internal/docs/MULTI_REGION.md:54-58 documents the
+		// contract, but without a code-level check an operator
+		// who pointed the home entry at a different host or
+		// database would silently get a single pool to the
+		// primary PG_HOST/PG_DATABASE while the home entry's URL
+		// was parsed-and-validated-but-never-dialled. Fail boot
+		// if the home entry's (host, port, database) tuple does
+		// not match (PG_HOST, PG_PORT, PG_DATABASE). User and
+		// password are intentionally not compared — operators
+		// commonly omit credentials from DSN strings and supply
+		// them via PG_USER/PG_PASSWORD env vars instead, so a
+		// user mismatch is ambiguous; a database mismatch is
+		// always a misconfig because the primary pool's database
+		// is what the home region actually serves.
+		if homePG.Host != c.Postgres.Host || homePG.Port != c.Postgres.Port || homePG.Database != c.Postgres.Database {
+			return fmt.Errorf("PG_REGION_MAP[%s] points at %s:%d/%s but PG_HOST/PG_PORT/PG_DATABASE is %s:%d/%s — the home-region entry must reach the same Postgres as the primary pool (see internal/docs/MULTI_REGION.md)",
+				c.Postgres.HomeRegion, homePG.Host, homePG.Port, homePG.Database, c.Postgres.Host, c.Postgres.Port, c.Postgres.Database)
+		}
+	}
+	// WS-7a: NATS super-cluster mirrors the PG_REGION_MAP guard
+	// above. The NATS client's home-region check in
+	// pkg/events/nats/supercluster.go:resolveSuperclusterServers
+	// also fails at boot, but centralising the check in validate()
+	// catches the misconfig before bus.New attempts any
+	// infrastructure connection — the operator's error experience
+	// is consistent between PG and NATS supercluster misconfig.
+	// NATS HomeRegion is sourced from Postgres.HomeRegion at
+	// wiring time (cmd/sn360-es/wire_infra.go:103), so the same
+	// home-region label drives both validators.
+	if len(c.NATS.Supercluster) > 0 {
+		if c.Postgres.HomeRegion == "" {
+			return errors.New("PG_HOME_REGION must be set when NATS_SUPERCLUSTER is configured (the home-region label is shared across PG and NATS super-cluster routing)")
+		}
+		if _, ok := c.NATS.Supercluster[c.Postgres.HomeRegion]; !ok {
+			return fmt.Errorf("NATS_SUPERCLUSTER must contain an entry for PG_HOME_REGION=%q; got regions %v", c.Postgres.HomeRegion, sortedRegionKeys(c.NATS.Supercluster))
+		}
+	}
 	// TIER1_SUPPRESS_PARTNER is the (typically negative) offset
 	// applied to Tier1 PassBelow / FlagAbove for Partner / Customer
 	// senders. .env.example documents the contract as "Must be <= 0"
@@ -230,6 +287,22 @@ func (c Config) validate() error {
 		if c.Postgres.Read.Host != "" &&
 			strings.EqualFold(strings.TrimSpace(c.Postgres.Read.SSLMode), "disable") {
 			return errors.New("PG_READ_SSLMODE=disable is not allowed in production environments (UAT/prod) when PG_READ_HOST is set; set PG_READ_SSLMODE=require or PG_READ_SSLMODE=verify-full")
+		}
+		// WS-7a multi-region routing: every regional pool carries
+		// the same RLS-scoped data, so a PG_REGION_MAP entry with
+		// sslmode=disable downgrades the trust chain identically
+		// to the primary guard above. Only kicks in when the
+		// operator actually wired a region map; the empty / nil
+		// map (single-region default) leaves the loop a no-op.
+		// Iterate in lex-sorted key order so the first error an
+		// operator sees is stable across boots — matches the
+		// deterministic-ordering convention used by the regional
+		// pool open loop in cmd/sn360-es/app.go.
+		for _, region := range sortedRegionKeys(c.Postgres.RegionMap) {
+			pg := c.Postgres.RegionMap[region]
+			if strings.EqualFold(strings.TrimSpace(pg.SSLMode), "disable") {
+				return fmt.Errorf("PG_REGION_MAP[%s]: sslmode=disable is not allowed in production environments (UAT/prod); set sslmode=require or sslmode=verify-full on the connection URL", region)
+			}
 		}
 		// CORS_ALLOWED_ORIGINS=* (wildcard) defeats browser SOP for
 		// every authenticated route. middleware/cors.go already
