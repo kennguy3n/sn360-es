@@ -367,3 +367,35 @@ func TestValidate_HomeRegionEntryMatchesIncludingDatabase(t *testing.T) {
 		t.Fatalf("validate() rejected canonical home-region wiring (host+port+database match; user/password intentionally exempt): %v", err)
 	}
 }
+
+// TestParsePostgresRegionMap_RejectsDatabaseWithSlash pins the
+// boot-time guard that an over-encoded URL path (where %2F decodes
+// back to a literal '/') is rejected with a clear error rather
+// than passed through to the Postgres driver, which would fail
+// with a confusing wire-protocol error.
+func TestParsePostgresRegionMap_RejectsDatabaseWithSlash(t *testing.T) {
+	raw := `{"ap-southeast-1": "postgres://user:pw@host:5432/db%2Fextra?sslmode=require"}`
+	_, err := parsePostgresRegionMap(raw, Postgres{})
+	if err == nil {
+		t.Fatal("parsePostgresRegionMap must reject database name containing '/'")
+	}
+	if !strings.Contains(err.Error(), "path separators") {
+		t.Fatalf("error = %q; want mention of path separators", err.Error())
+	}
+}
+
+// TestParsePostgresRegionMap_RejectsDatabaseWithControlChars pins
+// the boot-time guard against control characters (NUL, tab, etc.)
+// in the URL-encoded database name. These should never appear in
+// a real DSN but a clear early error beats a confused driver-level
+// failure.
+func TestParsePostgresRegionMap_RejectsDatabaseWithControlChars(t *testing.T) {
+	raw := `{"ap-southeast-1": "postgres://user:pw@host:5432/db%00name?sslmode=require"}`
+	_, err := parsePostgresRegionMap(raw, Postgres{})
+	if err == nil {
+		t.Fatal("parsePostgresRegionMap must reject database name containing control characters")
+	}
+	if !strings.Contains(err.Error(), "control characters") {
+		t.Fatalf("error = %q; want mention of control characters", err.Error())
+	}
+}

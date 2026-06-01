@@ -157,6 +157,25 @@ func postgresFromURL(raw string, base Postgres) (Postgres, error) {
 	if db == "" {
 		return Postgres{}, errors.New("database name (URL path) must not be empty")
 	}
+	// Reject database names containing path or control characters.
+	// url.Parse + strings.TrimPrefix("/") yields the decoded path
+	// segment, so a DSN like postgres://host/db%2Fextra produces
+	// db="db/extra" — a value the Postgres driver will reject at
+	// connect time with a confusing wire-protocol error. Surface
+	// the misconfig at boot with a clear, named error instead.
+	// Postgres database identifiers are quoted by the driver, so
+	// the only character classes we need to reject are the ones
+	// that indicate a malformed URL path: slashes (path separators
+	// that survived URL decoding) and control characters (null
+	// bytes, tabs, newlines that should never appear in a name).
+	if strings.ContainsAny(db, "/\\") {
+		return Postgres{}, fmt.Errorf("database name %q must not contain path separators (likely an over-encoded URL path)", db)
+	}
+	for _, r := range db {
+		if r < 0x20 || r == 0x7f {
+			return Postgres{}, fmt.Errorf("database name %q must not contain control characters", db)
+		}
+	}
 	sslMode := u.Query().Get("sslmode")
 	if sslMode == "" {
 		sslMode = base.SSLMode

@@ -642,6 +642,23 @@ func (a *application) handleOnboarding(ctx context.Context, msg events.Message) 
 					// against its regional pool. In
 					// single-region mode this falls back
 					// to pgDB.WithTenant verbatim.
+					//
+					// Deployment contract: the `tenants`
+					// row for env.TenantID MUST exist in
+					// the target regional pool before this
+					// handler fires for non-home regions —
+					// every tenant-scoped insert below
+					// (PersistDiscoveredUsers, etc.) has
+					// FK references to `tenants.id` in the
+					// *regional* pool's schema, not the
+					// home pool's catalog row. Operators
+					// satisfy this via logical replication
+					// of the `tenants` table to each
+					// regional pool, or via pre-seeding in
+					// provisioning scripts. See
+					// internal/docs/MULTI_REGION.md
+					// "Tenant-row provisioning across
+					// regional pools".
 					boundCtx, release, berr := a.tenantBoundConn(bgCtx, env.TenantID)
 					if berr != nil {
 						a.logger.Error("sn360-es: onboarding agent — tenant bind failed",

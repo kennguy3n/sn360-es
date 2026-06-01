@@ -197,6 +197,47 @@ can find the affected pool quickly.
    start routing as soon as the binary they hit has both
    `PG_REGION_MAP` set and a Postgres pool open for their region.
 
+## Tenant-row provisioning across regional pools
+
+This binary opens **one pool per region** but does NOT replicate the
+`tenants` catalog row across regional pools — every tenant-scoped
+table in every regional pool carries a foreign-key reference to its
+own `tenants.id`. The catalog (`tenants` table itself) lives on the
+home region's pool by convention and is what the region resolver
+queries to learn each tenant's region.
+
+This means: **the `tenants` row for tenant T MUST exist in T's
+regional pool before any handler binds T to that pool.** Concretely,
+when the `onboarding.tenant.created` event fires for a non-home-region
+tenant, the onboarding agent (now routing through the shared
+region-aware binder) opens a connection on T's regional pool and
+will hit FK violations on every tenant-scoped insert (labels,
+evaluation_results, …) if T is not present in that pool's `tenants`
+table.
+
+Operators have two ways to satisfy this contract:
+
+1. **Replicate tenant rows out-of-band** (recommended for prod). Run
+   a logical-replication subscription (or equivalent) on the
+   `tenants` table from the home region to each regional pool so a
+   tenant row created on the catalog appears on every regional pool
+   before the `onboarding.tenant.created` event is consumed. This is
+   the same shape used by every multi-region SaaS — the catalog is
+   the source of truth and regions are downstream subscribers.
+2. **Pre-seed in the migration / provisioning script** (acceptable
+   for small static tenant lists). The integration test
+   `internal/repository/multi_region_test.go` uses this pattern —
+   it `INSERT … tenants` into both regional pools explicitly before
+   binding either pool's tenant context.
+
+A future workstream may add an in-process "tenant catalog
+replicator" that subscribes to onboarding events and writes the
+`tenants` row to the right regional pool before publishing a
+`tenant.regional.ready` ack. For now, the operator workflow above is
+the documented contract; the regional pool is treated as opaque
+infrastructure that the operator is responsible for keeping
+catalog-aligned.
+
 ## Failover behaviour
 
 - **Regional Postgres pool down.** Requests for tenants in that region
