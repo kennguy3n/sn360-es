@@ -15,6 +15,9 @@ import (
 // is triggered (e.g., a message's score was upgraded from Warning to
 // Blocked via updated threat intel or user reports).
 type ClawbackEvent struct {
+	// SchemaVersion is the WS-7c wire-format version tag. See
+	// internal/dto/schema_version.go for the contract.
+	SchemaVersion        string        `json:"schema_version,omitempty"`
 	TenantID             string        `json:"tenant_id"`
 	PseudonymizedMessage string        `json:"pseudonymized_message_id"`
 	OldTier              constant.Tier `json:"old_tier"`

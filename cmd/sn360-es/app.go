@@ -13,6 +13,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/config"
 	"github.com/kennguy3n/sn360-es/internal/constant"
 	"github.com/kennguy3n/sn360-es/internal/dto"
+	"github.com/kennguy3n/sn360-es/internal/eventsschema"
 	"github.com/kennguy3n/sn360-es/internal/handler"
 	"github.com/kennguy3n/sn360-es/internal/repository"
 	"github.com/kennguy3n/sn360-es/internal/service"
@@ -36,6 +37,7 @@ import (
 	"github.com/kennguy3n/sn360-es/pkg/events"
 	"github.com/kennguy3n/sn360-es/pkg/events/bus"
 	natsbus "github.com/kennguy3n/sn360-es/pkg/events/nats"
+	"github.com/kennguy3n/sn360-es/pkg/events/schema"
 
 	// Side-effect imports so every Tier 2 SLM provider self-registers
 	// with the slm registry at process boot. New providers added under
@@ -82,6 +84,14 @@ type application struct {
 	pgDB     *postgres.DB
 	redis    *redis.Client
 	repos    *repository.Registry
+
+	// schemaValidator is the WS-7c registry that gates every
+	// publish + every subscribe against the registered
+	// (subject, schema_version) -> shape contract. Nil disables
+	// schema enforcement and restores pre-WS-7c behaviour;
+	// production wires this via wire_services.go from
+	// internal/eventsschema.MustRegister().
+	schemaValidator *schema.Validator
 
 	// Privacy + caches.
 	jwtIssuer   *privacy.JWTIssuer
@@ -328,6 +338,39 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		})
 	}
 
+	// WS-7c schema-versioning gate. Build the validator from the
+	// canonical sn360-es subject registry and bind it onto:
+	//   - the NATS event bus's Publisher (rejects mismatched
+	//     payloads with a structured *schema.ValidationError at
+	//     publish time);
+	//   - the consumer entry helpers (routes mismatched
+	//     deliveries to `sn360.dlq.schema.<subject>` and Acks
+	//     the original instead of nacking forever);
+	//   - the platform-bridge publisher (warns + observes the
+	//     metric on mismatch, but still publishes so a SOC
+	//     outage does not result from a one-off shape drift).
+	//
+	// The metric hook closes over app.metrics so the call sites
+	// in pkg/events/nats/publisher.go and the bridge can record
+	// to nats_schema_mismatch_total without taking a telemetry
+	// dependency at the package level.
+	app.schemaValidator = eventsschema.MustRegister()
+	if natsSvc, ok := eventBus.(*natsbus.Service); ok {
+		natsSvc.SetSchemaValidator(app.schemaValidator, func(subject string, result schema.Result) {
+			family := result.SubjectMatch
+			if family == "" {
+				family = "unknown"
+			}
+			app.metrics.ObserveSchemaMismatch(family, string(result.Reason), "publish")
+			logger.Warn("sn360-es: schema mismatch on publish",
+				slog.String("subject", subject),
+				slog.String("subject_family", family),
+				slog.String("resolved_version", result.ResolvedVersion),
+				slog.String("reason", string(result.Reason)),
+				slog.Any("validator_error", result.Err))
+		})
+	}
+
 	// Platform NATS bridge (WS-5A.1). The bridge is gated behind
 	// PLATFORM_NATS_ENABLED — when disabled it returns a no-op
 	// publisher so the consumer handlers can call its methods
@@ -345,6 +388,20 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	if perr != nil {
 		return nil, fmt.Errorf("platform bridge: %w", perr)
 	}
+	// WS-7c: wire the schema registry into the bridge so a
+	// hybrid-envelope publish on `sn360.events.email.>` runs the
+	// same v1 shape check as a primary `es.*` publish. The
+	// mismatch hook updates the metric with side="publish"
+	// (publisher-side enforcement, regardless of whether the
+	// payload originated from the bridge or the primary
+	// publisher).
+	platformPub = bridge.WithSchemaValidator(platformPub, app.schemaValidator, func(_ string, result schema.Result) {
+		family := result.SubjectMatch
+		if family == "" {
+			family = "unknown"
+		}
+		app.metrics.ObserveSchemaMismatch(family, string(result.Reason), "publish")
+	})
 	app.platformBridge = platformPub
 	app.closers = append(app.closers, platformPub.Close)
 

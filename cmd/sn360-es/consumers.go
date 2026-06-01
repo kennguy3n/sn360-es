@@ -108,7 +108,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 
 	// es.evaluate.result → persist to the management Postgres layer.
 	if a.repos != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.result", a.tenantBoundMessageHandler(a.handleEvaluateResult),
+		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.result", a.validatedTenantBoundHandler(a.handleEvaluateResult),
 			events.WithDurable("management-persist"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -123,7 +123,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 
 	// es.evaluate.result → trigger contextual micro-lessons.
 	if a.microLessonSvc != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.result", a.tenantBoundMessageHandler(a.handleEducationTrigger),
+		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.result", a.validatedTenantBoundHandler(a.handleEducationTrigger),
 			events.WithDurable("education-trigger"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -146,7 +146,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	// silently degrade), but it does NOT gate the evaluate-svc
 	// checkpoint below; see the comment block on resultConsumerErrs.
 	if a.repos != nil && a.repos.FeedbackEvents != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.action.feedback.>", a.tenantBoundMessageHandler(a.handleFeedbackPersist),
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.feedback.>", a.validatedTenantBoundHandler(a.handleFeedbackPersist),
 			events.WithDurable("feedback-persist"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -169,7 +169,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	// onto es.evaluate.result. See the INVARIANT block at the top of
 	// StartConsumers.
 	if a.bannerRenderer != nil || a.urlRewriter != nil || a.quarantineSvc != nil || a.labelApplier != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.result", a.tenantBoundMessageHandler(a.handleIngestionAction),
+		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.result", a.validatedTenantBoundHandler(a.handleIngestionAction),
 			events.WithDurable("ingestion-action"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -241,7 +241,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	// interest stream cannot lose a produced result message to a
 	// not-yet-bound durable.
 	if a.evaluator != nil && a.batchOrch == nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.request", a.tenantBoundMessageHandler(a.handleEvaluateRequest),
+		sub, err := a.eventBus.Subscribe(ctx, "es.evaluate.request", a.validatedTenantBoundHandler(a.handleEvaluateRequest),
 			events.WithDurable("evaluate-svc"),
 			events.WithMaxDeliver(5))
 		if err != nil {
@@ -255,7 +255,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 
 	// es.action.label → apply tier + category native labels.
 	if a.labelApplier != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.action.label", a.tenantBoundMessageHandler(a.handleActionLabel),
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.label", a.validatedTenantBoundHandler(a.handleActionLabel),
 			events.WithDurable("action-label"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -268,7 +268,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 
 	// es.action.banner → inject pre-rendered banner HTML.
 	if a.providers != nil && a.providers.hasAny() {
-		sub, err := a.eventBus.Subscribe(ctx, "es.action.banner", a.tenantBoundMessageHandler(a.handleActionBanner),
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.banner", a.validatedTenantBoundHandler(a.handleActionBanner),
 			events.WithDurable("action-banner"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -281,7 +281,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 
 	// es.action.url_rewrite → log + observe for now.
 	if a.urlRewriter != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.action.url_rewrite", a.tenantBoundMessageHandler(a.handleActionURLRewrite),
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.url_rewrite", a.validatedTenantBoundHandler(a.handleActionURLRewrite),
 			events.WithDurable("action-url-rewrite"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -295,7 +295,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	// es.action.quarantine → move Blocked-tier messages into the
 	// hidden quarantine label / folder.
 	if a.quarantineSvc != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.action.quarantine", a.tenantBoundMessageHandler(a.handleActionQuarantine),
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.quarantine", a.validatedTenantBoundHandler(a.handleActionQuarantine),
 			events.WithDurable("action-quarantine"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -308,7 +308,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 
 	// es.education.simulation.send → dispatch a campaign.
 	if a.simulationEng != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.education.simulation.send", a.tenantBoundMessageHandler(a.handleSimulationSend),
+		sub, err := a.eventBus.Subscribe(ctx, "es.education.simulation.send", a.validatedTenantBoundHandler(a.handleSimulationSend),
 			events.WithDurable("education-sim"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -322,7 +322,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 
 	// es.education.simulation.result → record per-user interaction outcomes.
 	if a.simulationTracker != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.education.simulation.result", a.tenantBoundMessageHandler(a.handleSimulationResult),
+		sub, err := a.eventBus.Subscribe(ctx, "es.education.simulation.result", a.validatedTenantBoundHandler(a.handleSimulationResult),
 			events.WithDurable("education-sim-track"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -358,7 +358,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	// es.action.quarantine.release → user (or AI agent) released a
 	// quarantined message.
 	if a.releaseSvc != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.action.quarantine.release", a.tenantBoundMessageHandler(a.handleQuarantineRelease),
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.quarantine.release", a.validatedTenantBoundHandler(a.handleQuarantineRelease),
 			events.WithDurable("quarantine-release"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -389,7 +389,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 	// cycle, but the incremental hot path is the whole point of
 	// WS-4a, so a degraded mode is not the same as a working one.
 	if a.repos != nil && a.repos.CommunicationHistories != nil {
-		sub, err := a.eventBus.Subscribe(ctx, dto.CommHistoryUpdateSubject, a.tenantBoundMessageHandler(a.handleCommHistoryUpdate),
+		sub, err := a.eventBus.Subscribe(ctx, dto.CommHistoryUpdateSubject, a.validatedTenantBoundHandler(a.handleCommHistoryUpdate),
 			events.WithDurable("comm-history-update"),
 			events.WithMaxDeliver(3))
 		if err != nil {
@@ -403,7 +403,7 @@ func (a *application) StartConsumers(ctx context.Context) error {
 
 	// es.action.escalation.> → fan escalation events into EscalationService.
 	if a.escalationSvc != nil {
-		sub, err := a.eventBus.Subscribe(ctx, "es.action.escalation.>", a.tenantBoundMessageHandler(a.handleEscalation),
+		sub, err := a.eventBus.Subscribe(ctx, "es.action.escalation.>", a.validatedTenantBoundHandler(a.handleEscalation),
 			events.WithDurable("escalation"),
 			events.WithMaxDeliver(3))
 		if err != nil {

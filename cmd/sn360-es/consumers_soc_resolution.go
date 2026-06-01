@@ -219,7 +219,7 @@ func (a *application) startSOCResolutionConsumer(ctx context.Context) error {
 		// tenant-bound DB context even when the cross-repo
 		// producer regresses on its header contract.
 		a.bodyTenantHeaderShim(
-			a.tenantBoundMessageHandler(a.handleSOCIncidentResolved),
+			a.validatedTenantBoundHandler(a.handleSOCIncidentResolved),
 		),
 		events.WithDurable(socResolutionDurable),
 		events.WithAckWait(socResolutionAckWait),

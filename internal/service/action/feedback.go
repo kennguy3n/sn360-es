@@ -35,6 +35,9 @@ func (a FeedbackAction) Valid() bool {
 // FeedbackEvent is the canonical payload published to
 // `es.action.feedback.<action>` after a banner click is verified.
 type FeedbackEvent struct {
+	// SchemaVersion is the WS-7c wire-format version tag. See
+	// internal/dto/schema_version.go for the contract.
+	SchemaVersion        string         `json:"schema_version,omitempty"`
 	TenantID             string         `json:"tenant_id"`
 	PseudonymizedMessage string         `json:"pseudonymized_message_id"`
 	Action               FeedbackAction `json:"action"`

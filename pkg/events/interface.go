@@ -36,6 +36,19 @@ const (
 	// translation.
 	HeaderTraceparent = "traceparent"
 	HeaderTracestate  = "tracestate"
+	// HeaderSchemaVersion mirrors the in-payload `schema_version`
+	// field on the message header (WS-7c). It lets a consumer
+	// classify a message's version without parsing the payload —
+	// useful for the schema-mismatch DLQ path where the original
+	// payload may be opaque to the DLQ consumer (e.g. an operator
+	// scanning `sn360.dlq.schema.>` from the CLI).
+	HeaderSchemaVersion = "schema-version"
+	// HeaderSchemaMismatchReason carries the structured reason
+	// (missing_version / unknown_version / payload_validation_failure)
+	// when the consumer routes a message to the schema-mismatch
+	// DLQ. Pinned in events so the platform-side DLQ tooling and
+	// the sn360-es side use one constant.
+	HeaderSchemaMismatchReason = "schema-mismatch-reason"
 )
 
 // busCtxKey is the unexported key type for context values that the bus

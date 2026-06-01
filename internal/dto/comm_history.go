@@ -54,6 +54,13 @@ const CommHistoryUpdateSubject = "es.management.comm_history.update"
 // The DedupID() helper derives the Nats-Msg-Id header value so
 // publishers and tests share one definition.
 type CommHistoryUpdate struct {
+	// SchemaVersion is the WS-7c wire-format version tag. Producers
+	// SHOULD set SchemaVersion=SchemaVersionV1 on construction;
+	// the publish-side validator stamps the same value as a
+	// backstop. Consumers that receive a payload without this
+	// field treat it as v1 (pre-WS-7c publishers remain
+	// compatible).
+	SchemaVersion    string    `json:"schema_version,omitempty"`
 	TenantID         string    `json:"tenant_id"`
 	MessageID        string    `json:"message_id"`
 	SenderHash       []byte    `json:"sender_hash"`

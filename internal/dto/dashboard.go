@@ -47,6 +47,9 @@ type SimulationStats struct {
 // DashboardSummary is the structured aggregate that backs the AI
 // narrative. All counts cover the supplied time range.
 type DashboardSummary struct {
+	// SchemaVersion is the WS-7c wire-format version tag. See
+	// internal/dto/schema_version.go for the contract.
+	SchemaVersion   string          `json:"schema_version,omitempty"`
 	TenantID        string          `json:"tenant_id"`
 	Range           TimeRange       `json:"range"`
 	EmailsProcessed int             `json:"emails_processed"`
