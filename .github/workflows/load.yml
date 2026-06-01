@@ -1,0 +1,295 @@
+name: Load
+
+# WS-6a end-to-end load harness. The smoke job ALWAYS runs on PR
+# (it has to be cheap — <2 min — so the harness can be exercised
+# every commit). The full scenarios (baseline / typical / peak /
+# soak) only fire when a maintainer triggers them manually from
+# the Actions tab; running 5,000-tenant load against a hosted CI
+# runner for every PR is overkill and would burn the action
+# budget.
+#
+# Layout matches the rest of .github/workflows/: keep the jobs
+# small, prefer make targets over inline shell, and assume only
+# the dev docker-compose stack is available (no external infra).
+
+on:
+  pull_request:
+    paths:
+      - "cmd/sn360-es-loadgen/**"
+      - "tests/load/**"
+      - "Makefile"
+      - ".github/workflows/load.yml"
+      - "pkg/telemetry/metrics.go"
+      - "internal/service/evaluate/evaluator.go"
+  push:
+    branches: [main]
+    paths:
+      - "cmd/sn360-es-loadgen/**"
+      - "tests/load/**"
+      - "Makefile"
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: "Scenario to run (smoke / baseline / typical / peak / soak). 'smoke' is the same as the PR smoke job; the others are heavyweight and only meant for release-trains."
+        required: true
+        default: "smoke"
+        type: choice
+        options:
+          - smoke
+          - baseline
+          - typical
+          - peak
+          - soak
+      duration_min:
+        description: "Override LOAD_DURATION_MIN (minutes). Empty = use scenario default."
+        required: false
+        default: ""
+        type: string
+      tenants:
+        description: "Override LOAD_TENANTS. Empty = scenario default. Bootstrap honours this too."
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel any in-flight load run when a new commit lands on the
+  # same branch — load runs are expensive and a newer commit
+  # invalidates the older artefact anyway.
+  group: load-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.25.x"
+  K6_VERSION: "v0.54.0"
+
+jobs:
+  smoke:
+    name: load-smoke
+    # Always run on PR, plus when the user explicitly picks "smoke"
+    # from the workflow_dispatch dropdown. The heavyweight scenarios
+    # are gated to the dedicated `scenario` job below.
+    if: github.event_name != 'workflow_dispatch' || inputs.scenario == 'smoke'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install k6
+        # The grafana/setup-k6-action installs the pinned k6
+        # binary from the official releases and adds it to PATH.
+        uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: ${{ env.K6_VERSION }}
+
+      - name: Build sn360-es-loadgen
+        run: make loadgen-build
+
+      - name: Start NATS + Postgres + Redis
+        # We deliberately only bring up the three services the
+        # smoke needs. ClamAV's first-boot can take minutes and the
+        # smoke does not exercise attachment scanning.
+        run: docker compose up -d nats postgres redis
+
+      - name: Wait for NATS + Postgres + Redis
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8222/varz >/dev/null \
+               && docker exec sn360es-postgres pg_isready -U sn360es >/dev/null \
+               && docker exec sn360es-redis redis-cli -a sn360es-dev ping >/dev/null; then
+              echo "all three healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "services failed to become healthy"
+          docker compose ps
+          exit 1
+
+      - name: Apply migrations
+        run: make migrate-up
+
+      - name: Bootstrap a 32-tenant pool
+        # Small enough that the bootstrap finishes in <5s; the
+        # smoke does not need the full 5,000-tenant pool.
+        env:
+          LOADGEN_POSTGRES_URL: postgres://sn360es:sn360es@127.0.0.1:5432/sn360es?sslmode=disable
+        run: |
+          ./bin/sn360-es-loadgen bootstrap \
+            -count=32 \
+            -postgres-url="$LOADGEN_POSTGRES_URL" \
+            -out=tests/load/results/tenants.json
+          jq '.count, (.tenants | length)' tests/load/results/tenants.json
+
+      - name: Start sn360-es-loadgen publisher (background)
+        run: |
+          set -euo pipefail
+          ./bin/sn360-es-loadgen publisher \
+            -nats-url=nats://127.0.0.1:4222 \
+            -bind=127.0.0.1:9099 \
+            >publisher.log 2>&1 &
+          echo $! >publisher.pid
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9099/healthz >/dev/null; then
+              echo "publisher healthy"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "publisher failed to become healthy"
+          cat publisher.log
+          exit 1
+
+      - name: Run load-smoke
+        run: make load-smoke
+
+      - name: Validate artefact
+        # The artefact contract is documented in
+        # tests/load/README.md §Release-over-release. Each file
+        # must carry all six captured metric families plus a
+        # k6_summary block so a reviewer can diff against an
+        # earlier release.
+        run: |
+          set -euo pipefail
+          latest=$(ls -1t tests/load/results/smoke-*.json | head -n1)
+          test -n "$latest" || { echo "no smoke artefact written"; exit 1; }
+          echo "validating $latest"
+          jq -e '
+            .scenario == "baseline"
+            and .config.msgs_per_sec != null
+            and .k6_summary.loadgen_publish_latency_ms != null
+            and (.metrics_snapshot.families | keys) as $f
+            | ([
+                "nats_consumer_lag",
+                "pg_client_connections",
+                "redis_memory_bytes",
+                "tier1_queue_depth",
+                "tier2_queue_depth",
+                "tier2_inflight_requests"
+              ] | all(. as $k | $f | index($k) != null))
+          ' "$latest"
+
+      - name: Stop publisher
+        if: always()
+        run: |
+          if [ -f publisher.pid ]; then
+            kill "$(cat publisher.pid)" || true
+          fi
+
+      - name: Upload artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-smoke-${{ github.run_id }}
+          path: tests/load/results/
+          retention-days: 30
+
+      - name: Tear down docker compose
+        if: always()
+        run: docker compose down -v
+
+  scenario:
+    name: load-${{ inputs.scenario }}
+    # Heavyweight scenarios are manual only. Soak in particular
+    # takes ~30 min by default and is not something every PR
+    # should trigger.
+    if: github.event_name == 'workflow_dispatch' && inputs.scenario != 'smoke'
+    runs-on: ubuntu-latest
+    # baseline ~10m, typical ~10m, peak ~10m, soak ~35m at default
+    # durations; the timeout accommodates an override up to 60m
+    # plus 10m of overhead.
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install k6
+        uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: ${{ env.K6_VERSION }}
+
+      - name: Build sn360-es-loadgen
+        run: make loadgen-build
+
+      - name: Start NATS + Postgres + Redis
+        run: docker compose up -d nats postgres redis
+
+      - name: Wait for services
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8222/varz >/dev/null \
+               && docker exec sn360es-postgres pg_isready -U sn360es >/dev/null \
+               && docker exec sn360es-redis redis-cli -a sn360es-dev ping >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose ps
+          exit 1
+
+      - name: Apply migrations
+        run: make migrate-up
+
+      - name: Bootstrap tenant pool
+        env:
+          LOADGEN_POSTGRES_URL: postgres://sn360es:sn360es@127.0.0.1:5432/sn360es?sslmode=disable
+          LOAD_TENANTS: ${{ inputs.tenants }}
+        run: |
+          ./bin/sn360-es-loadgen bootstrap \
+            -count="${LOAD_TENANTS:-5000}" \
+            -postgres-url="$LOADGEN_POSTGRES_URL" \
+            -out=tests/load/results/tenants.json
+
+      - name: Start publisher
+        run: |
+          ./bin/sn360-es-loadgen publisher \
+            -nats-url=nats://127.0.0.1:4222 \
+            -bind=127.0.0.1:9099 \
+            >publisher.log 2>&1 &
+          echo $! >publisher.pid
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9099/healthz >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat publisher.log
+          exit 1
+
+      - name: Run load-${{ inputs.scenario }}
+        env:
+          LOAD_DURATION_MIN: ${{ inputs.duration_min }}
+          LOAD_TENANTS: ${{ inputs.tenants }}
+        run: make "load-${{ inputs.scenario }}"
+
+      - name: Stop publisher
+        if: always()
+        run: |
+          if [ -f publisher.pid ]; then
+            kill "$(cat publisher.pid)" || true
+          fi
+
+      - name: Upload artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-${{ inputs.scenario }}-${{ github.run_id }}
+          path: tests/load/results/
+          retention-days: 90
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

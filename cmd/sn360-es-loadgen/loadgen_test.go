@@ -14,8 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kennguy3n/sn360-es/internal/dto"
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/kennguy3n/sn360-es/internal/dto"
 )
 
 func TestTenantIDDeterministic(t *testing.T) {
@@ -99,6 +100,37 @@ func TestIsLoopbackBind(t *testing.T) {
 	for _, b := range external {
 		if IsLoopbackBind(b) {
 			t.Fatalf("IsLoopbackBind(%q) = true, want false", b)
+		}
+	}
+}
+
+// TestFormatHasIntegerVerb pins the structural check the bootstrap
+// flag parser uses to accept any width / precision form of an
+// integer verb. The previous implementation used
+// `strings.Contains("%d")` which rejected `%04d` even though it is
+// the documented default.
+func TestFormatHasIntegerVerb(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		format string
+		ok     bool
+	}{
+		{"%d", true},
+		{"%04d", true},
+		{"%-5d", true},
+		{"loadgen-tenant-%04d", true},
+		{"Tenant %d", true},
+		{"static-name", false},
+		{"%s", false},
+		// Two verbs but one arg: fmt prints `%!+d(MISSING)`
+		// which our `%!` guard correctly rejects. Pin so a
+		// future regression cannot silently accept this.
+		{"%-5d|%+d", false},
+	}
+	for _, tc := range cases {
+		got := formatHasIntegerVerb(tc.format)
+		if got != tc.ok {
+			t.Fatalf("formatHasIntegerVerb(%q) = %v, want %v", tc.format, got, tc.ok)
 		}
 	}
 }

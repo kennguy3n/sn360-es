@@ -54,11 +54,11 @@ type Metrics struct {
 	// gauge to capture SLM call concurrency during a scenario run,
 	// and the SLO dashboard surfaces it next to Tier2Latency so a
 	// queue-up under load is visible at a glance.
-	Tier2Inflight                prometheus.Gauge
-	RspamdLatency                *prometheus.HistogramVec
-	EvaluateLatency              *prometheus.HistogramVec
-	EvaluateOutcome              *prometheus.CounterVec
-	EvaluateDegraded             *prometheus.CounterVec
+	Tier2Inflight    prometheus.Gauge
+	RspamdLatency    *prometheus.HistogramVec
+	EvaluateLatency  *prometheus.HistogramVec
+	EvaluateOutcome  *prometheus.CounterVec
+	EvaluateDegraded *prometheus.CounterVec
 
 	// --- Education service ----------------------------------------
 	SimulationSent  *prometheus.CounterVec

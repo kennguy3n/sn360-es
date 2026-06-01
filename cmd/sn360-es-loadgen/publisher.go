@@ -13,9 +13,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/kennguy3n/sn360-es/internal/dto"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/kennguy3n/sn360-es/internal/dto"
+	natsstreams "github.com/kennguy3n/sn360-es/pkg/events/nats"
 )
 
 // natsClient narrows the JetStream API we need so the publisher can
@@ -50,18 +52,6 @@ type publisherServer struct {
 	maxBatch   int
 }
 
-// publishOptions captures the optional per-publish overrides the
-// HTTP body may set. They map 1:1 to jetstream.PublishOpt values
-// the publisher applies before forwarding the message.
-type publishOptions struct {
-	// MessageID overrides the EvaluateRequest.MessageID. Useful
-	// when the k6 script wants to coordinate dedupe via
-	// jetstream.WithMsgID. When empty we fall back to the body's
-	// message_id; if that's also empty, we error 400 — the
-	// downstream consumer requires it.
-	MessageID string `json:"-"`
-}
-
 // runPublisher parses the publisher-subcommand flags and serves
 // HTTP. The function blocks until ctx is cancelled (signal handler
 // in main).
@@ -83,6 +73,8 @@ func runPublisher(ctx context.Context, logger *slog.Logger, args []string) error
 		"upper bound on graceful HTTP shutdown when SIGTERM arrives")
 	natsConnTimeout := fs.Duration("nats-connect-timeout", 15*time.Second,
 		"upper bound on the initial NATS connection")
+	ensureStream := fs.Bool("ensure-stream", true,
+		"create/update the canonical ES_EVALUATE JetStream stream on startup so the publisher works against a fresh NATS server without booting sn360-es first")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -104,6 +96,17 @@ func runPublisher(ctx context.Context, logger *slog.Logger, args []string) error
 		return fmt.Errorf("dial NATS at %s: %w", *natsURL, err)
 	}
 	defer nc.Close()
+
+	if *ensureStream {
+		// EnsureStream is idempotent. We only provision the
+		// ES_EVALUATE stream the publisher cares about — the
+		// other streams (results, onboarding, soc) are owned
+		// by sn360-es itself and the load harness does not
+		// produce on them.
+		if err := ensureEvaluateStream(connCtx, js, logger); err != nil {
+			return fmt.Errorf("ensure ES_EVALUATE stream: %w", err)
+		}
+	}
 
 	srv := &publisherServer{
 		logger:    logger,
@@ -337,6 +340,29 @@ func (s *publisherServer) publishOne(ctx context.Context, msg *dto.EvaluateReque
 		return err
 	}
 	return nil
+}
+
+// ensureEvaluateStream provisions the ES_EVALUATE work-queue
+// stream so publishing succeeds against a fresh NATS server. We
+// reuse natsstreams.DefaultStreamSpecs so the on-disk config is
+// byte-identical to what `sn360-es` would create itself.
+func ensureEvaluateStream(ctx context.Context, js jetstream.JetStream, logger *slog.Logger) error {
+	specs := natsstreams.DefaultStreamSpecs(natsstreams.Config{})
+	for _, spec := range specs {
+		if spec.Name != natsstreams.StreamEvaluate {
+			continue
+		}
+		_, err := natsstreams.EnsureStream(ctx, js, spec)
+		if err != nil {
+			return err
+		}
+		logger.Info("sn360-es-loadgen: ensured ES_EVALUATE stream",
+			slog.String("stream", spec.Name),
+			slog.Any("subjects", spec.Subjects),
+		)
+		return nil
+	}
+	return errors.New("default stream specs did not include ES_EVALUATE")
 }
 
 // IsLoopbackBind reports whether bind is a loopback address. It is

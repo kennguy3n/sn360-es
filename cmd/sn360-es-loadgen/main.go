@@ -67,12 +67,20 @@ publisher is 127.0.0.1:9099 (loopback only).
 }
 
 func main() {
-	if len(os.Args) < 2 {
+	// run() owns all the resources that need defers (signal
+	// context, etc.); main() is left as a tiny wrapper so any
+	// non-zero exit can call os.Exit without leaking defers
+	// inside the workhorse function.
+	os.Exit(run(os.Args[1:]))
+}
+
+func run(rawArgs []string) int {
+	if len(rawArgs) < 1 {
 		usage()
-		os.Exit(2)
+		return 2
 	}
-	sub := os.Args[1]
-	args := os.Args[2:]
+	sub := rawArgs[0]
+	args := rawArgs[1:]
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -84,18 +92,17 @@ func main() {
 
 	var err error
 	switch sub {
-	case cmdBootstrap, "-h", "--help":
-		if sub != cmdBootstrap {
-			usage()
-			os.Exit(0)
-		}
+	case "-h", "--help":
+		usage()
+		return 0
+	case cmdBootstrap:
 		err = runBootstrap(ctx, logger, args)
 	case cmdPublisher:
 		err = runPublisher(ctx, logger, args)
 	default:
 		fmt.Fprintf(os.Stderr, "sn360-es-loadgen: unknown subcommand %q\n\n", sub)
 		usage()
-		os.Exit(2)
+		return 2
 	}
 	if err != nil {
 		// Treat context cancellation as graceful shutdown rather
@@ -104,11 +111,12 @@ func main() {
 		// SIGTERM.
 		if errors.Is(err, context.Canceled) {
 			logger.Info("sn360-es-loadgen: shutdown")
-			return
+			return 0
 		}
 		logger.Error("sn360-es-loadgen: "+sub+" failed", slog.Any("error", err))
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // newFlagSet returns a flag set that exits with the standard help

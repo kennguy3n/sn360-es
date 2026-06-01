@@ -1,60 +1,69 @@
-/**
- * k6 smoke load test for sn360-es.
- *
- * Targets:
- *   - /healthz  (GET) – availability probe
- *   - /v1/banner/action (POST) – exercises the JSON decode + signed-
- *     token-validation path (the cheapest authenticated production
- *     endpoint)
- *
- * Thresholds:
- *   - p(95) latency < 500 ms
- *   - error rate < 1 %
- *
- * Usage:
- *   K6_TARGET=http://localhost:8080 k6 run tests/load/smoke.js
- */
+// tests/load/smoke.js
+//
+// 2-minute baseline-profile load smoke test against a fresh
+// `make dev-up` environment plus a running `sn360-es-loadgen
+// publisher`. The intent is "in under two minutes prove the
+// ingest path is alive and capture all six metric families" —
+// this is what CI runs on every PR.
+//
+// To run locally:
+//
+//   make dev-up                              # docker compose for NATS / PG / Redis
+//   bin/sn360-es-migrate -up                 # apply schema
+//   bin/sn360-es                             # run the API server (background)
+//   bin/sn360-es-loadgen bootstrap -count=32 # seed a small tenant pool
+//   bin/sn360-es-loadgen publisher           # start the HTTP -> NATS shim
+//   make load-smoke                          # this file
+//
+// The result artefact lands at
+// tests/load/results/smoke-<unix_ts>.json and contains the same
+// k6_summary + metrics_snapshot shape as a full scenario, so the
+// release-over-release comparison in tests/load/README.md works
+// against smoke runs too.
 
-import http from "k6/http";
-import { check, sleep } from "k6";
+import { runScenario } from "./lib/scenario.js";
 
-// Allow the target to be passed in as an env var (Makefile /
-// CI action set K6_TARGET when the app is running).
-const BASE = __ENV.K6_TARGET || "http://localhost:8080";
+const scenario = runScenario({
+  name: "baseline",
+  // Smoke deliberately runs short and uses a tiny tenant pool so
+  // a CI runner can finish in <2 min without docker resource
+  // strain. The full baseline scenario lives in baseline.js.
+  durationMin: 2,
+  tenants: 32,
+  // Pin the seed so two consecutive smoke runs against the same
+  // build produce comparable artefacts.
+  seed: 42,
+});
 
-export const options = {
-  vus: 50,
-  duration: "30s",
-  thresholds: {
-    http_req_duration: ["p(95)<500"],
-    http_req_failed: ["rate<0.01"],
-  },
-};
+export const options = scenario.options;
+export default scenario.iter;
 
-export default function () {
-  // 1. Health probe — lightweight GET.
-  const healthRes = http.get(`${BASE}/healthz`);
-  check(healthRes, {
-    "healthz 200": (r) => r.status === 200,
-  });
+export function handleSummary(data) {
+  const out = scenario.summary(data);
+  const ts = Math.floor(Date.now() / 1000);
+  const path = `tests/load/results/smoke-${ts}.json`;
+  return {
+    [path]: JSON.stringify(out, null, 2),
+    stdout: renderStdout(out),
+  };
+}
 
-  // 2. Banner-action POST — hits the JSON decoding, token
-  //    validation, and feedback service. The token is intentionally
-  //    invalid (random string); the handler rejects it quickly with
-  //    400/401 but still exercises the hot path through middleware,
-  //    JSON decoder, and feedback.FeedbackService.HandleAction.
-  const payload = JSON.stringify({
-    token: "smoke-test-token-invalid",
-    action: "report",
-  });
-  const params = { headers: { "Content-Type": "application/json" } };
-  const actionRes = http.post(`${BASE}/v1/banner/action`, payload, params);
-  check(actionRes, {
-    // 400 or 401 is expected because the token is not a valid JWT.
-    "banner/action responds": (r) =>
-      r.status === 400 || r.status === 401 || r.status === 200,
-  });
-
-  // Small random sleep to avoid perfectly synchronised bursts.
-  sleep(0.1 + Math.random() * 0.2);
+function renderStdout(out) {
+  const lat = out.k6_summary.loadgen_publish_latency_ms || {};
+  const ok = (out.k6_summary.loadgen_publish_ok || {}).count || 0;
+  const err = (out.k6_summary.loadgen_publish_errors || {}).count || 0;
+  return [
+    "",
+    `load-smoke (${out.scenario}, profile=${out.cost_model_profile})`,
+    `  msgs_per_sec target = ${out.config.msgs_per_sec}`,
+    `  publish ok           = ${ok}`,
+    `  publish err          = ${err}`,
+    `  publish_latency p50  = ${(lat.med ?? 0).toFixed(1)} ms`,
+    `  publish_latency p95  = ${(lat.p95 ?? 0).toFixed(1)} ms`,
+    `  publish_latency p99  = ${(lat.p99 ?? 0).toFixed(1)} ms`,
+    `  metric families      = ${
+      Object.keys(out.metrics_snapshot.families || {}).length
+    }`,
+    "",
+  ].join("\n");
 }

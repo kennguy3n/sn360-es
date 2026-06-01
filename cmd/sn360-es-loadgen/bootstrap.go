@@ -77,11 +77,16 @@ func runBootstrap(ctx context.Context, logger *slog.Logger, args []string) error
 	if *postgresURL == "" {
 		return errors.New("-postgres-url (or $LOADGEN_POSTGRES_URL) is required")
 	}
-	if !strings.Contains(*nameFormat, "%d") {
-		return fmt.Errorf("-name-format %q must contain exactly one %%d placeholder", *nameFormat)
+	// We probe the format strings by Sprintf-ing two indices and
+	// requiring the outputs differ. This accepts width / precision
+	// verbs (`%04d`, `%-5d`, `%+d`) but rejects formats with no
+	// integer verb at all, which would emit identical names for
+	// every row and trip the UNIQUE index on tenants.name.
+	if !formatHasIntegerVerb(*nameFormat) {
+		return fmt.Errorf("-name-format %q must contain an integer verb (e.g. %%d, %%04d)", *nameFormat)
 	}
-	if !strings.Contains(*displayFormat, "%d") {
-		return fmt.Errorf("-display-format %q must contain exactly one %%d placeholder", *displayFormat)
+	if !formatHasIntegerVerb(*displayFormat) {
+		return fmt.Errorf("-display-format %q must contain an integer verb (e.g. %%d, %%04d)", *displayFormat)
 	}
 	if *provider != "gws" && *provider != "o365" {
 		return fmt.Errorf("-provider must be one of {gws, o365}, got %q", *provider)
@@ -103,7 +108,15 @@ func runBootstrap(ctx context.Context, logger *slog.Logger, args []string) error
 	if err != nil {
 		return fmt.Errorf("open postgres: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		// Close errors during bootstrap teardown are not
+		// actionable — the manifest is already written. Log
+		// at debug so noisy CI logs do not get spammed.
+		if cerr := db.Close(); cerr != nil {
+			logger.Debug("bootstrap: postgres close returned error",
+				slog.Any("error", cerr))
+		}
+	}()
 
 	insCtx, insCancel := context.WithTimeout(ctx, *insertTimeout)
 	defer insCancel()
@@ -240,6 +253,27 @@ func tenantID(prefix string, index int) (string, error) {
 	return fmt.Sprintf("%s%012x", prefix, index), nil
 }
 
+// formatHasIntegerVerb returns true when the given fmt-style format
+// string consumes one int and renders two distinct strings for two
+// distinct inputs. The Sprintf-twice trick lets us accept any width
+// or precision form (`%04d`, `%+d`, `%-5d`, ...) without enumerating
+// them, while the `%!(EXTRA` guard catches format strings that are
+// missing a verb entirely — those silently append the unused
+// argument and would otherwise look "different" between calls.
+func formatHasIntegerVerb(f string) bool {
+	a := fmt.Sprintf(f, 0)
+	b := fmt.Sprintf(f, 1)
+	if a == b {
+		return false
+	}
+	// fmt emits `%!<verb>(<type>=value)` markers when the verb
+	// doesn't match the argument type (`%s` with an int) or when
+	// the format consumed no argument at all (`%!(EXTRA int=0)`).
+	// We treat either as "no integer verb here" so the bootstrap
+	// validation still fails fast on a malformed -name-format.
+	return !strings.Contains(a, "%!") && !strings.Contains(b, "%!")
+}
+
 // writeManifest writes the bootstrap manifest to path with secure
 // permissions. The directory is created on demand so the default
 // `tests/load/results/` location works out of the box.
@@ -247,14 +281,16 @@ func writeManifest(path string, m bootstrapManifest) error {
 	if path == "" {
 		return errors.New("manifest path required")
 	}
-	if err := os.MkdirAll(dirOf(path), 0o755); err != nil {
+	// The manifest contains tenant UUIDs only; not secret, but
+	// the directory should be group-restricted on a CI runner.
+	if err := os.MkdirAll(dirOf(path), 0o750); err != nil {
 		return err
 	}
 	body, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, body, 0o644)
+	return os.WriteFile(path, body, 0o600)
 }
 
 // redactedDSN trims the password from a libpq URL so the manifest
