@@ -13,6 +13,7 @@ import (
 
 	"github.com/kennguy3n/sn360-es/internal/dto"
 	"github.com/kennguy3n/sn360-es/internal/repository"
+	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
 	"github.com/kennguy3n/sn360-es/pkg/events"
 )
 
@@ -166,64 +167,19 @@ func (a *application) handleCommHistoryUpdate(ctx context.Context, msg events.Me
 	return nil
 }
 
-// publishCommHistoryUpdate is the WS-4a producer side of the
-// incremental-baselines pipeline. It derives the per-message sighting
-// from the request (via the SignalEnricher's SightingFor helper,
-// which shares the read-side normalisation so the (tenant, sender,
-// recipient) triple matches the row keys the read-side enricher's
-// Get() targets), marshals it, and publishes it onto
-// es.management.comm_history.update with the deterministic dedup id
-// bound to (tenant, sender_hash, recipient_hash, message_id).
-//
-// The function intentionally swallows all errors: failure to
-// produce a sighting must NEVER block the evaluate.request handler,
-// because that would NAK the upstream envelope and produce a
-// duplicate evaluate.result on the next redelivery. The
-// relationship_worker's 4-hour recomputation cycle recovers any
-// dropped sighting from the persisted communication_histories
-// rows, so the worst case here is a 4h staleness window on the
-// incremental counters.
+// publishCommHistoryUpdate is the per-message handler's adapter onto
+// the shared WS-4a publisher (evaluate.PublishCommHistoryUpdate). The
+// helper lives in the evaluate package so the batch orchestrator
+// (internal/service/evaluate/batch.go) can call the same function
+// without an import cycle on cmd/sn360-es. Keeping a method here
+// preserves the call-site at handleEvaluateRequest and the test seam
+// that lets ws4a_round_trip_test.go inject a recording bus and a
+// recording enricher behind the same wiring the production path uses.
 func (a *application) publishCommHistoryUpdate(ctx context.Context, req dto.EvaluateRequest) {
 	if a.signalEnricher == nil || a.eventBus == nil {
 		return
 	}
-	upd, ok := a.signalEnricher.SightingFor(ctx, req)
-	if !ok {
-		// SightingFor returns false on the same short-circuits
-		// Enrich applies (empty tenant / sender / recipient /
-		// message-id). No need to log; the read path will have
-		// already short-circuited in Enrich with the same
-		// triple, and a per-message warning would spam the log
-		// for every Tier-0 reject.
-		return
-	}
-	if err := upd.Validate(); err != nil {
-		a.logger.WarnContext(ctx, "sn360-es: comm_history.update derived but failed validate",
-			slog.String("tenant_id", upd.TenantID),
-			slog.String("message_id", upd.MessageID),
-			slog.Any("error", err))
-		return
-	}
-	payload, err := json.Marshal(upd)
-	if err != nil {
-		a.logger.WarnContext(ctx, "sn360-es: comm_history.update marshal failed",
-			slog.String("tenant_id", upd.TenantID),
-			slog.String("message_id", upd.MessageID),
-			slog.Any("error", err))
-		return
-	}
-	if err := a.eventBus.Publish(ctx, dto.CommHistoryUpdateSubject, payload,
-		events.WithMessageID(upd.DedupID()),
-		events.WithCorrelationID(req.CorrelationID),
-		events.WithTenantID(upd.TenantID),
-		events.WithEventType("management.comm_history.update"),
-		events.WithTraceContext(ctx),
-	); err != nil {
-		a.logger.WarnContext(ctx, "sn360-es: publish comm_history.update failed",
-			slog.String("tenant_id", upd.TenantID),
-			slog.String("message_id", upd.MessageID),
-			slog.Any("error", err))
-	}
+	evaluate.PublishCommHistoryUpdate(ctx, a.eventBus, a.signalEnricher, a.logger, req)
 }
 
 // evaluateResultRow projects a DTO into the repository row shape.

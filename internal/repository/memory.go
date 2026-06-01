@@ -606,6 +606,18 @@ func commKey(tenantID string, sender, recipient []byte) string {
 	return tenantID + ":" + hex.EncodeToString(sender) + ":" + hex.EncodeToString(recipient)
 }
 
+// cloneOrEmpty returns an independent copy of src. When src is nil it
+// returns a non-nil zero-length []byte so the result matches the
+// Postgres BYTEA NOT NULL column shape ("”::bytea"). Used by the
+// memoryCommHistory write paths that mirror Postgres column semantics
+// across the two backends.
+func cloneOrEmpty(src []byte) []byte {
+	if src == nil {
+		return []byte{}
+	}
+	return append([]byte(nil), src...)
+}
+
 func (m *memoryCommHistory) Upsert(_ context.Context, h *CommunicationHistory) error {
 	// h.ID generation is the one mutation we deliberately mirror
 	// from the Postgres backend: pgCommHistory.Upsert also does
@@ -825,12 +837,23 @@ func (m *memoryCommHistory) RecordSighting(_ context.Context, s Sighting) error 
 		// worker's CAS path stays in charge of computing it; if a
 		// later Upsert path ever re-creates the row, the same
 		// sentinel guard applies.
+		//
+		// SenderDomainHash is normalised to a non-nil zero-length
+		// slice when the sighting carries no domain hash, to match
+		// the Postgres backend which stores `''::bytea` for the
+		// BYTEA NOT NULL column. Without this normalisation, the
+		// memory row's SenderDomainHash would be nil while the
+		// Postgres row's would be `[]byte{}`; both have len()==0
+		// so functional behaviour is identical, but tests that
+		// reach for `bytes.Equal(x, nil)` vs `bytes.Equal(x,
+		// []byte{})` see different shapes across backends. Keeping
+		// representations identical removes that footgun.
 		row := CommunicationHistory{
 			ID:               uuid.NewString(),
 			TenantID:         s.TenantID,
 			SenderHash:       append([]byte(nil), s.SenderHash...),
 			RecipientHash:    append([]byte(nil), s.RecipientHash...),
-			SenderDomainHash: append([]byte(nil), s.SenderDomainHash...),
+			SenderDomainHash: cloneOrEmpty(s.SenderDomainHash),
 			SenderDomain:     s.SenderDomain,
 			Count7d:          1,
 			Count30d:         1,

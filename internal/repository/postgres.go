@@ -991,11 +991,19 @@ UPDATE communication_histories
 //     carries a non-empty value (COALESCE on
 //     NULLIF(persisted, ”) for sender_domain;
 //     length-check via OCTET_LENGTH for the bytea).
-//   - relationship / typical_hour: not touched. Owned by the worker
-//     CAS path (UpdateCountsIfFresh).
-//   - updated_at: stamped to NOW() so the worker's CAS guard reads
-//     a fresher row and steps aside on the next
-//     cycle, exactly like Upsert does.
+//   - relationship / typical_hour: not touched on UPDATE. Owned by the
+//     worker CAS path (UpdateCountsIfFresh). On INSERT,
+//     typical_hour is explicitly set to TypicalHourUnset (-1)
+//     in the column list — the schema also has a DEFAULT -1
+//     (migration 0007), but we pass the value explicitly so a
+//     future migration that drops or changes that default
+//     cannot silently start writing 0 (a valid hour) on first
+//     contact and confuse the Tier 0 ATO heuristic.
+//   - updated_at: stamped to NOW() on both branches so the worker's
+//     CAS guard reads a fresher row and steps aside on the
+//     next cycle, exactly like Upsert does. Passed explicitly
+//     in the INSERT column list for the same defense-in-depth
+//     reason as typical_hour.
 func (p *pgCommHistory) RecordSighting(ctx context.Context, s Sighting) error {
 	if s.TenantID == "" {
 		return errors.New("repository: RecordSighting requires a tenant id")
@@ -1026,12 +1034,20 @@ func (p *pgCommHistory) RecordSighting(ctx context.Context, s Sighting) error {
 	if domainHash == nil {
 		domainHash = []byte{}
 	}
+	// Pass typical_hour and updated_at explicitly rather than
+	// relying on schema defaults — see the docstring above for the
+	// defense-in-depth rationale. TypicalHourUnset (-1) matches the
+	// memory backend's first-contact value AND the migration 0007
+	// column default. updated_at is NOW() on both INSERT and UPDATE
+	// branches so the worker's CAS guard never reads a stale row
+	// timestamp it could mis-classify as fresh-enough-to-skip.
 	_, err := p.db.ExecContext(ctx, `
 INSERT INTO communication_histories (
     id, tenant_id, sender_hash, recipient_hash, sender_domain_hash,
-    sender_domain, count_7d, count_30d, first_seen_at, last_seen_at, relationship
+    sender_domain, count_7d, count_30d, first_seen_at, last_seen_at,
+    relationship, typical_hour, updated_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, 1, 1, $7, $7, '')
+VALUES ($1, $2, $3, $4, $5, $6, 1, 1, $7, $7, '', $8, NOW())
 ON CONFLICT (tenant_id, sender_hash, recipient_hash) DO UPDATE SET
     count_7d   = communication_histories.count_7d + 1,
     count_30d  = communication_histories.count_30d + 1,
@@ -1051,7 +1067,7 @@ ON CONFLICT (tenant_id, sender_hash, recipient_hash) DO UPDATE SET
     updated_at = NOW()
 `,
 		newID, s.TenantID, s.SenderHash, s.RecipientHash, domainHash,
-		sdomain, s.SentAt,
+		sdomain, s.SentAt, TypicalHourUnset,
 	)
 	return err
 }
