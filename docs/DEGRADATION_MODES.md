@@ -16,7 +16,7 @@ The contract is:
   up so unrelated routes keep serving).
 
 All checks are wired in
-[`cmd/sn360-es/health.go`](../../cmd/sn360-es/health.go) and serve
+[`cmd/sn360-es/health.go`](../cmd/sn360-es/health.go) and serve
 the `/readyz` JSON payload.
 
 ## Risk levels
@@ -111,15 +111,15 @@ read the table row above for the data-loss profile:
 When you add a new degradation mode, add a corresponding test that
 proves the system still answers correctly with the dependency missing.
 
-## Chaos engineering regressions (WS-6b)
+## Chaos Engineering Regressions
 
 The four scenarios below each have a regression test under
-[`tests/chaos/`](../../tests/chaos) that exercises the documented
+[`tests/chaos/`](../tests/chaos) that exercises the documented
 failure mode end-to-end against real `testcontainers`-spun
 dependencies. The suite is build-tagged (`//go:build chaos`) so it
 never runs as part of the standard `go test ./...` path; trigger it
 locally with `make chaos` or via the
-[`chaos.yml`](../../.github/workflows/chaos.yml) workflow
+[`chaos.yml`](../.github/workflows/chaos.yml) workflow
 (`workflow_dispatch` + nightly schedule).
 
 Each entry below pins:
@@ -157,7 +157,7 @@ Each entry below pins:
   to half-open (default 30 s after the last failure) and close
   itself; no manual intervention is required.
 * **Test pin.**
-  [`tests/chaos/tier2_failure_test.go`](../../tests/chaos/tier2_failure_test.go)
+  [`tests/chaos/tier2_failure_test.go`](../tests/chaos/tier2_failure_test.go)
   → `TestChaos_Tier2SLMFailure`.
 
 ### NATS single-node failure
@@ -175,7 +175,7 @@ Each entry below pins:
   ack-pending replay completed cleanly. Within a single broker
   lifetime, a re-publish of the same `Nats-Msg-Id` within the
   configured `DedupWindow` (default 2 min, see
-  [`pkg/events/nats/streams.go`](../../pkg/events/nats/streams.go))
+  [`pkg/events/nats/streams.go`](../pkg/events/nats/streams.go))
   is rejected as a duplicate by the broker and must NOT produce a
   second result. NOTE: the JetStream dedup map is held in memory
   on the broker and is RESET on server restart (documented
@@ -191,7 +191,7 @@ Each entry below pins:
   inspect the consumer's `MaxAckPending` and ensure the message
   handler is not stuck on a downstream call.
 * **Test pin.**
-  [`tests/chaos/nats_failover_test.go`](../../tests/chaos/nats_failover_test.go)
+  [`tests/chaos/nats_failover_test.go`](../tests/chaos/nats_failover_test.go)
   → `TestChaos_NATSSingleNodeFailure`.
 
 ### Postgres primary failover
@@ -204,7 +204,7 @@ Each entry below pins:
   stopped mid-test, modelling the loss of a primary node.
 * **Expected recovery.** While the primary is down, the wrapper's
   unbound `QueryRowContext` continues to serve reads from the
-  replica pool — the WS-2a routing matrix is preserved across the
+  replica pool — the read-replica routing matrix is preserved across the
   failure. Tenant-bound writes (those wrapped in `WithTenant`)
   fail fast with a clear database error and are NEVER silently
   routed elsewhere. After an operator promotion (modelled by
@@ -221,7 +221,7 @@ Each entry below pins:
   fail and JetStream will retry them once the new primary is up;
   no message is lost.
 * **Test pin.**
-  [`tests/chaos/postgres_failover_test.go`](../../tests/chaos/postgres_failover_test.go)
+  [`tests/chaos/postgres_failover_test.go`](../tests/chaos/postgres_failover_test.go)
   → `TestChaos_PostgresPrimaryFailover`.
 
 ### Redis cache eviction storm
@@ -233,7 +233,7 @@ Each entry below pins:
   while a fully-configured sn360-es process is serving traffic on
   the same Redis instance via the rate-limiter and label cache.
 * **Expected recovery.** `assertProductionDurableStores`
-  ([`cmd/sn360-es/app.go`](../../cmd/sn360-es/app.go)) refuses to
+  ([`cmd/sn360-es/app.go`](../cmd/sn360-es/app.go)) refuses to
   boot in production when an in-memory store would be the durable
   backing for escalation tickets, quarantine envelopes, simulation
   campaign / interaction stores, or the agent config store. While
@@ -251,7 +251,7 @@ Each entry below pins:
   the fix, but cache miss ratios will be elevated until eviction
   pressure drops.
 * **Test pin.**
-  [`tests/chaos/redis_eviction_test.go`](../../tests/chaos/redis_eviction_test.go)
+  [`tests/chaos/redis_eviction_test.go`](../tests/chaos/redis_eviction_test.go)
   → `TestChaos_RedisAssertProductionDurableStores` (boot guard) and
   `TestChaos_RedisEvictionStorm` (runtime resilience).
 
@@ -262,6 +262,6 @@ make chaos            # runs all four scenarios; ~7 min cold, ~3 min warm cache
 ```
 
 The suite is also run nightly by
-[`.github/workflows/chaos.yml`](../../.github/workflows/chaos.yml).
+[`.github/workflows/chaos.yml`](../.github/workflows/chaos.yml).
 A failure in CI should be triaged against the matching runbook
 above — do NOT mute the scenario.

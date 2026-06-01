@@ -287,9 +287,9 @@ contract.
 
 | Doc | Purpose |
 |---|---|
-| [`internal/docs/PROPOSAL.md`](./internal/docs/PROPOSAL.md) | Design document: tiered pipeline, privacy, zero-admin, banner UX, education |
-| [`internal/docs/ARCHITECTURE.md`](./internal/docs/ARCHITECTURE.md) | System architecture: single-binary deployment, streams, consumers, data flow |
-| [`internal/docs/PHASES.md`](./internal/docs/PHASES.md) | Codebase guide: per-package code pointers organized by domain |
+| [`docs/PROPOSAL.md`](./docs/PROPOSAL.md) | Design document: tiered pipeline, privacy, zero-admin, banner UX, education |
+| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | System architecture: single-binary deployment, streams, consumers, data flow |
+| [`docs/CODEBASE_GUIDE.md`](./docs/CODEBASE_GUIDE.md) | Codebase guide: per-package code pointers organized by domain |
 | [`scripts/CORPUS.md`](./scripts/CORPUS.md) | Labelled corpus dataset contract |
 | [`scripts/corpus_generator/README.md`](./scripts/corpus_generator/README.md) | How the corpus is generated and which models are targeted |
 | [`benchmarks/README.md`](./benchmarks/README.md) | Benchmark suite, baselines, and how to compare runs |
@@ -312,6 +312,7 @@ contract.
 sn360-es/
 ├── api/                                 # OpenAPI 3.1 spec (api/openapi.yaml)
 ├── benchmarks/                          # Bench artefacts (txt/md) + BASELINE.md + README.md
+├── blog/                                # Public-facing technical blog posts
 ├── cmd/
 │   ├── sn360-es/                        # Main service entrypoint (single binary)
 │   ├── sn360-es-migrate/                # golang-migrate runner CLI
@@ -324,6 +325,7 @@ sn360-es/
 │   ├── llm/                             # Tier 2 Ternary-Bonsai-8B SLM deployment
 │   ├── helm/sn360-es/                   # Helm chart (Deployment, Service, HPA, NATS subchart)
 │   └── argocd/                          # ArgoCD Application manifests (dev/qa/uat/prod)
+├── docs/                                # Design, architecture, and codebase guide
 ├── internal/
 │   ├── config/                          # Environment-based configuration
 │   ├── constant/                        # Event types, Redis keys, categories
@@ -348,7 +350,6 @@ sn360-es/
 │   │   ├── tier1/                       # Encoder client + batch orchestration
 │   │   ├── worker/                      # Periodic workers (relationship, directory sync, vendor, cleanup)
 │   │   └── dlq_processor.go, dlq_alerting.go  # Dead-letter consumer + alerting
-│   ├── docs/                            # Design, architecture, and codebase guide
 │   └── translation/                     # Cross-service i18n bundles (banners/)
 ├── pkg/
 │   ├── email_provider/                  # GWS / O365 mailbox provider abstractions

@@ -314,12 +314,12 @@ Formula: `final_score = Σ(category_weight × normalized_category_score)`, clamp
 ### Tier 2 SLM Deployment
 
 The Tier 2 model is a **self-hosted Ternary-Bonsai-8B SLM**. The
-deployment manifests live in [`deployments/llm/`](../../deployments/llm/);
+deployment manifests live in [`deployments/llm/`](../deployments/llm/);
 the in-process Go client is `internal/service/evaluate/tier2.go` and
 uses the shared `pkg/httpclient` pool. Corpus generation and accuracy
 baselines are pinned to this deployment for reproducibility — see
-[`scripts/CORPUS.md`](../../scripts/CORPUS.md) and
-[`scripts/corpus_generator/README.md`](../../scripts/corpus_generator/README.md).
+[`scripts/CORPUS.md`](../scripts/CORPUS.md) and
+[`scripts/corpus_generator/README.md`](../scripts/corpus_generator/README.md).
 Alternative model providers are not supported.
 
 ## 4. Privacy Architecture
@@ -502,7 +502,7 @@ running on the poller in §5.1.1 alone.
 ### 5.5 Shared Packages
 
 - **`pkg/httpclient/`**: HTTP/2 pooled client with retry, circuit breaker, and per-call timeout. Shared by the VirusTotal URL scanner, the encoder client (Tier 1), the SLM client (Tier 2), and tenant provider clients.
-- **`pkg/email_provider/`**: Provider-agnostic mailbox abstractions (token sources, mailbox listing, message fetch, label/category mutation, banner injection, body rewriting, quarantine). SN360-ES ships native packages for **five providers**: Gmail (`gmail/`), Outlook (`outlook/`), Zoho Mail (`zoho/`), Fastmail/JMAP (`fastmail/`), and Amazon WorkMail (`workmail/`). Each package implements the same six interfaces (`TokenSource`, `DirectoryClient`, `MailboxProvider`, `LabelProvider`, `BannerInjector`, `BodyRewriter`, `QuarantineProvider`) so the action consumers, ingestion poller, and onboarding agent are provider-agnostic. See [`blog/tenant-requirements-gmail-outlook.md`](../../blog/tenant-requirements-gmail-outlook.md) and [`blog/tenant-requirements-zoho-fastmail-workmail.md`](../../blog/tenant-requirements-zoho-fastmail-workmail.md) for the full deep-dives on auth, capabilities, and limitations per provider.
+- **`pkg/email_provider/`**: Provider-agnostic mailbox abstractions (token sources, mailbox listing, message fetch, label/category mutation, banner injection, body rewriting, quarantine). SN360-ES ships native packages for **five providers**: Gmail (`gmail/`), Outlook (`outlook/`), Zoho Mail (`zoho/`), Fastmail/JMAP (`fastmail/`), and Amazon WorkMail (`workmail/`). Each package implements the same six interfaces (`TokenSource`, `DirectoryClient`, `MailboxProvider`, `LabelProvider`, `BannerInjector`, `BodyRewriter`, `QuarantineProvider`) so the action consumers, ingestion poller, and onboarding agent are provider-agnostic. See [`blog/tenant-requirements-gmail-outlook.md`](../blog/tenant-requirements-gmail-outlook.md) and [`blog/tenant-requirements-zoho-fastmail-workmail.md`](../blog/tenant-requirements-zoho-fastmail-workmail.md) for the full deep-dives on auth, capabilities, and limitations per provider.
 - **`pkg/storage/postgres/`**: pgx-based PostgreSQL connection helper with structured `Config` and `Open` / `Close` / `Ping` / `Driver` accessors.
 - **`pkg/storage/redis/`**: Redis pipeline wrapper, scan / prefix helpers, and JSON serialization helpers used by the `internal/service/cache/` AI + Rspamd caches and the action-token cache.
 - **`pkg/storage/s3/`**: AWS S3 client wrapper for raw-body offload (optional).

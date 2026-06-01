@@ -1,20 +1,20 @@
-# Multi-Region Routing (WS-7a)
+# Multi-Region Routing
 
 This document covers the deployment topology, env-var contract, and
-failure semantics introduced by [WS-7a](PRODUCT_PLAN.md) — multi-region
-routing for Postgres and the NATS super-cluster bridge.
+failure semantics for multi-region routing of Postgres and the NATS
+super-cluster bridge.
 
 ## Why this exists
 
 `sn360-es` runs as a single binary per region today. Each region has
 its own Postgres cluster and NATS cluster; tenants are pinned to a
 home region via the `tenants.region` column (default `ap-southeast-1`
-— see [`migrations/0001_init.up.sql:25`](../../migrations/0001_init.up.sql)).
+— see [`migrations/0001_init.up.sql:25`](../migrations/0001_init.up.sql)).
 A single-region binary could only serve tenants whose `region` matched
 its local Postgres. Cross-region traffic forced a load-balancer-level
 hop that bypassed all the in-process RLS, caches, and bridge wiring.
 
-WS-7a lets one binary instance serve tenants from **multiple regions**:
+Multi-region routing lets one binary instance serve tenants from **multiple regions**:
 the tenant-context binder resolves the tenant's region at request
 entry (HTTP middleware + NATS consumer wrapper), routes the query to
 the matching regional Postgres pool, and (when configured) bridges
@@ -22,14 +22,14 @@ cross-region NATS subjects through the super-cluster.
 
 Single-region deployments are unaffected. With `PG_REGION_MAP` empty
 and `NATS_SUPERCLUSTER` empty the binary boots and runs identically to
-the pre-WS-7a code path.
+the single-region code path.
 
 ## Env-var contract
 
 | Env var | Type | Default | Effect |
 |---|---|---|---|
 | `PG_DSN` / `PG_HOST` / `PG_PORT` / ... | scalar | (existing) | Primary Postgres pool. Unchanged. |
-| `PG_READ_HOST` / ... | scalar | unset | Read-replica pool. Unchanged from WS-2a. |
+| `PG_READ_HOST` / ... | scalar | unset | Read-replica pool. Unchanged from read-replica routing. |
 | `PG_HOME_REGION` | scalar | `ap-southeast-1` | Names the region that the **primary pool** serves. MUST appear as a key in `PG_REGION_MAP` when that var is set. |
 | `PG_REGION_MAP` | JSON object | empty | Maps `region -> postgres://...` URLs. When non-empty, one pool is opened per non-home region; tenants in those regions route through the regional pool. When empty, multi-region routing is disabled (single-region default). |
 | `NATS_URL` / `NATS_USER` / ... | scalar | (existing) | Primary NATS connection. Unchanged. |

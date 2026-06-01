@@ -11,7 +11,7 @@ integrated email education service.
 This document describes the design of the system and is updated to
 reflect what is actually built. Anything labelled "Out of scope" or
 called out in the project status matrix in
-[`README.md`](../../README.md) is not yet wired into the running
+[`README.md`](../README.md) is not yet wired into the running
 binary.
 
 ---
@@ -314,7 +314,7 @@ Self-hosted **XLM-RoBERTa-base** on Kubernetes:
 - **CPU fallback**: ~200ms on CPU, ~20ms on GPU
 
 The deployment manifests for the encoder service live in
-[`deployments/encoder/`](../../deployments/encoder/). The Go client is
+[`deployments/encoder/`](../deployments/encoder/). The Go client is
 `internal/service/tier1/encoder.go`.
 
 Thresholds (configurable per tenant via score engine):
@@ -328,7 +328,7 @@ Thresholds (configurable per tenant via score engine):
 
 Tier 2 is served by a **self-hosted Ternary-Bonsai-8B** small language
 model (SLM), deployed from
-[`deployments/llm/`](../../deployments/llm/). It is invoked only for
+[`deployments/llm/`](../deployments/llm/). It is invoked only for
 emails Tier 1 marks as ambiguous, and:
 
 - Performs full contextual analysis with aspect-level reasoning
@@ -339,8 +339,8 @@ emails Tier 1 marks as ambiguous, and:
 
 Alternative model providers are not supported; the corpus and accuracy
 baselines are pinned to this specific deployment for reproducibility.
-See [`scripts/CORPUS.md`](../../scripts/CORPUS.md) and
-[`scripts/corpus_generator/README.md`](../../scripts/corpus_generator/README.md).
+See [`scripts/CORPUS.md`](../scripts/CORPUS.md) and
+[`scripts/corpus_generator/README.md`](../scripts/corpus_generator/README.md).
 
 ### Graceful Degradation
 
@@ -728,7 +728,7 @@ Outlook and Gmail add-ins (Manifest v3) provide real-time UX:
 - **Pre-open**: At `Warning+` tier, shows a modal before the body renders —
   useful on mobile clients that auto-render HTML.
 
-The add-in skeletons live in [`deployments/addins/`](../../deployments/addins/).
+The add-in skeletons live in [`deployments/addins/`](../deployments/addins/).
 
 ### Accessibility
 
@@ -851,4 +851,4 @@ Employee Vulnerability Score = f(
 | **Add-Ins + Dashboard** | Pre-send / pre-open add-ins + admin dashboard + quarantine + user-reported phishing |
 
 Code pointers for every package are documented in
-[`PHASES.md`](./PHASES.md).
+[`CODEBASE_GUIDE.md`](./CODEBASE_GUIDE.md).
