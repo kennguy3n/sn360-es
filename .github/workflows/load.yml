@@ -63,7 +63,10 @@ concurrency:
 
 env:
   GO_VERSION: "1.25.x"
-  K6_VERSION: "v0.54.0"
+  # grafana/setup-k6-action prepends a `v` itself, so we pass the
+  # bare semver here. Using `v0.54.0` here produces a `vv0.54.0`
+  # download URL and a 404 from the GitHub release CDN.
+  K6_VERSION: "0.54.0"
 
 jobs:
   smoke:
