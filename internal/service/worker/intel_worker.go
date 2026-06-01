@@ -281,6 +281,25 @@ func (j *IntelJob) filterDue(feeds []intel.Feed, now time.Time) []intel.Feed {
 //
 // intel.ErrFeedNotFound surfaces unchanged so the handler can
 // translate it to a 404.
+//
+// Concurrency. PollFeed does NOT acquire the worker:lock:intel
+// cycle lock that wraps the scheduled Run() path, so an admin
+// /refresh on the same feed as an in-flight scheduled cycle can
+// race the bookkeeping write in RecordFeedResult — both writers
+// land on intel_feeds.{last_fetched_at, last_ok, last_error,
+// consecutive_failures} for the same row. The indicator corpus is
+// unaffected: UpsertIndicators is idempotent via
+// `ON CONFLICT (hash) DO UPDATE SET last_seen=now(),
+// severity=GREATEST(...)`, so concurrent writes converge on the
+// max-severity / most-recent timestamp. The remaining race is
+// transient bookkeeping (consecutive_failures could be momentarily
+// bumped past its true value), and it self-heals on the next
+// successful poll within FetchInterval (default 1 minute).
+// This was a deliberate choice — adding per-feed Redis locking
+// would require plumbing LockFactory through IntelJobConfig and
+// translating an ErrFeedBusy back through the handler to a 409,
+// which is heavier than the self-healing race justifies for an
+// admin-only manual endpoint.
 func (j *IntelJob) PollFeed(ctx context.Context, feedID string) (int, error) {
 	feed, err := j.store.GetFeed(ctx, feedID)
 	if err != nil {
