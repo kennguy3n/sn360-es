@@ -36,9 +36,9 @@ the script and the tests.
 
 ## Headline numbers
 
-USD per tenant per month at three representative traffic
-profiles, with all WS-2-era levers active versus a pre-PR #44
-baseline.
+USD per tenant per month at the four representative traffic
+profiles (low / medium / high / enterprise), with all WS-2-era
+levers active versus a pre-PR #44 baseline.
 
 | Profile    | Messages / tenant / day | Baseline (pre-PR #44) | All levers on (post-WS-2b) | $/tenant/mo saving | % saving |
 | ---        | --: | --: | --: | --: | --: |
