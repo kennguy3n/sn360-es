@@ -148,7 +148,17 @@ func NewCircuitBreaker(cfg CircuitBreakerConfig) *CircuitBreaker {
 
 // Do runs op under the breaker. If the breaker is open and the open-window
 // has not elapsed, op is not called and ErrCircuitOpen is returned.
-func (cb *CircuitBreaker) Do(ctx context.Context, op func(context.Context) error) error {
+//
+// Panic safety. If op panics — or terminates the goroutine via
+// runtime.Goexit (e.g. t.Fatal in a test) — Do treats the abort as a
+// failure for the purpose of breaker accounting. Without this, a panic
+// inside the StateHalfOpen trial request would leave halfOpenProbe == true
+// with no caller to release it and no onFailure to transition back to
+// StateOpen, wedging the breaker permanently. The panic is NOT swallowed:
+// the deferred handler records the failure (which itself releases the
+// probe slot via transition(StateOpen)) and then lets the panic continue
+// unwinding, so callers see the original stack.
+func (cb *CircuitBreaker) Do(ctx context.Context, op func(context.Context) error) (err error) {
 	if !cb.allow() {
 		cb.totalShortCircuit.Add(1)
 		if cb.cfg.OnShortCircuit != nil {
@@ -156,7 +166,18 @@ func (cb *CircuitBreaker) Do(ctx context.Context, op func(context.Context) error
 		}
 		return ErrCircuitOpen
 	}
-	err := op(ctx)
+	// Sentinel flag rather than recover()/re-panic so the original
+	// panic value and stack trace propagate to the caller unchanged.
+	// The flag stays true through any non-normal exit (panic, Goexit);
+	// only the line right after op(ctx) returning clears it.
+	aborted := true
+	defer func() {
+		if aborted {
+			cb.onFailure()
+		}
+	}()
+	err = op(ctx)
+	aborted = false
 	if err != nil {
 		cb.onFailure()
 	} else {

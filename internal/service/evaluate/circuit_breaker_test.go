@@ -189,3 +189,81 @@ func TestCircuitBreaker_OnStateChangeFiresOnTransitions(t *testing.T) {
 		t.Fatalf("unexpected transition sequence: %v", transitions)
 	}
 }
+
+// TestCircuitBreaker_PanicInHalfOpenProbeReleasesSlot pins the panic-safety
+// contract documented on Do: a panic in op while the breaker is in
+// StateHalfOpen must be treated as failure for breaker accounting so the
+// halfOpenProbe slot is released and the breaker transitions back to
+// StateOpen rather than wedging.
+func TestCircuitBreaker_PanicInHalfOpenProbeReleasesSlot(t *testing.T) {
+	t.Parallel()
+	cb := NewCircuitBreaker(CircuitBreakerConfig{
+		FailureThreshold: 1,
+		SuccessThreshold: 1,
+		OpenTimeout:      2 * time.Millisecond,
+	})
+	// Trip closed → open.
+	_ = cb.Do(context.Background(), func(context.Context) error { return errors.New("trip") })
+	if cb.State() != StateOpen {
+		t.Fatalf("expected state=open after first failure, got %s", cb.State())
+	}
+	// Wait for the open window so the next Do enters half-open and
+	// dispatches the trial request.
+	time.Sleep(5 * time.Millisecond)
+	// The trial request panics. Do must re-raise the panic AND treat
+	// it as failure (transitions back to open + releases the probe).
+	func() {
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatalf("expected Do to re-raise panic from op")
+			}
+		}()
+		_ = cb.Do(context.Background(), func(context.Context) error {
+			panic("trial-request-blew-up")
+		})
+	}()
+	if cb.State() != StateOpen {
+		t.Fatalf("expected state=open after panic in half-open trial, got %s", cb.State())
+	}
+	// Wait for another open window and try a normal recovery. If the
+	// probe slot was wedged, this Do would short-circuit; if released,
+	// it should run the op and close the breaker.
+	time.Sleep(5 * time.Millisecond)
+	called := false
+	if err := cb.Do(context.Background(), func(context.Context) error {
+		called = true
+		return nil
+	}); err != nil {
+		t.Fatalf("expected recovery Do to succeed, got %v", err)
+	}
+	if !called {
+		t.Fatalf("expected op to run on recovery — breaker is wedged")
+	}
+	if cb.State() != StateClosed {
+		t.Fatalf("expected state=closed after recovery, got %s", cb.State())
+	}
+}
+
+// TestCircuitBreaker_PanicCounterIncrements verifies that a panicking op is
+// counted in the cumulative failure counter (so the
+// /metrics-exported sn360_es_circuit_breaker_failure_total reflects
+// panic-driven outages, not just error-returning ones).
+func TestCircuitBreaker_PanicCounterIncrements(t *testing.T) {
+	t.Parallel()
+	cb := NewCircuitBreaker(CircuitBreakerConfig{
+		FailureThreshold: 100, // we don't care about tripping here
+		OpenTimeout:      time.Hour,
+	})
+	_, failBefore, _ := cb.Metrics()
+	func() {
+		defer func() { _ = recover() }()
+		_ = cb.Do(context.Background(), func(context.Context) error {
+			panic("boom")
+		})
+	}()
+	_, failAfter, _ := cb.Metrics()
+	if failAfter != failBefore+1 {
+		t.Fatalf("expected failure counter to increment on panic: before=%d after=%d", failBefore, failAfter)
+	}
+}
