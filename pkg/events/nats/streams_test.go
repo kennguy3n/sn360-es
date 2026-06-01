@@ -40,6 +40,9 @@ func TestStreamForSubject_CoversAllDefaultStreamSpecs(t *testing.T) {
 		{"platform future soc envelopes", "soc.incident.assigned", StreamPlatform},
 		{"webhook DLQ WS-5B.2 envelope", "sn360.dlq.webhook.tenant-a.sink-1", StreamWebhookDLQ},
 		{"webhook DLQ nested", "sn360.dlq.webhook.tenant-a.sink-1.extra", StreamWebhookDLQ},
+		{"schema DLQ WS-7c primary subject", "sn360.dlq.schema.es.evaluate.request", StreamSchemaDLQ},
+		{"schema DLQ WS-7c nested subject", "sn360.dlq.schema.es.evaluate.request.tenant-1", StreamSchemaDLQ},
+		{"schema DLQ WS-7c bridge subject", "sn360.dlq.schema.sn360.events.email.t-1.phishing", StreamSchemaDLQ},
 
 		// Negative cases: subjects outside the declared mapping must
 		// return "" so DLQ replay surfaces the routing miss instead

@@ -168,14 +168,20 @@ func (i UserInteractionType) IsGood() bool {
 
 // UserInteraction is a single recorded action by a simulation target.
 type UserInteraction struct {
-	CampaignID string              `json:"campaign_id"`
-	UserHash   string              `json:"user_hash"`
-	Action     UserInteractionType `json:"action"`
-	OccurredAt time.Time           `json:"occurred_at"`
+	// SchemaVersion is the WS-7c wire-format version tag. See
+	// internal/dto/schema_version.go for the contract.
+	SchemaVersion string              `json:"schema_version,omitempty"`
+	CampaignID    string              `json:"campaign_id"`
+	UserHash      string              `json:"user_hash"`
+	Action        UserInteractionType `json:"action"`
+	OccurredAt    time.Time           `json:"occurred_at"`
 }
 
 // SimulationResult aggregates the outcome counts for a campaign.
 type SimulationResult struct {
+	// SchemaVersion is the WS-7c wire-format version tag. See
+	// internal/dto/schema_version.go for the contract.
+	SchemaVersion        string `json:"schema_version,omitempty"`
 	CampaignID           string `json:"campaign_id"`
 	Delivered            int    `json:"delivered"`
 	Opened               int    `json:"opened"`

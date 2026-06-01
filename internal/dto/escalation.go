@@ -73,6 +73,9 @@ type EscalationIncident struct {
 
 // EscalationTicket is the package handed off to SecOps.
 type EscalationTicket struct {
+	// SchemaVersion is the WS-7c wire-format version tag. See
+	// internal/dto/schema_version.go for the contract.
+	SchemaVersion   string             `json:"schema_version,omitempty"`
 	TicketID        string             `json:"ticket_id"`
 	TenantID        string             `json:"tenant_id"`
 	CreatedAt       time.Time          `json:"created_at"`

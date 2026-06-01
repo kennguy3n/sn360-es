@@ -62,6 +62,19 @@ type Metrics struct {
 	EventConsumed   *prometheus.CounterVec
 	EventErrors     *prometheus.CounterVec
 	EventLagSeconds *prometheus.GaugeVec
+	// NATSSchemaMismatch counts every WS-7c schema-validation
+	// rejection, partitioned by subject_family + reason. The
+	// `subject_family` label is the registry-matched key (e.g.
+	// `es.evaluate.request`, NOT the high-cardinality
+	// `es.evaluate.request.t-42`) so the counter stays cheap.
+	// Reasons are the [schema.MismatchReason] enum values:
+	// `missing_version` (legacy publisher path; emitted for
+	// dashboard visibility only — not a DLQ event),
+	// `unknown_version` (forward-compat trap — DLQ event),
+	// `payload_validation_failure` (shape failure — DLQ event).
+	// The `side` label is `publish` or `subscribe` so dashboards
+	// can split producer- vs consumer-side failures.
+	NATSSchemaMismatch *prometheus.CounterVec
 
 	// --- HTTP server ----------------------------------------------
 	HTTPRequests       *prometheus.CounterVec
@@ -216,6 +229,9 @@ func NewMetrics(cfg MetricsConfig) *Metrics {
 		EventLagSeconds: b.gaugeVec("event_lag_seconds",
 			"Estimated consumer lag in seconds.",
 			[]string{"bus", "stream"}),
+		NATSSchemaMismatch: b.counterVec("nats_schema_mismatch_total",
+			"NATS messages rejected by the WS-7c schema validator (publish or subscribe side), partitioned by subject_family + reason + side.",
+			[]string{"subject_family", "reason", "side"}),
 
 		HTTPRequests: b.counterVec("http_requests_total",
 			"HTTP requests served, partitioned by method/route/status.",
@@ -341,6 +357,33 @@ func (m *Metrics) ObserveAction(kind, provider, tier string) {
 	case "quarantine":
 		m.ActionQuarantineExecuted.WithLabelValues(provider).Inc()
 	}
+}
+
+// ObserveSchemaMismatch increments nats_schema_mismatch_total
+// with a low-cardinality `subject_family` label (the registry
+// key — e.g. `es.evaluate.request` — NOT the per-message subject
+// suffix which would include tenant/correlation IDs). `reason`
+// matches the [schema.MismatchReason] enum values. `side` is
+// either `publish` or `subscribe` so the dashboards can separate
+// producer- and consumer-side failures.
+//
+// Defensive fallbacks (empty -> "unknown") keep the cardinality
+// bounded even if a future call site forgets to populate the
+// labels.
+func (m *Metrics) ObserveSchemaMismatch(subjectFamily, reason, side string) {
+	if m == nil {
+		return
+	}
+	if subjectFamily == "" {
+		subjectFamily = "unknown"
+	}
+	if reason == "" {
+		reason = "unknown"
+	}
+	if side == "" {
+		side = "unknown"
+	}
+	m.NATSSchemaMismatch.WithLabelValues(subjectFamily, reason, side).Inc()
 }
 
 // ObserveWorkerCycle records a periodic worker cycle outcome. err is

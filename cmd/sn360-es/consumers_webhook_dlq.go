@@ -113,7 +113,7 @@ func (a *application) startWebhookDLQConsumer(ctx context.Context) error {
 	// events.WithTenantID(sink.TenantID), so the wrapper reads
 	// the tenant from the verified header.
 	sub, err := a.eventBus.Subscribe(ctx, webhookDLQSubject,
-		a.tenantBoundMessageHandler(a.handleWebhookDLQ),
+		a.validatedTenantBoundHandler(a.handleWebhookDLQ),
 		events.WithDurable(webhookDLQDurable),
 		events.WithAckWait(webhookDLQAckWait),
 		events.WithMaxDeliver(webhookDLQMaxDeliver),

@@ -159,8 +159,18 @@ type BatchOrchestratorConfig struct {
 // orchestrator. Producers (ingestion-svc, perf-harness) publish this on
 // `es.evaluate.request`.
 type BatchMessage struct {
-	Request dto.EvaluateRequest `json:"request"`
-	Signals dto.RiskSignals     `json:"signals"`
+	// SchemaVersion is the WS-7c top-level wire-format version
+	// tag. It deliberately lives at the BatchMessage level
+	// (NOT at Request.SchemaVersion) because the validator
+	// dispatcher on `es.evaluate.request` peeks the OUTER
+	// envelope to find the version — the BatchMessage wrapper
+	// IS the envelope on that subject. Embedding the version
+	// inside Request would force the validator to know about
+	// the wrapper before it had decided whether the payload was
+	// flat or wrapped, defeating the whole point of versioning.
+	SchemaVersion string              `json:"schema_version,omitempty"`
+	Request       dto.EvaluateRequest `json:"request"`
+	Signals       dto.RiskSignals     `json:"signals"`
 }
 
 // BatchOrchestrator pulls messages from JetStream in batches, runs the

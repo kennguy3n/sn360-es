@@ -47,6 +47,8 @@ import (
 
 	"github.com/kennguy3n/sn360-es/internal/constant"
 	"github.com/kennguy3n/sn360-es/internal/dto"
+	pkgevents "github.com/kennguy3n/sn360-es/pkg/events"
+	"github.com/kennguy3n/sn360-es/pkg/events/schema"
 )
 
 // SubjectPrefix is the JetStream subject namespace the platform's
@@ -395,6 +397,34 @@ type natsPlatformPublisher struct {
 	mu sync.Mutex
 	nc *nats.Conn
 	js jetstream.JetStream
+
+	// validator runs the WS-7c schema check on the
+	// platform-bridge payload before it is published. nil
+	// disables validation (legacy behaviour). The hook is
+	// non-fatal: a mismatch increments the metric, logs a
+	// warning, and routes the payload through the publish path
+	// unchanged. The bridge cannot drop a verdict because of a
+	// schema check (the SOC outage on a stricter contract
+	// would be worse than a one-off shape drift).
+	validator        *schema.Validator
+	onSchemaMismatch func(subject string, result schema.Result)
+}
+
+// WithSchemaValidator binds a SchemaValidator to the bridge
+// publisher. Returns a PlatformPublisher that runs the validator
+// against every envelope. Used by cmd/sn360-es so the bridge and
+// the primary publisher share one registry.
+func WithSchemaValidator(p PlatformPublisher, v *schema.Validator, onMismatch func(subject string, result schema.Result)) PlatformPublisher {
+	if v == nil {
+		return p
+	}
+	if np, ok := p.(*natsPlatformPublisher); ok {
+		np.mu.Lock()
+		np.validator = v
+		np.onSchemaMismatch = onMismatch
+		np.mu.Unlock()
+	}
+	return p
 }
 
 // PublishEvaluation implements PlatformPublisher.
@@ -599,6 +629,37 @@ func (p *natsPlatformPublisher) publish(ctx context.Context, subject, msgID, cor
 		return fmt.Errorf("bridge: marshal envelope: %w", err)
 	}
 
+	// WS-7c: enforce schema-versioning on every bridge envelope
+	// before the broker call. The bridge is the canonical
+	// producer for `sn360.events.email.*`, so the platform
+	// side's consumer can rely on a self-describing payload.
+	// Validation failures are NON-FATAL on this path — we
+	// surface the mismatch via the hook (Prometheus counter)
+	// and a warn log, but still publish the original envelope
+	// so a misregistered validator does not stall the SOC
+	// pipeline. The publish-time enforcement at the primary
+	// pkg/events/nats.Publisher (which IS fatal) is the
+	// gatekeeper for non-bridge subjects.
+	p.mu.Lock()
+	validator := p.validator
+	onMismatch := p.onSchemaMismatch
+	p.mu.Unlock()
+	if validator != nil {
+		if validator.SubjectFamily(subject) != "" {
+			result := validator.Validate(subject, data)
+			if result.IsMismatch() {
+				if onMismatch != nil {
+					onMismatch(subject, result)
+				}
+				p.logger.Warn("sn360-es: platform bridge schema mismatch (publishing anyway to avoid SOC outage)",
+					slog.String("subject", subject),
+					slog.String("resolved_version", result.ResolvedVersion),
+					slog.String("reason", string(result.Reason)),
+					slog.Any("error", result.Err))
+			}
+		}
+	}
+
 	// Dedup ID: <tenant>:<msg-or-uuid>:<subject>. Using the
 	// per-message ID where present means a re-delivery of the same
 	// es.evaluate.result that lands on a different sn360-es replica
@@ -624,6 +685,13 @@ func (p *natsPlatformPublisher) publish(ctx context.Context, subject, msgID, cor
 	msg.Header.Set("event-type", eventType)
 	msg.Header.Set("source", p.cfg.Source)
 	msg.Header.Set("enqueued-at", time.Now().UTC().Format(time.RFC3339Nano))
+	// WS-7c: mirror the in-payload schema_version onto the
+	// header so a passive observer (`nats consume --headers-only`)
+	// or the platform's schema-DLQ tooling can classify a
+	// message it cannot fully parse.
+	if v := schema.PeekVersion(data); v != "" {
+		msg.Header.Set(pkgevents.HeaderSchemaVersion, v)
+	}
 
 	delay := 100 * time.Millisecond
 	var lastErr error
@@ -978,6 +1046,17 @@ func hashIdentifier(tenantID, email string) string {
 // source rule would either match nothing or merge unrelated events
 // into one huge pending bucket.
 type Envelope struct {
+	// SchemaVersion is the WS-7c wire-format version tag for the
+	// hybrid bridge envelope. The platform side
+	// (services/correlation-engine, services/playbook-engine)
+	// unmarshals into its own Event shape and runs the same
+	// (subject, version) validation contract documented in
+	// internal/docs/SCHEMA_VERSIONING.md. Pre-WS-7c bridge
+	// publishers without this field are accepted as v1 on the
+	// platform side so the rollout does not require a lockstep
+	// flip.
+	SchemaVersion string `json:"schema_version,omitempty"`
+
 	// Wazuh-envelope keys (alert-forwarder).
 	Timestamp time.Time `json:"@timestamp"`
 	ClusterID string    `json:"cluster_id,omitempty"`
@@ -1122,8 +1201,9 @@ type EscalationPayload struct {
 // alert-forwarder can pick them up without translation.
 func buildEnvelope(cfg Config, tenantID, ruleID string, ruleLevel int, ruleDesc string, payload any) Envelope {
 	return Envelope{
-		Timestamp: time.Now().UTC(),
-		ClusterID: cfg.ClusterID,
+		SchemaVersion: dto.SchemaVersionV1,
+		Timestamp:     time.Now().UTC(),
+		ClusterID:     cfg.ClusterID,
 		Rule: Rule{
 			ID:          ruleID,
 			Level:       ruleLevel,

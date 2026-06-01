@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/kennguy3n/sn360-es/pkg/events"
+	"github.com/kennguy3n/sn360-es/pkg/events/schema"
 )
 
 // Service is the events.EventService implementation backed by NATS
@@ -38,6 +39,31 @@ func (s *Service) SetMessageObserver(observer MessageObserver) {
 	s.mu.Lock()
 	s.observer = observer
 	s.mu.Unlock()
+}
+
+// SetSchemaValidator binds a WS-7c schema.Validator onto the
+// underlying Publisher so every Publish call is gated by the
+// registered (subject, schema_version) contract. The optional
+// mismatch hook is invoked with the original subject and the
+// validator's Result whenever a mismatch is detected — typical
+// implementations increment the nats_schema_mismatch_total
+// Prometheus counter so the operator dashboard sees rejects in
+// real time.
+//
+// Calling this with v == nil disables schema enforcement on
+// the publisher (Validator==nil is the "validator opt-out"
+// signal documented on Publisher.WithSchemaValidator). Calling
+// it again after a subscription is already running does NOT
+// retroactively patch the consumer-side wiring — the
+// subscribe-side validation lives in cmd/sn360-es/consumers_schema.go
+// because the DLQ-routing policy is a binary-level concern.
+func (s *Service) SetSchemaValidator(v *schema.Validator, onMismatch func(subject string, result schema.Result)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.publisher == nil {
+		return
+	}
+	s.publisher.WithSchemaValidator(v).WithSchemaMismatchHook(onMismatch)
 }
 
 // NewService builds a Service from a Config. It creates the connection,

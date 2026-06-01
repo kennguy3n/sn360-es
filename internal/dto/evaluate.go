@@ -10,6 +10,13 @@ import (
 // evaluation pipeline. It is the message shipped on the `es.evaluate.>`
 // JetStream subject.
 type EvaluateRequest struct {
+	// SchemaVersion is the WS-7c wire-format version tag. Producers
+	// SHOULD set this to SchemaVersionV1 on construction; the
+	// publish-side validator stamps the same value as a backstop
+	// (see pkg/events/schema). Consumers that receive a payload
+	// without this field treat it as v1 — pre-WS-7c publishers
+	// remain compatible.
+	SchemaVersion string `json:"schema_version,omitempty"`
 	// MessageID is the pseudonymised email message identifier.
 	MessageID string `json:"message_id"`
 	// TenantID identifies the tenant that owns the recipient mailbox.
@@ -51,6 +58,11 @@ type EvaluateRequest struct {
 // is published back on `es.action.>` subjects (e.g. `es.action.label`,
 // `es.action.banner`) for the action consumers to act on.
 type EvaluateResult struct {
+	// SchemaVersion is the WS-7c wire-format version tag. See the
+	// note on EvaluateRequest.SchemaVersion for the full
+	// backward/forward-compat contract; the rules are identical
+	// because both DTOs cross the same publish + subscribe path.
+	SchemaVersion string    `json:"schema_version,omitempty"`
 	MessageID     string    `json:"message_id"`
 	TenantID      string    `json:"tenant_id"`
 	CorrelationID string    `json:"correlation_id"`

@@ -87,6 +87,28 @@ const (
 	// `es.dlq.>` namespace (which serves a different decide-and-
 	// republish semantic — see internal/service/dlq_processor.go).
 	StreamWebhookDLQ = "SN360_WEBHOOK_DLQ"
+	// StreamSchemaDLQ owns the `sn360.dlq.schema.>` namespace
+	// used by WS-7c. Messages that fail schema validation at
+	// subscribe time (unknown `schema_version`, payload that
+	// fails the registered shape check) are republished onto
+	// `sn360.dlq.schema.<original_subject>` with the original
+	// payload + headers preserved and HeaderError /
+	// HeaderSchemaMismatchReason / HeaderOriginSubject set so
+	// operator tooling can classify the failure without parsing
+	// the payload.
+	//
+	// The dedup window matches the FU-B convention on
+	// StreamPlatform (600s): a producer that publishes the same
+	// dedup-id'd payload twice within the window collapses at
+	// the broker, so a retry storm of the same bad payload does
+	// not balloon the DLQ depth.
+	//
+	// Retention is LimitsPolicy + 30d MaxAge so operators have
+	// time to inspect dead messages before they age out. The
+	// schema-mismatch DLQ is not a work-queue — there is no
+	// active retrier; the migration playbook is "fix the
+	// publisher, then drain via the schema DLQ replayer".
+	StreamSchemaDLQ = "SN360_SCHEMA_DLQ"
 )
 
 // StreamSpec describes a JetStream stream that SN360-ES requires.
@@ -231,6 +253,24 @@ func DefaultStreamSpecs(cfg Config) []StreamSpec {
 			Replicas:    replicas,
 			Discard:     jetstream.DiscardOld,
 			Description: "SN360-ES per-tenant standalone webhook DLQ (WS-5B.2; consumer retries with 1s/5s/30s/5m/1h backoff)",
+		},
+		{
+			Name: StreamSchemaDLQ,
+			// `sn360.dlq.schema.>` is disjoint from every primary
+			// stream's wildcard so JetStream does not reject the
+			// schema-DLQ stream as overlapping. Don't put any
+			// schema-DLQ subject under `es.dlq.>` (overlaps
+			// StreamDLQ) or `sn360.dlq.webhook.>` (overlaps
+			// StreamWebhookDLQ).
+			Subjects:    []string{"sn360.dlq.schema.>"},
+			Retention:   jetstream.LimitsPolicy,
+			Storage:     storage,
+			MaxAge:      30 * 24 * time.Hour,
+			MaxMsgSize:  10 * 1024 * 1024,
+			DedupWindow: orDefault(cfg.DedupWindow, 600*time.Second),
+			Replicas:    replicas,
+			Discard:     jetstream.DiscardOld,
+			Description: "SN360 schema-mismatch DLQ (WS-7c; subscribe-side validation routes here on unknown / payload-invalid versions)",
 		},
 		{
 			Name: StreamPlatform,
@@ -414,6 +454,9 @@ func isResultFilter(subj string) bool {
 //   - sn360.dlq.webhook.>            → StreamWebhookDLQ (WS-5B.2
 //     per-tenant standalone webhook DLQ; the consumer in
 //     cmd/sn360-es/consumers_webhook_dlq.go drains with exp backoff)
+//   - sn360.dlq.schema.>             → StreamSchemaDLQ (WS-7c
+//     schema-mismatch DLQ; messages that fail schema validation
+//     at subscribe time are republished here for operator review)
 //
 // Any other es.evaluate.* subject (e.g. a hypothetical
 // es.evaluate.status) is treated as unrouted and returns "" rather
@@ -422,6 +465,8 @@ func isResultFilter(subj string) bool {
 // would land on a stream that doesn't accept the subject.
 func StreamForSubject(subject string) string {
 	switch {
+	case strings.HasPrefix(subject, "sn360.dlq.schema."):
+		return StreamSchemaDLQ
 	case strings.HasPrefix(subject, "es.dlq."):
 		return StreamDLQ
 	case subject == "es.evaluate.result" || strings.HasPrefix(subject, "es.evaluate.result."):
