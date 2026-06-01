@@ -54,3 +54,10 @@ __pycache__/
 # `cmd/sn360-es-handler-coverage/` source directory is still
 # tracked.
 /sn360-es-handler-coverage
+
+# WS-4b corpus-eval reports: the harness writes per-run reports to
+# testdata/corpus-eval/reports/{timestamp}.json. Only the baseline
+# (testdata/corpus-eval/baseline.json) and the synthetic corpus
+# (testdata/corpus-eval/synthetic.jsonl) are committed; the
+# per-run reports are local artifacts.
+testdata/corpus-eval/reports/

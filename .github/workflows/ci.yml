@@ -118,6 +118,92 @@ jobs:
         if: always()
         run: docker compose down -v --remove-orphans
 
+  corpus-eval:
+    name: WS-4b Corpus Eval (detection-quality regression)
+    # Detection-quality regression harness: runs the production
+    # Tier 0 / (Tier 1 when configured) / Tier 2 cascade against
+    # the committed synthetic corpus, diffs the per-label F1 scores
+    # against testdata/corpus-eval/baseline.json, and fails when
+    # any label drops by more than 5 F1 points (catastrophic drops
+    # over 25 F1 points always fail and are flagged separately).
+    #
+    # The job runs on every PR but is intentionally not in the
+    # `build` needs list, so PR merges are not blocked when the
+    # job fails — the WS-4b spec wants detection-quality regressions
+    # to be visible without becoming a merge gate for unrelated PRs.
+    # Pushes to main run the same job and ARE expected to be green
+    # (a regression at merge-to-main time is a real signal).
+    #
+    # Tier 1 and Tier 2 are skipped in CI by design: bringing up the
+    # XLM-RoBERTa encoder service requires a GPU pod, and the SLM
+    # is gated behind a model file that is downloaded at deploy
+    # time (see deployments/llm/download-model.sh). The corpus
+    # harness surfaces both as `tier1_configured: false` /
+    # `tier2_configured: false` in the report so reviewers don't
+    # mistake Tier 0-only metrics for full-pipeline metrics.
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Verify synthetic corpus and baseline are committed
+        run: |
+          set -euo pipefail
+          test -f testdata/corpus-eval/synthetic.jsonl
+          test -f testdata/corpus-eval/baseline.json
+          echo "corpus and baseline OK"
+
+      - name: Run corpus harness against committed synthetic corpus
+        # We tee stderr to the run log AND a file so the summary
+        # appears in the GitHub Actions step output even when the
+        # binary exits non-zero (regression detected).
+        run: |
+          set -euo pipefail
+          mkdir -p testdata/corpus-eval/reports
+          go run ./cmd/corpus-eval \
+            -corpus=testdata/corpus-eval/synthetic.jsonl \
+            -baseline=testdata/corpus-eval/baseline.json \
+            -tolerance=0.05 \
+            -out=testdata/corpus-eval/reports/ci-${{ github.run_id }}.json \
+            -fail-on-regression=true
+
+      - name: Upload corpus-eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-eval-report-${{ github.run_id }}
+          path: testdata/corpus-eval/reports/
+          retention-days: 30
+
+  adversarial-fuzz:
+    name: WS-4b Adversarial Fuzz (property tests)
+    # The adversarial perturbation property tests are a thin
+    # superset of `make test`, but we surface them as a dedicated
+    # job so the WS-4b "silent misclassification is a fail"
+    # invariant is visible in the CI status checklist. The job
+    # runs the property tests (100 iterations per perturbation
+    # kind, fixed seed) plus the perturbation-function unit tests.
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: go test ./internal/test/adversarial/...
+        run: go test -v -count=1 -run 'TestProperty_|Test' ./internal/test/adversarial/...
+
   cost-model:
     name: Cost Model Regression Tests
     runs-on: ubuntu-latest

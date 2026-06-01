@@ -1,0 +1,2098 @@
+{
+  "corpus_version": "ws4b-synthetic-v1-size=200",
+  "corpus_path": "testdata/corpus-eval/synthetic.jsonl",
+  "synthetic_only": true,
+  "evaluator_version": "a09497c",
+  "evaluated_at": "2026-06-01T04:20:40.50134471Z",
+  "total_fixtures": 200,
+  "per_label": {
+    "bec": {
+      "tp": 0,
+      "fp": 0,
+      "fn": 50,
+      "support": 50,
+      "precision": 0,
+      "recall": 0,
+      "f1": 0
+    },
+    "benign": {
+      "tp": 50,
+      "fp": 110,
+      "fn": 0,
+      "support": 50,
+      "precision": 0.3125,
+      "recall": 1,
+      "f1": 0.47619047619047616
+    },
+    "phish": {
+      "tp": 40,
+      "fp": 0,
+      "fn": 10,
+      "support": 50,
+      "precision": 1,
+      "recall": 0.8,
+      "f1": 0.888888888888889
+    },
+    "spam": {
+      "tp": 0,
+      "fp": 0,
+      "fn": 50,
+      "support": 50,
+      "precision": 0,
+      "recall": 0,
+      "f1": 0
+    }
+  },
+  "per_tier": {
+    "Blocked": {
+      "tier": "Blocked",
+      "total": 0,
+      "correct": 0,
+      "accuracy": 0
+    },
+    "Caution": {
+      "tier": "Caution",
+      "total": 50,
+      "correct": 0,
+      "accuracy": 0
+    },
+    "HighRisk": {
+      "tier": "HighRisk",
+      "total": 67,
+      "correct": 0,
+      "accuracy": 0
+    },
+    "Informational": {
+      "tier": "Informational",
+      "total": 8,
+      "correct": 8,
+      "accuracy": 1
+    },
+    "Trusted": {
+      "tier": "Trusted",
+      "total": 42,
+      "correct": 42,
+      "accuracy": 1
+    },
+    "Warning": {
+      "tier": "Warning",
+      "total": 33,
+      "correct": 0,
+      "accuracy": 0
+    }
+  },
+  "aggregate_accuracy": 0.45,
+  "macro_f1": 0.3412698412698413,
+  "confusion": {
+    "bec": {
+      "bec": 0,
+      "benign": 50,
+      "phish": 0,
+      "spam": 0
+    },
+    "benign": {
+      "bec": 0,
+      "benign": 50,
+      "phish": 0,
+      "spam": 0
+    },
+    "phish": {
+      "bec": 0,
+      "benign": 10,
+      "phish": 40,
+      "spam": 0
+    },
+    "spam": {
+      "bec": 0,
+      "benign": 50,
+      "phish": 0,
+      "spam": 0
+    }
+  },
+  "misclassifications": [
+    {
+      "id": "bec-001",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "payroll-redirect",
+        "domain": "jsmith-direct.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "payroll-redirect"
+      }
+    },
+    {
+      "id": "bec-002",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "ceo-wire",
+        "domain": "example-ceo.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "ceo-wire-transfer"
+      }
+    },
+    {
+      "id": "bec-003",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "INVOICE_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "invoice-redirect",
+        "domain": "vendor-finance.example",
+        "signals.has_failed_auth": "true",
+        "signals.relationship_category": "LapsedContact",
+        "source": "ws4b-synthetic-v1",
+        "template": "invoice-redirect"
+      }
+    },
+    {
+      "id": "bec-004",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "ceo-wire",
+        "domain": "example-ceo.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "ceo-wire-transfer"
+      }
+    },
+    {
+      "id": "bec-005",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "ceo-wire",
+        "domain": "example-ceo.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "ceo-wire-transfer"
+      }
+    },
+    {
+      "id": "bec-006",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "ceo-wire",
+        "domain": "ceo-private.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "ceo-wire-transfer"
+      }
+    },
+    {
+      "id": "bec-007",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "payroll-redirect",
+        "domain": "j-smith-personal.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "payroll-redirect"
+      }
+    },
+    {
+      "id": "bec-008",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Trusted",
+      "expected_primary": "VENDOR_COMPROMISE",
+      "predicted_primary": "VENDOR_TRUSTED",
+      "score": 0,
+      "reason_codes": [
+        "vendor_trusted"
+      ],
+      "metadata": {
+        "attack_type": "vendor-takeover",
+        "domain": "trusted-vendor-ap.example",
+        "signals.has_failed_auth": "true",
+        "signals.is_from_vendor": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "vendor-takeover"
+      }
+    },
+    {
+      "id": "bec-009",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "ceo-wire",
+        "domain": "example-ceo.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "ceo-wire-transfer"
+      }
+    },
+    {
+      "id": "bec-010",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "INVOICE_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "invoice-redirect",
+        "domain": "vendor-finance.example",
+        "signals.has_failed_auth": "true",
+        "signals.relationship_category": "LapsedContact",
+        "source": "ws4b-synthetic-v1",
+        "template": "invoice-redirect"
+      }
+    },
+    {
+      "id": "bec-011",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "payroll-redirect",
+        "domain": "jsmith-direct.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "payroll-redirect"
+      }
+    },
+    {
+      "id": "bec-012",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "payroll-redirect",
+        "domain": "j-smith-personal.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "payroll-redirect"
+      }
+    },
+    {
+      "id": "bec-013",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Trusted",
+      "expected_primary": "VENDOR_COMPROMISE",
+      "predicted_primary": "VENDOR_TRUSTED",
+      "score": 0,
+      "reason_codes": [
+        "vendor_trusted"
+      ],
+      "metadata": {
+        "attack_type": "vendor-takeover",
+        "domain": "trusted-vendor-ap.example",
+        "signals.has_failed_auth": "true",
+        "signals.is_from_vendor": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "vendor-takeover"
+      }
+    },
+    {
+      "id": "bec-014",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Trusted",
+      "expected_primary": "VENDOR_COMPROMISE",
+      "predicted_primary": "VENDOR_TRUSTED",
+      "score": 0,
+      "reason_codes": [
+        "vendor_trusted"
+      ],
+      "metadata": {
+        "attack_type": "vendor-takeover",
+        "domain": "trusted-vendor-ap.example",
+        "signals.has_failed_auth": "true",
+        "signals.is_from_vendor": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "vendor-takeover"
+      }
+    },
+    {
+      "id": "bec-015",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "payroll-redirect",
+        "domain": "jsmith-direct.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "payroll-redirect"
+      }
+    },
+    {
+      "id": "bec-016",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "INVOICE_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "invoice-redirect",
+        "domain": "acme-vendor-billing.example",
+        "signals.has_failed_auth": "true",
+        "signals.relationship_category": "LapsedContact",
+        "source": "ws4b-synthetic-v1",
+        "template": "invoice-redirect"
+      }
+    },
+    {
+      "id": "bec-017",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "payroll-redirect",
+        "domain": "jsmith-direct.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "payroll-redirect"
+      }
+    },
+    {
+      "id": "bec-018",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "payroll-redirect",
+        "domain": "j-smith-personal.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "payroll-redirect"
+      }
+    },
+    {
+      "id": "bec-019",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "payroll-redirect",
+        "domain": "j-smith-personal.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "payroll-redirect"
+      }
+    },
+    {
+      "id": "bec-020",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "payroll-redirect",
+        "domain": "j-smith-personal.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "payroll-redirect"
+      }
+    },
+    {
+      "id": "bec-021",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "ceo-wire",
+        "domain": "example-ceo.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "ceo-wire-transfer"
+      }
+    },
+    {
+      "id": "bec-022",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Trusted",
+      "expected_primary": "VENDOR_COMPROMISE",
+      "predicted_primary": "VENDOR_TRUSTED",
+      "score": 0,
+      "reason_codes": [
+        "vendor_trusted"
+      ],
+      "metadata": {
+        "attack_type": "vendor-takeover",
+        "domain": "trusted-vendor-ap.example",
+        "signals.has_failed_auth": "true",
+        "signals.is_from_vendor": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "vendor-takeover"
+      }
+    },
+    {
+      "id": "bec-023",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "INVOICE_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "invoice-redirect",
+        "domain": "vendor-finance.example",
+        "signals.has_failed_auth": "true",
+        "signals.relationship_category": "LapsedContact",
+        "source": "ws4b-synthetic-v1",
+        "template": "invoice-redirect"
+      }
+    },
+    {
+      "id": "bec-024",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "ceo-wire",
+        "domain": "ceo-private.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "ceo-wire-transfer"
+      }
+    },
+    {
+      "id": "bec-025",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "payroll-redirect",
+        "domain": "jsmith-direct.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "payroll-redirect"
+      }
+    },
+    {
+      "id": "bec-026",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "INVOICE_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "invoice-redirect",
+        "domain": "vendor-finance.example",
+        "signals.has_failed_auth": "true",
+        "signals.relationship_category": "LapsedContact",
+        "source": "ws4b-synthetic-v1",
+        "template": "invoice-redirect"
+      }
+    },
+    {
+      "id": "bec-027",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "ceo-wire",
+        "domain": "ceo-private.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "ceo-wire-transfer"
+      }
+    },
+    {
+      "id": "bec-028",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "INVOICE_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "invoice-redirect",
+        "domain": "acme-vendor-billing.example",
+        "signals.has_failed_auth": "true",
+        "signals.relationship_category": "LapsedContact",
+        "source": "ws4b-synthetic-v1",
+        "template": "invoice-redirect"
+      }
+    },
+    {
+      "id": "bec-029",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "INVOICE_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "invoice-redirect",
+        "domain": "vendor-finance.example",
+        "signals.has_failed_auth": "true",
+        "signals.relationship_category": "LapsedContact",
+        "source": "ws4b-synthetic-v1",
+        "template": "invoice-redirect"
+      }
+    },
+    {
+      "id": "bec-030",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Trusted",
+      "expected_primary": "VENDOR_COMPROMISE",
+      "predicted_primary": "VENDOR_TRUSTED",
+      "score": 0,
+      "reason_codes": [
+        "vendor_trusted"
+      ],
+      "metadata": {
+        "attack_type": "vendor-takeover",
+        "domain": "trusted-vendor-ap.example",
+        "signals.has_failed_auth": "true",
+        "signals.is_from_vendor": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "vendor-takeover"
+      }
+    },
+    {
+      "id": "bec-031",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Trusted",
+      "expected_primary": "VENDOR_COMPROMISE",
+      "predicted_primary": "VENDOR_TRUSTED",
+      "score": 0,
+      "reason_codes": [
+        "vendor_trusted"
+      ],
+      "metadata": {
+        "attack_type": "vendor-takeover",
+        "domain": "trusted-vendor-ap.example",
+        "signals.has_failed_auth": "true",
+        "signals.is_from_vendor": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "vendor-takeover"
+      }
+    },
+    {
+      "id": "bec-032",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "ceo-wire",
+        "domain": "ceo-private.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "ceo-wire-transfer"
+      }
+    },
+    {
+      "id": "bec-033",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "INVOICE_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "invoice-redirect",
+        "domain": "vendor-finance.example",
+        "signals.has_failed_auth": "true",
+        "signals.relationship_category": "LapsedContact",
+        "source": "ws4b-synthetic-v1",
+        "template": "invoice-redirect"
+      }
+    },
+    {
+      "id": "bec-034",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "INVOICE_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "invoice-redirect",
+        "domain": "acme-vendor-billing.example",
+        "signals.has_failed_auth": "true",
+        "signals.relationship_category": "LapsedContact",
+        "source": "ws4b-synthetic-v1",
+        "template": "invoice-redirect"
+      }
+    },
+    {
+      "id": "bec-035",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "INVOICE_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "invoice-redirect",
+        "domain": "acme-vendor-billing.example",
+        "signals.has_failed_auth": "true",
+        "signals.relationship_category": "LapsedContact",
+        "source": "ws4b-synthetic-v1",
+        "template": "invoice-redirect"
+      }
+    },
+    {
+      "id": "bec-036",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "payroll-redirect",
+        "domain": "jsmith-direct.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "payroll-redirect"
+      }
+    },
+    {
+      "id": "bec-037",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "INVOICE_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "invoice-redirect",
+        "domain": "vendor-finance.example",
+        "signals.has_failed_auth": "true",
+        "signals.relationship_category": "LapsedContact",
+        "source": "ws4b-synthetic-v1",
+        "template": "invoice-redirect"
+      }
+    },
+    {
+      "id": "bec-038",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "INVOICE_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "invoice-redirect",
+        "domain": "vendor-finance.example",
+        "signals.has_failed_auth": "true",
+        "signals.relationship_category": "LapsedContact",
+        "source": "ws4b-synthetic-v1",
+        "template": "invoice-redirect"
+      }
+    },
+    {
+      "id": "bec-039",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Trusted",
+      "expected_primary": "VENDOR_COMPROMISE",
+      "predicted_primary": "VENDOR_TRUSTED",
+      "score": 0,
+      "reason_codes": [
+        "vendor_trusted"
+      ],
+      "metadata": {
+        "attack_type": "vendor-takeover",
+        "domain": "trusted-vendor-ap.example",
+        "signals.has_failed_auth": "true",
+        "signals.is_from_vendor": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "vendor-takeover"
+      }
+    },
+    {
+      "id": "bec-040",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "ceo-wire",
+        "domain": "example-ceo.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "ceo-wire-transfer"
+      }
+    },
+    {
+      "id": "bec-041",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "ceo-wire",
+        "domain": "example-ceo.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "ceo-wire-transfer"
+      }
+    },
+    {
+      "id": "bec-042",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "payroll-redirect",
+        "domain": "j-smith-personal.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "payroll-redirect"
+      }
+    },
+    {
+      "id": "bec-043",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "ceo-wire",
+        "domain": "ceo-private.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "ceo-wire-transfer"
+      }
+    },
+    {
+      "id": "bec-044",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "BEC_IMPERSONATION",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "ceo-wire",
+        "domain": "ceo-private.example",
+        "signals.has_failed_auth": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "ceo-wire-transfer"
+      }
+    },
+    {
+      "id": "bec-045",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Trusted",
+      "expected_primary": "VENDOR_COMPROMISE",
+      "predicted_primary": "VENDOR_TRUSTED",
+      "score": 0,
+      "reason_codes": [
+        "vendor_trusted"
+      ],
+      "metadata": {
+        "attack_type": "vendor-takeover",
+        "domain": "trusted-vendor-ap.example",
+        "signals.has_failed_auth": "true",
+        "signals.is_from_vendor": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "vendor-takeover"
+      }
+    },
+    {
+      "id": "bec-046",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "INVOICE_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "invoice-redirect",
+        "domain": "acme-vendor-billing.example",
+        "signals.has_failed_auth": "true",
+        "signals.relationship_category": "LapsedContact",
+        "source": "ws4b-synthetic-v1",
+        "template": "invoice-redirect"
+      }
+    },
+    {
+      "id": "bec-047",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "INVOICE_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "invoice-redirect",
+        "domain": "acme-vendor-billing.example",
+        "signals.has_failed_auth": "true",
+        "signals.relationship_category": "LapsedContact",
+        "source": "ws4b-synthetic-v1",
+        "template": "invoice-redirect"
+      }
+    },
+    {
+      "id": "bec-048",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "INVOICE_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "invoice-redirect",
+        "domain": "vendor-finance.example",
+        "signals.has_failed_auth": "true",
+        "signals.relationship_category": "LapsedContact",
+        "source": "ws4b-synthetic-v1",
+        "template": "invoice-redirect"
+      }
+    },
+    {
+      "id": "bec-049",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Trusted",
+      "expected_primary": "VENDOR_COMPROMISE",
+      "predicted_primary": "VENDOR_TRUSTED",
+      "score": 0,
+      "reason_codes": [
+        "vendor_trusted"
+      ],
+      "metadata": {
+        "attack_type": "vendor-takeover",
+        "domain": "trusted-vendor-ap.example",
+        "signals.has_failed_auth": "true",
+        "signals.is_from_vendor": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "vendor-takeover"
+      }
+    },
+    {
+      "id": "bec-050",
+      "label": "bec",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Trusted",
+      "expected_primary": "VENDOR_COMPROMISE",
+      "predicted_primary": "VENDOR_TRUSTED",
+      "score": 0,
+      "reason_codes": [
+        "vendor_trusted"
+      ],
+      "metadata": {
+        "attack_type": "vendor-takeover",
+        "domain": "trusted-vendor-ap.example",
+        "signals.has_failed_auth": "true",
+        "signals.is_from_vendor": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "vendor-takeover"
+      }
+    },
+    {
+      "id": "phish-012",
+      "label": "phish",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "LOOKALIKE_DOMAIN",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "lookalike-bank",
+        "domain": "bankofarnerica-secure.example",
+        "signals.has_failed_auth": "true",
+        "signals.has_lookalike_domain": "true",
+        "signals.has_suspicious_url": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "lookalike-bank"
+      }
+    },
+    {
+      "id": "phish-018",
+      "label": "phish",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "LOOKALIKE_DOMAIN",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "lookalike-bank",
+        "domain": "bofa-alerts.example",
+        "signals.has_failed_auth": "true",
+        "signals.has_lookalike_domain": "true",
+        "signals.has_suspicious_url": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "lookalike-bank"
+      }
+    },
+    {
+      "id": "phish-022",
+      "label": "phish",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "LOOKALIKE_DOMAIN",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "lookalike-bank",
+        "domain": "bankofarnerica-secure.example",
+        "signals.has_failed_auth": "true",
+        "signals.has_lookalike_domain": "true",
+        "signals.has_suspicious_url": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "lookalike-bank"
+      }
+    },
+    {
+      "id": "phish-031",
+      "label": "phish",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "LOOKALIKE_DOMAIN",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "lookalike-bank",
+        "domain": "bofa-alerts.example",
+        "signals.has_failed_auth": "true",
+        "signals.has_lookalike_domain": "true",
+        "signals.has_suspicious_url": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "lookalike-bank"
+      }
+    },
+    {
+      "id": "phish-032",
+      "label": "phish",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "LOOKALIKE_DOMAIN",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "lookalike-bank",
+        "domain": "bankofarnerica-secure.example",
+        "signals.has_failed_auth": "true",
+        "signals.has_lookalike_domain": "true",
+        "signals.has_suspicious_url": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "lookalike-bank"
+      }
+    },
+    {
+      "id": "phish-033",
+      "label": "phish",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "LOOKALIKE_DOMAIN",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "lookalike-bank",
+        "domain": "bofa-alerts.example",
+        "signals.has_failed_auth": "true",
+        "signals.has_lookalike_domain": "true",
+        "signals.has_suspicious_url": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "lookalike-bank"
+      }
+    },
+    {
+      "id": "phish-034",
+      "label": "phish",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "LOOKALIKE_DOMAIN",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "lookalike-bank",
+        "domain": "bankofarnerica-secure.example",
+        "signals.has_failed_auth": "true",
+        "signals.has_lookalike_domain": "true",
+        "signals.has_suspicious_url": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "lookalike-bank"
+      }
+    },
+    {
+      "id": "phish-037",
+      "label": "phish",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "LOOKALIKE_DOMAIN",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "lookalike-bank",
+        "domain": "bankofarnerica-secure.example",
+        "signals.has_failed_auth": "true",
+        "signals.has_lookalike_domain": "true",
+        "signals.has_suspicious_url": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "lookalike-bank"
+      }
+    },
+    {
+      "id": "phish-044",
+      "label": "phish",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "LOOKALIKE_DOMAIN",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "lookalike-bank",
+        "domain": "bofa-alerts.example",
+        "signals.has_failed_auth": "true",
+        "signals.has_lookalike_domain": "true",
+        "signals.has_suspicious_url": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "lookalike-bank"
+      }
+    },
+    {
+      "id": "phish-045",
+      "label": "phish",
+      "predicted_label": "benign",
+      "expected_tier": "HighRisk",
+      "predicted_tier": "Informational",
+      "expected_primary": "LOOKALIKE_DOMAIN",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "lookalike-bank",
+        "domain": "bofa-alerts.example",
+        "signals.has_failed_auth": "true",
+        "signals.has_lookalike_domain": "true",
+        "signals.has_suspicious_url": "true",
+        "source": "ws4b-synthetic-v1",
+        "template": "lookalike-bank"
+      }
+    },
+    {
+      "id": "spam-001",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "promo-spam",
+        "domain": "daily-deals-promo.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "promo-newsletter"
+      }
+    },
+    {
+      "id": "spam-002",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "supplements-spam",
+        "domain": "wellness-now.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "supplements-spam"
+      }
+    },
+    {
+      "id": "spam-003",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "promo-spam",
+        "domain": "daily-deals-promo.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "promo-newsletter"
+      }
+    },
+    {
+      "id": "spam-004",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "crypto-spam",
+        "domain": "crypto-insider-tips.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "crypto-investment"
+      }
+    },
+    {
+      "id": "spam-005",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "crypto-spam",
+        "domain": "crypto-insider-tips.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "crypto-investment"
+      }
+    },
+    {
+      "id": "spam-006",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "lottery-scam",
+        "domain": "sweeps-winner.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "lottery-scam"
+      }
+    },
+    {
+      "id": "spam-007",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "lottery-scam",
+        "domain": "sweeps-winner.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "lottery-scam"
+      }
+    },
+    {
+      "id": "spam-008",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "lottery-scam",
+        "domain": "sweeps-winner.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "lottery-scam"
+      }
+    },
+    {
+      "id": "spam-009",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "promo-spam",
+        "domain": "daily-deals-promo.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "promo-newsletter"
+      }
+    },
+    {
+      "id": "spam-010",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "supplements-spam",
+        "domain": "wellness-now.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "supplements-spam"
+      }
+    },
+    {
+      "id": "spam-011",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "lottery-scam",
+        "domain": "sweeps-winner.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "lottery-scam"
+      }
+    },
+    {
+      "id": "spam-012",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "supplements-spam",
+        "domain": "wellness-now.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "supplements-spam"
+      }
+    },
+    {
+      "id": "spam-013",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "supplements-spam",
+        "domain": "wellness-now.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "supplements-spam"
+      }
+    },
+    {
+      "id": "spam-014",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "lottery-scam",
+        "domain": "sweeps-winner.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "lottery-scam"
+      }
+    },
+    {
+      "id": "spam-015",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "lottery-scam",
+        "domain": "sweeps-winner.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "lottery-scam"
+      }
+    },
+    {
+      "id": "spam-016",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "lottery-scam",
+        "domain": "sweeps-winner.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "lottery-scam"
+      }
+    },
+    {
+      "id": "spam-017",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "crypto-spam",
+        "domain": "crypto-insider-tips.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "crypto-investment"
+      }
+    },
+    {
+      "id": "spam-018",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "supplements-spam",
+        "domain": "wellness-now.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "supplements-spam"
+      }
+    },
+    {
+      "id": "spam-019",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "crypto-spam",
+        "domain": "crypto-insider-tips.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "crypto-investment"
+      }
+    },
+    {
+      "id": "spam-020",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "crypto-spam",
+        "domain": "crypto-insider-tips.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "crypto-investment"
+      }
+    },
+    {
+      "id": "spam-021",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "crypto-spam",
+        "domain": "crypto-insider-tips.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "crypto-investment"
+      }
+    },
+    {
+      "id": "spam-022",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "supplements-spam",
+        "domain": "wellness-now.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "supplements-spam"
+      }
+    },
+    {
+      "id": "spam-023",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "crypto-spam",
+        "domain": "crypto-insider-tips.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "crypto-investment"
+      }
+    },
+    {
+      "id": "spam-024",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "lottery-scam",
+        "domain": "sweeps-winner.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "lottery-scam"
+      }
+    },
+    {
+      "id": "spam-025",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "lottery-scam",
+        "domain": "sweeps-winner.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "lottery-scam"
+      }
+    },
+    {
+      "id": "spam-026",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "supplements-spam",
+        "domain": "wellness-now.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "supplements-spam"
+      }
+    },
+    {
+      "id": "spam-027",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "supplements-spam",
+        "domain": "wellness-now.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "supplements-spam"
+      }
+    },
+    {
+      "id": "spam-028",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "lottery-scam",
+        "domain": "sweeps-winner.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "lottery-scam"
+      }
+    },
+    {
+      "id": "spam-029",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "supplements-spam",
+        "domain": "wellness-now.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "supplements-spam"
+      }
+    },
+    {
+      "id": "spam-030",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "supplements-spam",
+        "domain": "wellness-now.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "supplements-spam"
+      }
+    },
+    {
+      "id": "spam-031",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "supplements-spam",
+        "domain": "wellness-now.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "supplements-spam"
+      }
+    },
+    {
+      "id": "spam-032",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "crypto-spam",
+        "domain": "crypto-insider-tips.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "crypto-investment"
+      }
+    },
+    {
+      "id": "spam-033",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "supplements-spam",
+        "domain": "wellness-now.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "supplements-spam"
+      }
+    },
+    {
+      "id": "spam-034",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "supplements-spam",
+        "domain": "wellness-now.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "supplements-spam"
+      }
+    },
+    {
+      "id": "spam-035",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "lottery-scam",
+        "domain": "sweeps-winner.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "lottery-scam"
+      }
+    },
+    {
+      "id": "spam-036",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "promo-spam",
+        "domain": "daily-deals-promo.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "promo-newsletter"
+      }
+    },
+    {
+      "id": "spam-037",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "promo-spam",
+        "domain": "summer-sale.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "promo-newsletter"
+      }
+    },
+    {
+      "id": "spam-038",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "supplements-spam",
+        "domain": "wellness-now.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "supplements-spam"
+      }
+    },
+    {
+      "id": "spam-039",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "crypto-spam",
+        "domain": "crypto-insider-tips.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "crypto-investment"
+      }
+    },
+    {
+      "id": "spam-040",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "crypto-spam",
+        "domain": "crypto-insider-tips.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "crypto-investment"
+      }
+    },
+    {
+      "id": "spam-041",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "promo-spam",
+        "domain": "daily-deals-promo.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "promo-newsletter"
+      }
+    },
+    {
+      "id": "spam-042",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "supplements-spam",
+        "domain": "wellness-now.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "supplements-spam"
+      }
+    },
+    {
+      "id": "spam-043",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "NEWSLETTER",
+      "score": 0,
+      "reason_codes": [
+        "recurring_service"
+      ],
+      "metadata": {
+        "attack_type": "supplements-spam",
+        "domain": "wellness-now.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "supplements-spam"
+      }
+    },
+    {
+      "id": "spam-044",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "crypto-spam",
+        "domain": "crypto-insider-tips.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "crypto-investment"
+      }
+    },
+    {
+      "id": "spam-045",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "crypto-spam",
+        "domain": "crypto-insider-tips.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "crypto-investment"
+      }
+    },
+    {
+      "id": "spam-046",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "lottery-scam",
+        "domain": "sweeps-winner.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "lottery-scam"
+      }
+    },
+    {
+      "id": "spam-047",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "crypto-spam",
+        "domain": "crypto-insider-tips.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "crypto-investment"
+      }
+    },
+    {
+      "id": "spam-048",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "promo-spam",
+        "domain": "summer-sale.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "promo-newsletter"
+      }
+    },
+    {
+      "id": "spam-049",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "crypto-spam",
+        "domain": "crypto-insider-tips.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "crypto-investment"
+      }
+    },
+    {
+      "id": "spam-050",
+      "label": "spam",
+      "predicted_label": "benign",
+      "expected_tier": "Caution",
+      "predicted_tier": "Informational",
+      "expected_primary": "SCAM_FRAUD",
+      "predicted_primary": "FIRST_CONTACT_EXTERNAL",
+      "score": 0,
+      "metadata": {
+        "attack_type": "promo-spam",
+        "domain": "daily-deals-promo.example",
+        "source": "ws4b-synthetic-v1",
+        "template": "promo-newsletter"
+      }
+    }
+  ],
+  "degraded_fixtures": 0,
+  "tier_coverage": {
+    "tier0_configured": true,
+    "tier0_executed": true,
+    "tier1_configured": false,
+    "tier1_executed": false,
+    "tier2_configured": false,
+    "tier2_executed": false,
+    "rspamd_configured": false,
+    "rspamd_executed": false
+  }
+}
