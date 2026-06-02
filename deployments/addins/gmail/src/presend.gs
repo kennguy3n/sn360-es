@@ -1,8 +1,8 @@
 /*
- * SN360 Gmail Add-on — Pre-Send Trigger (WS-7b)
+ * SN360 Gmail Add-on — Pre-Send Trigger
  *
  * Bound to the composeTrigger in appsscript.json. Implements the
- * three pre-send flows from PRODUCT_PLAN.md §7b using Gmail
+ * three pre-send flows using Gmail
  * Add-on APIs (CardService + GmailApp + advanced Gmail service):
  *
  *   1. Recipient risk check (To/Cc/Bcc)

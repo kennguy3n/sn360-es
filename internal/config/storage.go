@@ -7,7 +7,7 @@ import (
 
 // Postgres carries database connection config for the writer pool.
 // Read traffic is optionally routed to a separate replica when
-// ReadHost is set (see PostgresRead and WS-2a in PRODUCT_PLAN.md).
+// ReadHost is set (see PostgresRead and docs/MULTI_REGION.md).
 type Postgres struct {
 	Host            string
 	Port            int
