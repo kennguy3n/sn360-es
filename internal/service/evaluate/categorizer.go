@@ -18,7 +18,7 @@ import (
 // want to think about tuning just use [DefaultCategoryWeights].
 //
 // All weights are added together within a category bucket; the
-// highest-scoring bucket wins. See internal/docs/CATEGORIZER_WEIGHTS.md
+// highest-scoring bucket wins. See docs/CATEGORIZER_WEIGHTS.md
 // for the rationale behind each default.
 type CategoryWeights struct {
 	// HighScoreThreshold is the EvaluateResult.Score above which the
@@ -79,7 +79,7 @@ type CategoryWeights struct {
 }
 
 // DefaultCategoryWeights returns the tuned defaults baked into the
-// production binary. See internal/docs/CATEGORIZER_WEIGHTS.md for
+// production binary. See docs/CATEGORIZER_WEIGHTS.md for
 // the rationale behind each value.
 func DefaultCategoryWeights() CategoryWeights {
 	return CategoryWeights{

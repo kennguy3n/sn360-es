@@ -36,7 +36,7 @@
 //   - Tier 2 wire-up:    cmd/sn360-es/tier2.go
 //   - Metrics:           pkg/telemetry/metrics.go::Tier2Escalations,
 //     EvaluateDegraded
-//   - Degradation doc:   internal/docs/DEGRADATION_MODES.md
+//   - Degradation doc:   docs/DEGRADATION_MODES.md
 package chaos_test
 
 import (

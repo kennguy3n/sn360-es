@@ -50,7 +50,7 @@ spec:
       rules:
         - alert: SN360ESTier1LatencyHigh
           # Tier 1 p99 over a 5-minute window above the SLO budget.
-          # The SLO is 250 ms (see `internal/docs/ARCHITECTURE.md` §6.3);
+          # The SLO is 250 ms (see `docs/ARCHITECTURE.md` §6.3);
           # we fire at 500 ms to give a 2x burn allowance.
           expr: |
             histogram_quantile(0.99,
@@ -66,7 +66,7 @@ spec:
               Tier 1 encoder inference is slower than expected.
               Check pod CPU saturation; if {{`{{ $value }}`}}s sustained,
               consider scaling the consumers role replicas.
-            runbook_url: "https://github.com/{{ .Values.gitOwnerRepo | default "kennguy3n/sn360-es" }}/blob/main/internal/docs/RUNBOOKS.md#tier1-latency"
+            runbook_url: "https://github.com/{{ .Values.gitOwnerRepo | default "kennguy3n/sn360-es" }}/blob/main/docs/RUNBOOKS.md#tier1-latency"
 
         - alert: SN360ESTier2LatencyHigh
           # Tier 2 SLM call is inherently slower; SLO is 5s, alert at 10s.

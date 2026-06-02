@@ -6,7 +6,7 @@ has its default value, how signals stack to produce a final
 per tenant.
 
 The canonical defaults live in
-[`evaluate.DefaultCategoryWeights()`](../service/evaluate/categorizer.go).
+[`evaluate.DefaultCategoryWeights()`](../internal/service/evaluate/categorizer.go).
 This file is the human-readable companion to that struct — keep them in
 sync when you tune a weight.
 
@@ -37,7 +37,7 @@ The mechanics are:
 * Buckets accumulate the configured weights (additive, not max).
 * The bucket with the highest total wins the **primary** slot. Ties
   are broken deterministically by
-  [`constant.AllCategories`](../constant/categories.go) declaration
+  [`constant.AllCategories`](../internal/constant/categories.go) declaration
   order (not alphabetical) so the output is stable and matches the
   reporting-table ordering used everywhere else in the codebase.
 * The two highest-scoring non-benign buckets (excluding the primary)

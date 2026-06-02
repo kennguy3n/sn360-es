@@ -205,12 +205,12 @@ class TestCostModel(unittest.TestCase):
     # rather than mutate this one in place.
     PRE_WS2_LEVERS_ON_5K_ENTERPRISE_USD = 115.1182
 
-    # Floor on the per-tenant cost reduction WS-2a + WS-2b are
-    # expected to deliver at 5 000-tenant enterprise density. Set
-    # at 8% per the WS-2c task brief (PRODUCT_PLAN.md §2c):
-    # read-replica routing (WS-2a) drops the API-role vCPU-hour
-    # coefficient by ~20% and HASH partitioning of
-    # `communication_histories` (WS-2b) drops the consumer-role
+    # Floor on the per-tenant cost reduction read-replica routing +
+    # HASH partitioning are expected to deliver at 5 000-tenant
+    # enterprise density. Set at 8% per the calibration notes in
+    # benchmarks/COST_MODEL.md: read-replica routing (PR #57) drops
+    # the API-role vCPU-hour coefficient by ~20% and HASH
+    # partitioning of `communication_histories` (PR #58) drops the consumer-role
     # coefficient by ~25%, with the partitioning storage / write
     # multipliers tightening from 0.85 / 0.80 to 0.72 / 0.70 in
     # cost_postgres. The combined floor expressed here is the

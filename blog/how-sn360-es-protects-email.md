@@ -157,7 +157,7 @@ The administrator's first dashboard view shows all of the above, plus a Resilien
 
 ## 2. Email Scoring Pipeline: Tier 0 → Tier 1 → Tier 2
 
-Every inbound message runs through the same three-tier pipeline. The architecture is documented in detail in `internal/docs/ARCHITECTURE.md`; the code lives in `internal/service/tier0/`, `internal/service/tier1/`, and `internal/service/evaluate/`. The key insight is that **most messages never reach the ML model** — Tier 0's rule-based gate disposes of 80–90 % of mail in microseconds, and Tier 1's encoder disposes of most of the remainder in 50–200 ms. The expensive Ternary-Bonsai-8B SLM is reserved for the ambiguous tail.
+Every inbound message runs through the same three-tier pipeline. The architecture is documented in detail in `docs/ARCHITECTURE.md`; the code lives in `internal/service/tier0/`, `internal/service/tier1/`, and `internal/service/evaluate/`. The key insight is that **most messages never reach the ML model** — Tier 0's rule-based gate disposes of 80–90 % of mail in microseconds, and Tier 1's encoder disposes of most of the remainder in 50–200 ms. The expensive Ternary-Bonsai-8B SLM is reserved for the ambiguous tail.
 
 ```mermaid
 flowchart TD
@@ -266,7 +266,7 @@ The finance analyst sees a red banner that says *"This message impersonates our 
 
 ## 3. Classification Outcomes: What We Show and How We Handle
 
-Every scored message lands in one of six severity tiers, each with its own banner UX and a defined set of side effects. The full UX contract is documented in `internal/docs/ARCHITECTURE.md` section 8.2; the rendering logic is in `internal/service/action/banner_renderer.go`.
+Every scored message lands in one of six severity tiers, each with its own banner UX and a defined set of side effects. The full UX contract is documented in `docs/ARCHITECTURE.md` section 8.2; the rendering logic is in `internal/service/action/banner_renderer.go`.
 
 ### The Six Tiers
 
@@ -553,4 +553,4 @@ This post covered the protective core of SN360-ES: onboarding, scoring, banner U
 1. **User education and resilience scoring** — the platform tracks every user's interactions with risky mail (clicked through an interstitial, reported phishing, fell for a simulation) and translates those signals into a per-user resilience score that feeds back into the risk-weighting at scoring time. Lessons and simulations are delivered through the same dashboard channel.
 2. **Risk profiling and the SecOps view** — beyond per-message decisions, the platform aggregates threat exposure across the org graph, surfaces high-risk users and high-risk campaigns, and feeds the SecOps queue with structured incident context.
 
-In the meantime, if you want to verify any of the above against code, every file path in this post is a live reference to the [`sn360-es`](https://github.com/kennguy3n/sn360-es) repository. The architecture document at `internal/docs/ARCHITECTURE.md` is the canonical companion reference.
+In the meantime, if you want to verify any of the above against code, every file path in this post is a live reference to the [`sn360-es`](https://github.com/kennguy3n/sn360-es) repository. The architecture document at `docs/ARCHITECTURE.md` is the canonical companion reference.

@@ -3,9 +3,7 @@
 A contributor-oriented map of the SN360-ES source tree. For the design
 rationale behind each subsystem, see [`PROPOSAL.md`](./PROPOSAL.md);
 for the runtime topology and data flow, see
-[`ARCHITECTURE.md`](./ARCHITECTURE.md). The project status matrix in
-[`README.md`](../../README.md#project-status) lists which routes and
-consumers are wired today.
+[`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ---
 
@@ -382,7 +380,7 @@ process. Key wiring:
 - Middleware chain (outside→in): telemetry → request-id → request-logger
   → CORS → rate-limit → JWT-auth → mux. Each tier short-circuits on
   failure; the JWT layer is skipped only on the paths listed in
-  `defaultAuthSkipPaths()` in [`cmd/sn360-es/routes.go`](../../cmd/sn360-es/routes.go):
+  `defaultAuthSkipPaths()` in [`cmd/sn360-es/routes.go`](../cmd/sn360-es/routes.go):
   `/healthz`, `/readyz`, `/metrics`, `/docs`, `/docs/`, `/openapi.yaml`,
   `/l/`, `/v1/banner/action`, `/v1/quarantine/release`,
   `/v1/education/lesson/`, and `/v1/onboarding/callback`. Every other
@@ -400,7 +398,7 @@ process. Key wiring:
 |---|---|
 | Unit tests | One `_test.go` per package; full coverage of all service, handler, middleware, and privacy packages. |
 | Integration tests | testcontainers-based suites for NATS JetStream, Redis pipeline, PostgreSQL + golang-migrate, bus factory, and an end-to-end pipeline test. Behind `//go:build integration` and `make test-integration`. |
-| Benchmarks | Labelled 1 000-email corpus + Go microbenchmarks + accuracy / precision / recall / F1 / confusion-matrix harness + resource profiler. Run via `make bench-all`. See [`benchmarks/`](../../benchmarks/). |
+| Benchmarks | Labelled 1 000-email corpus + Go microbenchmarks + accuracy / precision / recall / F1 / confusion-matrix harness + resource profiler. Run via `make bench-all`. See [`benchmarks/`](../benchmarks/). |
 | Lint | `make lint` runs `gofmt -l` and `go vet`. |
 | Database migrations | `cmd/sn360-es-migrate/` wraps `golang-migrate` v4; `make migrate-up/-down/-check`; schema in `migrations/`. |
 | API documentation | `api/openapi.yaml` documents every public handler; Swagger UI at `/docs` and raw spec at `/openapi.yaml`. |
@@ -430,5 +428,5 @@ following items are deployment-time concerns:
   `.env.example`.
 
 These are operational tasks that belong in the deployment pipeline.
-The [`README.md`](../../README.md#project-status) project status matrix
+The [`README.md`](../README.md#project-status) project status matrix
 is the authoritative view of what is wired vs. optional.

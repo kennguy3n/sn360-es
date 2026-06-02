@@ -1,7 +1,7 @@
-# NATS Message Schema Versioning (WS-7c)
+# NATS Message Schema Versioning
 
-This document is the load-bearing reference for the WS-7c schema
-versioning subsystem. It covers:
+This document is the load-bearing reference for the schema versioning
+subsystem. It covers:
 
 1. Why the gate exists ([§1](#1-why))
 2. The wire-format contract ([§2](#2-wire-format))
@@ -30,7 +30,7 @@ mismatch was undetectable at publish time because nothing in
 the broker cared about the payload shape — only the consumer
 did, and only at message-handler time.
 
-WS-7c closes that gap. The wire format now carries an
+Schema versioning closes that gap. The wire format now carries an
 explicit `schema_version` field, the publish path enforces
 the registered `(subject, schema_version) -> Go-type` contract
 before the broker call, and the subscribe path repeats the
@@ -75,7 +75,7 @@ header always agrees with what is on the wire.
 ### Version value semantics
 
 - `"v1"` is the canonical first version every DTO ships with on
-  the WS-7c rollout. `pkg/events/schema.SchemaVersionV1` is the
+  the initial schema versioning rollout. `pkg/events/schema.SchemaVersionV1` is the
   load-bearing constant; producer code does not hardcode the
   literal.
 - The field is a `string` (not an `int`) so we can land
@@ -86,7 +86,7 @@ header always agrees with what is on the wire.
 
 ## <a id="3-validator"></a>3. Validator surface
 
-The validator lives in [`pkg/events/schema`](../../pkg/events/schema/).
+The validator lives in [`pkg/events/schema`](../pkg/events/schema/).
 Public API:
 
 | Function | Purpose |
@@ -103,7 +103,7 @@ Public API:
 | `schema.DLQSubject(origin) -> string` | Map a subject to its schema-mismatch DLQ subject. |
 
 The canonical sn360-es registry lives in
-[`internal/eventsschema`](../eventsschema/registry.go). Every
+[`internal/eventsschema`](../internal/eventsschema/registry.go). Every
 subject the binary publishes or subscribes to is bound there;
 unregistered subjects pass through (the validator is opt-in).
 
@@ -147,7 +147,7 @@ preservation:
 | — | `error = "schema mismatch: <reason>[: <validator err>]"` | Human-readable. |
 
 The schema-DLQ stream `SN360_SCHEMA_DLQ`
-([`pkg/events/nats/streams.go`](../../pkg/events/nats/streams.go))
+([`pkg/events/nats/streams.go`](../pkg/events/nats/streams.go))
 binds the `sn360.dlq.schema.>` wildcard, retains messages for
 30 days, and applies the same 600s dedup window every other
 DLQ stream uses (FU-B contract). The namespace is
@@ -165,7 +165,7 @@ NOT made. The error carries `Subject`, `ResolvedVersion`,
 via `errors.As(err, &target)`.
 
 The platform-bridge publisher
-([`internal/service/bridge/platform_publisher.go`](../service/bridge/platform_publisher.go))
+([`internal/service/bridge/platform_publisher.go`](../internal/service/bridge/platform_publisher.go))
 is the one exception: a mismatch logs a warn, increments the
 metric, and STILL publishes the payload. The bridge cannot
 afford to drop a verdict because a hot-rolled `v2` envelope
@@ -175,7 +175,7 @@ the SOC outage would be worse than a one-off shape drift.
 ### Subscribe-side enforcement is NON-FATAL
 
 A mismatch at subscribe time
-([`cmd/sn360-es/consumers_schema.go`](../../cmd/sn360-es/consumers_schema.go))
+([`cmd/sn360-es/consumers_schema.go`](../cmd/sn360-es/consumers_schema.go))
 republishes the payload onto the schema-mismatch DLQ and Acks
 the original delivery. The handler is NOT invoked. The wrapper
 returns `nil` so the underlying JetStream consumer does not
@@ -185,7 +185,7 @@ loops forever — it lands on the DLQ within one delivery.
 
 ## <a id="5-compat"></a>5. Backward and forward compatibility
 
-### Backward compat (pre-WS-7c publishers)
+### Backward compat (pre-versioning publishers)
 
 A payload with NO `schema_version` field is treated as `"v1"`.
 The validator defaults the version, runs the v1 validator, and
@@ -194,7 +194,7 @@ the message processes normally. The
 the operator dashboard can see "legacy publisher X is still in
 the field" without routing those messages anywhere.
 
-### Forward compat (post-WS-7c bumps)
+### Forward compat (post-versioning bumps)
 
 A payload with `schema_version: "v999"` is treated as a
 forward-compat trap. The validator returns
@@ -254,14 +254,14 @@ The platform consumes the bridge envelope
 (`sn360.events.email.<tenant>.<kind>`) and the
 correlation/playbook engines unmarshal it into their own Go
 shapes. The platform side mirrors the
-WS-7c contract:
+schema versioning contract:
 
 - `services/correlation-engine` and `services/playbook-engine`
   carry their own `_schemaversion` shared package + a
   `SchemaVersion` field on `Event`.
 - The platform's subscribe path runs the same `(subject, version)`
   registry; unknown versions are terminated.
-- Pre-WS-7c payloads (no `schema_version` field) are accepted
+- Pre-versioning payloads (no `schema_version` field) are accepted
   as v1 on the platform side, so sn360-es can ship v1-tagged
   events before the platform side is updated without a
   lockstep flip.
@@ -292,7 +292,7 @@ is the operator-visible signal:
 | `side` | `publish` (publisher-side enforcement) or `subscribe` (consumer-side enforcement). |
 
 A non-zero rate on `reason=missing_version` means at least one
-upstream publisher is still emitting the pre-WS-7c shape;
+upstream publisher is still emitting the pre-versioning shape;
 a non-zero rate on `reason=unknown_version` or
 `payload_validation_failure` is an active outage — a producer
 just rolled a shape the consumer side does not understand and

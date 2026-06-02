@@ -4,7 +4,7 @@
 // Redis eviction-storm chaos scenario.
 //
 // This file pins TWO related contracts from
-// internal/docs/DEGRADATION_MODES.md §"Redis cache eviction storm":
+// docs/DEGRADATION_MODES.md §"Redis cache eviction storm":
 //
 //  1. The production boot guard `assertProductionDurableStores`
 //     (cmd/sn360-es/app.go) refuses to start the binary when an
@@ -42,7 +42,7 @@
 //   - Boot guard:       cmd/sn360-es/app.go::assertProductionDurableStores
 //   - Memory fallback:  cmd/sn360-es/wire_services.go::buildConfigStore
 //   - Eviction policy:  testcontainers Redis run-args (maxmemory + LRU)
-//   - Degradation doc:  internal/docs/DEGRADATION_MODES.md
+//   - Degradation doc:  docs/DEGRADATION_MODES.md
 package chaos_test
 
 import (

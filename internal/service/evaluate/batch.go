@@ -762,7 +762,7 @@ func tier0BypassResult(req dto.EvaluateRequest, outcome dto.Tier0Outcome) dto.Ev
 // orchestrator expected a `BatchMessage{Request, Signals}` wrapper. A
 // deployment that flipped `TIER1_BATCH_ENABLED=true` without rolling
 // every upstream publisher in lockstep would NAK every message and
-// land them in the DLQ — see `internal/docs/ARCHITECTURE.md`
+// land them in the DLQ — see `docs/ARCHITECTURE.md`
 // "TIER1_BATCH_ENABLED wire-format dependency". This decoder removes
 // the lockstep requirement: the orchestrator tolerates either shape so
 // a phased rollout (batch consumer first, publishers later) is safe.

@@ -70,7 +70,7 @@ type Config struct {
 	// leaf nodes when the primary URL is unreachable, and
 	// surfaces the remote-region URLs to operators via the
 	// boot log. Cross-region publish/subscribe is the same Subject
-	// space — see internal/docs/MULTI_REGION.md for the wiring.
+	// space — see docs/MULTI_REGION.md for the wiring.
 	// Nil / empty: single-region behaviour (use URL only).
 	Supercluster map[string]string
 }

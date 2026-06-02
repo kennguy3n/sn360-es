@@ -55,7 +55,7 @@ const SchemaVersionV1 = "v1"
 // the payload to discover the message's self-declared version.
 // Kept as a package-level constant so the consumer-side peek
 // (`pkg/events/schema.peekVersion`) and the documentation
-// (`internal/docs/SCHEMA_VERSIONING.md`) cannot drift on a
+// (`docs/SCHEMA_VERSIONING.md`) cannot drift on a
 // rename.
 const SchemaVersionField = "schema_version"
 
@@ -449,7 +449,7 @@ func (v *Validator) SubjectFamily(subject string) string {
 
 // DLQSubject derives the schema-mismatch DLQ subject for a given
 // concrete subject. The contract is documented in
-// `internal/docs/SCHEMA_VERSIONING.md` and consumed by the
+// `docs/SCHEMA_VERSIONING.md` and consumed by the
 // subscribe-time wiring: a mismatched message on subject
 // `es.evaluate.request.t-42` is republished on
 // `sn360.dlq.schema.es.evaluate.request.t-42` with the original

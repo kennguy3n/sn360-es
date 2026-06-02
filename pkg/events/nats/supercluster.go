@@ -10,7 +10,7 @@
 //
 // Out of scope for this file: spinning up the leaf nodes
 // themselves (an operator concern documented in
-// internal/docs/MULTI_REGION.md) and cross-region account /
+// docs/MULTI_REGION.md) and cross-region account /
 // JetStream replication (an nats-server config, not a client
 // option). The client-side surface is intentionally narrow: parse
 // the env var (in internal/config), pick the home-region list

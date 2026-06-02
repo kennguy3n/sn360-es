@@ -1,7 +1,6 @@
 # tests/load
 
-End-to-end load harness for sn360-es. Implements WS-6a (see
-`internal/docs/PRODUCT_PLAN.md` §6a).
+End-to-end load harness for sn360-es.
 
 The harness exercises the ingest → JetStream → consumer → Tier 0/1/2 → action
 pipeline at three traffic profiles drawn from the cost-model
@@ -20,7 +19,7 @@ fixed seed) used for CI gating on every PR. `soak` is a 30-minute hold of the
 
 ## What gets captured
 
-Per the WS-6a brief every run captures six metric families and persists them
+Every run captures six metric families and persists them
 into `tests/load/results/<scenario>-<unix_ts>.json` alongside the k6 summary:
 
 1. **End-to-end latency p50 / p95 / p99** — `loadgen_publish_latency_ms`
@@ -159,7 +158,7 @@ default.
 | `LOAD_SEED`               | scenario-specific (42 / 7)                | Seeds PRNG for corpus + tenant rotation.         |
 | `LOAD_BATCH_SIZE`         | 1 (4 for peak)                            | `POST /publish` vs `POST /publish/batch`.        |
 | `LOAD_TENANTS_PATH`       | `tests/load/results/tenants.json`         | Bootstrap manifest the scripts read.             |
-| `LOAD_CORPUS_PATH`        | `scripts/corpus/loadtest/all.json`        | WS-4b corpus path (mini-corpus fallback).        |
+| `LOAD_CORPUS_PATH`        | `scripts/corpus/loadtest/all.json`        | Corpus path (mini-corpus fallback).              |
 | `LOAD_PROM_URL`           | `http://127.0.0.1:9090`                   | Prometheus for metric snapshots.                 |
 | `LOAD_NATS_MON_URL`       | `http://127.0.0.1:8222`                   | NATS monitoring endpoint fallback.               |
 | `LOADGEN_PUBLISHER_URL`   | `http://127.0.0.1:9099`                   | The HTTP→NATS shim.                              |
@@ -177,7 +176,7 @@ The harness uses **one k6 script per scenario** (`baseline.js`, `typical.js`,
    to hand-roll the option plumbing.
 2. Each scenario has its own threshold ceiling (`expectedP99Ms`); declaring
    them inline keeps the contract per-scenario obvious.
-3. WS-6b (chaos engineering) imports `runScenario({...})` to compose its
+3. The chaos engineering suite imports `runScenario({...})` to compose its
    chaos-aware variant — one file per scenario keeps the variant point
    small.
 
@@ -187,7 +186,7 @@ duration / wider tenant pool respectively.
 ## Reusable scenario runner
 
 `tests/load/lib/scenario.js` exposes a `runScenario({...})` factory so other
-workstreams (notably WS-6b) can compose against the same scenario shape
+other test suites (notably chaos engineering) can compose against the same scenario shape
 without copy-pasting plumbing:
 
 ```js
@@ -203,7 +202,7 @@ export function handleSummary(data) {
 
 `runScenario` accepts `name` (one of `baseline` / `typical` / `peak`), and
 optional overrides for `msgsPerSecond`, `durationMin`, `tenants`, `seed`, and
-`optionsOverrides`. WS-6b should layer its chaos-injection helpers around
+`optionsOverrides`. The chaos suite should layer its chaos-injection helpers around
 `s.iter` (e.g. wrap it in a function that sometimes simulates a NATS
 disconnect) so the scenario shape stays identical between the load harness
 and the chaos regression suite.
@@ -220,7 +219,7 @@ Import:
 2. Pick your Prometheus datasource (the variable is named `$datasource`).
 3. Set `$scenario` from the dropdown.
 
-The dashboard is intentionally pinned to the metric families WS-6a captures;
+The dashboard is intentionally pinned to the metric families the load harness captures;
 adding new panels should normally be paired with a new family in
 `tests/load/lib/metrics.js` so the persisted artefact stays in sync with the
 dashboard.
@@ -297,7 +296,7 @@ tests/load/
 │   └── sn360-es-load.json    # 6-row dashboard (Ingest / Evaluate / Tier 2 / PG / Redis / NATS)
 ├── lib/
 │   ├── config.js             # SCENARIOS + loadConfig()
-│   ├── corpus.js             # WS-4b corpus loader + envelope builder
+│   ├── corpus.js             # corpus loader + envelope builder
 │   ├── metrics.js            # captureMetrics() — six metric families
 │   ├── scenario.js           # buildOptions / runIteration / runScenario / summarise
 │   └── seed.js               # deterministic PRNG

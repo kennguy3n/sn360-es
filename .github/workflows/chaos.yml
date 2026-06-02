@@ -3,7 +3,7 @@ name: Chaos
 # WS-6b chaos engineering regressions.
 #
 # This workflow runs the four chaos scenarios documented in
-# internal/docs/DEGRADATION_MODES.md against a real testcontainers
+# docs/DEGRADATION_MODES.md against a real testcontainers
 # environment (NATS, Postgres, Redis). It is intentionally NOT a
 # per-PR trigger:
 #

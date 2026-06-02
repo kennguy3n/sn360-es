@@ -61,7 +61,7 @@
 //   - Read-replica routing:     pkg/storage/postgres/postgres.go
 //     ::QueryContext / ::QueryRowContext
 //   - Bound-conn semantics:     pkg/storage/postgres/tenant_context.go
-//   - Degradation doc:          internal/docs/DEGRADATION_MODES.md
+//   - Degradation doc:          docs/DEGRADATION_MODES.md
 package chaos_test
 
 import (

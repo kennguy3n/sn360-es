@@ -1,7 +1,7 @@
 /*
- * SN360 Outlook Pre-Send Add-in (WS-7b)
+ * SN360 Outlook Pre-Send Add-in
  *
- * Implements the three pre-send flows from PRODUCT_PLAN.md §7b:
+ * Implements the three pre-send flows:
  *
  *   1. Recipient risk check (To/Cc/Bcc)
  *      Hashes each recipient's email + tenant context and POSTs the

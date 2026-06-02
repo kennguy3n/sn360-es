@@ -85,7 +85,7 @@ func (c Config) validate() error {
 		}
 		// WS-7a: the primary pool (PG_HOST/PG_PORT/PG_DATABASE)
 		// doubles as the home-region pool —
-		// internal/docs/MULTI_REGION.md:54-58 documents the
+		// docs/MULTI_REGION.md:54-58 documents the
 		// contract, but without a code-level check an operator
 		// who pointed the home entry at a different host or
 		// database would silently get a single pool to the
@@ -100,7 +100,7 @@ func (c Config) validate() error {
 		// always a misconfig because the primary pool's database
 		// is what the home region actually serves.
 		if homePG.Host != c.Postgres.Host || homePG.Port != c.Postgres.Port || homePG.Database != c.Postgres.Database {
-			return fmt.Errorf("PG_REGION_MAP[%s] points at %s:%d/%s but PG_HOST/PG_PORT/PG_DATABASE is %s:%d/%s — the home-region entry must reach the same Postgres as the primary pool (see internal/docs/MULTI_REGION.md)",
+			return fmt.Errorf("PG_REGION_MAP[%s] points at %s:%d/%s but PG_HOST/PG_PORT/PG_DATABASE is %s:%d/%s — the home-region entry must reach the same Postgres as the primary pool (see docs/MULTI_REGION.md)",
 				c.Postgres.HomeRegion, homePG.Host, homePG.Port, homePG.Database, c.Postgres.Host, c.Postgres.Port, c.Postgres.Database)
 		}
 	}

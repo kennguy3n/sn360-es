@@ -45,7 +45,7 @@
 //   - JetStream stream config:  pkg/events/nats/streams.go
 //   - DedupWindow default:      pkg/events/nats/streams.go::120-137
 //     (DedupWindow: 2 * time.Minute)
-//   - Degradation doc:          internal/docs/DEGRADATION_MODES.md
+//   - Degradation doc:          docs/DEGRADATION_MODES.md
 package chaos_test
 
 import (

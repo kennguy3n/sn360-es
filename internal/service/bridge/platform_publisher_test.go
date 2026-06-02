@@ -12,8 +12,8 @@ import (
 )
 
 // TestKindForVerdict_PrimaryCategoryRouting checks that the
-// subject-suffix mapping matches the PRODUCT_PLAN.md WS-5A.1
-// subject table for every primary category currently produced by
+// subject-suffix mapping matches the bridge subject table for
+// every primary category currently produced by
 // the evaluator. The platform's correlation rules subscribe to
 // these subjects by name, so any drift here silently re-routes
 // events away from the rule that's expecting them.

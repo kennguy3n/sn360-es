@@ -1,8 +1,8 @@
 # sn360-es Cost Model
 
-> **Recalibrated 2026-06-01** after WS-2a (read-replica routing,
-> PR #57) and WS-2b (HASH partitioning of `communication_histories`,
-> PR #58) shipped. The numerical cells in the headline table and
+> **Recalibrated 2026-06-01** after read-replica routing
+> (PR #57) and HASH partitioning of `communication_histories`
+> (PR #58) shipped. The numerical cells in the headline table and
 > the 5 000-tenant enterprise anchor moved; the methodology, lever
 > taxonomy, and Tier 0 / 1 / 2 routing model are unchanged. See
 > `scripts/cost_model/project.py` header comment for the source
@@ -13,8 +13,8 @@ sn360-es review plan calibrated against the cost levers landed
 in PR #44 (tenant-isolation hardening), PR #45 (worker pagination
 + Redis rate limiter + Tier 1 batch default-on + native PG
 partitioning), PR #46 (role-split + KEDA on consumer lag +
-PgBouncer sidecar), PR #57 (WS-2a read-replica routing), and
-PR #58 (WS-2b HASH partitioning of `communication_histories`).
+PgBouncer sidecar), PR #57 (read-replica routing), and
+PR #58 (HASH partitioning of `communication_histories`).
 
 The model is intentionally simple and reproducible. A single
 Python script — `scripts/cost_model/project.py` — emits a JSON
@@ -37,10 +37,10 @@ the script and the tests.
 ## Headline numbers
 
 USD per tenant per month at the four representative traffic
-profiles (low / medium / high / enterprise), with all WS-2-era
+profiles (low / medium / high / enterprise), with all scaling-era
 levers active versus a pre-PR #44 baseline.
 
-| Profile    | Messages / tenant / day | Baseline (pre-PR #44) | All levers on (post-WS-2b) | $/tenant/mo saving | % saving |
+| Profile    | Messages / tenant / day | Baseline (pre-PR #44) | All levers on (post-HASH-partitioning) | $/tenant/mo saving | % saving |
 | ---        | --: | --: | --: | --: | --: |
 | low        |     200 | $0.641   | $0.416   | $0.225   | 35.1% |
 | medium     |   1 200 | $3.772   | $2.412   | $1.360   | 36.0% |
@@ -67,14 +67,14 @@ Those high-volume cohorts still gain the largest *absolute*
 dollar savings per tenant — $13.92 (high) and $44.60
 (enterprise) versus $1.36 (medium) and $0.23 (low) — they just
 trade them off against a larger Tier 2 token baseline. Prior
-to the WS-2c recalibration the savings curve was monotonically
-descending (33.7 % → 32.6 % → 25.1 % → 22.6 %); the WS-2b HASH
+to the post-PR #58 recalibration the savings curve was monotonically
+descending (33.7 % → 32.6 % → 25.1 % → 22.6 %); the HASH
 partitioning consumer-CPU drop and the tightened
 `partitioning_active` multipliers compounded against the
 `medium` cohort's profile mix in a way that nudged it above
 `low`. Both shapes are consistent with the model's
 architecture — high-volume cohorts always pay a larger share
-of their total in Tier 2 tokens — the WS-2c numbers just make
+of their total in Tier 2 tokens — the recalibrated numbers just make
 the inflection visible on the headline table.
 
 The `enterprise` row is the 5 000-tenant scale-out anchor: the
@@ -87,10 +87,10 @@ density is 5 000 tenants per deployment (vs the 1 000-tenant
 default the table is computed against), shared Redis / PG /
 NAT GW lines amortise across more tenants, dropping the
 enterprise per-tenant figure to roughly **$104.07 / month** —
-down from **$115.12 / month** before the WS-2c recalibration
+down from **$115.12 / month** before the recalibration
 (a 9.6 % reduction). The `test_post_ws2_density_delta`
 regression in `scripts/cost_model/test_project.py` pins this
-improvement at ≥ 8 %; see the WS-2c calibration notes below for
+improvement at ≥ 8 %; see the calibration notes below for
 the coefficient / multiplier evidence the figure rests on.
 
 Both columns use the architecturally-bounded Tier 0 bypass model
@@ -117,7 +117,7 @@ components, in order of contribution to the high-cohort total:
    shared-instance baseline by ~60% on idle connection budget;
    native partitioning takes 30% off the write I/O budget — the
    PR #45 cleanup-worker no-longer-scans-the-entire-table effect
-   (20%) compounded with WS-2b HASH partition pruning keeping
+   (20%) compounded with HASH partition pruning (PR #58) keeping
    each Upsert's read side hot in cache (≈12.5%).
 3. **s3** — Object storage for raw email blobs. Lever-independent
    in this model (no PR #44–#46 lever changes the retention
@@ -177,7 +177,7 @@ components, in order of contribution to the high-cohort total:
 | Tenant-scoped AI cache | PR #44 | `tier0_bypass_hit_rate` 0.10 → 0.68 | Two tenants no longer share verdicts; closes cross-tenant correctness + cost-side-channel |
 | Tier 1 batch default-on | PR #45 | `tier1_batch_efficiency` 1.00 → 0.30 | Encoder amortises across a 64-message batch; per-message cost drops to ~30% |
 | Worker keyset pagination | PR #45 | (Not a direct cost lever — survives 10k+ tenants without OOM.) | `Tenants.IterateActive` instead of `Tenants.List(ctx,0)`; bounded batches of 256 |
-| Native PG partitioning + WS-2b HASH | PR #45 + PR #58 | `partitioning_active` → 0.72x storage + 0.70x write I/O | DROP PARTITION at O(1) vs row-by-row DELETE on the append-only tables (PR #45); HASH partitioning of `communication_histories` by `tenant_id` into 32 partitions keeps per-partition heaps small so autovacuum keeps up and tenant-scoped DML prunes to one partition (PR #58) |
+| Native PG partitioning + HASH | PR #45 + PR #58 | `partitioning_active` → 0.72x storage + 0.70x write I/O | DROP PARTITION at O(1) vs row-by-row DELETE on the append-only tables (PR #45); HASH partitioning of `communication_histories` by `tenant_id` into 32 partitions keeps per-partition heaps small so autovacuum keeps up and tenant-scoped DML prunes to one partition (PR #58) |
 | Redis cluster rate limiter | PR #45 | `rate_limiter_backend` redis → tighter API-role autoscale | Cluster-wide buckets; replicas can scale to floor without bucket-eviction concern |
 | Role-split + KEDA on lag | PR #46 | `role_split_active` + `keda_on_lag` → 0.85x consumer compute | Slow Tier-2 SLM call no longer stalls API request handlers; consumer autoscale tracks actual queue depth |
 | PgBouncer sidecar | PR #46 | `pgbouncer_active` → 0.40x shared idle connection budget | 50:1 transaction-pooled multiplexing; smaller RDS shape supports same fleet |
@@ -187,11 +187,11 @@ components, in order of contribution to the high-cohort total:
 
 **Prices** are 2026-05 AWS us-east-1 list prices, re-verified
 against the AWS public pricing API on 2026-06-01 as part of the
-WS-2c recalibration. Every per-instance, per-GB-month, per-request,
+recalibration. Every per-instance, per-GB-month, per-request,
 and per-1k-token list price was unchanged from the 2026-01
-snapshot — the WS-2c diff therefore touches only the source-URL
+snapshot — the recalibration diff therefore touches only the source-URL
 citations in `project.py` for prices, while the architectural
-coefficients moved to absorb the WS-2a / WS-2b shipping (see
+coefficients moved to absorb the read-replica / HASH-partitioning shipping (see
 below). The full source-URL block (with offer publication dates)
 lives at the top of `project.py`. We use:
 
@@ -207,8 +207,8 @@ lives at the top of `project.py`. We use:
 - KMS request per 10k (publication 2025-08-28; the symmetric
   request rate has been stable since)
 
-**WS-2c coefficient recalibration.** WS-2a (PR #57) and WS-2b
-(PR #58) shipped between the 2026-01 baseline and the 2026-06-01
+**Coefficient recalibration.** Read-replica routing (PR #57) and
+HASH partitioning (PR #58) shipped between the 2026-01 baseline and the 2026-06-01
 refresh. The per-role compute coefficients in `project.py`
 absorb both changes:
 
@@ -231,9 +231,9 @@ absorb both changes:
 - `WORKER_VCPU_HOURS_PER_MONTH`: 0.02 (unchanged). The singleton
   worker performs partition maintenance, retention sweeps, and
   DLQ replay — none of which are read- or write-pool contention
-  sensitive at the WS-2 traffic shape.
+  sensitive at the current traffic shape.
 - `partitioning_active` storage multiplier: 0.85 → 0.72. PR #45's
-  tighter-retention multiplier (0.85) compounds with WS-2b's
+  tighter-retention multiplier (0.85) compounds with PR #58's
   per-partition bloat reduction (~0.85): autovacuum keeps up
   with dead tuples on the smaller per-partition heap of
   `communication_histories` instead of falling behind on one
@@ -241,7 +241,7 @@ absorb both changes:
   decomposition.
 - `partitioning_active` write-CPU multiplier: 0.80 → 0.70.
   PR #45's cleanup-worker no-longer-scans-the-entire-table
-  effect (0.80) compounds with WS-2b's HASH-pruning + index-
+  effect (0.80) compounds with PR #58's HASH-pruning + index-
   depth reduction (~0.875): each Upsert touches a 32x smaller
   per-partition B-tree, so the read side of the upsert round-
   trip stays in cache far more often than against the
@@ -258,18 +258,18 @@ must update the floor (and the comment trail at the top of
 **What the "Baseline (pre-PR #44)" column actually models.** The
 two columns in the headline table are *configuration*
 counterfactuals against a single fixed *infrastructure* baseline,
-not a historical reconstruction of pre-WS-2 wall-clock spend.
+not a historical reconstruction of pre-scaling wall-clock spend.
 Specifically:
 
 - The per-role compute coefficients in `cost_compute()`
   (`API_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY` and
   `CONSUMER_VCPU_HOURS_PER_MONTH_PER_KMSG_PER_DAY`) bake in the
-  current infrastructure shape — WS-2a read-replica routing
-  and WS-2b HASH-partitioned `communication_histories` — and
+  current infrastructure shape — read-replica routing (PR #57)
+  and HASH-partitioned `communication_histories` (PR #58) — and
   apply unconditionally to *both* columns. The "Baseline
   (pre-PR #44)" column therefore answers "what would today's
   deployment cost if we turned off the PR #44–#46 levers but
-  kept the WS-2 infrastructure?", not "what did this cost in
+  kept the current infrastructure?", not "what did this cost in
   2025 before any of those PRs landed?".
 - The `partitioning_active` lever, by contrast, *does* gate
   the `cost_postgres` storage (0.72×) and write-I/O (0.70×)
@@ -279,7 +279,7 @@ Specifically:
   partition layout.
 
 This asymmetry is intentional: the comparison the table is
-designed for is "levers vs no levers" holding the WS-2
+designed for is "levers vs no levers" holding the current
 infrastructure constant, which is the decision a deployment
 operator actually makes today. The `CostLevers` class
 docstring and the `# Modelling axis (...)` comment block in
