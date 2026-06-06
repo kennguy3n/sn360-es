@@ -40,6 +40,7 @@ package ingestion
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
@@ -56,7 +57,6 @@ import (
 
 	"github.com/emersion/go-msgauth/dkim"
 	smtp "github.com/emersion/go-smtp"
-	"github.com/google/uuid"
 
 	"github.com/kennguy3n/sn360-es/internal/dto"
 	"github.com/kennguy3n/sn360-es/pkg/events"
@@ -389,7 +389,7 @@ func (s *smtpSession) Data(r io.Reader) error {
 	// Phase 1 resolves, normalizes, and runs the pre-delivery decision
 	// for every recipient, publishing nothing. Any non-accept verdict
 	// returns immediately, before a single event exists.
-	baseID := messageID(parsed.headers, s.gw.cfg.now)
+	baseID := messageID(parsed.headers, raw)
 	type acceptedRecipient struct {
 		req  dto.EvaluateRequest
 		rcpt string
@@ -539,20 +539,40 @@ func (g *SMTPGateway) verifyDKIM(raw []byte) string {
 	return "fail"
 }
 
-// headersWithAuthResults clones the parsed headers and injects a
-// synthesized Authentication-Results header carrying the DKIM verdict
-// (unless the upstream MTA already stamped one, which we trust). The
-// normalizer reads this header to populate RiskSignals, so the gateway
-// path produces the same SPF/DKIM/DMARC signals as provider-sourced
-// mail without special-casing the normalizer.
+// headersWithAuthResults clones the parsed headers and stamps the
+// gateway's own synthesized Authentication-Results header carrying the
+// DKIM verdict it just computed. The normalizer reads this header to
+// populate RiskSignals, so the gateway path produces the same
+// SPF/DKIM/DMARC signals as provider-sourced mail without special-casing
+// the normalizer.
+//
+// Security: the MX gateway is the *border* MTA — it receives mail
+// directly from arbitrary external senders, with no trusted relay in
+// front of it. Any Authentication-Results header already present on the
+// inbound message was therefore written by the (untrusted) sender, who
+// can trivially forge "dkim=pass; spf=pass; dmarc=pass" to make a
+// failing message look authenticated to the entire detection pipeline
+// (normalizer -> RiskSignals -> AuthVerdict / ATO heuristic). Per
+// RFC 7601 §5 a border receiver must remove any A-R header that does not
+// carry its own authserv-id before adding its own. We do exactly that:
+// drop every inbound A-R (any header-key casing) and stamp our verdict
+// under our authserv-id (cfg.Domain). This differs from the poller/push
+// paths, where Authentication-Results legitimately comes from the
+// mailbox provider (Gmail/Outlook) — a trusted upstream — and is kept.
 func (g *SMTPGateway) headersWithAuthResults(headers map[string]string, dkimResult string) map[string]string {
 	out := make(map[string]string, len(headers)+1)
 	for k, v := range headers {
+		// Strip any sender-supplied Authentication-Results (regardless of
+		// header-key casing) so a forged stamp can never reach the
+		// normalizer. parseMessage canonicalizes keys, but scanning
+		// case-insensitively keeps this correct for any caller.
+		if strings.EqualFold(k, "Authentication-Results") {
+			continue
+		}
 		out[k] = v
 	}
-	if headerLookup(out, "Authentication-Results") == "" {
-		out["Authentication-Results"] = fmt.Sprintf("%s; dkim=%s", g.cfg.Domain, dkimResult)
-	}
+	// Always stamp our own verified verdict under our authserv-id.
+	out["Authentication-Results"] = fmt.Sprintf("%s; dkim=%s", g.cfg.Domain, dkimResult)
 	return out
 }
 
@@ -681,13 +701,23 @@ func extractBodies(contentType, contentTransferEncoding string, body io.Reader) 
 }
 
 // messageID returns a stable per-message identifier derived from the
-// RFC 5322 Message-ID header, falling back to a generated UUID when
-// the header is absent (some MTAs add it only on relay).
-func messageID(headers map[string]string, now func() time.Time) string {
+// RFC 5322 Message-ID header, falling back to a content hash of the raw
+// message when the header is absent (some MTAs add it only on relay).
+//
+// The fallback must be deterministic across SMTP retries: the per-
+// recipient event IDs the gateway publishes are derived from this base
+// ID, and NATS dedup collapses re-published recipients only when those
+// IDs are identical on retry. A random fallback (e.g. a UUID) would
+// differ on every retry, so if a multi-recipient message lacking a
+// Message-ID partially published and then deferred, the sending MTA's
+// retry would re-publish the already-committed recipients under fresh
+// IDs and defeat dedup. Hashing the raw bytes keeps the ID stable for
+// the identical message the MTA resends.
+func messageID(headers map[string]string, raw []byte) string {
 	if id := strings.TrimSpace(headerLookup(headers, "Message-ID")); id != "" {
 		return strings.Trim(id, "<>")
 	}
-	return fmt.Sprintf("smtp-%d-%s", now().UnixNano(), uuid.NewString())
+	return fmt.Sprintf("smtp-%x", sha256.Sum256(raw))
 }
 
 // parseAddress parses a single RFC 5322 address, returning the bare

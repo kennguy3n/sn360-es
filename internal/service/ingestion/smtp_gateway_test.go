@@ -226,6 +226,44 @@ func TestSMTPGateway_DKIM_UnsignedIsNone(t *testing.T) {
 	}
 }
 
+// TestSMTPGateway_ForgedAuthResults_Stripped guards the border-MTA
+// hardening: the gateway receives mail directly from untrusted senders,
+// so a sender-supplied Authentication-Results header must never reach
+// the normalizer. Here an UNSIGNED message arrives pre-stamped with a
+// forged "dkim=pass; spf=pass; dmarc=pass". The pipeline must see the
+// gateway's own verdict (dkim=none, no spf/dmarc), not the forgery —
+// otherwise a phishing message could spoof full authentication and
+// suppress the ATO heuristic.
+func TestSMTPGateway_ForgedAuthResults_Stripped(t *testing.T) {
+	bus := &capturingBus{}
+	addr, stop := startGateway(t, SMTPGatewayConfig{Publisher: bus, Logger: discardLogger()})
+	defer stop()
+
+	// No valid DKIM signature, but the sender forges a passing A-R stamp.
+	msg := "From: attacker@evil.example\r\n" +
+		"To: bob@acme.example\r\n" +
+		"Subject: Totally legit\r\n" +
+		"Message-ID: <forged@evil.example>\r\n" +
+		"Authentication-Results: evil.example; dkim=pass; spf=pass; dmarc=pass\r\n" +
+		"\r\n" +
+		"please reset your password\r\n"
+	if err := sendRaw(t, addr, "attacker@evil.example", []string{"bob@acme.example"}, msg); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	pubs := waitForPublishes(t, bus, 1)
+	req := decodeRequest(t, pubs[0].Data)
+	if req.Signals.DKIMResult == "pass" {
+		t.Errorf("DKIMResult = %q, forged dkim=pass leaked into the pipeline", req.Signals.DKIMResult)
+	}
+	if req.Signals.SPFResult == "pass" {
+		t.Errorf("SPFResult = %q, forged spf=pass leaked into the pipeline", req.Signals.SPFResult)
+	}
+	if req.Signals.DMARCResult == "pass" {
+		t.Errorf("DMARCResult = %q, forged dmarc=pass leaked into the pipeline", req.Signals.DMARCResult)
+	}
+}
+
 func TestSMTPGateway_PreDeliveryReject_BouncesMessage(t *testing.T) {
 	bus := &capturingBus{}
 	addr, stop := startGateway(t, SMTPGatewayConfig{
