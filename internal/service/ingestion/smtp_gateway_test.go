@@ -5,11 +5,14 @@ import (
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/smtp"
 	"strings"
@@ -433,6 +436,67 @@ func TestSMTPGateway_RelaysAcceptedMessage(t *testing.T) {
 	}
 }
 
+// TestSMTPGateway_RequireTLS_RejectsPlaintextMail verifies that with
+// RequireTLS set, MAIL FROM on a still-plaintext session (the client
+// never issued STARTTLS) is rejected with 530 and nothing is published.
+func TestSMTPGateway_RequireTLS_RejectsPlaintextMail(t *testing.T) {
+	bus := &capturingBus{}
+	addr, stop := startGateway(t, SMTPGatewayConfig{
+		Publisher:  bus,
+		Logger:     discardLogger(),
+		TLSConfig:  genServerTLS(t),
+		RequireTLS: true,
+	})
+	defer stop()
+
+	msg := "From: a@sender.example\r\nTo: bob@acme.example\r\nSubject: x\r\nMessage-ID: <p@x>\r\n\r\nbody\r\n"
+	err := sendRawSTARTTLS(t, addr, "a@sender.example", []string{"bob@acme.example"}, msg, false)
+	if err == nil {
+		t.Fatal("expected MAIL FROM rejection on plaintext session")
+	}
+	if !strings.Contains(err.Error(), "530") {
+		t.Errorf("error = %v, want 530", err)
+	}
+	if got := bus.snapshot(); len(got) != 0 {
+		t.Errorf("expected 0 publishes on rejected plaintext mail, got %d", len(got))
+	}
+}
+
+// TestSMTPGateway_STARTTLS_AllowsMailAndMarksEnvelopeTLS guards the
+// STARTTLS upgrade path end-to-end: after the client issues STARTTLS,
+// MAIL FROM must succeed under RequireTLS and the envelope handed to the
+// pipeline/relay must record TLS=true. go-smtp destroys the session on
+// STARTTLS (conn.go:947-949) and re-invokes the backend's NewSession on
+// the mandatory post-STARTTLS EHLO with the upgraded connection, so the
+// session's cached TLS state correctly reflects the upgrade. A stale
+// false (the failure mode a cached bool would exhibit if go-smtp reused
+// the session) would surface here as a 530 rejection and TLS=false.
+func TestSMTPGateway_STARTTLS_AllowsMailAndMarksEnvelopeTLS(t *testing.T) {
+	bus := &capturingBus{}
+	relay := &recordingDeliverer{}
+	addr, stop := startGateway(t, SMTPGatewayConfig{
+		Publisher:  bus,
+		Logger:     discardLogger(),
+		Deliverer:  relay,
+		TLSConfig:  genServerTLS(t),
+		RequireTLS: true,
+	})
+	defer stop()
+
+	msg := "From: a@sender.example\r\nTo: bob@acme.example\r\nSubject: x\r\nMessage-ID: <s@x>\r\n\r\nbody\r\n"
+	if err := sendRawSTARTTLS(t, addr, "a@sender.example", []string{"bob@acme.example"}, msg, true); err != nil {
+		t.Fatalf("send over STARTTLS: %v", err)
+	}
+
+	waitForPublishes(t, bus, 1)
+	if got := relay.count(); got != 1 {
+		t.Fatalf("deliverer called %d times, want 1", got)
+	}
+	if !relay.lastEnv().TLS {
+		t.Error("relay envelope TLS = false, want true after STARTTLS upgrade")
+	}
+}
+
 // --- helpers ---
 
 func waitForPublishes(t *testing.T, bus *capturingBus, want int) []capturedPublish {
@@ -518,4 +582,75 @@ func signMessage(t *testing.T, priv crypto.Signer, domain, selector, msg string)
 		t.Fatalf("dkim sign: %v", err)
 	}
 	return buf.String()
+}
+
+// sendRawSTARTTLS drives a transaction with the low-level client,
+// optionally upgrading the connection via STARTTLS before MAIL FROM.
+// The client trusts the gateway's self-signed cert (InsecureSkipVerify)
+// since the test cert is generated per run.
+func sendRawSTARTTLS(t *testing.T, addr, from string, to []string, msg string, startTLS bool) error {
+	t.Helper()
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	if err := c.Hello("client.test"); err != nil {
+		t.Fatalf("hello: %v", err)
+	}
+	if startTLS {
+		if ok, _ := c.Extension("STARTTLS"); !ok {
+			t.Fatal("server did not advertise STARTTLS")
+		}
+		if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil { //nolint:gosec // self-signed test cert
+			t.Fatalf("starttls: %v", err)
+		}
+	}
+	if err := c.Mail(from); err != nil {
+		return err
+	}
+	for _, rcpt := range to {
+		if err := c.Rcpt(rcpt); err != nil {
+			return err
+		}
+	}
+	w, err := c.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, msg); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return c.Quit()
+}
+
+// genServerTLS builds a *tls.Config with a fresh self-signed cert valid
+// for 127.0.0.1/localhost so the gateway can offer STARTTLS in tests.
+func genServerTLS(t *testing.T) *tls.Config {
+	t.Helper()
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("genkey: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:     []string{"localhost"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: priv}},
+		MinVersion:   tls.VersionTLS12,
+	}
 }
