@@ -4,6 +4,15 @@ on:
   push:
     tags:
       - "v*"
+  # Coordinated-release receiver (sn360-security-platform Workstream 9,
+  # Task 1). The platform's release-orchestrate.yml fans this event out
+  # after its own release succeeds, carrying the pinned version in
+  # client_payload.version. The push:tags trigger above is unchanged, so a
+  # manually-pushed tag still releases exactly as before — the dispatch
+  # path is purely additive. See the receiver contract in the platform repo
+  # at docs/runbooks/coordinated-release.md.
+  repository_dispatch:
+    types: [sn360-coordinated-release]
 
 permissions:
   contents: write
@@ -22,6 +31,46 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # Resolve the release version + image tag set from the trigger:
+      #   * push:tags          -> github.ref_name (the pushed tag)
+      #   * repository_dispatch -> client_payload.version (platform pin)
+      # The SemVer regex matches the platform's validate-tag gate, and the
+      # `:latest` floating tag is withheld for pre-releases (e.g. a
+      # coordinated `v0.1.0-rc.1`) so a release-candidate never clobbers the
+      # pointer production consumers default to.
+      - name: Resolve release version
+        id: ver
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PAYLOAD_VERSION: ${{ github.event.client_payload.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" = "repository_dispatch" ]; then
+            version="${PAYLOAD_VERSION}"
+          else
+            version="${REF_NAME}"
+          fi
+          if ! printf '%s' "${version}" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
+            echo "::error::resolved release version '${version}' is not a valid SemVer tag" >&2
+            exit 1
+          fi
+          tags="${GHCR_IMAGE}:${version}"
+          if printf '%s' "${version}" | grep -q '-'; then
+            prerelease=true
+          else
+            prerelease=false
+            tags="${tags}"$'\n'"${GHCR_IMAGE}:latest"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            echo "${tags}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Release version: ${version} (prerelease=${prerelease})"
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -53,12 +102,12 @@ jobs:
           context: .
           load: true
           push: false
-          tags: ${{ env.GHCR_IMAGE }}:${{ github.ref_name }}
+          tags: ${{ env.GHCR_IMAGE }}:${{ steps.ver.outputs.version }}
 
       - name: Trivy scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.GHCR_IMAGE }}:${{ github.ref_name }}
+          image-ref: ${{ env.GHCR_IMAGE }}:${{ steps.ver.outputs.version }}
           format: table
           severity: HIGH,CRITICAL
           exit-code: "1"
@@ -68,7 +117,7 @@ jobs:
       - name: Generate SBOM (syft)
         uses: anchore/sbom-action@v0
         with:
-          image: ${{ env.GHCR_IMAGE }}:${{ github.ref_name }}
+          image: ${{ env.GHCR_IMAGE }}:${{ steps.ver.outputs.version }}
           format: spdx-json
           output-file: sbom.spdx.json
 
@@ -77,13 +126,17 @@ jobs:
         with:
           context: .
           push: true
-          tags: |
-            ${{ env.GHCR_IMAGE }}:${{ github.ref_name }}
-            ${{ env.GHCR_IMAGE }}:latest
+          # version, plus :latest only for stable releases (see Resolve step).
+          tags: ${{ steps.ver.outputs.tags }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Explicit tag_name so the repository_dispatch path (which has no
+          # triggering git tag) tags the released commit at the resolved
+          # version; for the push:tags path this equals github.ref_name.
+          tag_name: ${{ steps.ver.outputs.version }}
+          prerelease: ${{ steps.ver.outputs.prerelease }}
           generate_release_notes: true
           files: |
             sbom.spdx.json
