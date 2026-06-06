@@ -102,6 +102,43 @@ tenants therefore get a smaller absolute bypass benefit than low-
 traffic tenants — they have proportionally more cold-call mail to
 begin with.
 
+## Base tier ceiling ($10 / tenant / month)
+
+The entry **Base** SME plan is priced at **$10 / tenant / month**.
+The cost-validation requirement for the 5 000-tenant launch is that
+the *infrastructure* cost (COGS) of the inbound-volume bands the Base
+plan targets stays comfortably under that price with all PR #45/#46
+scaling levers active. The Base plan targets the `low` and `medium`
+cohorts; the `high` and `enterprise` cohorts model materially heavier
+tenants that map to higher-priced plans (their COGS is an order of
+magnitude above the Base price point and is *expected* to exceed $10),
+so they are out of scope for this ceiling by design.
+
+Levers-on COGS for the Base-tier profiles, regenerated with
+`python3 scripts/cost_model/project.py --tenants {1000,5000}`:
+
+| Base-tier profile | Messages / tenant / day | COGS @ 1 000 density | COGS @ 5 000 density | Headroom under $10 @ 5 000 |
+| --- | --: | --: | --: | --: |
+| low    |   200 | $0.4159 | $0.2526 | 97.5% |
+| medium | 1 200 | $2.4121 | $2.2488 | 77.5% |
+
+Both bands clear the $10 ceiling with wide margin at the 5 000-tenant
+launch density (and at the 1 000-tenant default), so the Base plan's
+unit economics hold: even the heavier `medium` band leaves ~$7.75 /
+tenant / month of gross margin before sales, support, and platform
+overhead. For reference, the non-Base cohorts at 5 000 density are
+`high` $31.40 and `enterprise` $104.07 — these are intentionally above
+$10 and belong to higher tiers.
+
+This ceiling is enforced as a regression by
+`test_base_tier_under_cogs_ceiling` in
+`scripts/cost_model/test_project.py`, which asserts every Base-tier
+profile costs strictly less than $10 / tenant / month (levers-on) at
+both densities. If a future price refresh or lever rework pushes a
+Base-tier band over $10, that test fails and forces a deliberate
+decision — re-tier the profile or reprice the plan — rather than
+letting the Base economics silently erode.
+
 ## How to read each component
 
 Every record in `benchmarks/cost_model.json` carries a `breakdown`
