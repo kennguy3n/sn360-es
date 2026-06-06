@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -104,6 +105,38 @@ func TestIAMCoreDirectoryClient_ListUsers_PropagatesHTTPError(t *testing.T) {
 	}
 	if _, err := client.ListUsers(context.Background(), "acme"); err == nil {
 		t.Fatal("expected error on 500 response")
+	}
+}
+
+// TestIAMCoreDirectoryClient_ListUsers_PageCap ensures a misbehaving
+// API that never terminates pagination (always a non-empty page with
+// total=0) is bounded by the page cap and errors rather than looping
+// forever or silently returning a truncated roster.
+func TestIAMCoreDirectoryClient_ListUsers_PageCap(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		// Always non-empty, total=0 → neither termination guard fires.
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"total": 0,
+			"users": []map[string]any{{"user_id": "u", "email": "u@x.com"}},
+		})
+	}))
+	defer srv.Close()
+
+	client, err := NewIAMCoreDirectoryClient(IAMCoreDirectoryConfig{BaseURL: srv.URL, Token: "t"})
+	if err != nil {
+		t.Fatalf("NewIAMCoreDirectoryClient: %v", err)
+	}
+	_, err = client.ListUsers(context.Background(), "acme")
+	if err == nil {
+		t.Fatal("expected error when pagination never terminates")
+	}
+	if !strings.Contains(err.Error(), "exceeded") {
+		t.Errorf("error = %v, want page-cap 'exceeded' error", err)
+	}
+	if hits > iamCoreMaxPages+1 {
+		t.Errorf("made %d requests, want <= %d (page cap not enforced)", hits, iamCoreMaxPages+1)
 	}
 }
 

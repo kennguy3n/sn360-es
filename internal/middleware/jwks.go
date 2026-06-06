@@ -137,11 +137,15 @@ func (v *JWKSVerifier) Verify(ctx context.Context, token string) (string, error)
 	}
 	// Proactively refresh when the cache is empty or stale so the
 	// common case never depends on a reactive (unknown-kid) refresh.
+	// Use refreshIfAllowed (rate-limited) instead of refresh directly
+	// so that concurrent requests hitting the TTL boundary don't all
+	// stampede the JWKS endpoint — only the first one through the
+	// throttle window actually fetches.
 	if v.stale() {
 		// A refresh failure here is non-fatal: a still-valid cached
 		// key set can keep validating tokens while iam-core's JWKS
 		// endpoint is briefly unavailable.
-		_ = v.refresh(ctx)
+		_ = v.refreshIfAllowed(ctx)
 	}
 
 	var claims iamCoreClaims
@@ -179,6 +183,12 @@ func (v *JWKSVerifier) keyfunc(ctx context.Context) jwt.Keyfunc {
 		// Unknown kid: iam-core most likely rotated its signing key.
 		// Refresh once (rate-limited) and retry the lookup.
 		if err := v.refreshIfAllowed(ctx); err != nil {
+			// A concurrent goroutine may have completed a refresh
+			// while this one was throttled; retry the lookup before
+			// giving up so we don't reject a valid token.
+			if key, ok := v.lookup(kid); ok {
+				return key, nil
+			}
 			return nil, fmt.Errorf("middleware/jwks: refresh for kid %q: %w", kid, err)
 		}
 		if key, ok := v.lookup(kid); ok {

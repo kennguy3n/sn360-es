@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// iamCoreMaxPages caps how many pages ListUsers will walk before
+// erroring, bounding the pagination loop against a misbehaving API.
+const iamCoreMaxPages = 1000
+
 // IAMCoreUserSource fetches a tenant's user roster from an external
 // identity provider. It is the seam the directory-sync worker uses
 // when configured with the iam-core directory source, kept as an
@@ -106,7 +110,17 @@ func (c *IAMCoreDirectoryClient) ListUsers(ctx context.Context, tenantID string)
 	// or once we have collected the reported `total` — whichever
 	// comes first. The `total` guard bounds the loop even if the API
 	// ever returned a non-empty trailing page.
+	//
+	// iamCoreMaxPages is a hard safety cap so a misbehaving API (e.g.
+	// one that always returns a non-empty page with total=0) can never
+	// wedge a sync in an unbounded loop. At the default page size of
+	// 100 this covers 100k users per tenant; exceeding it is treated
+	// as an error rather than a silently-truncated roster, because a
+	// partial roster would make the directory pipeline drop real users.
 	for page := 1; ; page++ {
+		if page > iamCoreMaxPages {
+			return nil, fmt.Errorf("agent: iam-core ListUsers exceeded %d pages for tenant %q (API not terminating pagination)", iamCoreMaxPages, tenantID)
+		}
 		resp, err := c.fetchPage(ctx, tenantID, page)
 		if err != nil {
 			return nil, err
