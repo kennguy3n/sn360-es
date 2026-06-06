@@ -21,15 +21,19 @@ permissions:
 
 # Serialise releases for a given version so a manual `v*` tag push and a
 # coordinated repository_dispatch for the same version can't race to create
-# the same GitHub Release or overwrite the same image tag. The group is keyed
-# on the raw trigger version (both paths are `v`-prefixed in practice — a
-# manual tag is `v*` and the platform inherits its own `v`-prefixed tag).
-# cancel-in-progress is false: a release already in flight must finish, not be
-# cancelled. (The key is evaluated at workflow level, so it uses the raw event
-# fields rather than the canonicalised steps.ver.outputs.version, which is not
-# yet available here.)
+# the same GitHub Release or overwrite the same image tag.
+#
+# The key must match the canonical (single leading `v`) version that the
+# "Resolve release version" step computes, so the two trigger paths converge on
+# ONE group even when a dispatch carries a bare `1.2.3` while a manual tag is
+# `v1.2.3`. GitHub Actions expressions have no strip-prefix function, so we
+# branch on startsWith: if the raw trigger version already starts with `v` use
+# it verbatim, otherwise prepend one. (The key is evaluated at workflow level,
+# before any step runs, so it can only use the raw event fields — not
+# steps.ver.outputs.version.) cancel-in-progress is false: a release already in
+# flight must finish, not be cancelled.
 concurrency:
-  group: release-${{ github.event.client_payload.version || github.ref_name }}
+  group: ${{ startsWith(github.event.client_payload.version || github.ref_name, 'v') && format('release-{0}', github.event.client_payload.version || github.ref_name) || format('release-v{0}', github.event.client_payload.version || github.ref_name) }}
   cancel-in-progress: false
 
 env:
