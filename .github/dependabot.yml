@@ -9,10 +9,13 @@
 # manage) and reads checksums straight from the committed go.sum /
 # package-lock.json.
 #
-# PR-volume control: each ecosystem groups its minor+patch bumps into one PR
-# and caps concurrently-open PRs, so a weekly run produces a handful of
-# reviewable PRs, not a flood. Major bumps are intentionally left ungrouped
-# — they can carry breaking changes and deserve individual review.
+# PR-volume control: each semver ecosystem (Go, npm, github-actions) groups
+# its minor+patch bumps into one PR and caps concurrently-open PRs, so a
+# weekly run produces a handful of reviewable PRs, not a flood. The docker
+# ecosystem is deliberately left ungrouped — base-image tags don't follow
+# semver, so update-type grouping isn't meaningful and each image bump is
+# clearer as its own PR. Major bumps are likewise intentionally ungrouped —
+# they can carry breaking changes and deserve individual review.
 version: 2
 
 updates:
