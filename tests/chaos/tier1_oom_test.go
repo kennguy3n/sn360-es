@@ -281,14 +281,18 @@ func startTier1MockOOMControllable(t *testing.T) (*httptest.Server, *atomic.Bool
 }
 
 // tier1HealthyInferenceTotal sums sn360_es_tier1_inferences_total
-// across every verdict label except "error", giving the count of
-// inferences the encoder actually served successfully. Summing rather
-// than reading a single label keeps the success-sanity assertion
-// robust to which verdict label the categoriser assigns the baseline.
+// across every non-error verdict label, giving the count of inferences
+// the encoder actually served successfully. The success labels are
+// exactly the three the Tier 1 threshold logic can emit — "pass",
+// "flag", and "escalate" (internal/service/tier1/config.go:94-96, cast
+// straight to the metric label at evaluator.go:419); the degraded path
+// records "error", which is deliberately excluded here. Summing across
+// all three keeps the success-sanity assertion robust to whichever
+// verdict the categoriser assigns the baseline message.
 func tier1HealthyInferenceTotal(t *testing.T, metricsURL string) float64 {
 	t.Helper()
 	var total float64
-	for _, verdict := range []string{"escalate", "flag", "pass", "ham", "phishing", "unknown"} {
+	for _, verdict := range []string{"pass", "flag", "escalate"} {
 		total += counterValue(t, metricsURL, "sn360_es_tier1_inferences_total", map[string]string{"verdict": verdict})
 	}
 	return total
