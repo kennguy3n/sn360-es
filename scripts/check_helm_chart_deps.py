@@ -7,22 +7,27 @@ Dockerfiles, so neither the external sub-charts pinned in a chart's
 from `.github/dependabot.yml`. This script closes that gap for the chart(s)
 under `deployments/helm/`.
 
-It runs two independent kinds of check per dependency that has an HTTP(S)
-`repository:` (i.e. a real upstream Helm repo, not a `file://` first-party
-sub-chart):
+Three classes of finding, with deliberately different severities:
 
-  INTEGRITY (hard failure, exit 1) — a genuine supply-chain problem:
-    * the pinned `version:` does not exist in the upstream repo index
-      (typo, yanked, or hallucinated pin); and
+  INTEGRITY (hard failure, exit 1) — a genuine, locally-verifiable defect:
     * `Chart.lock`, when present, disagrees with `Chart.yaml` about a
       dependency's pinned version (the chart was edited without re-running
-      `helm dependency update`, so deploys would resolve a different version
-      than the manifest claims).
+      `helm dependency update`, so a deploy resolves a different version than
+      the manifest claims). This check is fully OFFLINE, so it always gates.
+    * a pinned `version:` that the upstream index was successfully fetched for
+      does not exist there (typo / yanked / hallucinated pin).
 
-  FRESHNESS (warning only, exit 0) — informational drift:
-    * a newer stable version exists upstream. This mirrors what a Dependabot
-      bump PR would surface; it is deliberately NOT a hard failure, so it never
-      blocks an unrelated PR. The weekly scheduled run is the signal to act.
+  NETWORK (warning only, exit 0) — could not reach the upstream index after
+    retries. We deliberately do NOT fail closed on a transient upstream outage:
+    that would block every chart-touching PR on flakiness, and the real
+    tamper-detection signal (the offline Chart.yaml<->Chart.lock consistency
+    check above) still gates regardless. Existence/freshness are simply skipped
+    for that dependency and surfaced as a warning.
+
+  FRESHNESS (warning only, exit 0) — a newer stable version exists upstream.
+    Mirrors what a Dependabot bump PR would surface; never a hard failure, so a
+    stale pin can't red-wall an unrelated PR. The weekly scheduled run is the
+    signal to act.
 
 Pass --fail-on-drift to turn freshness drift into a hard failure too (not used
 by the PR gate; available for ad-hoc audits).
@@ -36,26 +41,62 @@ import argparse
 import os
 import re
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
 import yaml
 
-# A stable SemVer "x.y.z" (no pre-release / build metadata). Used to pick the
-# newest *stable* upstream version — pre-releases (1.3.0-beta.1) are ignored.
-_STABLE_SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
+# Full SemVer 2.0.0 grammar: x.y.z with optional -prerelease and +build.
+_SEMVER = re.compile(
+    r"^(\d+)\.(\d+)\.(\d+)"           # core
+    r"(?:-([0-9A-Za-z.-]+))?"          # optional -prerelease
+    r"(?:\+[0-9A-Za-z.-]+)?$"          # optional +build (ignored for ordering)
+)
 
 
-def _key(version: str) -> tuple[int, int, int]:
-    major, minor, patch = (int(p) for p in version.split("."))
-    return major, minor, patch
+def _parse(version: str) -> tuple[tuple[int, int, int], str | None] | None:
+    """Return ((major, minor, patch), prerelease_or_None) or None if unparseable."""
+    m = _SEMVER.match(version)
+    if not m:
+        return None
+    core = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    return core, m.group(4)
 
 
-def _fetch_index(repo_url: str) -> dict:
-    """Fetch and parse a Helm repository index.yaml."""
+def _is_stable(version: str) -> bool:
+    parsed = _parse(version)
+    return parsed is not None and parsed[1] is None
+
+
+# Index cache keyed by repository URL so several dependencies sharing one repo
+# (e.g. multiple bitnami charts) fetch index.yaml at most once per run.
+_INDEX_CACHE: dict[str, dict] = {}
+
+
+def _fetch_index(repo_url: str, retries: int = 3, backoff: float = 2.0) -> dict:
+    """Fetch+parse a Helm repo index.yaml, with caching and bounded retries.
+
+    Retries are what make it safe to treat a final failure as a transient
+    NETWORK warning rather than an integrity failure: a genuine outage is
+    distinguished from a one-off blip by having survived `retries` attempts.
+    """
+    if repo_url in _INDEX_CACHE:
+        return _INDEX_CACHE[repo_url]
     url = repo_url.rstrip("/") + "/index.yaml"
-    with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310 - https helm repo
-        return yaml.safe_load(resp.read())
+    last_exc: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310 - https helm repo
+                index = yaml.safe_load(resp.read())
+            _INDEX_CACHE[repo_url] = index
+            return index
+        except Exception as exc:  # noqa: BLE001 - retried; see caller's classification
+            last_exc = exc
+            if attempt < retries:
+                time.sleep(backoff * attempt)
+    assert last_exc is not None
+    raise last_exc
 
 
 def _upstream_versions(index: dict, name: str) -> list[str]:
@@ -63,8 +104,8 @@ def _upstream_versions(index: dict, name: str) -> list[str]:
 
 
 def _newest_stable(versions: list[str]) -> str | None:
-    stable = [v for v in versions if _STABLE_SEMVER.match(v)]
-    return max(stable, key=_key) if stable else None
+    stable = [v for v in versions if _is_stable(v)]
+    return max(stable, key=lambda v: _parse(v)[0]) if stable else None  # type: ignore[index]
 
 
 def _annotate(level: str, msg: str) -> None:
@@ -92,32 +133,64 @@ def _load_lock_versions(chart_dir: Path) -> dict[str, str]:
     return {d["name"]: d["version"] for d in data.get("dependencies", [])}
 
 
-def check_chart(chart_yaml: Path, fail_on_drift: bool) -> tuple[int, int, list[str]]:
-    """Return (integrity_failures, drift_warnings, summary_lines) for one chart."""
+class Counts:
+    __slots__ = ("integrity", "network", "drift")
+
+    def __init__(self) -> None:
+        self.integrity = 0
+        self.network = 0
+        self.drift = 0
+
+
+def _check_drift(rel: str, name: str, pinned: str, versions: list[str],
+                 fail_on_drift: bool, counts: Counts, summary: list[str]) -> None:
+    """Freshness comparison that never raises on odd pinned strings."""
+    newest = _newest_stable(versions)
+    pinned_parsed = _parse(pinned)
+    if newest is None or pinned_parsed is None:
+        # Either no stable upstream release, or the pin isn't plain semver
+        # (e.g. a digest or an exotic range) — can't rank it, so don't guess.
+        summary.append(f"- ℹ️ `{name}`: `{pinned}` present upstream; not semver-comparable")
+        return
+
+    newest_core = _parse(newest)[0]  # type: ignore[index]
+    pinned_core, pinned_pre = pinned_parsed
+    # Drift if a newer stable core exists, or the pin is a pre-release of the
+    # newest core (a stable release of what you're testing is now available).
+    drift = newest_core > pinned_core or (newest_core == pinned_core and pinned_pre is not None)
+    if not drift:
+        summary.append(f"- ✅ `{name}`: `{pinned}` is current")
+        return
+
+    counts.drift += 1
+    level = "error" if fail_on_drift else "warning"
+    _annotate(level, f"{rel}: dependency '{name}' is {pinned}; newest stable upstream is {newest}.")
+    flag = "❌" if fail_on_drift else "⚠️"
+    summary.append(f"- {flag} `{name}`: `{pinned}` → newest stable `{newest}`")
+
+
+def check_chart(chart_yaml: Path, fail_on_drift: bool, counts: Counts) -> list[str]:
+    """Append findings for one chart; mutate `counts`. Returns summary lines."""
     chart = yaml.safe_load(chart_yaml.read_text()) or {}
     deps = chart.get("dependencies", []) or []
     rel = chart_yaml.parent.as_posix()
     lock_versions = _load_lock_versions(chart_yaml.parent)
 
-    integrity = 0
-    drift = 0
-    summary: list[str] = []
-
     http_deps = [d for d in deps if str(d.get("repository", "")).startswith(("http://", "https://"))]
     if not http_deps:
-        return 0, 0, []
+        return []
 
-    summary.append(f"### `{rel}`")
+    summary: list[str] = [f"### `{rel}`"]
 
     for dep in http_deps:
         name = dep["name"]
         pinned = str(dep["version"])
         repo_url = dep["repository"]
 
-        # Chart.lock vs Chart.yaml integrity (offline).
+        # (1) Chart.lock vs Chart.yaml — fully offline, always an integrity gate.
         locked = lock_versions.get(name)
         if locked is not None and locked != pinned:
-            integrity += 1
+            counts.integrity += 1
             _annotate(
                 "error",
                 f"{rel}: dependency '{name}' pinned to {pinned} in Chart.yaml but "
@@ -125,17 +198,22 @@ def check_chart(chart_yaml: Path, fail_on_drift: bool) -> tuple[int, int, list[s
             )
             summary.append(f"- ❌ `{name}`: Chart.yaml `{pinned}` ≠ Chart.lock `{locked}`")
 
+        # (2) Upstream existence + (3) freshness — require the network.
         try:
             index = _fetch_index(repo_url)
-        except Exception as exc:  # noqa: BLE001 - network/parse failure is a check error
-            integrity += 1
-            _annotate("error", f"{rel}: could not fetch index for '{name}' from {repo_url}: {exc}")
-            summary.append(f"- ❌ `{name}`: failed to fetch upstream index ({exc})")
+        except Exception as exc:  # noqa: BLE001 - transient outage, classified as a warning
+            counts.network += 1
+            _annotate(
+                "warning",
+                f"{rel}: upstream index for '{name}' unreachable after retries ({repo_url}: {exc}). "
+                f"Skipping existence/freshness; offline Chart.lock check still enforced.",
+            )
+            summary.append(f"- ⚠️ `{name}`: upstream index unreachable ({exc}) — existence/freshness skipped")
             continue
 
         versions = _upstream_versions(index, name)
         if pinned not in versions:
-            integrity += 1
+            counts.integrity += 1
             _annotate(
                 "error",
                 f"{rel}: dependency '{name}' pinned to {pinned}, which does not exist "
@@ -144,20 +222,9 @@ def check_chart(chart_yaml: Path, fail_on_drift: bool) -> tuple[int, int, list[s
             summary.append(f"- ❌ `{name}`: pinned `{pinned}` not found upstream")
             continue
 
-        newest = _newest_stable(versions)
-        if newest and newest != pinned and _key(newest) > _key(pinned):
-            drift += 1
-            level = "error" if fail_on_drift else "warning"
-            _annotate(
-                level,
-                f"{rel}: dependency '{name}' is {pinned}; newest stable upstream is {newest}.",
-            )
-            flag = "❌" if fail_on_drift else "⚠️"
-            summary.append(f"- {flag} `{name}`: `{pinned}` → newest stable `{newest}`")
-        else:
-            summary.append(f"- ✅ `{name}`: `{pinned}` is current")
+        _check_drift(rel, name, pinned, versions, fail_on_drift, counts, summary)
 
-    return integrity, drift, summary
+    return summary
 
 
 def main() -> int:
@@ -185,29 +252,32 @@ def main() -> int:
         print(f"no Chart.yaml under {root}; nothing to check")
         return 0
 
-    total_integrity = 0
-    total_drift = 0
+    counts = Counts()
     summary_lines = ["## Helm chart dependency supply-chain check"]
-
     for cf in sorted(chart_files):
-        integrity, drift, lines = check_chart(cf, args.fail_on_drift)
-        total_integrity += integrity
-        total_drift += drift
-        summary_lines.extend(lines)
+        summary_lines.extend(check_chart(cf, args.fail_on_drift, counts))
 
-    if total_integrity == 0 and total_drift == 0:
+    if counts.integrity == 0 and counts.network == 0 and counts.drift == 0:
         summary_lines.append("\nAll external chart dependencies are pinned to existing, current versions.")
     _summary(summary_lines)
 
-    print(f"\nintegrity failures: {total_integrity}, freshness drift: {total_drift}")
-    if total_integrity:
+    print(
+        f"\nintegrity failures: {counts.integrity}, "
+        f"freshness drift: {counts.drift}, network warnings: {counts.network}"
+    )
+    if counts.integrity:
         print("FAILED: integrity problem(s) in chart dependencies (see annotations above).")
         return 1
-    if total_drift and args.fail_on_drift:
+    if counts.drift and args.fail_on_drift:
         print("FAILED: chart dependency drift (--fail-on-drift).")
         return 1
-    if total_drift:
-        print("OK (with freshness warnings): integrity verified; newer versions available upstream.")
+    notes = []
+    if counts.drift:
+        notes.append("newer versions available upstream")
+    if counts.network:
+        notes.append("some upstream indexes unreachable (checked offline only)")
+    if notes:
+        print(f"OK (with warnings): integrity verified; {', '.join(notes)}.")
     else:
         print("OK: chart dependencies pinned to existing, current versions.")
     return 0
