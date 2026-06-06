@@ -301,13 +301,20 @@ type smtpSession struct {
 	remoteAddr string
 	tls        bool
 
-	mailFrom string
-	rcptTo   []string
+	// mailCalled records whether MAIL FROM was issued this
+	// transaction. It is tracked separately from mailFrom because the
+	// null reverse-path MAIL FROM:<> (bounces / DSNs, RFC 5321 §4.5.5)
+	// is a *valid* command that leaves mailFrom == "" — so an empty
+	// mailFrom cannot be used to detect a missing MAIL FROM.
+	mailCalled bool
+	mailFrom   string
+	rcptTo     []string
 }
 
 // Reset discards the in-progress transaction state (between messages
 // on the same connection).
 func (s *smtpSession) Reset() {
+	s.mailCalled = false
 	s.mailFrom = ""
 	s.rcptTo = nil
 }
@@ -324,6 +331,7 @@ func (s *smtpSession) Mail(from string, _ *smtp.MailOptions) error {
 			Message:      "Must issue a STARTTLS command first",
 		}
 	}
+	s.mailCalled = true
 	s.mailFrom = from
 	return nil
 }
@@ -338,7 +346,15 @@ func (s *smtpSession) Rcpt(to string, _ *smtp.RcptOptions) error {
 // pre-delivery decision, publishes the message into the evaluation
 // pipeline, and relays it downstream.
 func (s *smtpSession) Data(r io.Reader) error {
-	if s.mailFrom == "" || len(s.rcptTo) == 0 {
+	// Defense-in-depth sequencing guard. go-smtp's state machine
+	// already refuses DATA without a prior MAIL+RCPT, so this should
+	// never fire, but we keep it to decouple our safety from the
+	// framework's internals. We test mailCalled rather than
+	// mailFrom == "": the null reverse-path MAIL FROM:<> (bounces /
+	// DSNs, RFC 5321 §4.5.5) is a legitimate command that leaves
+	// mailFrom empty, and rejecting it would silently bounce a large
+	// fraction of real MX traffic.
+	if !s.mailCalled || len(s.rcptTo) == 0 {
 		return &smtp.SMTPError{
 			Code:         503,
 			EnhancedCode: smtp.EnhancedCode{5, 5, 1},

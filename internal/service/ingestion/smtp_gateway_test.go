@@ -264,6 +264,42 @@ func TestSMTPGateway_ForgedAuthResults_Stripped(t *testing.T) {
 	}
 }
 
+// TestSMTPGateway_NullReversePath_Accepted guards bounce / DSN
+// handling. A message with the null reverse-path MAIL FROM:<>
+// (RFC 5321 §4.5.5) is a perfectly valid transaction — it is how
+// every bounce and delivery-status notification is sent. The earlier
+// `mailFrom == ""` sequencing guard rejected these with a 503 "Bad
+// sequence" because the null sender leaves mailFrom empty, silently
+// bouncing a large fraction of real MX traffic. The transaction must
+// be accepted and the message published for scanning, with the
+// envelope sender recorded as empty.
+func TestSMTPGateway_NullReversePath_Accepted(t *testing.T) {
+	bus := &capturingBus{}
+	addr, stop := startGateway(t, SMTPGatewayConfig{Publisher: bus, Logger: discardLogger()})
+	defer stop()
+
+	// A typical bounce: null reverse-path, From: a mailer-daemon.
+	msg := "From: MAILER-DAEMON@acme.example\r\n" +
+		"To: alice@acme.example\r\n" +
+		"Subject: Undelivered Mail Returned to Sender\r\n" +
+		"Message-ID: <bounce@acme.example>\r\n" +
+		"\r\n" +
+		"Delivery to the following recipient failed permanently.\r\n"
+	// from == "" makes the stdlib client emit MAIL FROM:<>.
+	if err := sendRaw(t, addr, "", []string{"alice@acme.example"}, msg); err != nil {
+		t.Fatalf("bounce send rejected, want accepted: %v", err)
+	}
+
+	pubs := waitForPublishes(t, bus, 1)
+	req := decodeRequest(t, pubs[0].Data)
+	// The envelope sender is the null reverse-path; the published
+	// request falls back to the From: header for the logical sender,
+	// but the transaction itself must have been accepted.
+	if req.MessageID == "" {
+		t.Errorf("published request has empty MessageID; bounce was not normalized as expected")
+	}
+}
+
 func TestSMTPGateway_PreDeliveryReject_BouncesMessage(t *testing.T) {
 	bus := &capturingBus{}
 	addr, stop := startGateway(t, SMTPGatewayConfig{
