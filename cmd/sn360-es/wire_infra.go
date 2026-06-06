@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -295,6 +296,65 @@ func buildPoller(ctx context.Context, cfg *config.Config, logger *slog.Logger, a
 		slog.Int("providers", len(providers)),
 		slog.Duration("interval", cfg.Ingestion.Interval))
 	return p
+}
+
+// buildSMTPGateway wires the pre-delivery MX gateway from config. It
+// returns nil (with a logged reason) when a required dependency is
+// missing, so a misconfiguration disables the gateway rather than
+// crashing the binary — matching buildPoller's defensive posture.
+func buildSMTPGateway(cfg *config.Config, logger *slog.Logger, app *application) *ingestion.SMTPGateway {
+	gw := cfg.Ingestion.SMTPGateway
+	if app.eventBus == nil {
+		logger.Warn("sn360-es: smtp gateway enabled but event bus is unavailable; gateway disabled")
+		return nil
+	}
+
+	gwCfg := ingestion.SMTPGatewayConfig{
+		Addr:            gw.Addr,
+		Domain:          gw.Domain,
+		RequireTLS:      gw.RequireTLS,
+		Publisher:       app.eventBus,
+		Normalizer:      ingestion.NewDefaultNormalizer(),
+		Logger:          logger,
+		MaxMessageBytes: gw.MaxMessageBytes,
+		MaxRecipients:   gw.MaxRecipients,
+		ReadTimeout:     gw.ReadTimeout,
+		WriteTimeout:    gw.WriteTimeout,
+	}
+
+	// STARTTLS requires both a certificate and a key. Configuring only
+	// one is an operator error: fail closed (no listener) rather than
+	// silently serving plaintext when TLS was intended.
+	switch {
+	case gw.TLSCertFile != "" && gw.TLSKeyFile != "":
+		cert, err := tls.LoadX509KeyPair(gw.TLSCertFile, gw.TLSKeyFile)
+		if err != nil {
+			logger.Warn("sn360-es: smtp gateway TLS cert load failed; gateway disabled",
+				slog.Any("error", err))
+			return nil
+		}
+		gwCfg.TLSConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}
+	case gw.TLSCertFile != "" || gw.TLSKeyFile != "":
+		logger.Warn("sn360-es: smtp gateway TLS requires both cert and key; gateway disabled")
+		return nil
+	case gw.RequireTLS:
+		logger.Warn("sn360-es: smtp gateway REQUIRE_TLS set without a TLS cert/key; gateway disabled")
+		return nil
+	}
+
+	g, err := ingestion.NewSMTPGateway(gwCfg)
+	if err != nil {
+		logger.Warn("sn360-es: smtp gateway init failed; gateway disabled", slog.Any("error", err))
+		return nil
+	}
+	logger.Info("sn360-es: smtp mx gateway wired",
+		slog.String("addr", gw.Addr),
+		slog.Bool("tls", gwCfg.TLSConfig != nil),
+		slog.Bool("require_tls", gw.RequireTLS))
+	return g
 }
 
 func buildMailboxProviders(ctx context.Context, cfg *config.Config, logger *slog.Logger) []ingestion.MailboxProvider {

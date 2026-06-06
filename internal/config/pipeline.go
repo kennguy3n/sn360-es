@@ -55,6 +55,38 @@ type Ingestion struct {
 	// Required when Mode is "push" or "hybrid" and an Outlook
 	// provider is configured.
 	PushMicrosoftClientStateSecret string
+
+	// SMTPGateway configures the optional pre-delivery MX gateway.
+	SMTPGateway SMTPGateway
+}
+
+// SMTPGateway configures the optional pre-delivery SMTP MX gateway.
+// The gateway is an independent ingress alongside poll/push: mail
+// servers route inbound mail to it via MX records and it scans each
+// message before relaying it downstream. It is gated separately from
+// INGESTION_MODE because an operator may run the gateway without (or
+// in addition to) provider-API polling.
+type SMTPGateway struct {
+	// Enabled starts the SMTP listener. Default false.
+	Enabled bool
+	// Addr is the listen address. Default ":25".
+	Addr string
+	// Domain is the hostname announced in the SMTP banner. Defaults
+	// to the binary's configured public domain or "sn360-es".
+	Domain string
+	// RequireTLS refuses MAIL FROM on a plaintext session. Only
+	// meaningful when a TLS cert/key pair is configured.
+	RequireTLS bool
+	// TLSCertFile / TLSKeyFile enable STARTTLS when both are set.
+	TLSCertFile string
+	TLSKeyFile  string
+	// MaxMessageBytes caps the accepted message size. Default 25 MiB.
+	MaxMessageBytes int64
+	// MaxRecipients caps RCPT TO per transaction. Default 100.
+	MaxRecipients int
+	// ReadTimeout / WriteTimeout bound per-connection IO. Default 60s.
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
 }
 
 // PushEnabled reports whether the configured INGESTION_MODE
@@ -108,6 +140,22 @@ func loadIngestion() Ingestion {
 		PushGmailTopic:                 strings.TrimSpace(getStr("INGESTION_PUSH_GMAIL_TOPIC", "")),
 		PushGoogleAudience:             strings.TrimSpace(getStr("INGESTION_PUSH_GOOGLE_AUDIENCE", "")),
 		PushMicrosoftClientStateSecret: getStr("INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET", ""),
+		SMTPGateway:                    loadSMTPGateway(),
+	}
+}
+
+func loadSMTPGateway() SMTPGateway {
+	return SMTPGateway{
+		Enabled:         getBool("SMTP_GATEWAY_ENABLED", false),
+		Addr:            strings.TrimSpace(getStr("SMTP_GATEWAY_ADDR", ":25")),
+		Domain:          strings.TrimSpace(getStr("SMTP_GATEWAY_DOMAIN", "")),
+		RequireTLS:      getBool("SMTP_GATEWAY_REQUIRE_TLS", false),
+		TLSCertFile:     strings.TrimSpace(getStr("SMTP_GATEWAY_TLS_CERT_FILE", "")),
+		TLSKeyFile:      strings.TrimSpace(getStr("SMTP_GATEWAY_TLS_KEY_FILE", "")),
+		MaxMessageBytes: int64(getInt("SMTP_GATEWAY_MAX_MESSAGE_BYTES", 25<<20)),
+		MaxRecipients:   getInt("SMTP_GATEWAY_MAX_RECIPIENTS", 100),
+		ReadTimeout:     getDuration("SMTP_GATEWAY_READ_TIMEOUT", 60*time.Second),
+		WriteTimeout:    getDuration("SMTP_GATEWAY_WRITE_TIMEOUT", 60*time.Second),
 	}
 }
 
