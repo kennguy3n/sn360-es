@@ -88,3 +88,10 @@ updates:
       github-actions:
         patterns:
           - "*"
+        # Scope the group to minor+patch so a breaking *major* action bump
+        # (e.g. actions/checkout v4 -> v5) lands as its own PR for review,
+        # consistent with the gomod/npm groups above. A group without an
+        # update-types filter would otherwise bundle majors too.
+        update-types:
+          - minor
+          - patch
