@@ -14,6 +14,15 @@ const (
 	AttackTypeInvoiceFraud       AttackType = "invoice_fraud"
 	AttackTypeLookalikeDomain    AttackType = "lookalike_domain"
 	AttackTypeAccountTakeover    AttackType = "account_takeover"
+	// AttackTypeVishing covers email lures whose payload is a phone
+	// callback (a "phone-oriented attack delivery" / callback-phishing
+	// vector) rather than a link or attachment — the email asks the
+	// target to dial a number, where the social engineering continues.
+	AttackTypeVishing AttackType = "vishing"
+	// AttackTypeSupplyChain covers attacks that impersonate or ride a
+	// trusted third party (vendor, MSP, software update channel) to
+	// reach the target through the supply relationship.
+	AttackTypeSupplyChain AttackType = "supply_chain"
 )
 
 // AllAttackTypes lists every attack type in a stable order. Tests iterate
@@ -25,6 +34,8 @@ var AllAttackTypes = []AttackType{
 	AttackTypeInvoiceFraud,
 	AttackTypeLookalikeDomain,
 	AttackTypeAccountTakeover,
+	AttackTypeVishing,
+	AttackTypeSupplyChain,
 }
 
 // Valid reports whether a is a known attack type.
