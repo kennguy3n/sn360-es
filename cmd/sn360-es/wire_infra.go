@@ -17,6 +17,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/handler"
 	"github.com/kennguy3n/sn360-es/internal/middleware"
 	"github.com/kennguy3n/sn360-es/internal/service/action"
+	"github.com/kennguy3n/sn360-es/internal/service/agent"
 	"github.com/kennguy3n/sn360-es/internal/service/bridge"
 	"github.com/kennguy3n/sn360-es/internal/service/ingestion"
 	"github.com/kennguy3n/sn360-es/internal/service/relationship"
@@ -1178,6 +1179,25 @@ func buildDirectorySyncRunner(cfg *config.Config, logger *slog.Logger, app *appl
 			return []byte(piiHasher.HashPII(tenantID, input)), nil
 		}
 	}
+	// iam-core directory source (opt-in via DIRECTORY_SYNC_SOURCE).
+	// config.validate() already guarantees the Management API URL +
+	// token are present when the source is iam-core, so a wire
+	// failure here is unexpected and skips the worker rather than
+	// silently reverting to native.
+	source := worker.DirectorySource(cfg.DirectorySyncSource)
+	var iamCoreSource agent.IAMCoreUserSource
+	if cfg.DirectorySyncSource == config.DirectorySourceIAMCore {
+		c, cerr := agent.NewIAMCoreDirectoryClient(agent.IAMCoreDirectoryConfig{
+			BaseURL: cfg.IAMCore.ManagementURL,
+			Token:   cfg.IAMCore.ManagementToken,
+		})
+		if cerr != nil {
+			logger.Warn("sn360-es: iam-core directory source init failed",
+				slog.Any("error", cerr))
+			return nil
+		}
+		iamCoreSource = c
+	}
 	job, err := worker.NewDirectorySyncJob(worker.DirectorySyncJobConfig{
 		Interval:        cfg.Worker.DirectorySyncInterval,
 		Tenants:         app.repos.Tenants,
@@ -1192,6 +1212,8 @@ func buildDirectorySyncRunner(cfg *config.Config, logger *slog.Logger, app *appl
 		SyncCheckpoints: app.repos.SyncCheckpoints,
 		OrgGraphs:       app.repos.OrgGraphs,
 		Binder:          workerTenantBinder(app),
+		Source:          source,
+		IAMCore:         iamCoreSource,
 	})
 	if err != nil {
 		logger.Warn("sn360-es: directory sync worker init failed",

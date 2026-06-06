@@ -34,7 +34,31 @@ type DirectorySyncJobConfig struct {
 	// `migrations/0018_row_level_security.up.sql`. Nil is a valid
 	// no-op for in-memory tests.
 	Binder TenantBinder
+
+	// Source selects where the user roster comes from. Empty is
+	// treated as SourceNative (the existing per-provider directory
+	// client). When SourceIAMCore, fetchUsers pulls users from the
+	// iam-core Management API via IAMCore instead; groups,
+	// memberships, sensitivity classification and the org-graph
+	// snapshot are unchanged and still produced locally.
+	Source DirectorySource
+	// IAMCore is the iam-core Management API user source. Required
+	// when Source is SourceIAMCore; ignored otherwise.
+	IAMCore agent.IAMCoreUserSource
 }
+
+// DirectorySource selects the directory-sync user roster source. It
+// mirrors config.DirectorySyncSource but is redeclared here so the
+// worker package does not depend on the config package.
+type DirectorySource string
+
+const (
+	// SourceNative pulls users from the per-provider directory client
+	// (GWS / MS Graph) with delta sync when supported. Default.
+	SourceNative DirectorySource = "native"
+	// SourceIAMCore pulls users from iam-core's Management API.
+	SourceIAMCore DirectorySource = "iam-core"
+)
 
 // DirectorySyncJob implements the Job interface for periodic
 // directory synchronization. It discovers new/changed users,
@@ -60,6 +84,13 @@ func NewDirectorySyncJob(cfg DirectorySyncJobConfig) (*DirectorySyncJob, error) 
 	}
 	if cfg.Hasher == nil {
 		return nil, fmt.Errorf("worker: directory sync requires Hasher")
+	}
+	// Fail loud on an iam-core source with no Management API client
+	// wired — silently falling back to the native provider would make
+	// an operator believe iam-core is the source of truth when it is
+	// not.
+	if cfg.Source == SourceIAMCore && cfg.IAMCore == nil {
+		return nil, fmt.Errorf("worker: directory sync source %q requires an IAMCore user source", cfg.Source)
 	}
 	if cfg.Interval <= 0 {
 		cfg.Interval = 6 * time.Hour
@@ -332,6 +363,14 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 // supports it and a checkpoint repository is configured; otherwise
 // falls back to a full ListUsers call.
 func (j *DirectorySyncJob) fetchUsers(ctx context.Context, tenantID string) ([]agent.DiscoveredUser, error) {
+	// iam-core source: the user roster comes from the Management API.
+	// The caller (syncTenant) still classifies sensitivity, builds the
+	// org-graph snapshot, and delta-syncs groups/memberships from the
+	// native provider — only the user list source changes here.
+	if j.cfg.Source == SourceIAMCore {
+		return j.cfg.IAMCore.ListUsers(ctx, tenantID)
+	}
+
 	dc, ok := j.cfg.Directory.(agent.DeltaSyncCapable)
 	if !ok || j.cfg.SyncCheckpoints == nil {
 		return j.cfg.Directory.ListUsers(ctx, tenantID)

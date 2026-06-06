@@ -320,10 +320,16 @@ func wrapMiddleware(mux http.Handler, app *application) (http.Handler, error) {
 
 	// JWT auth: optional. Skipped when no issuer is configured (dev
 	// runs with no banner secret).
-	if app.jwtIssuer != nil {
+	// Dual-issuer: mount the middleware when EITHER the primary
+	// banner-token issuer OR the iam-core JWKS issuer is configured.
+	// A deployment may run iam-core-only (no banner secret) and still
+	// needs authenticated routes.
+	if app.jwtIssuer != nil || app.cfg.IAMCore.JWKSEndpoint != "" {
 		h = middleware.NewJWTAuth(h, middleware.JWTAuthConfig{
-			Issuer:    app.jwtIssuer,
-			SkipPaths: defaultAuthSkipPaths(),
+			Issuer:         app.jwtIssuer,
+			SkipPaths:      defaultAuthSkipPaths(),
+			IAMCoreJWKSURL: app.cfg.IAMCore.JWKSEndpoint,
+			IAMCoreIssuer:  app.cfg.IAMCore.Issuer,
 		})
 	}
 
