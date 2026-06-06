@@ -1176,7 +1176,7 @@ func buildDirectorySyncRunner(cfg *config.Config, logger *slog.Logger, app *appl
 		// operator who configured iam-core but no native provider knows
 		// why nothing syncs.
 		if cfg.DirectorySyncSource == config.DirectorySourceIAMCore {
-			logger.Warn("sn360-es: directory sync worker skipped; DIRECTORY_SYNC_SOURCE=iam-core still requires a native directory provider for groups/memberships, but none is configured")
+			logger.Warn("sn360-es: directory sync worker skipped; DIRECTORY_SYNC_SOURCE=iam-core still requires a native directory provider (e.g. GWS, O365, Zoho, Fastmail, or WorkMail) for groups and memberships — iam-core only supplies the user list — but none is configured")
 		} else {
 			logger.Info("sn360-es: directory sync worker skipped; no directory client")
 		}
