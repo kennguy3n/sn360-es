@@ -647,3 +647,96 @@ func TestDirectorySyncJob_Run_NativeDeltaPreservesMemberships(t *testing.T) {
 		t.Errorf("Engineering members = %v, want both %s and %s (delta sync must not drop unchanged members)", members, aliceUID, carolUID)
 	}
 }
+
+// fakeOrgGraphRepo captures the last persisted snapshot.
+type fakeOrgGraphRepo struct{ last *repository.OrgGraphSnapshot }
+
+func (f *fakeOrgGraphRepo) Upsert(_ context.Context, s *repository.OrgGraphSnapshot) error {
+	f.last = s
+	return nil
+}
+
+func (f *fakeOrgGraphRepo) GetByTenant(_ context.Context, _ string) (*repository.OrgGraphSnapshot, error) {
+	return f.last, nil
+}
+
+// deptHighRiskClassifier marks anyone in the "Exec" department as high
+// sensitivity, so a test can assert the high-risk set is computed over the
+// full population rather than just the changed delta users.
+type deptHighRiskClassifier struct{}
+
+func (deptHighRiskClassifier) ClassifyBatch(_ context.Context, in []agent.UserClassifyInput) ([]agent.ClassifyResult, error) {
+	out := make([]agent.ClassifyResult, len(in))
+	for i, u := range in {
+		if u.Department == "Exec" {
+			out[i] = agent.ClassifyResult{Sensitivity: agent.SensitivityHigh, Confidence: 0.9}
+		} else {
+			out[i] = agent.ClassifyResult{Sensitivity: agent.SensitivityDefault, Confidence: 1.0}
+		}
+	}
+	return out, nil
+}
+
+// TestDirectorySyncJob_Run_NativeDeltaSnapshotUsesFullRoster is the
+// regression guard for the org-graph snapshot under-counting bug: under
+// native delta sync the snapshot must describe the whole org (employee /
+// department counts and the high-risk set), not just the changed delta
+// users. Otherwise an incremental sync would persist a snapshot reporting
+// e.g. 1 employee instead of the true headcount.
+func TestDirectorySyncJob_Run_NativeDeltaSnapshotUsesFullRoster(t *testing.T) {
+	orgRepo := &fakeOrgGraphRepo{}
+
+	native := &fakeDeltaDirectoryClient{
+		fakeDirSyncDirectoryClientTracked: fakeDirSyncDirectoryClientTracked{
+			fakeDirSyncDirectoryClient: fakeDirSyncDirectoryClient{
+				// Full native roster: 3 employees across 3 departments,
+				// one of them (alice) high-risk.
+				users: []agent.DiscoveredUser{
+					{ID: "n-alice", Email: "alice@test.com", DisplayName: "Alice", Department: "Exec"},
+					{ID: "n-carol", Email: "carol@test.com", DisplayName: "Carol", Department: "Eng"},
+					{ID: "n-dave", Email: "dave@test.com", DisplayName: "Dave", Department: "Sales"},
+				},
+			},
+		},
+		// Delta returns ONLY the changed user (dave, not high-risk).
+		delta: []agent.DiscoveredUser{
+			{ID: "n-dave", Email: "dave@test.com", DisplayName: "Dave", Department: "Sales"},
+		},
+	}
+
+	job, err := NewDirectorySyncJob(DirectorySyncJobConfig{
+		Interval:        time.Hour,
+		Tenants:         &fakeDirSyncTenantLister{tenants: []repository.Tenant{{ID: "t1", Name: "T1"}}},
+		Directory:       native,
+		Users:           newFakeUserRepo(),
+		Groups:          newFakeGroupRepo(),
+		Memberships:     newFakeMembershipRepo(),
+		OrgGraphs:       orgRepo,
+		Classifier:      deptHighRiskClassifier{},
+		SyncCheckpoints: &fakeCheckpointRepo{token: "prev-token"},
+		Hasher:          func(_, input string) ([]byte, error) { return []byte("hash:" + input), nil },
+		Logger:          slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("NewDirectorySyncJob: %v", err)
+	}
+
+	if err := job.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !native.deltaCalled {
+		t.Error("ListUsersDelta was not called; expected the delta-sync path")
+	}
+	if orgRepo.last == nil {
+		t.Fatal("no org-graph snapshot was persisted")
+	}
+	if orgRepo.last.EmployeeCount != 3 {
+		t.Errorf("EmployeeCount = %d, want 3 (full roster, not the delta subset)", orgRepo.last.EmployeeCount)
+	}
+	if orgRepo.last.DepartmentCount != 3 {
+		t.Errorf("DepartmentCount = %d, want 3 (full roster)", orgRepo.last.DepartmentCount)
+	}
+	if len(orgRepo.last.HighRiskIDs) != 1 {
+		t.Errorf("HighRiskIDs = %v, want exactly 1 (alice, classified over the full roster)", orgRepo.last.HighRiskIDs)
+	}
+}

@@ -187,6 +187,20 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 		groupCtxByEmail[strings.ToLower(mu.Email)] = mu
 	}
 
+	// Sensitivity classification and the org-graph snapshot describe the
+	// whole tenant population, not just the users fetched this cycle.
+	// Under native delta sync `users` is only the changed subset, so
+	// deriving classification coverage or the snapshot (employee/department
+	// counts, high-risk set) from it would under-report the org. The full
+	// population is the iam-core roster in iam-core mode (the authoritative
+	// user list) and the full native roster otherwise (membershipRoster is
+	// a complete ListUsers even on the delta path). The provider fetch
+	// stays incremental; only local processing walks the full roster.
+	populationRoster := membershipRoster
+	if j.cfg.Source == SourceIAMCore {
+		populationRoster = users
+	}
+
 	// Fetch existing users for diff. Key by hex-encoded email hash
 	// because that is the stable UPSERT conflict key (not the generated ID).
 	existingUsers, err := j.cfg.Users.List(ctx, tenantID, 0)
@@ -198,11 +212,16 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 		existingByHash[fmt.Sprintf("%x", u.EmailHash)] = u
 	}
 
-	// Classify sensitivity for all discovered users if classifier available.
-	var classResults []agent.ClassifyResult
-	if j.cfg.Classifier != nil && len(users) > 0 {
-		inputs := make([]agent.UserClassifyInput, len(users))
-		for i, u := range users {
+	// Classify sensitivity for the full population, keyed by email so both
+	// the user upserts (which iterate the possibly-partial `users` set) and
+	// the org-graph snapshot (which walks the full population) read a single
+	// consistent result. In iam-core and native-full modes populationRoster
+	// equals `users`, so this is unchanged; only the native delta path now
+	// classifies the full roster instead of just the changed subset.
+	classByEmail := make(map[string]agent.ClassifyResult, len(populationRoster))
+	if j.cfg.Classifier != nil && len(populationRoster) > 0 {
+		inputs := make([]agent.UserClassifyInput, len(populationRoster))
+		for i, u := range populationRoster {
 			// Group/admin context is sourced from the native provider
 			// (see membershipRoster above), matched to this user by
 			// email. In native mode gctx is the same record as u.
@@ -223,23 +242,27 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 				IsAdmin:     gctx.IsAdmin,
 			}
 		}
-		classResults, err = j.cfg.Classifier.ClassifyBatch(ctx, inputs)
-		if err != nil {
+		results, cerr := j.cfg.Classifier.ClassifyBatch(ctx, inputs)
+		if cerr != nil {
 			j.cfg.Logger.Warn("directory sync: classification failed, using defaults",
 				slog.String("tenant_id", tenantID),
-				slog.String("err", err.Error()))
+				slog.String("err", cerr.Error()))
+		} else {
+			for i, u := range populationRoster {
+				if i < len(results) {
+					classByEmail[strings.ToLower(u.Email)] = results[i]
+				}
+			}
 		}
 	}
 
 	// Upsert users.
-	for i, u := range users {
+	for _, u := range users {
 		sens := agent.SensitivityDefault
 		confidence := 1.0
-		needsReview := false
-		if i < len(classResults) {
-			sens = classResults[i].Sensitivity
-			confidence = classResults[i].Confidence
-			needsReview = classResults[i].NeedsReview
+		if cr, ok := classByEmail[strings.ToLower(u.Email)]; ok {
+			sens = cr.Sensitivity
+			confidence = cr.Confidence
 		}
 
 		var emailHash []byte
@@ -261,7 +284,6 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 			SensitivityTier: sens.DBTier(),
 			Locale:          "",
 		}
-		_ = needsReview
 
 		if err := j.cfg.Users.Upsert(ctx, repoUser); err != nil {
 			j.cfg.Logger.Warn("directory sync: user upsert failed",
@@ -354,18 +376,21 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 	if j.cfg.OrgGraphs != nil {
 		highRisk := make([]string, 0)
 		deptSet := make(map[string]struct{})
-		for i, u := range users {
+		// Walk the full population so counts and the high-risk set reflect
+		// the whole org, not just the users changed this cycle.
+		for _, u := range populationRoster {
 			if u.Department != "" {
 				deptSet[u.Department] = struct{}{}
 			}
-			if i < len(classResults) && classResults[i].Sensitivity >= agent.SensitivityHigh {
+			cr, ok := classByEmail[strings.ToLower(u.Email)]
+			if ok && cr.Sensitivity >= agent.SensitivityHigh && j.cfg.Hasher != nil {
 				if h, hErr := j.cfg.Hasher(tenantID, u.Email); hErr == nil {
 					highRisk = append(highRisk, fmt.Sprintf("%x", h))
 				}
 			}
 		}
 		graphData, _ := json.Marshal(map[string]any{
-			"employees":   len(users),
+			"employees":   len(populationRoster),
 			"groups":      len(groups),
 			"departments": len(deptSet),
 			"high_risk":   len(highRisk),
@@ -376,7 +401,7 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 			GraphJSON:       graphData,
 			HighRiskIDs:     highRisk,
 			DepartmentCount: len(deptSet),
-			EmployeeCount:   len(users),
+			EmployeeCount:   len(populationRoster),
 			GroupCount:      len(groups),
 		}
 		if gErr := j.cfg.OrgGraphs.Upsert(ctx, snap); gErr != nil {
