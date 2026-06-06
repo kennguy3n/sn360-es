@@ -247,6 +247,144 @@ func TestSMTPGateway_PreDeliveryReject_BouncesMessage(t *testing.T) {
 	}
 }
 
+// TestSMTPGateway_PreDeliveryRejectMidLoop_PublishesNothing guards the
+// two-phase decision/publish split: a reject on the SECOND recipient
+// must not leak an event for the first. Before the fix the loop
+// published recipient 0, then returned 550 on recipient 1 — so the
+// pipeline saw a message the gateway told the sender it had refused,
+// and the MTA retry re-published it.
+func TestSMTPGateway_PreDeliveryRejectMidLoop_PublishesNothing(t *testing.T) {
+	bus := &capturingBus{}
+	addr, stop := startGateway(t, SMTPGatewayConfig{
+		Publisher: bus,
+		Logger:    discardLogger(),
+		Decider: deciderFunc(func(_ context.Context, req dto.EvaluateRequest) (DeliveryDecision, string) {
+			if req.Recipient == "carol@acme.example" {
+				return DecisionReject, "blocked phishing"
+			}
+			return DecisionAccept, ""
+		}),
+	})
+	defer stop()
+
+	msg := "From: a@sender.example\r\nTo: bob@acme.example\r\nSubject: x\r\nMessage-ID: <mid@x>\r\n\r\nbody\r\n"
+	// bob is accepted, carol is rejected; the whole transaction must fail.
+	err := sendRaw(t, addr, "a@sender.example", []string{"bob@acme.example", "carol@acme.example"}, msg)
+	if err == nil {
+		t.Fatal("expected rejection error, got nil")
+	}
+	if !strings.Contains(err.Error(), "550") {
+		t.Errorf("error = %v, want 550 reject", err)
+	}
+	// Give any erroneously-published event time to land before asserting.
+	time.Sleep(50 * time.Millisecond)
+	if got := bus.snapshot(); len(got) != 0 {
+		t.Errorf("a mid-loop reject must publish nothing, got %d events", len(got))
+	}
+}
+
+// TestSMTPGateway_Relay_OnlyScannedRecipients guards that the relay
+// envelope contains only the recipients the gateway actually scanned.
+// A recipient that resolves to no tenant is dropped from scanning, so
+// it must also be dropped from the relay envelope — otherwise the
+// downstream store receives mail this gateway never evaluated.
+func TestSMTPGateway_Relay_OnlyScannedRecipients(t *testing.T) {
+	bus := &capturingBus{}
+	relay := &recordingDeliverer{}
+	addr, stop := startGateway(t, SMTPGatewayConfig{
+		Publisher: bus,
+		Logger:    discardLogger(),
+		Deliverer: relay,
+		TenantResolver: func(domain string) (string, bool) {
+			if domain == "acme.example" {
+				return "acme.example", true
+			}
+			return "", false
+		},
+	})
+	defer stop()
+
+	msg := "From: a@sender.example\r\nTo: bob@acme.example\r\nSubject: x\r\nMessage-ID: <rel@x>\r\n\r\nbody\r\n"
+	if err := sendRaw(t, addr, "a@sender.example",
+		[]string{"bob@acme.example", "stranger@unknown.example"}, msg); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	waitForPublishes(t, bus, 1)
+	if got := relay.count(); got != 1 {
+		t.Fatalf("deliverer called %d times, want 1", got)
+	}
+	env := relay.lastEnv()
+	if len(env.RcptTo) != 1 || env.RcptTo[0] != "bob@acme.example" {
+		t.Errorf("relay RcptTo = %v, want [bob@acme.example] only (stranger dropped)", env.RcptTo)
+	}
+}
+
+// TestSMTPGateway_Data_DecodesBase64Body guards that base64
+// Content-Transfer-Encoding bodies are decoded before reaching the
+// normalizer. Before the fix the raw base64 blob was passed through,
+// garbling the text and degrading detection.
+func TestSMTPGateway_Data_DecodesBase64Body(t *testing.T) {
+	bus := &capturingBus{}
+	addr, stop := startGateway(t, SMTPGatewayConfig{Publisher: bus, Logger: discardLogger()})
+	defer stop()
+
+	plaintext := "Wire $48,000 to the new account today."
+	encoded := base64.StdEncoding.EncodeToString([]byte(plaintext))
+	msg := "From: a@sender.example\r\n" +
+		"To: bob@acme.example\r\n" +
+		"Subject: Urgent\r\n" +
+		"Message-ID: <b64@x>\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n" +
+		"Content-Transfer-Encoding: base64\r\n" +
+		"\r\n" +
+		encoded + "\r\n"
+
+	if err := sendRaw(t, addr, "a@sender.example", []string{"bob@acme.example"}, msg); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	pubs := waitForPublishes(t, bus, 1)
+	req := decodeRequest(t, pubs[0].Data)
+	if !strings.Contains(req.Body, "Wire $48,000 to the new account") {
+		t.Errorf("base64 body not decoded: %q", req.Body)
+	}
+}
+
+// TestSMTPGateway_Data_DecodesQuotedPrintableHTML guards quoted-printable
+// decoding of an HTML part inside a multipart message.
+func TestSMTPGateway_Data_DecodesQuotedPrintableHTML(t *testing.T) {
+	bus := &capturingBus{}
+	addr, stop := startGateway(t, SMTPGatewayConfig{Publisher: bus, Logger: discardLogger()})
+	defer stop()
+
+	// "Pay =E2=82=AC50 now" decodes to "Pay €50 now"; the soft line break
+	// "=\r\n" must be stripped by the decoder.
+	msg := "From: a@sender.example\r\n" +
+		"To: bob@acme.example\r\n" +
+		"Subject: QP\r\n" +
+		"Message-ID: <qp@x>\r\n" +
+		"MIME-Version: 1.0\r\n" +
+		"Content-Type: multipart/alternative; boundary=\"B\"\r\n" +
+		"\r\n" +
+		"--B\r\n" +
+		"Content-Type: text/html; charset=utf-8\r\n" +
+		"Content-Transfer-Encoding: quoted-printable\r\n" +
+		"\r\n" +
+		"<p>Pay =E2=82=AC50 =\r\nnow</p>\r\n" +
+		"--B--\r\n"
+
+	if err := sendRaw(t, addr, "a@sender.example", []string{"bob@acme.example"}, msg); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	pubs := waitForPublishes(t, bus, 1)
+	req := decodeRequest(t, pubs[0].Data)
+	// The normalizer strips HTML into the plaintext Body; a correctly
+	// decoded QP part yields "Pay €50 now" (soft break removed, =E2=82=AC
+	// → €).
+	if !strings.Contains(req.Body, "Pay \u20ac50 now") {
+		t.Errorf("quoted-printable HTML not decoded: %q", req.Body)
+	}
+}
+
 func TestSMTPGateway_NoTenant_RejectsRecipients(t *testing.T) {
 	bus := &capturingBus{}
 	addr, stop := startGateway(t, SMTPGatewayConfig{

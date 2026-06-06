@@ -41,12 +41,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"mime"
 	"mime/multipart"
+	"mime/quotedprintable"
 	"net"
 	"net/mail"
 	"strings"
@@ -374,10 +376,25 @@ func (s *smtpSession) Data(r io.Reader) error {
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Cannot process message"}
 	}
 
-	// Publish one evaluate.request per recipient so each tenant/mailbox
-	// is attributed independently — mirroring inbox-level delivery.
+	// Process recipients in two phases so the SMTP reply and the
+	// pipeline state can never disagree. A single DATA command yields a
+	// single SMTP reply, yet each recipient is published as its own
+	// per-tenant event; if we interleaved "decide then publish" per
+	// recipient, a reject/defer on recipient N would return an error to
+	// the sender *after* recipients 0..N-1 were already committed to the
+	// bus. The sending MTA would then retry the bounced/deferred message
+	// and re-publish 0..N-1 — duplicate scans plus a pipeline that acted
+	// on a message the gateway claims to have refused.
+	//
+	// Phase 1 resolves, normalizes, and runs the pre-delivery decision
+	// for every recipient, publishing nothing. Any non-accept verdict
+	// returns immediately, before a single event exists.
 	baseID := messageID(parsed.headers, s.gw.cfg.now)
-	var published int
+	type acceptedRecipient struct {
+		req  dto.EvaluateRequest
+		rcpt string
+	}
+	accepted := make([]acceptedRecipient, 0, len(env.RcptTo))
 	for i, rcpt := range env.RcptTo {
 		rcptDomain := extractDomain(rcpt)
 		tenant, ok := s.gw.resolveTenant(rcptDomain)
@@ -407,27 +424,43 @@ func (s *smtpSession) Data(r io.Reader) error {
 			continue
 		}
 
+		// A reject/defer for any recipient blocks the whole transaction.
+		// Returning here is safe precisely because nothing has been
+		// published yet, so a retry cannot duplicate earlier recipients.
 		if decision, reason := s.gw.decide(ctx, req); decision != DecisionAccept {
 			return decisionError(decision, reason)
 		}
 
-		if err := s.gw.publish(ctx, req); err != nil {
-			s.gw.cfg.Logger.Warn("sn360-es: smtp gateway publish failed", slog.Any("error", err))
-			// Defer: we could not enqueue the message for scanning, so
-			// retry is preferable to delivering unscanned mail.
-			return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Temporary processing failure"}
-		}
-		published++
+		accepted = append(accepted, acceptedRecipient{req: req, rcpt: rcpt})
 	}
 
-	if published == 0 {
+	if len(accepted) == 0 {
 		// No recipient resolved to a known tenant — reject so the
 		// sender is not misled into thinking we accepted delivery.
 		return &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 1, 1}, Message: "No deliverable recipients"}
 	}
 
+	// Phase 2: every recipient passed the decider; publish them all.
+	for _, a := range accepted {
+		if err := s.gw.publish(ctx, a.req); err != nil {
+			s.gw.cfg.Logger.Warn("sn360-es: smtp gateway publish failed", slog.Any("error", err))
+			// Defer: we could not enqueue the message for scanning, so
+			// retry is preferable to delivering unscanned mail.
+			return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Temporary processing failure"}
+		}
+	}
+
+	// Relay only the recipients we actually scanned. Recipients dropped
+	// in phase 1 (no tenant / normalize failure) were never evaluated,
+	// so the relay envelope must not include them — otherwise the
+	// downstream store would receive mail this gateway never scanned.
 	if s.gw.cfg.Deliverer != nil {
-		if err := s.gw.cfg.Deliverer.Deliver(ctx, env, raw); err != nil {
+		relayEnv := env
+		relayEnv.RcptTo = make([]string, len(accepted))
+		for i, a := range accepted {
+			relayEnv.RcptTo[i] = a.rcpt
+		}
+		if err := s.gw.cfg.Deliverer.Deliver(ctx, relayEnv, raw); err != nil {
 			s.gw.cfg.Logger.Warn("sn360-es: smtp gateway downstream relay failed", slog.Any("error", err))
 			return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Downstream delivery temporarily unavailable"}
 		}
@@ -435,7 +468,7 @@ func (s *smtpSession) Data(r io.Reader) error {
 
 	s.gw.cfg.Logger.Info("sn360-es: smtp gateway accepted message",
 		slog.String("remote", s.remoteAddr),
-		slog.Int("recipients", published),
+		slog.Int("recipients", len(accepted)),
 		slog.String("dkim", dkimResult))
 	return nil
 }
@@ -570,21 +603,42 @@ func parseMessage(raw []byte) (parsedMessage, error) {
 		pm.dateHdr = d.UTC()
 	}
 
-	text, html := extractBodies(msg.Header.Get("Content-Type"), msg.Body)
+	text, html := extractBodies(msg.Header.Get("Content-Type"), msg.Header.Get("Content-Transfer-Encoding"), msg.Body)
 	pm.text = text
 	pm.html = html
 	return pm, nil
+}
+
+// decodeTransferEncoding wraps r with a decoder for the message part's
+// Content-Transfer-Encoding. base64 and quoted-printable (the two
+// encodings real-world MTAs use for non-ASCII text bodies) are decoded;
+// 7bit / 8bit / binary and any unrecognized value pass through
+// unchanged so a mislabeled part degrades to raw bytes rather than an
+// empty or corrupt body. Without this, the normalizer would receive the
+// encoded blob (e.g. a base64 string) instead of the message text,
+// silently degrading detection on the majority of HTML/UTF-8 mail.
+func decodeTransferEncoding(r io.Reader, encoding string) io.Reader {
+	switch strings.ToLower(strings.TrimSpace(encoding)) {
+	case "base64":
+		// The stdlib streaming base64 decoder already skips the CRLFs
+		// MIME inserts every 76 chars.
+		return base64.NewDecoder(base64.StdEncoding, r)
+	case "quoted-printable":
+		return quotedprintable.NewReader(r)
+	default:
+		return r
+	}
 }
 
 // extractBodies walks the MIME tree rooted at the given Content-Type
 // and returns the concatenated text/plain and text/html parts. Nested
 // multiparts (multipart/alternative inside multipart/mixed) are walked
 // recursively; non-text parts (attachments) are skipped.
-func extractBodies(contentType string, body io.Reader) (text, html string) {
+func extractBodies(contentType, contentTransferEncoding string, body io.Reader) (text, html string) {
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil || !strings.HasPrefix(mediaType, "multipart/") {
 		// Single-part message: classify by media type, default to text.
-		data, _ := io.ReadAll(body)
+		data, _ := io.ReadAll(decodeTransferEncoding(body, contentTransferEncoding))
 		if strings.EqualFold(mediaType, "text/html") {
 			return "", string(data)
 		}
@@ -603,16 +657,19 @@ func extractBodies(contentType string, body io.Reader) (text, html string) {
 			break // io.EOF or malformed trailing boundary; stop walking.
 		}
 		partType, partParams, _ := mime.ParseMediaType(part.Header.Get("Content-Type"))
+		partCTE := part.Header.Get("Content-Transfer-Encoding")
 		switch {
 		case strings.HasPrefix(partType, "multipart/"):
-			t, h := extractBodies(part.Header.Get("Content-Type"), part)
+			// A multipart container itself is never transfer-encoded
+			// (RFC 2045 §6.4); its leaf parts carry their own CTE.
+			t, h := extractBodies(part.Header.Get("Content-Type"), "", part)
 			textBuf.WriteString(t)
 			htmlBuf.WriteString(h)
 		case strings.EqualFold(partType, "text/plain"):
-			data, _ := io.ReadAll(part)
+			data, _ := io.ReadAll(decodeTransferEncoding(part, partCTE))
 			textBuf.Write(data)
 		case strings.EqualFold(partType, "text/html"):
-			data, _ := io.ReadAll(part)
+			data, _ := io.ReadAll(decodeTransferEncoding(part, partCTE))
 			htmlBuf.Write(data)
 		default:
 			_ = partParams
