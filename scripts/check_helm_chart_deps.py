@@ -89,6 +89,18 @@ def _fetch_index(repo_url: str, retries: int = 3, backoff: float = 2.0) -> dict:
         try:
             with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310 - https helm repo
                 index = yaml.safe_load(resp.read())
+            # A 200 with an empty/non-mapping body (CDN maintenance page,
+            # rate-limit notice, truncated response) parses to None or a
+            # scalar. That is a broken upstream, not a valid empty index, so
+            # raise here: it is retried like any other failure and, if it
+            # persists, the caller classifies it as a NETWORK warning. Coercing
+            # it to {} instead would be wrong — every pinned dep would then look
+            # "not found upstream" and hard-fail the PR on a transient outage.
+            if not isinstance(index, dict):
+                raise ValueError(
+                    f"upstream index at {url} is not a YAML mapping "
+                    f"(got {type(index).__name__})"
+                )
             _INDEX_CACHE[repo_url] = index
             return index
         except Exception as exc:  # noqa: BLE001 - retried; see caller's classification
@@ -109,11 +121,19 @@ def _newest_stable(versions: list[str]) -> str | None:
 
 
 def _annotate(level: str, msg: str) -> None:
-    """Emit a GitHub Actions annotation when running in CI; else plain text."""
+    """Emit a GitHub Actions annotation when running in CI; else plain text.
+
+    Workflow commands are newline-delimited, so a stray CR/LF in an interpolated
+    chart name/version could split the line and forge a second `::command::`.
+    The values come from a committed, reviewed Chart.yaml (so the practical risk
+    is low), but a single-line annotation should never contain raw newlines
+    regardless — collapse them so the message can't break out of its command.
+    """
+    safe = msg.replace("\r", " ").replace("\n", " ")
     if os.environ.get("GITHUB_ACTIONS") == "true":
-        print(f"::{level}::{msg}")
+        print(f"::{level}::{safe}")
     else:
-        print(f"[{level}] {msg}")
+        print(f"[{level}] {safe}")
 
 
 def _summary(lines: list[str]) -> None:
@@ -246,8 +266,14 @@ def main() -> int:
         print(f"no charts directory at {root}; nothing to check")
         return 0
 
-    # Top-level charts only; skip vendored sub-charts pulled into charts/.
-    chart_files = [p for p in root.rglob("Chart.yaml") if "/charts/" not in p.as_posix()]
+    # Top-level charts only; skip vendored sub-charts pulled into a `charts/`
+    # subdirectory. Match on the path *relative to root* so an absolute
+    # --charts-dir that happens to contain a `charts` component (e.g.
+    # /home/user/charts/proj/helm) doesn't filter out every chart.
+    chart_files = [
+        p for p in root.rglob("Chart.yaml")
+        if "charts" not in p.relative_to(root).parts
+    ]
     if not chart_files:
         print(f"no Chart.yaml under {root}; nothing to check")
         return 0
