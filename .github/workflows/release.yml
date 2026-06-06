@@ -28,6 +28,16 @@ jobs:
     name: Build, scan, sign, and publish
     runs-on: ubuntu-latest
     steps:
+      # On repository_dispatch there is no triggering ref, so checkout uses
+      # github.sha — the default-branch HEAD captured when the event was
+      # created. That single commit is pinned for the whole run (every step
+      # sees the same github.sha), so a coordinated release is internally
+      # consistent: it builds, tags, and releases the platform-pinned version
+      # against the current default-branch HEAD. The client_payload carries a
+      # version, not a downstream commit SHA — the platform repo cannot know
+      # this repo's commits — so commit-level cross-repo pinning is out of
+      # scope by design; main is expected to be release-ready (that is what
+      # the merge-gate CI protects).
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -35,10 +45,14 @@ jobs:
       # Resolve the release version + image tag set from the trigger:
       #   * push:tags          -> github.ref_name (the pushed tag)
       #   * repository_dispatch -> client_payload.version (platform pin)
-      # The SemVer regex matches the platform's validate-tag gate, and the
-      # `:latest` floating tag is withheld for pre-releases (e.g. a
-      # coordinated `v0.1.0-rc.1`) so a release-candidate never clobbers the
-      # pointer production consumers default to.
+      # The SemVer regex matches the platform's validate-tag gate. The version
+      # is then canonicalised to a single leading `v` so both the image tags
+      # and the GitHub Release tag always match this repo's `v*` tag
+      # convention (push:tags only fires on `v*`), regardless of whether a
+      # dispatch carried `1.2.3` or `v1.2.3`. The `:latest` floating tag is
+      # withheld for pre-releases (e.g. a coordinated `v0.1.0-rc.1`) so a
+      # release-candidate never clobbers the pointer production consumers
+      # default to.
       - name: Resolve release version
         id: ver
         env:
@@ -56,6 +70,10 @@ jobs:
             echo "::error::resolved release version '${version}' is not a valid SemVer tag" >&2
             exit 1
           fi
+          # Canonicalise to exactly one leading `v` (strip then re-add) so the
+          # published image tag and GitHub Release tag are identical across the
+          # push:tags and repository_dispatch paths.
+          version="v${version#v}"
           tags="${GHCR_IMAGE}:${version}"
           if printf '%s' "${version}" | grep -q '-'; then
             prerelease=true
