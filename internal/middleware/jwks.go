@@ -211,27 +211,30 @@ func (v *JWKSVerifier) stale() bool {
 	return len(v.keys) == 0 || time.Since(v.fetchedAt) >= v.cacheTTL
 }
 
-// refreshIfAllowed performs a refresh only when one has not been
-// attempted within MinRefreshInterval, so a flood of tokens carrying
-// an unknown kid cannot stampede the JWKS endpoint.
+// refreshIfAllowed performs at most one JWKS fetch per
+// MinRefreshInterval. The throttle check and the claim of the refresh
+// window happen under a single write lock, so when a flood of tokens
+// carrying an unknown kid (or a burst hitting the TTL boundary) arrives
+// at once, exactly one goroutine advances to fetch and the rest are
+// throttled immediately — there is no check-then-act window in which
+// several callers could all stampede the JWKS endpoint. lastAttempt is
+// claimed before the fetch, so the throttle also covers failed attempts.
 func (v *JWKSVerifier) refreshIfAllowed(ctx context.Context) error {
-	v.mu.RLock()
-	throttled := !v.lastAttempt.IsZero() && time.Since(v.lastAttempt) < v.minRefresh
-	v.mu.RUnlock()
-	if throttled {
+	v.mu.Lock()
+	if !v.lastAttempt.IsZero() && time.Since(v.lastAttempt) < v.minRefresh {
+		v.mu.Unlock()
 		return errors.New("refresh throttled")
 	}
+	v.lastAttempt = time.Now()
+	v.mu.Unlock()
 	return v.refresh(ctx)
 }
 
 // refresh fetches and parses the JWKS, atomically replacing the cached
-// key set on success. lastAttempt is recorded even on failure so the
-// throttle in refreshIfAllowed applies to failed attempts too.
+// key set on success. Callers must claim the refresh window first via
+// refreshIfAllowed, which records lastAttempt; refresh itself does not
+// touch the throttle state.
 func (v *JWKSVerifier) refresh(ctx context.Context) error {
-	v.mu.Lock()
-	v.lastAttempt = time.Now()
-	v.mu.Unlock()
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURL, nil)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)

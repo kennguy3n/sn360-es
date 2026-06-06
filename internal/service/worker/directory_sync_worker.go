@@ -37,10 +37,14 @@ type DirectorySyncJobConfig struct {
 
 	// Source selects where the user roster comes from. Empty is
 	// treated as SourceNative (the existing per-provider directory
-	// client). When SourceIAMCore, fetchUsers pulls users from the
-	// iam-core Management API via IAMCore instead; groups,
-	// memberships, sensitivity classification and the org-graph
-	// snapshot are unchanged and still produced locally.
+	// client). When SourceIAMCore, fetchUsers pulls the authoritative
+	// user list from the iam-core Management API via IAMCore. Groups,
+	// memberships and group-based classification context still come
+	// from the native provider (Directory) — iam-core exposes neither
+	// native group IDs nor an admin flag — and are matched back to the
+	// iam-core users by email. Sensitivity classification and the
+	// org-graph snapshot are produced locally in both modes. A native
+	// Directory is therefore required even when Source is SourceIAMCore.
 	Source DirectorySource
 	// IAMCore is the iam-core Management API user source. Required
 	// when Source is SourceIAMCore; ignored otherwise.
@@ -160,6 +164,29 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 		return fmt.Errorf("list groups: %w", err)
 	}
 
+	// Group memberships and group-based classification context always
+	// come from the native provider — iam-core's Management API exposes
+	// neither sn360's native group IDs nor an admin flag. In native mode
+	// this is exactly the roster we already fetched. In iam-core mode the
+	// user *list* is authoritative from iam-core, but we still pull the
+	// native roster here and match it to the iam-core users by email so
+	// memberships and classification keep their group/admin context.
+	// Without this, iam-core users carry empty GroupIDs and the
+	// membership loop below would call ReplaceForGroup with an empty set,
+	// silently wiping every group's memberships on each sync.
+	membershipRoster := users
+	if j.cfg.Source == SourceIAMCore {
+		nativeUsers, nerr := j.cfg.Directory.ListUsers(ctx, tenantID)
+		if nerr != nil {
+			return fmt.Errorf("list native users for group context: %w", nerr)
+		}
+		membershipRoster = nativeUsers
+	}
+	groupCtxByEmail := make(map[string]agent.DiscoveredUser, len(membershipRoster))
+	for _, mu := range membershipRoster {
+		groupCtxByEmail[strings.ToLower(mu.Email)] = mu
+	}
+
 	// Fetch existing users for diff. Key by hex-encoded email hash
 	// because that is the stable UPSERT conflict key (not the generated ID).
 	existingUsers, err := j.cfg.Users.List(ctx, tenantID, 0)
@@ -176,9 +203,13 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 	if j.cfg.Classifier != nil && len(users) > 0 {
 		inputs := make([]agent.UserClassifyInput, len(users))
 		for i, u := range users {
+			// Group/admin context is sourced from the native provider
+			// (see membershipRoster above), matched to this user by
+			// email. In native mode gctx is the same record as u.
+			gctx := groupCtxByEmail[strings.ToLower(u.Email)]
 			groupNames := make([]string, 0)
 			for _, g := range groups {
-				for _, gid := range u.GroupIDs {
+				for _, gid := range gctx.GroupIDs {
 					if gid == g.ID {
 						groupNames = append(groupNames, g.Name)
 					}
@@ -189,7 +220,7 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 				Department:  u.Department,
 				DisplayName: u.DisplayName,
 				GroupNames:  groupNames,
-				IsAdmin:     u.IsAdmin,
+				IsAdmin:     gctx.IsAdmin,
 			}
 		}
 		classResults, err = j.cfg.Classifier.ClassifyBatch(ctx, inputs)
@@ -296,10 +327,13 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 		// Update memberships using resolved DB user UUIDs (not provider IDs).
 		if j.cfg.Memberships != nil && len(resolvedByHash) > 0 {
 			memberIDs := make([]string, 0)
-			for _, u := range users {
-				for _, gid := range u.GroupIDs {
+			// Memberships are derived from the native provider's roster
+			// (membershipRoster), which carries GroupIDs; the DB UUID is
+			// resolved by email hash against the persisted user list.
+			for _, mu := range membershipRoster {
+				for _, gid := range mu.GroupIDs {
 					if gid == g.ID {
-						if h, hErr := j.cfg.Hasher(tenantID, u.Email); hErr == nil {
+						if h, hErr := j.cfg.Hasher(tenantID, mu.Email); hErr == nil {
 							if dbUID, ok := resolvedByHash[fmt.Sprintf("%x", h)]; ok {
 								memberIDs = append(memberIDs, dbUID)
 							}
@@ -363,10 +397,11 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 // supports it and a checkpoint repository is configured; otherwise
 // falls back to a full ListUsers call.
 func (j *DirectorySyncJob) fetchUsers(ctx context.Context, tenantID string) ([]agent.DiscoveredUser, error) {
-	// iam-core source: the user roster comes from the Management API.
-	// The caller (syncTenant) still classifies sensitivity, builds the
-	// org-graph snapshot, and delta-syncs groups/memberships from the
-	// native provider — only the user list source changes here.
+	// iam-core source: the authoritative user list comes from the
+	// Management API. The caller (syncTenant) still classifies
+	// sensitivity, builds the org-graph snapshot, and sources
+	// groups/memberships from the native provider — only the user list
+	// source changes here.
 	if j.cfg.Source == SourceIAMCore {
 		return j.cfg.IAMCore.ListUsers(ctx, tenantID)
 	}
