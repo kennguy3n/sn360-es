@@ -170,6 +170,22 @@ func TestJWKSVerifier_RejectsMissingTenant(t *testing.T) {
 	}
 }
 
+// TestJWKSVerifier_RejectsMissingExpiration ensures a correctly-signed
+// iam-core token with no exp claim is rejected, so a no-expiry token can
+// never stay valid until its signing key rotates out of the JWKS.
+func TestJWKSVerifier_RejectsMissingExpiration(t *testing.T) {
+	ts := newJWKSTestServer(t)
+	v, _ := NewJWKSVerifier(JWKSVerifierConfig{JWKSURL: ts.server.URL, Issuer: testIAMIssuer})
+
+	claims := iamClaims("acme")
+	claims.ExpiresAt = nil // strip exp
+	tok := ts.signECToken(t, claims, testECKid)
+
+	if _, err := v.Verify(context.Background(), tok); err == nil {
+		t.Fatal("expected rejection of token missing exp claim")
+	}
+}
+
 func TestJWKSVerifier_RejectsUnknownKid(t *testing.T) {
 	ts := newJWKSTestServer(t)
 	v, _ := NewJWKSVerifier(JWKSVerifierConfig{JWKSURL: ts.server.URL, Issuer: testIAMIssuer})

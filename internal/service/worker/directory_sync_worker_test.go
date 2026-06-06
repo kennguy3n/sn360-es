@@ -60,6 +60,34 @@ func (f *fakeDirSyncDirectoryClientTracked) ListUsers(ctx context.Context, tenan
 	return f.fakeDirSyncDirectoryClient.ListUsers(ctx, tenantID)
 }
 
+// fakeDeltaDirectoryClient is a DeltaSyncCapable native provider. Its
+// full ListUsers returns the complete roster (used for group context),
+// while ListUsersDelta returns only a partial "changed users" set —
+// modelling the real delta-sync behaviour the membership loop must not
+// treat as the full roster.
+type fakeDeltaDirectoryClient struct {
+	fakeDirSyncDirectoryClientTracked
+	delta       []agent.DiscoveredUser
+	deltaCalled bool
+}
+
+func (f *fakeDeltaDirectoryClient) ListUsersDelta(_ context.Context, _ string, _ string) ([]agent.DiscoveredUser, string, error) {
+	f.deltaCalled = true
+	return f.delta, "next-token", nil
+}
+
+// fakeCheckpointRepo returns a fixed delta token so the worker takes the
+// incremental (partial) delta path rather than a first-time full sync.
+type fakeCheckpointRepo struct{ token string }
+
+func (f *fakeCheckpointRepo) Get(_ context.Context, tenantID, provider string) (*repository.SyncCheckpoint, error) {
+	return &repository.SyncCheckpoint{TenantID: tenantID, Provider: provider, DeltaToken: f.token}, nil
+}
+
+func (f *fakeCheckpointRepo) Upsert(_ context.Context, _ *repository.SyncCheckpoint) error {
+	return nil
+}
+
 // fakeIAMCoreUserSource is a stub agent.IAMCoreUserSource that records
 // the tenant IDs it was asked about and returns a fixed roster.
 type fakeIAMCoreUserSource struct {
@@ -540,5 +568,82 @@ func TestDirectorySyncJob_Run_NativeSourceDefault(t *testing.T) {
 	}
 	if userRepo.upserts != 1 {
 		t.Errorf("user upserts = %d, want 1 (from native roster)", userRepo.upserts)
+	}
+}
+
+// TestDirectorySyncJob_Run_NativeDeltaPreservesMemberships is the
+// regression guard for the native delta-sync under-counting bug: when a
+// delta sync returns only the changed users, memberships must still be
+// resolved from the *full* native roster. Otherwise ReplaceForGroup
+// would be called with only the changed members, silently dropping every
+// unchanged member of the group on each incremental sync.
+func TestDirectorySyncJob_Run_NativeDeltaPreservesMemberships(t *testing.T) {
+	userRepo := newFakeUserRepo()
+	groupRepo := newFakeGroupRepo()
+	memberRepo := newFakeMembershipRepo()
+
+	// Pre-seed alice and carol as already-persisted members of g1 (from
+	// prior full syncs), so membership resolution can map them to UUIDs.
+	aliceUID := fmt.Sprintf("uid:%x", []byte("hash:alice@test.com"))
+	carolUID := fmt.Sprintf("uid:%x", []byte("hash:carol@test.com"))
+	userRepo.users["t1"] = []repository.User{
+		{ID: aliceUID, TenantID: "t1", EmailHash: []byte("hash:alice@test.com")},
+		{ID: carolUID, TenantID: "t1", EmailHash: []byte("hash:carol@test.com")},
+	}
+
+	native := &fakeDeltaDirectoryClient{
+		fakeDirSyncDirectoryClientTracked: fakeDirSyncDirectoryClientTracked{
+			fakeDirSyncDirectoryClient: fakeDirSyncDirectoryClient{
+				// Full native roster: both members of Engineering.
+				users: []agent.DiscoveredUser{
+					{ID: "n-alice", Email: "alice@test.com", DisplayName: "Alice", GroupIDs: []string{"g1"}},
+					{ID: "n-carol", Email: "carol@test.com", DisplayName: "Carol", GroupIDs: []string{"g1"}},
+				},
+				groups: []agent.DiscoveredGroup{{ID: "g1", Name: "Engineering"}},
+			},
+		},
+		// Delta returns ONLY the changed user (dave), who is in no group.
+		delta: []agent.DiscoveredUser{
+			{ID: "n-dave", Email: "dave@test.com", DisplayName: "Dave"},
+		},
+	}
+
+	job, err := NewDirectorySyncJob(DirectorySyncJobConfig{
+		Interval:        time.Hour,
+		Tenants:         &fakeDirSyncTenantLister{tenants: []repository.Tenant{{ID: "t1", Name: "T1"}}},
+		Directory:       native,
+		Users:           userRepo,
+		Groups:          groupRepo,
+		Memberships:     memberRepo,
+		SyncCheckpoints: &fakeCheckpointRepo{token: "prev-token"},
+		Hasher:          func(_, input string) ([]byte, error) { return []byte("hash:" + input), nil },
+		Logger:          slog.Default(),
+		// Native source (default), but delta-capable + checkpoint set.
+	})
+	if err != nil {
+		t.Fatalf("NewDirectorySyncJob: %v", err)
+	}
+
+	if err := job.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// The incremental delta path must have been taken...
+	if !native.deltaCalled {
+		t.Error("ListUsersDelta was not called; expected the delta-sync path")
+	}
+	// ...and the full native roster fetched for group/membership context.
+	if !native.listUsersCalled {
+		t.Error("full native ListUsers was not called; delta roster is partial and cannot back memberships")
+	}
+
+	// Both unchanged members must survive the incremental sync.
+	members := memberRepo.replaced["gid:Engineering"]
+	got := map[string]bool{}
+	for _, m := range members {
+		got[m] = true
+	}
+	if len(members) != 2 || !got[aliceUID] || !got[carolUID] {
+		t.Errorf("Engineering members = %v, want both %s and %s (delta sync must not drop unchanged members)", members, aliceUID, carolUID)
 	}
 }

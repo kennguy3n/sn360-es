@@ -125,6 +125,10 @@ func NewJWKSVerifier(cfg JWKSVerifierConfig) (*JWKSVerifier, error) {
 		parser: jwt.NewParser(
 			jwt.WithIssuer(cfg.Issuer),
 			jwt.WithValidMethods(iamCoreAsymmetricAlgs),
+			// Reject tokens without an exp claim. A no-expiry token would
+			// otherwise stay valid until its signing key is rotated out of
+			// the JWKS — matching the push-signature verifier's hardening.
+			jwt.WithExpirationRequired(),
 		),
 		keys: map[string]crypto.PublicKey{},
 	}, nil

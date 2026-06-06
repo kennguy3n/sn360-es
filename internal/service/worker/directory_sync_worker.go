@@ -155,7 +155,7 @@ func (j *DirectorySyncJob) Run(ctx context.Context) error {
 }
 
 func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) error {
-	users, err := j.fetchUsers(ctx, tenantID)
+	users, nativeFull, err := j.fetchUsers(ctx, tenantID)
 	if err != nil {
 		return fmt.Errorf("list users: %w", err)
 	}
@@ -164,18 +164,18 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 		return fmt.Errorf("list groups: %w", err)
 	}
 
-	// Group memberships and group-based classification context always
-	// come from the native provider — iam-core's Management API exposes
-	// neither sn360's native group IDs nor an admin flag. In native mode
-	// this is exactly the roster we already fetched. In iam-core mode the
-	// user *list* is authoritative from iam-core, but we still pull the
-	// native roster here and match it to the iam-core users by email so
-	// memberships and classification keep their group/admin context.
-	// Without this, iam-core users carry empty GroupIDs and the
-	// membership loop below would call ReplaceForGroup with an empty set,
-	// silently wiping every group's memberships on each sync.
+	// Group memberships and group-based classification context must be
+	// derived from the *complete* native roster. ReplaceForGroup performs
+	// a full replace, so resolving members from a partial roster would
+	// silently drop every member missing from it. Two ways `users` can be
+	// partial: (1) iam-core source — the Management API roster carries no
+	// native group IDs / admin flag at all; (2) native delta sync —
+	// ListUsersDelta returns only changed users. In both cases we fetch a
+	// full native ListUsers here and match it to the persisted users by
+	// email hash. Only a full native ListUsers (nativeFull) can be used
+	// as-is. iam-core/admin context is then matched back by email.
 	membershipRoster := users
-	if j.cfg.Source == SourceIAMCore {
+	if !nativeFull {
 		nativeUsers, nerr := j.cfg.Directory.ListUsers(ctx, tenantID)
 		if nerr != nil {
 			return fmt.Errorf("list native users for group context: %w", nerr)
@@ -395,20 +395,26 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 
 // fetchUsers attempts incremental delta sync when the directory client
 // supports it and a checkpoint repository is configured; otherwise
-// falls back to a full ListUsers call.
-func (j *DirectorySyncJob) fetchUsers(ctx context.Context, tenantID string) ([]agent.DiscoveredUser, error) {
+// falls back to a full ListUsers call. The returned bool is true only
+// when the result is a complete native ListUsers roster; it is false for
+// the iam-core source and for native delta results (which are partial).
+// The caller relies on this to decide whether it must fetch a full
+// native roster for group/membership context (see syncTenant).
+func (j *DirectorySyncJob) fetchUsers(ctx context.Context, tenantID string) ([]agent.DiscoveredUser, bool, error) {
 	// iam-core source: the authoritative user list comes from the
 	// Management API. The caller (syncTenant) still classifies
 	// sensitivity, builds the org-graph snapshot, and sources
 	// groups/memberships from the native provider — only the user list
-	// source changes here.
+	// source changes here. Not a native roster, so nativeFull=false.
 	if j.cfg.Source == SourceIAMCore {
-		return j.cfg.IAMCore.ListUsers(ctx, tenantID)
+		users, err := j.cfg.IAMCore.ListUsers(ctx, tenantID)
+		return users, false, err
 	}
 
 	dc, ok := j.cfg.Directory.(agent.DeltaSyncCapable)
 	if !ok || j.cfg.SyncCheckpoints == nil {
-		return j.cfg.Directory.ListUsers(ctx, tenantID)
+		users, err := j.cfg.Directory.ListUsers(ctx, tenantID)
+		return users, true, err
 	}
 
 	// Determine provider name for checkpoint key.
@@ -429,11 +435,12 @@ func (j *DirectorySyncJob) fetchUsers(ctx context.Context, tenantID string) ([]a
 
 	users, newToken, err := dc.ListUsersDelta(ctx, tenantID, deltaToken)
 	if err != nil {
-		// Delta failed — fall back to full sync.
+		// Delta failed — fall back to a full sync (complete roster).
 		j.cfg.Logger.Warn("directory sync: delta sync failed, falling back to full",
 			slog.String("tenant_id", tenantID),
 			slog.String("err", err.Error()))
-		return j.cfg.Directory.ListUsers(ctx, tenantID)
+		users, ferr := j.cfg.Directory.ListUsers(ctx, tenantID)
+		return users, true, ferr
 	}
 
 	// Persist the new delta token.
@@ -445,7 +452,8 @@ func (j *DirectorySyncJob) fetchUsers(ctx context.Context, tenantID string) ([]a
 		})
 	}
 
-	return users, nil
+	// Delta returns only changed users — a partial roster.
+	return users, false, nil
 }
 
 // classifyGroupRisk maps a group name to a risk_class value stored in
