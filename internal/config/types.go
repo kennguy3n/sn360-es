@@ -102,3 +102,36 @@ func (r Role) RunsWorkers() bool { return r == RoleAll || r == RoleWorkers }
 
 // String implements fmt.Stringer.
 func (r Role) String() string { return string(r) }
+
+// DirectorySyncSource selects where the directory-sync worker pulls
+// its user roster from.
+//
+//   - DirectorySourceNative: the existing behaviour. Users come from
+//     the configured per-provider directory client (GWS / MS Graph),
+//     with delta sync when the provider supports it. Default.
+//   - DirectorySourceIAMCore: users come from iam-core's Management
+//     API. Group / membership sync still runs against the native
+//     provider, and sensitivity classification plus org-graph
+//     construction continue to happen locally (both are email-
+//     security specific to sn360-es).
+type DirectorySyncSource string
+
+const (
+	DirectorySourceNative  DirectorySyncSource = "native"
+	DirectorySourceIAMCore DirectorySyncSource = "iam-core"
+)
+
+// Valid reports whether the value is a recognised directory source.
+// The empty string is NOT valid here; Load() defaults it to
+// DirectorySourceNative before validation runs.
+func (s DirectorySyncSource) Valid() bool {
+	switch s {
+	case DirectorySourceNative, DirectorySourceIAMCore:
+		return true
+	default:
+		return false
+	}
+}
+
+// String implements fmt.Stringer.
+func (s DirectorySyncSource) String() string { return string(s) }

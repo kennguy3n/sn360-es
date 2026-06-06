@@ -84,13 +84,31 @@ func ClaimsFromContext(ctx context.Context) *privacy.ActionClaims {
 
 // JWTAuthConfig wires JWTAuth.
 type JWTAuthConfig struct {
-	// Issuer verifies tokens. Must be non-nil.
+	// Issuer verifies the primary (HS256, privacy-package) tokens.
+	// May be nil when only the iam-core issuer is configured.
 	Issuer *privacy.JWTIssuer
 	// SkipPaths is the list of exact paths that bypass auth (health
 	// probes, docs, metrics). Paths are matched verbatim, with one
 	// exception: a trailing "/" makes the entry a prefix match so
 	// "/docs/" also covers "/docs/swagger.css".
 	SkipPaths []string
+
+	// IAMCoreJWKSURL is the iam-core JWKS document URL. When set
+	// together with IAMCoreIssuer, JWTAuth becomes dual-issuer:
+	// tokens that the primary Issuer rejects are then validated
+	// against iam-core's JWKS. This enables a gradual migration —
+	// existing privacy-package tokens keep working while iam-core
+	// tokens are accepted in parallel. Empty disables the secondary
+	// issuer (behaviour identical to before).
+	IAMCoreJWKSURL string
+	// IAMCoreIssuer is the expected `iss` claim on iam-core tokens.
+	// Required when IAMCoreJWKSURL is set.
+	IAMCoreIssuer string
+	// IAMCore, when non-nil, is used as the secondary verifier
+	// instead of constructing one from IAMCoreJWKSURL/IAMCoreIssuer.
+	// Primarily an injection seam for tests; production wiring sets
+	// the URL/issuer fields and lets NewJWTAuth build the verifier.
+	IAMCore IAMCoreVerifier
 }
 
 // JWTAuth validates the `Authorization: Bearer <token>` header on every
@@ -98,10 +116,11 @@ type JWTAuthConfig struct {
 // downstream handlers via request context. Requests hitting paths in
 // SkipPaths bypass authentication.
 type JWTAuth struct {
-	next   http.Handler
-	issuer *privacy.JWTIssuer
-	skip   map[string]bool
-	prefix []string
+	next    http.Handler
+	issuer  *privacy.JWTIssuer
+	iamCore IAMCoreVerifier
+	skip    map[string]bool
+	prefix  []string
 }
 
 // NewJWTAuth wraps next. The default SkipPaths list ("/healthz",
@@ -121,7 +140,20 @@ func NewJWTAuth(next http.Handler, cfg JWTAuthConfig) *JWTAuth {
 		}
 		skip[p] = true
 	}
-	return &JWTAuth{next: next, issuer: cfg.Issuer, skip: skip, prefix: prefixes}
+	iamCore := cfg.IAMCore
+	if iamCore == nil && cfg.IAMCoreJWKSURL != "" && cfg.IAMCoreIssuer != "" {
+		// Errors here are intentionally swallowed to a nil verifier:
+		// a malformed iam-core config must never silently disable the
+		// primary issuer. The only inputs that can fail validation are
+		// empty URL/issuer, which we have already excluded.
+		if v, err := NewJWKSVerifier(JWKSVerifierConfig{
+			JWKSURL: cfg.IAMCoreJWKSURL,
+			Issuer:  cfg.IAMCoreIssuer,
+		}); err == nil {
+			iamCore = v
+		}
+	}
+	return &JWTAuth{next: next, issuer: cfg.Issuer, iamCore: iamCore, skip: skip, prefix: prefixes}
 }
 
 // ServeHTTP implements http.Handler.
@@ -130,9 +162,9 @@ func (j *JWTAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		j.next.ServeHTTP(w, r)
 		return
 	}
-	// Issuer not wired (test / dev) — fail closed so missing config
-	// never accidentally opens the API.
-	if j.issuer == nil {
+	// Neither issuer wired (test / dev) — fail closed so missing
+	// config never accidentally opens the API.
+	if j.issuer == nil && j.iamCore == nil {
 		writeUnauthorized(w, "missing_auth_configuration")
 		return
 	}
@@ -141,17 +173,45 @@ func (j *JWTAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeUnauthorized(w, "missing_token")
 		return
 	}
-	claims, err := j.issuer.Verify(tok)
-	if err != nil {
+
+	// Dual-issuer validation. The primary privacy-package issuer is
+	// tried first; only when it rejects the token (different signing
+	// key/algorithm) do we fall back to iam-core's JWKS. A token that
+	// the primary issuer accepts is definitively a primary token —
+	// even an empty tenant claim on it is a primary-token error, not
+	// a reason to re-try it against iam-core.
+	var (
+		claims   *privacy.ActionClaims
+		tenantID string
+		verified bool
+	)
+	if j.issuer != nil {
+		if c, err := j.issuer.Verify(tok); err == nil {
+			claims = c
+			tenantID = c.TenantID
+			verified = true
+		}
+	}
+	if !verified && j.iamCore != nil {
+		if tid, err := j.iamCore.Verify(r.Context(), tok); err == nil {
+			tenantID = tid
+			// Surface the verified tenant through the same claims
+			// envelope handlers already read. iam-core tokens carry no
+			// message-scoped fields, so only TenantID is populated.
+			claims = &privacy.ActionClaims{TenantID: tid}
+			verified = true
+		}
+	}
+	if !verified {
 		writeUnauthorized(w, "invalid_token")
 		return
 	}
-	if claims.TenantID == "" {
+	if tenantID == "" {
 		writeUnauthorized(w, "missing_tenant_claim")
 		return
 	}
 	ctx := r.Context()
-	ctx = context.WithValue(ctx, ctxKeyTenantID, claims.TenantID)
+	ctx = context.WithValue(ctx, ctxKeyTenantID, tenantID)
 	ctx = context.WithValue(ctx, ctxKeyClaims, claims)
 	j.next.ServeHTTP(w, r.WithContext(ctx))
 }

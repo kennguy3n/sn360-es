@@ -59,6 +59,38 @@ func (c Config) validate() error {
 	default:
 		return fmt.Errorf("INGESTION_MODE: invalid value %q (expected one of: poll, push, hybrid, or empty)", c.Ingestion.Mode)
 	}
+	// DIRECTORY_SYNC_SOURCE selects the directory-sync user roster
+	// source. A typo (e.g. "iamcore", "Native") must fail fast at
+	// boot rather than silently fall back to the native provider and
+	// leave an operator believing iam-core is the source of truth.
+	// Empty is accepted and treated as native — Load() injects the
+	// default, but a directly-constructed Config (tests, embedders)
+	// leaves it zero-valued.
+	switch c.DirectorySyncSource {
+	case "", DirectorySourceNative, DirectorySourceIAMCore:
+		// ok
+	default:
+		return fmt.Errorf("DIRECTORY_SYNC_SOURCE: invalid value %q (expected one of: native, iam-core)", c.DirectorySyncSource)
+	}
+	// When the directory-sync source is iam-core the Management API
+	// must be reachable. Fail fast at boot so the worker never starts
+	// a sync that would immediately error on a missing base URL or an
+	// unauthenticated Management API call.
+	if c.DirectorySyncSource == DirectorySourceIAMCore {
+		if c.IAMCore.ManagementURL == "" {
+			return errors.New("IAM_CORE_MANAGEMENT_URL must be set when DIRECTORY_SYNC_SOURCE=iam-core")
+		}
+		if c.IAMCore.ManagementToken == "" {
+			return errors.New("IAM_CORE_MANAGEMENT_TOKEN must be set when DIRECTORY_SYNC_SOURCE=iam-core (Management API requires a bearer token with the read:users scope)")
+		}
+	}
+	// Dual-issuer JWT validation is opt-in via IAM_CORE_JWKS_URL.
+	// When it is set, the expected `iss` claim must also be set or
+	// the middleware cannot pin tokens to iam-core — accepting any
+	// issuer would be an authentication bypass.
+	if c.IAMCore.JWKSEndpoint != "" && c.IAMCore.Issuer == "" {
+		return errors.New("IAM_CORE_ISSUER must be set when IAM_CORE_JWKS_URL is configured (the middleware pins the iam-core `iss` claim)")
+	}
 	if c.Score.Blocked <= c.Score.HighRisk ||
 		c.Score.HighRisk <= c.Score.Warning ||
 		c.Score.Warning <= c.Score.Caution ||

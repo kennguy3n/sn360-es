@@ -34,7 +34,35 @@ type DirectorySyncJobConfig struct {
 	// `migrations/0018_row_level_security.up.sql`. Nil is a valid
 	// no-op for in-memory tests.
 	Binder TenantBinder
+
+	// Source selects where the user roster comes from. Empty is
+	// treated as SourceNative (the existing per-provider directory
+	// client). When SourceIAMCore, fetchUsers pulls the authoritative
+	// user list from the iam-core Management API via IAMCore. Groups,
+	// memberships and group-based classification context still come
+	// from the native provider (Directory) — iam-core exposes neither
+	// native group IDs nor an admin flag — and are matched back to the
+	// iam-core users by email. Sensitivity classification and the
+	// org-graph snapshot are produced locally in both modes. A native
+	// Directory is therefore required even when Source is SourceIAMCore.
+	Source DirectorySource
+	// IAMCore is the iam-core Management API user source. Required
+	// when Source is SourceIAMCore; ignored otherwise.
+	IAMCore agent.IAMCoreUserSource
 }
+
+// DirectorySource selects the directory-sync user roster source. It
+// mirrors config.DirectorySyncSource but is redeclared here so the
+// worker package does not depend on the config package.
+type DirectorySource string
+
+const (
+	// SourceNative pulls users from the per-provider directory client
+	// (GWS / MS Graph) with delta sync when supported. Default.
+	SourceNative DirectorySource = "native"
+	// SourceIAMCore pulls users from iam-core's Management API.
+	SourceIAMCore DirectorySource = "iam-core"
+)
 
 // DirectorySyncJob implements the Job interface for periodic
 // directory synchronization. It discovers new/changed users,
@@ -60,6 +88,13 @@ func NewDirectorySyncJob(cfg DirectorySyncJobConfig) (*DirectorySyncJob, error) 
 	}
 	if cfg.Hasher == nil {
 		return nil, fmt.Errorf("worker: directory sync requires Hasher")
+	}
+	// Fail loud on an iam-core source with no Management API client
+	// wired — silently falling back to the native provider would make
+	// an operator believe iam-core is the source of truth when it is
+	// not.
+	if cfg.Source == SourceIAMCore && cfg.IAMCore == nil {
+		return nil, fmt.Errorf("worker: directory sync source %q requires an IAMCore user source", cfg.Source)
 	}
 	if cfg.Interval <= 0 {
 		cfg.Interval = 6 * time.Hour
@@ -120,13 +155,50 @@ func (j *DirectorySyncJob) Run(ctx context.Context) error {
 }
 
 func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) error {
-	users, err := j.fetchUsers(ctx, tenantID)
+	users, nativeFull, err := j.fetchUsers(ctx, tenantID)
 	if err != nil {
 		return fmt.Errorf("list users: %w", err)
 	}
 	groups, err := j.cfg.Directory.ListGroups(ctx, tenantID)
 	if err != nil {
 		return fmt.Errorf("list groups: %w", err)
+	}
+
+	// Group memberships and group-based classification context must be
+	// derived from the *complete* native roster. ReplaceForGroup performs
+	// a full replace, so resolving members from a partial roster would
+	// silently drop every member missing from it. Two ways `users` can be
+	// partial: (1) iam-core source — the Management API roster carries no
+	// native group IDs / admin flag at all; (2) native delta sync —
+	// ListUsersDelta returns only changed users. In both cases we fetch a
+	// full native ListUsers here and match it to the persisted users by
+	// email hash. Only a full native ListUsers (nativeFull) can be used
+	// as-is. iam-core/admin context is then matched back by email.
+	membershipRoster := users
+	if !nativeFull {
+		nativeUsers, nerr := j.cfg.Directory.ListUsers(ctx, tenantID)
+		if nerr != nil {
+			return fmt.Errorf("list native users for group context: %w", nerr)
+		}
+		membershipRoster = nativeUsers
+	}
+	groupCtxByEmail := make(map[string]agent.DiscoveredUser, len(membershipRoster))
+	for _, mu := range membershipRoster {
+		groupCtxByEmail[strings.ToLower(mu.Email)] = mu
+	}
+
+	// Sensitivity classification and the org-graph snapshot describe the
+	// whole tenant population, not just the users fetched this cycle.
+	// Under native delta sync `users` is only the changed subset, so
+	// deriving classification coverage or the snapshot (employee/department
+	// counts, high-risk set) from it would under-report the org. The full
+	// population is the iam-core roster in iam-core mode (the authoritative
+	// user list) and the full native roster otherwise (membershipRoster is
+	// a complete ListUsers even on the delta path). The provider fetch
+	// stays incremental; only local processing walks the full roster.
+	populationRoster := membershipRoster
+	if j.cfg.Source == SourceIAMCore {
+		populationRoster = users
 	}
 
 	// Fetch existing users for diff. Key by hex-encoded email hash
@@ -140,14 +212,23 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 		existingByHash[fmt.Sprintf("%x", u.EmailHash)] = u
 	}
 
-	// Classify sensitivity for all discovered users if classifier available.
-	var classResults []agent.ClassifyResult
-	if j.cfg.Classifier != nil && len(users) > 0 {
-		inputs := make([]agent.UserClassifyInput, len(users))
-		for i, u := range users {
+	// Classify sensitivity for the full population, keyed by email so both
+	// the user upserts (which iterate the possibly-partial `users` set) and
+	// the org-graph snapshot (which walks the full population) read a single
+	// consistent result. In iam-core and native-full modes populationRoster
+	// equals `users`, so this is unchanged; only the native delta path now
+	// classifies the full roster instead of just the changed subset.
+	classByEmail := make(map[string]agent.ClassifyResult, len(populationRoster))
+	if j.cfg.Classifier != nil && len(populationRoster) > 0 {
+		inputs := make([]agent.UserClassifyInput, len(populationRoster))
+		for i, u := range populationRoster {
+			// Group/admin context is sourced from the native provider
+			// (see membershipRoster above), matched to this user by
+			// email. In native mode gctx is the same record as u.
+			gctx := groupCtxByEmail[strings.ToLower(u.Email)]
 			groupNames := make([]string, 0)
 			for _, g := range groups {
-				for _, gid := range u.GroupIDs {
+				for _, gid := range gctx.GroupIDs {
 					if gid == g.ID {
 						groupNames = append(groupNames, g.Name)
 					}
@@ -158,26 +239,30 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 				Department:  u.Department,
 				DisplayName: u.DisplayName,
 				GroupNames:  groupNames,
-				IsAdmin:     u.IsAdmin,
+				IsAdmin:     gctx.IsAdmin,
 			}
 		}
-		classResults, err = j.cfg.Classifier.ClassifyBatch(ctx, inputs)
-		if err != nil {
+		results, cerr := j.cfg.Classifier.ClassifyBatch(ctx, inputs)
+		if cerr != nil {
 			j.cfg.Logger.Warn("directory sync: classification failed, using defaults",
 				slog.String("tenant_id", tenantID),
-				slog.String("err", err.Error()))
+				slog.String("err", cerr.Error()))
+		} else {
+			for i, u := range populationRoster {
+				if i < len(results) {
+					classByEmail[strings.ToLower(u.Email)] = results[i]
+				}
+			}
 		}
 	}
 
 	// Upsert users.
-	for i, u := range users {
+	for _, u := range users {
 		sens := agent.SensitivityDefault
 		confidence := 1.0
-		needsReview := false
-		if i < len(classResults) {
-			sens = classResults[i].Sensitivity
-			confidence = classResults[i].Confidence
-			needsReview = classResults[i].NeedsReview
+		if cr, ok := classByEmail[strings.ToLower(u.Email)]; ok {
+			sens = cr.Sensitivity
+			confidence = cr.Confidence
 		}
 
 		var emailHash []byte
@@ -199,7 +284,6 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 			SensitivityTier: sens.DBTier(),
 			Locale:          "",
 		}
-		_ = needsReview
 
 		if err := j.cfg.Users.Upsert(ctx, repoUser); err != nil {
 			j.cfg.Logger.Warn("directory sync: user upsert failed",
@@ -265,10 +349,13 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 		// Update memberships using resolved DB user UUIDs (not provider IDs).
 		if j.cfg.Memberships != nil && len(resolvedByHash) > 0 {
 			memberIDs := make([]string, 0)
-			for _, u := range users {
-				for _, gid := range u.GroupIDs {
+			// Memberships are derived from the native provider's roster
+			// (membershipRoster), which carries GroupIDs; the DB UUID is
+			// resolved by email hash against the persisted user list.
+			for _, mu := range membershipRoster {
+				for _, gid := range mu.GroupIDs {
 					if gid == g.ID {
-						if h, hErr := j.cfg.Hasher(tenantID, u.Email); hErr == nil {
+						if h, hErr := j.cfg.Hasher(tenantID, mu.Email); hErr == nil {
 							if dbUID, ok := resolvedByHash[fmt.Sprintf("%x", h)]; ok {
 								memberIDs = append(memberIDs, dbUID)
 							}
@@ -289,18 +376,21 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 	if j.cfg.OrgGraphs != nil {
 		highRisk := make([]string, 0)
 		deptSet := make(map[string]struct{})
-		for i, u := range users {
+		// Walk the full population so counts and the high-risk set reflect
+		// the whole org, not just the users changed this cycle.
+		for _, u := range populationRoster {
 			if u.Department != "" {
 				deptSet[u.Department] = struct{}{}
 			}
-			if i < len(classResults) && classResults[i].Sensitivity >= agent.SensitivityHigh {
+			cr, ok := classByEmail[strings.ToLower(u.Email)]
+			if ok && cr.Sensitivity >= agent.SensitivityHigh && j.cfg.Hasher != nil {
 				if h, hErr := j.cfg.Hasher(tenantID, u.Email); hErr == nil {
 					highRisk = append(highRisk, fmt.Sprintf("%x", h))
 				}
 			}
 		}
 		graphData, _ := json.Marshal(map[string]any{
-			"employees":   len(users),
+			"employees":   len(populationRoster),
 			"groups":      len(groups),
 			"departments": len(deptSet),
 			"high_risk":   len(highRisk),
@@ -311,7 +401,7 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 			GraphJSON:       graphData,
 			HighRiskIDs:     highRisk,
 			DepartmentCount: len(deptSet),
-			EmployeeCount:   len(users),
+			EmployeeCount:   len(populationRoster),
 			GroupCount:      len(groups),
 		}
 		if gErr := j.cfg.OrgGraphs.Upsert(ctx, snap); gErr != nil {
@@ -330,11 +420,26 @@ func (j *DirectorySyncJob) syncTenant(ctx context.Context, tenantID string) erro
 
 // fetchUsers attempts incremental delta sync when the directory client
 // supports it and a checkpoint repository is configured; otherwise
-// falls back to a full ListUsers call.
-func (j *DirectorySyncJob) fetchUsers(ctx context.Context, tenantID string) ([]agent.DiscoveredUser, error) {
+// falls back to a full ListUsers call. The returned bool is true only
+// when the result is a complete native ListUsers roster; it is false for
+// the iam-core source and for native delta results (which are partial).
+// The caller relies on this to decide whether it must fetch a full
+// native roster for group/membership context (see syncTenant).
+func (j *DirectorySyncJob) fetchUsers(ctx context.Context, tenantID string) ([]agent.DiscoveredUser, bool, error) {
+	// iam-core source: the authoritative user list comes from the
+	// Management API. The caller (syncTenant) still classifies
+	// sensitivity, builds the org-graph snapshot, and sources
+	// groups/memberships from the native provider — only the user list
+	// source changes here. Not a native roster, so nativeFull=false.
+	if j.cfg.Source == SourceIAMCore {
+		users, err := j.cfg.IAMCore.ListUsers(ctx, tenantID)
+		return users, false, err
+	}
+
 	dc, ok := j.cfg.Directory.(agent.DeltaSyncCapable)
 	if !ok || j.cfg.SyncCheckpoints == nil {
-		return j.cfg.Directory.ListUsers(ctx, tenantID)
+		users, err := j.cfg.Directory.ListUsers(ctx, tenantID)
+		return users, true, err
 	}
 
 	// Determine provider name for checkpoint key.
@@ -355,11 +460,12 @@ func (j *DirectorySyncJob) fetchUsers(ctx context.Context, tenantID string) ([]a
 
 	users, newToken, err := dc.ListUsersDelta(ctx, tenantID, deltaToken)
 	if err != nil {
-		// Delta failed — fall back to full sync.
+		// Delta failed — fall back to a full sync (complete roster).
 		j.cfg.Logger.Warn("directory sync: delta sync failed, falling back to full",
 			slog.String("tenant_id", tenantID),
 			slog.String("err", err.Error()))
-		return j.cfg.Directory.ListUsers(ctx, tenantID)
+		users, ferr := j.cfg.Directory.ListUsers(ctx, tenantID)
+		return users, true, ferr
 	}
 
 	// Persist the new delta token.
@@ -371,7 +477,8 @@ func (j *DirectorySyncJob) fetchUsers(ctx context.Context, tenantID string) ([]a
 		})
 	}
 
-	return users, nil
+	// Delta returns only changed users — a partial roster.
+	return users, false, nil
 }
 
 // classifyGroupRisk maps a group name to a risk_class value stored in

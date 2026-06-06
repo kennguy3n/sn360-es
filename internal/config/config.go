@@ -78,6 +78,13 @@ type Config struct {
 	Onboarding               Onboarding
 	Telemetry                Telemetry
 	Platform                 Platform
+	IAMCore                  IAMCore
+
+	// DirectorySyncSource selects where the directory-sync worker
+	// pulls its user roster from (native provider vs iam-core
+	// Management API). Loaded from DIRECTORY_SYNC_SOURCE; defaults to
+	// DirectorySourceNative so existing deployments are unchanged.
+	DirectorySyncSource DirectorySyncSource
 }
 
 // Load reads configuration from the environment.
@@ -127,6 +134,8 @@ func Load() (Config, error) {
 		Onboarding:               loadOnboarding(),
 		Telemetry:                loadTelemetry(),
 		Platform:                 loadPlatform(),
+		IAMCore:                  loadIAMCore(),
+		DirectorySyncSource:      DirectorySyncSource(strings.ToLower(getStr("DIRECTORY_SYNC_SOURCE", string(DirectorySourceNative)))),
 	}
 
 	// Critical numeric settings: re-parse with the strict helpers so a
