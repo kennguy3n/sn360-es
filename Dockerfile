@@ -7,7 +7,7 @@
 # different Alpine major and quietly change behaviour. Pinning keeps
 # CI / prod builds bit-identical for the lifetime of this commit;
 # Renovate / Dependabot bump the pin via an explicit PR.
-FROM golang:1.25.10-alpine3.22 AS builder
+FROM golang:1.26.4-alpine3.22 AS builder
 ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
 WORKDIR /src
 
