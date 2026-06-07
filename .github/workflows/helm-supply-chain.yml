@@ -1,0 +1,58 @@
+name: Helm Supply Chain
+
+# Supply-chain hardening for Helm chart dependencies (Workstream 9, Task 4).
+#
+# Dependabot (.github/dependabot.yml) covers gomod / npm / docker(Dockerfiles) /
+# github-actions, but it has NO helm ecosystem and its docker fetcher only reads
+# Dockerfiles — so the external sub-charts pinned in deployments/helm/*/Chart.yaml
+# (e.g. the bundled NATS JetStream chart) and the versions recorded in Chart.lock
+# are invisible to it. This job closes that gap:
+#
+#   * On PRs that touch the chart, it GATES integrity — a pinned dependency
+#     version that doesn't exist upstream, or a Chart.yaml/Chart.lock mismatch,
+#     fails the check (a real supply-chain defect).
+#   * On a weekly schedule, it surfaces freshness drift (a newer stable upstream
+#     version is available) the way a Dependabot bump PR would — as a warning +
+#     job summary, NOT a hard failure, so it never blocks unrelated PRs.
+#
+# See scripts/check_helm_chart_deps.py for the full rationale.
+on:
+  pull_request:
+    paths:
+      - "deployments/helm/**/Chart.yaml"
+      - "deployments/helm/**/Chart.lock"
+      - "scripts/check_helm_chart_deps.py"
+      - ".github/workflows/helm-supply-chain.yml"
+  schedule:
+    # Mondays 05:30 UTC — just after the Dependabot weekly run so all
+    # supply-chain drift surfaces together.
+    - cron: "30 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: helm-supply-chain-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  chart-deps:
+    name: Verify Helm chart dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        # Pin the exact version so a compromised/yanked future PyYAML release
+        # can't be pulled into this supply-chain check on a floating `latest`.
+        # --disable-pip-version-check keeps the log clean on the disposable runner.
+        run: pip install --disable-pip-version-check "pyyaml==6.0.2"
+
+      - name: Check Helm chart dependencies
+        run: python scripts/check_helm_chart_deps.py

@@ -1,0 +1,100 @@
+# Dependabot configuration — automated dependency updates (Workstream 9,
+# Task 4: supply-chain hardening). Complements the existing PR-time scanner
+# in ci.yml (govulncheck): that tells us when a dependency is *already*
+# vulnerable; Dependabot is the proactive half that opens the bump PRs that
+# keep us off the vulnerable versions in the first place.
+#
+# Why Dependabot rather than Renovate: this is a GitHub-hosted repo, so
+# Dependabot is native (no GitHub App install / self-hosted runner + PAT to
+# manage) and reads checksums straight from the committed go.sum /
+# package-lock.json.
+#
+# PR-volume control: each semver ecosystem (Go, npm, github-actions) groups
+# its minor+patch bumps into one PR and caps concurrently-open PRs, so a
+# weekly run produces a handful of reviewable PRs, not a flood. The docker
+# ecosystem is deliberately left ungrouped — base-image tags don't follow
+# semver, so update-type grouping isn't meaningful and each image bump is
+# clearer as its own PR. Major bumps are likewise intentionally ungrouped —
+# they can carry breaking changes and deserve individual review.
+version: 2
+
+updates:
+  # --- Go modules ------------------------------------------------------
+  # Single Go module at the repo root (the service ships as one binary).
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps(go)"
+    groups:
+      go-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # --- JavaScript / TypeScript ----------------------------------------
+  # The Outlook / Gmail add-ins bundle (Office.js) ships its own
+  # package.json + package-lock.json under deployments/addins.
+  - package-ecosystem: npm
+    directory: "/deployments/addins"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(js)"
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # --- Container base images ------------------------------------------
+  # The main service Dockerfile at the repo root plus the two Python ML
+  # inference images (encoder = XLM-RoBERTa ONNX, llm = SLM serving).
+  - package-ecosystem: docker
+    directories:
+      - "/"
+      - "/deployments/encoder"
+      - "/deployments/llm"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(docker)"
+
+  # --- GitHub Actions --------------------------------------------------
+  # Workflow actions are version-tag pinned (e.g. actions/checkout@v4).
+  # Dependabot keeps those tags current; grouped into one PR to avoid a
+  # separate PR per action.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci(actions)"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        # Scope the group to minor+patch so a breaking *major* action bump
+        # (e.g. actions/checkout v4 -> v5) lands as its own PR for review,
+        # consistent with the gomod/npm groups above. A group without an
+        # update-types filter would otherwise bundle majors too.
+        update-types:
+          - minor
+          - patch
