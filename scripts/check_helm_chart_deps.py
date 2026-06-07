@@ -112,7 +112,11 @@ def _fetch_index(repo_url: str, retries: int = 3, backoff: float = 2.0) -> dict:
 
 
 def _upstream_versions(index: dict, name: str) -> list[str]:
-    return [e["version"] for e in index.get("entries", {}).get(name, [])]
+    # str()-coerce: a YAML index that records e.g. `version: 1.0` parses it as a
+    # float, which would never `==` the string `pinned` from Chart.yaml and would
+    # surface as a spurious integrity failure. Mirrors the str() on the Chart.yaml
+    # side in check_chart().
+    return [str(e["version"]) for e in index.get("entries", {}).get(name, [])]
 
 
 def _newest_stable(versions: list[str]) -> str | None:
@@ -150,7 +154,11 @@ def _load_lock_versions(chart_dir: Path) -> dict[str, str]:
     if not lock.is_file():
         return {}
     data = yaml.safe_load(lock.read_text()) or {}
-    return {d["name"]: d["version"] for d in data.get("dependencies", [])}
+    # `data.get("dependencies", [])` is not enough: an explicit `dependencies:`
+    # with no value parses to None (the key exists, so the default is skipped),
+    # and iterating None raises TypeError. `or []` collapses both the missing
+    # and the explicit-null case, matching the guard in check_chart().
+    return {d["name"]: d["version"] for d in (data.get("dependencies") or [])}
 
 
 class Counts:
