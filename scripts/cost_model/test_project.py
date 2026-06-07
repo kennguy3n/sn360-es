@@ -329,6 +329,66 @@ class TestCostModel(unittest.TestCase):
             ),
         )
 
+    # The Base tier is the entry SME plan, priced at $10 / tenant /
+    # month. The cost model's `low` (200 msg/tenant/day) and `medium`
+    # (1 200 msg/tenant/day) cohorts are the inbound-volume bands that
+    # plan targets — see benchmarks/COST_MODEL.md "Base tier ceiling".
+    # `high` (8 500) and `enterprise` (15 000) model materially heavier
+    # tenants that map to higher-priced plans (their per-tenant COGS is
+    # ~$31 and ~$104 respectively at 5 000-tenant density, an order of
+    # magnitude above the Base price point) and are therefore excluded
+    # from this ceiling by design.
+    BASE_TIER_PROFILES = ("low", "medium")
+    BASE_TIER_COGS_CEILING_USD = 10.00
+
+    def test_base_tier_under_cogs_ceiling(self) -> None:
+        """Base-tier COGS ceiling: every Base-tier profile must cost
+        strictly less than $10 / tenant / month with all PR #45/#46
+        levers on, so the $10 Base plan price covers infrastructure
+        cost with margin to spare.
+
+        Checked at two densities:
+
+          * the 5 000-tenant scale-out density the SME launch is sized
+            for (the headline ask in the WS-5 cost-validation task), and
+          * the 1 000-tenant ``DEFAULT_TENANTS_PER_DEPLOYMENT`` the
+            headline table is computed against.
+
+        Asserting at both pins the ceiling against the shared-infra
+        amortisation curve from both ends: a regression that inflates a
+        per-message variable cost trips the 5 000 check, while one that
+        inflates the shared-instance baseline (Redis / PG / NAT GW)
+        trips the sparser 1 000-tenant check first. Both use
+        ``levers_on`` because the Base plan economics assume the
+        scaling-era levers are active in production.
+        """
+        for profile_name in self.BASE_TIER_PROFILES:
+            profile = project.PROFILES[profile_name]
+            for density in (5_000, project.DEFAULT_TENANTS_PER_DEPLOYMENT):
+                rec = project.project_one(
+                    profile,
+                    project.CostLevers.levers_on(),
+                    tenants_per_deployment=density,
+                )
+                cost = rec["total_per_tenant_month_usd"]
+                with self.subTest(profile=profile_name, density=density):
+                    self.assertLess(
+                        cost,
+                        self.BASE_TIER_COGS_CEILING_USD,
+                        (
+                            f"Base-tier profile {profile_name!r} costs "
+                            f"${cost:.4f} / tenant / month at "
+                            f"{density}-tenant density with levers on, "
+                            f"at/above the ${self.BASE_TIER_COGS_CEILING_USD:.2f} "
+                            "Base-plan COGS ceiling. Either a cost lever "
+                            "stopped firing or a price/coefficient drifted "
+                            "— investigate before shipping, and if the new "
+                            "cost is legitimate, re-tier the profile or "
+                            "reprice the plan rather than relaxing this "
+                            "ceiling silently."
+                        ),
+                    )
+
     def test_tier0_bypass_reduces_inference(self) -> None:
         # At identical other levers, raising tier0_bypass_hit_rate
         # must reduce Tier 1 + Tier 2 cost. Exercises the
