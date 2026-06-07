@@ -55,7 +55,7 @@ jobs:
       # this repo's commits — so commit-level cross-repo pinning is out of
       # scope by design; main is expected to be release-ready (that is what
       # the merge-gate CI protects).
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
