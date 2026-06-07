@@ -9,7 +9,7 @@
     "test:gmail": "node --test --test-reporter spec gmail/test/*.test.js"
   },
   "devDependencies": {
-    "office-addin-mock": "^2.4.0"
+    "office-addin-mock": "^3.0.9"
   },
   "engines": {
     "node": ">=18"
