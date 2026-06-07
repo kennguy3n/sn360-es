@@ -230,6 +230,11 @@ type application struct {
 	// Ingestion polling.
 	poller *ingestion.Poller
 
+	// smtpGateway is nil unless SMTP_GATEWAY_ENABLED is set. It is the
+	// pre-delivery MX ingress; like the poller it belongs to the
+	// consumer role and is spawned as a tracked background goroutine.
+	smtpGateway *ingestion.SMTPGateway
+
 	// Push-notification ingestion.
 	//
 	// pushManager is nil unless INGESTION_MODE includes push and at
@@ -1284,6 +1289,12 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 			slog.String("mode", cfg.Ingestion.Mode))
 	}
 
+	// SMTP MX gateway (pre-delivery scanning). Independent of
+	// INGESTION_MODE — gated by its own SMTP_GATEWAY_ENABLED flag.
+	if cfg.Ingestion.SMTPGateway.Enabled {
+		app.smtpGateway = buildSMTPGateway(cfg, logger, app)
+	}
+
 	// Push-notification ingestion. The manager + verifier are built
 	// in lock-step: if either fails we drop both so the /v1/push
 	// route is never mounted with a half-functional pipeline.
@@ -1467,6 +1478,12 @@ func (a *application) StartBackground(ctx context.Context) {
 				return nil
 			}
 			return a.poller.Run(ctx)
+		})
+		a.spawn(ctx, "smtp mx gateway", func(ctx context.Context) error {
+			if a.smtpGateway == nil {
+				return nil
+			}
+			return a.smtpGateway.Run(ctx)
 		})
 		a.spawn(ctx, "push subscription setup", func(ctx context.Context) error {
 			if a.pushManager == nil {

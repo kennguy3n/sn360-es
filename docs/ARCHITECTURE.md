@@ -470,6 +470,45 @@ subscription-setup + renewal goroutines from `StartBackground`. The
 mounted when both halves are present; otherwise the binary keeps
 running on the poller in §5.1.1 alone.
 
+#### 5.1.3 SMTP MX Gateway (Pre-Delivery Scanning)
+
+Polling (§5.1.1) and push (§5.1.2) both ingest mail that providers
+have *already delivered* to the inbox. The MX gateway is the third
+ingress and the only **pre-delivery** one: mail servers route inbound
+mail to it via MX records, so it scans each message *before* it
+reaches the mailbox and can refuse a message at SMTP time. This is the
+table-stakes deployment mode versus Proofpoint / Mimecast.
+
+`internal/service/ingestion/smtp_gateway.go` implements an SMTP server
+(built on `github.com/emersion/go-smtp`) that:
+
+- Advertises **STARTTLS** (RFC 3207) when a cert/key pair is
+  configured; `SMTP_GATEWAY_REQUIRE_TLS` additionally refuses
+  `MAIL FROM` on a plaintext session so message bodies are never sent
+  in the clear.
+- Performs inline **DKIM verification** (`go-msgauth/dkim`) over the
+  raw RFC 5322 bytes and folds the verdict into a synthesized
+  `Authentication-Results` header (`dkim=pass|fail|none`), so the
+  existing `DefaultNormalizer` derives the same SPF/DKIM/DMARC
+  `RiskSignals` it does for provider-sourced mail — no normalizer
+  special-casing.
+- **Integrates with the 3-tier pipeline** by publishing one
+  `es.evaluate.request` event per resolved recipient (Tier 0 → Tier 1
+  → Tier 2 + Rspamd run downstream exactly as for poll/push), using
+  the same envelope metadata (`WithTenantID` / `WithMessageID` /
+  `WithCorrelationID` / `WithEventType`).
+- Supports an optional synchronous `PreDeliveryDecider` that can
+  `accept` / `defer` (4xx) / `reject` (5xx) a message before relay —
+  e.g. off fast Tier 0 rules — and an optional `MessageDeliverer` that
+  relays accepted mail to the downstream smarthost. With no deliverer
+  wired the gateway scans-and-publishes only (monitoring mode).
+
+The gateway runs as a consumer-role background goroutine (alongside
+the poller) and is gated independently of `INGESTION_MODE` by
+`SMTP_GATEWAY_ENABLED`. Listen address, TLS material, size/recipient
+ceilings and IO timeouts are configured via the `SMTP_GATEWAY_*`
+environment variables (see `internal/config/pipeline.go`).
+
 ### 5.2 Evaluation Domain
 
 - **Tier 0 Gate**: Rule-based classification using `buildRiskSignals()`
