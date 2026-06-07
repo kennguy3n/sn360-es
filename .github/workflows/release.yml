@@ -4,11 +4,37 @@ on:
   push:
     tags:
       - "v*"
+  # Coordinated-release receiver (sn360-security-platform Workstream 9,
+  # Task 1). The platform's release-orchestrate.yml fans this event out
+  # after its own release succeeds, carrying the pinned version in
+  # client_payload.version. The push:tags trigger above is unchanged, so a
+  # manually-pushed tag still releases exactly as before — the dispatch
+  # path is purely additive. See the receiver contract in the platform repo
+  # at docs/runbooks/coordinated-release.md.
+  repository_dispatch:
+    types: [sn360-coordinated-release]
 
 permissions:
   contents: write
   packages: write
   id-token: write
+
+# Serialise releases for a given version so a manual `v*` tag push and a
+# coordinated repository_dispatch for the same version can't race to create
+# the same GitHub Release or overwrite the same image tag.
+#
+# The key must match the canonical (single leading `v`) version that the
+# "Resolve release version" step computes, so the two trigger paths converge on
+# ONE group even when a dispatch carries a bare `1.2.3` while a manual tag is
+# `v1.2.3`. GitHub Actions expressions have no strip-prefix function, so we
+# branch on startsWith: if the raw trigger version already starts with `v` use
+# it verbatim, otherwise prepend one. (The key is evaluated at workflow level,
+# before any step runs, so it can only use the raw event fields — not
+# steps.ver.outputs.version.) cancel-in-progress is false: a release already in
+# flight must finish, not be cancelled.
+concurrency:
+  group: ${{ startsWith(github.event.client_payload.version || github.ref_name, 'v') && format('release-{0}', github.event.client_payload.version || github.ref_name) || format('release-v{0}', github.event.client_payload.version || github.ref_name) }}
+  cancel-in-progress: false
 
 env:
   GO_VERSION: "1.25.x"
@@ -19,9 +45,67 @@ jobs:
     name: Build, scan, sign, and publish
     runs-on: ubuntu-latest
     steps:
+      # On repository_dispatch there is no triggering ref, so checkout uses
+      # github.sha — the default-branch HEAD captured when the event was
+      # created. That single commit is pinned for the whole run (every step
+      # sees the same github.sha), so a coordinated release is internally
+      # consistent: it builds, tags, and releases the platform-pinned version
+      # against the current default-branch HEAD. The client_payload carries a
+      # version, not a downstream commit SHA — the platform repo cannot know
+      # this repo's commits — so commit-level cross-repo pinning is out of
+      # scope by design; main is expected to be release-ready (that is what
+      # the merge-gate CI protects).
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # Resolve the release version + image tag set from the trigger:
+      #   * push:tags          -> github.ref_name (the pushed tag)
+      #   * repository_dispatch -> client_payload.version (platform pin)
+      # The SemVer regex matches the platform's validate-tag gate. The version
+      # is then canonicalised to a single leading `v` so both the image tags
+      # and the GitHub Release tag always match this repo's `v*` tag
+      # convention (push:tags only fires on `v*`), regardless of whether a
+      # dispatch carried `1.2.3` or `v1.2.3`. The `:latest` floating tag is
+      # withheld for pre-releases (e.g. a coordinated `v0.1.0-rc.1`) so a
+      # release-candidate never clobbers the pointer production consumers
+      # default to.
+      - name: Resolve release version
+        id: ver
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PAYLOAD_VERSION: ${{ github.event.client_payload.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" = "repository_dispatch" ]; then
+            version="${PAYLOAD_VERSION}"
+          else
+            version="${REF_NAME}"
+          fi
+          if ! printf '%s' "${version}" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
+            echo "::error::resolved release version '${version}' is not a valid SemVer tag" >&2
+            exit 1
+          fi
+          # Canonicalise to exactly one leading `v` (strip then re-add) so the
+          # published image tag and GitHub Release tag are identical across the
+          # push:tags and repository_dispatch paths.
+          version="v${version#v}"
+          tags="${GHCR_IMAGE}:${version}"
+          if printf '%s' "${version}" | grep -q '-'; then
+            prerelease=true
+          else
+            prerelease=false
+            tags="${tags}"$'\n'"${GHCR_IMAGE}:latest"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            echo "${tags}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Release version: ${version} (prerelease=${prerelease})"
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -53,12 +137,12 @@ jobs:
           context: .
           load: true
           push: false
-          tags: ${{ env.GHCR_IMAGE }}:${{ github.ref_name }}
+          tags: ${{ env.GHCR_IMAGE }}:${{ steps.ver.outputs.version }}
 
       - name: Trivy scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.GHCR_IMAGE }}:${{ github.ref_name }}
+          image-ref: ${{ env.GHCR_IMAGE }}:${{ steps.ver.outputs.version }}
           format: table
           severity: HIGH,CRITICAL
           exit-code: "1"
@@ -68,7 +152,7 @@ jobs:
       - name: Generate SBOM (syft)
         uses: anchore/sbom-action@v0
         with:
-          image: ${{ env.GHCR_IMAGE }}:${{ github.ref_name }}
+          image: ${{ env.GHCR_IMAGE }}:${{ steps.ver.outputs.version }}
           format: spdx-json
           output-file: sbom.spdx.json
 
@@ -77,13 +161,17 @@ jobs:
         with:
           context: .
           push: true
-          tags: |
-            ${{ env.GHCR_IMAGE }}:${{ github.ref_name }}
-            ${{ env.GHCR_IMAGE }}:latest
+          # version, plus :latest only for stable releases (see Resolve step).
+          tags: ${{ steps.ver.outputs.tags }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Explicit tag_name so the repository_dispatch path (which has no
+          # triggering git tag) tags the released commit at the resolved
+          # version; for the push:tags path this equals github.ref_name.
+          tag_name: ${{ steps.ver.outputs.version }}
+          prerelease: ${{ steps.ver.outputs.prerelease }}
           generate_release_notes: true
           files: |
             sbom.spdx.json
