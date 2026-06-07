@@ -9,13 +9,16 @@
 # manage) and reads checksums straight from the committed go.sum /
 # package-lock.json.
 #
-# PR-volume control: each semver ecosystem (Go, npm, github-actions) groups
-# its minor+patch bumps into one PR and caps concurrently-open PRs, so a
-# weekly run produces a handful of reviewable PRs, not a flood. The docker
-# ecosystem is deliberately left ungrouped — base-image tags don't follow
-# semver, so update-type grouping isn't meaningful and each image bump is
-# clearer as its own PR. Major bumps are likewise intentionally ungrouped —
-# they can carry breaking changes and deserve individual review.
+# PR-volume control: every ecosystem (Go, npm, docker, github-actions)
+# groups its minor+patch bumps into one PR and caps concurrently-open PRs,
+# so a weekly run produces a handful of reviewable PRs, not a flood. Major
+# bumps are intentionally isolated from the groups (via the minor+patch
+# update-types filter) so each one lands as its own PR — they can carry
+# breaking changes and deserve individual review. This applies to docker
+# too: the base images in use (golang, python, ubuntu, curlimages/curl) are
+# semver-tagged, so Dependabot classifies their bumps as major/minor/patch
+# and the group keeps routine patch/minor base-image bumps together while a
+# runtime major (e.g. python 3.x or ubuntu LTS) still gets its own PR.
 version: 2
 
 updates:
@@ -72,6 +75,18 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "deps(docker)"
+    groups:
+      docker-minor-patch:
+        patterns:
+          - "*"
+        # Scope to minor+patch so routine base-image bumps (e.g. golang
+        # 1.x patch, curlimages/curl minor) group into one PR, while a
+        # runtime major (python 3.11 -> 3.14, ubuntu 22.04 -> 26.04) still
+        # lands as its own PR for individual review — consistent with the
+        # gomod / npm / github-actions groups.
+        update-types:
+          - minor
+          - patch
 
   # --- GitHub Actions --------------------------------------------------
   # Workflow actions are version-tag pinned (e.g. actions/checkout@v4).
