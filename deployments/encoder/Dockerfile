@@ -3,7 +3,7 @@
 # ---- builder ---------------------------------------------------------
 # Installs Python dependencies into an isolated venv. We split this from
 # the runtime image so the final image is small and free of build tools.
-FROM python:3.11-slim AS builder
+FROM python:3.14-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -20,7 +20,7 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install -r /opt/encoder/requirements.txt
 
 # ---- runtime ---------------------------------------------------------
-FROM python:3.11-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
