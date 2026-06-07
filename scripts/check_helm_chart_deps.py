@@ -158,7 +158,15 @@ def _load_lock_versions(chart_dir: Path) -> dict[str, str]:
     # with no value parses to None (the key exists, so the default is skipped),
     # and iterating None raises TypeError. `or []` collapses both the missing
     # and the explicit-null case, matching the guard in check_chart().
-    return {d["name"]: d["version"] for d in (data.get("dependencies") or [])}
+    #
+    # str()-coerce the version for the same reason the Chart.yaml side does
+    # (check_chart, `pinned = str(dep["version"])`): a Chart.lock recording
+    # `version: 1.0` parses it as a float, so the `locked != pinned` integrity
+    # check would compare float 1.0 against the string "1.0" — always unequal —
+    # and raise a spurious integrity failure. Coercing both sides keeps the
+    # comparison string-vs-string. This is the third and last of the float-hazard
+    # sites (the other two are _upstream_versions and check_chart).
+    return {d["name"]: str(d["version"]) for d in (data.get("dependencies") or [])}
 
 
 class Counts:
