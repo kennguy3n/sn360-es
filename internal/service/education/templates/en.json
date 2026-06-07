@@ -196,5 +196,71 @@
     "sender_domain_template": "{{.lookalike_internal_domain}}",
     "landing_page_type": "approval_landing",
     "expected_detection_points": ["peer-as-attacker", "internal context"]
+  },
+  {
+    "template_id": "vishing.easy.fake_invoice_callback",
+    "attack_type": "vishing",
+    "difficulty": "easy",
+    "subject_template": "Your order #{{.order_number}} was charged ${{.amount}}",
+    "body_template": "<p>Thank you for your purchase. ${{.amount}} has been charged to your account. If you did not authorise this, call our billing team at {{.callback_number}} to cancel.</p>",
+    "sender_display_template": "{{.brand_name}} Billing",
+    "sender_domain_template": "{{.fake_billing_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": ["callback number (no link)", "unexpected charge urgency"]
+  },
+  {
+    "template_id": "vishing.medium.helpdesk_callback",
+    "attack_type": "vishing",
+    "difficulty": "medium",
+    "subject_template": "Mailbox storage full \u2014 action needed",
+    "body_template": "<p>Your mailbox is over quota and incoming mail is being held. Our support desk cannot reply by email while your account is flagged \u2014 please call {{.callback_number}} to restore delivery.</p>",
+    "sender_display_template": "IT Helpdesk",
+    "sender_domain_template": "{{.fake_helpdesk_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": ["callback pretext", "email-channel avoidance"]
+  },
+  {
+    "template_id": "vishing.hard.exec_assistant_callback",
+    "attack_type": "vishing",
+    "difficulty": "hard",
+    "subject_template": "Re: {{.deal_name}} \u2014 can you call me?",
+    "body_template": "<p>Hi {{.target_name}}, I'm in back-to-back meetings and can't type much. There's a sensitive issue on {{.deal_name}} I need handled today \u2014 call my cell {{.callback_number}} when you get this. Don't loop in others yet.</p>",
+    "sender_display_template": "{{.ceo_name}}",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": ["executive impersonation", "callback + secrecy", "lookalike domain"]
+  },
+  {
+    "template_id": "supply_chain.easy.vendor_bank_update",
+    "attack_type": "supply_chain",
+    "difficulty": "easy",
+    "subject_template": "Updated remittance details for {{.vendor_name}}",
+    "body_template": "<p>Please note our bank has changed. Update our records and direct all future payments to the account at <a href=\"{{.landing_url}}\">this secure portal</a>.</p>",
+    "sender_display_template": "{{.vendor_name}} Accounts",
+    "sender_domain_template": "{{.lookalike_vendor_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": ["vendor impersonation", "bank-detail change"]
+  },
+  {
+    "template_id": "supply_chain.medium.msp_software_update",
+    "attack_type": "supply_chain",
+    "difficulty": "medium",
+    "subject_template": "{{.msp_name}}: critical patch for {{.product_name}}",
+    "body_template": "<p>A critical security patch is available for {{.product_name}}. As your managed service provider we recommend applying it now \u2014 download and run the signed installer from <a href=\"{{.landing_url}}\">the update portal</a>.</p>",
+    "sender_display_template": "{{.msp_name}} Support",
+    "sender_domain_template": "{{.fake_msp_domain}}",
+    "landing_page_type": "malware_download",
+    "expected_detection_points": ["MSP impersonation", "software-update lure"]
+  },
+  {
+    "template_id": "supply_chain.hard.compromised_partner_thread",
+    "attack_type": "supply_chain",
+    "difficulty": "hard",
+    "subject_template": "RE: {{.project_name}} statement of work \u2014 revised",
+    "body_template": "<p>Hi {{.target_name}}, following our call, here is the revised SOW. The file is on our document workspace \u2014 sign in with your work account to view: <a href=\"{{.landing_url}}\">{{.partner_name}} workspace</a>.</p><p>Best,<br>{{.partner_contact}}</p>",
+    "sender_display_template": "{{.partner_contact}}",
+    "sender_domain_template": "{{.partner_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": ["compromised real partner", "existing-thread context", "SSO credential harvest"]
   }
 ]
