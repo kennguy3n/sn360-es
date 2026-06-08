@@ -39,6 +39,47 @@ func (c LessonContext) IsZero() bool {
 	return c.Industry == "" && c.EmployeeRole == "" && c.ThreatProfile == ""
 }
 
+// Length caps for the contextual signals. These bound the prompt size
+// (and therefore token cost) and limit the leverage of prompt-injection
+// payloads, since these fields originate from user-supplied query
+// params (see internal/handler/education.go). Industry / role are short
+// labels; the threat profile is a short free-text phrase.
+const (
+	maxContextLabelLen  = 80
+	maxThreatProfileLen = 200
+)
+
+// normalized returns a copy of the context with each field collapsed to
+// a single line of whitespace-normalised text and truncated to its cap.
+// Collapsing newlines/control runs neutralises the most direct
+// prompt-injection formatting (injected blank lines, fake "system:"
+// blocks split across lines) and the caps bound token cost. It does not
+// pretend to defeat semantic injection — the prompt itself constrains
+// the model to teaching content and the output is HTML-escaped and
+// wrapped locally, so a hostile value can at worst skew lesson prose.
+func (c LessonContext) normalized() LessonContext {
+	return LessonContext{
+		Industry:      normalizeContextField(c.Industry, maxContextLabelLen),
+		EmployeeRole:  normalizeContextField(c.EmployeeRole, maxContextLabelLen),
+		ThreatProfile: normalizeContextField(c.ThreatProfile, maxThreatProfileLen),
+	}
+}
+
+// normalizeContextField collapses internal whitespace (including
+// newlines and tabs) to single spaces and truncates to max runes,
+// trimming any partial trailing word introduced by the cut.
+func normalizeContextField(s string, maxLen int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if maxLen <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= maxLen {
+		return s
+	}
+	return strings.TrimSpace(string(r[:maxLen]))
+}
+
 // LessonGenerator produces a (possibly contextualised) lesson from a
 // deterministic base lesson. Implementations may be LLM-backed or
 // deterministic. The returned lesson MUST keep the base lesson's
@@ -65,8 +106,12 @@ type Tier2LessonGeneratorConfig struct {
 	// MaxTokens caps response length. Defaults to 512 (a 2-minute
 	// lesson is longer than a banner explanation).
 	MaxTokens int
-	// Temperature for sampling. Defaults to 0.4.
-	Temperature float64
+	// Temperature for sampling. A nil pointer selects the default
+	// (0.4); a non-nil value is used verbatim so an operator can
+	// deliberately request deterministic sampling (0.0). Mirrors the
+	// *float64 shape of config.AI.Temperature so the composition root
+	// can thread its nil/non-nil state through unchanged.
+	Temperature *float64
 	// HTTPClient lets tests inject a custom transport.
 	HTTPClient *http.Client
 	// Logger for debug output.
@@ -106,8 +151,18 @@ func NewTier2LessonGenerator(cfg Tier2LessonGeneratorConfig) (*Tier2LessonGenera
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = 512
 	}
-	if cfg.Temperature < 0 {
-		cfg.Temperature = 0.4
+	// nil => default 0.4; non-nil is honoured verbatim (incl. an
+	// explicit 0.0 for deterministic sampling). Out-of-range values are
+	// clamped to the OpenAI-compatible [0,2] window.
+	temperature := 0.4
+	if cfg.Temperature != nil {
+		temperature = *cfg.Temperature
+		if temperature < 0 {
+			temperature = 0
+		}
+		if temperature > 2 {
+			temperature = 2
+		}
 	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = &http.Client{Timeout: cfg.Timeout}
@@ -121,7 +176,7 @@ func NewTier2LessonGenerator(cfg Tier2LessonGeneratorConfig) (*Tier2LessonGenera
 		model:       cfg.Model,
 		timeout:     cfg.Timeout,
 		maxTokens:   cfg.MaxTokens,
-		temperature: cfg.Temperature,
+		temperature: temperature,
 		http:        cfg.HTTPClient,
 		log:         cfg.Logger,
 	}, nil
@@ -233,9 +288,15 @@ func (f FallbackLessonGenerator) Generate(ctx context.Context, base MicroLesson,
 			return lesson, nil
 		}
 		if f.Logger != nil {
-			f.Logger.WarnContext(ctx, "education: primary lesson generator failed, using catalog",
-				slog.String("lesson_id", base.LessonID),
-				slog.Any("error", err))
+			// Distinguish the two failure modes so the log never shows a
+			// confusing "error=<nil>": a real error vs. a nil-error reply
+			// with an empty/whitespace body.
+			reason := "empty body"
+			attrs := []any{slog.String("lesson_id", base.LessonID), slog.String("reason", reason)}
+			if err != nil {
+				attrs = []any{slog.String("lesson_id", base.LessonID), slog.Any("error", err)}
+			}
+			f.Logger.WarnContext(ctx, "education: primary lesson generator failed, using catalog", attrs...)
 		}
 	}
 	if f.Fallback != nil {
@@ -247,6 +308,9 @@ func (f FallbackLessonGenerator) Generate(ctx context.Context, base MicroLesson,
 // --- prompt + rendering helpers --------------------------------------------
 
 func buildLessonPrompt(base MicroLesson, lc LessonContext, locale string) string {
+	// Whitespace-normalise and length-cap the user-supplied signals
+	// before they enter the prompt (token-cost + injection hardening).
+	lc = lc.normalized()
 	var b strings.Builder
 	b.WriteString("You are a security-awareness coach writing a short micro-lesson for an employee. ")
 	fmt.Fprintf(&b, "Write the ENTIRE lesson in the '%s' language (use the correct locale/dialect). ", locale)

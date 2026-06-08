@@ -695,15 +695,22 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		// EDUCATION_LLM_LESSONS_ENABLED=true; when enabled we wrap the
 		// Tier 2 endpoint in a FallbackLessonGenerator so any model
 		// failure degrades to the deterministic catalog lesson.
+		//
+		// The generator reuses the Tier 2 *connection* (URL / APIKey /
+		// Model) but takes its sampling budget from the dedicated
+		// EDUCATION_LLM_* knobs (zero/nil => generator defaults), so the
+		// classifier's TIER2_MAX_TOKENS / AI_TIMEOUT / TIER2_TEMPERATURE
+		// tuning does not silently truncate or re-temperature lessons.
 		var lessonGen education.LessonGenerator
 		if cfg.AI.EducationLessonsEnabled && cfg.AI.URL != "" {
 			primary, gerr := education.NewTier2LessonGenerator(education.Tier2LessonGeneratorConfig{
-				URL:       cfg.AI.URL,
-				APIKey:    cfg.AI.APIKey,
-				Model:     cfg.AI.Model,
-				Timeout:   cfg.AI.Timeout,
-				MaxTokens: cfg.AI.MaxTokens,
-				Logger:    logger,
+				URL:         cfg.AI.URL,
+				APIKey:      cfg.AI.APIKey,
+				Model:       cfg.AI.Model,
+				Timeout:     cfg.AI.EducationTimeout,
+				MaxTokens:   cfg.AI.EducationMaxTokens,
+				Temperature: cfg.AI.EducationTemperature,
+				Logger:      logger,
 			})
 			if gerr == nil {
 				lessonGen = education.FallbackLessonGenerator{

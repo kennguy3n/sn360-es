@@ -79,6 +79,18 @@ type AI struct {
 	// / threat profile via the same OpenAI-compatible endpoint as
 	// Tier 2, falling back to the catalog on any model failure.
 	EducationLessonsEnabled bool
+
+	// Education* knobs decouple the micro-lesson generator's sampling
+	// budget from the Tier 2 *classifier* budget. The lesson generator
+	// reuses the Tier 2 connection (URL / APIKey / Model) but a
+	// 2-minute lesson needs a larger token budget and a different
+	// latency/temperature profile than a classification call, so these
+	// are configured separately. Each zero/nil value falls back to the
+	// generator's own documented default (512 tokens / 15s / 0.4) — it
+	// does NOT inherit TIER2_MAX_TOKENS / AI_TIMEOUT / TIER2_TEMPERATURE.
+	EducationMaxTokens   int
+	EducationTimeout     time.Duration
+	EducationTemperature *float64
 }
 
 // ParseProviderOpts is exported so callers (Validate, tests, the
@@ -107,6 +119,9 @@ func loadAI() AI {
 		Temperature:  getFloatPtr("TIER2_TEMPERATURE"),
 
 		EducationLessonsEnabled: getBool("EDUCATION_LLM_LESSONS_ENABLED", false),
+		EducationMaxTokens:      getInt("EDUCATION_LLM_MAX_TOKENS", 0),
+		EducationTimeout:        getDuration("EDUCATION_LLM_TIMEOUT", 0),
+		EducationTemperature:    getFloatPtr("EDUCATION_LLM_TEMPERATURE"),
 	}
 }
 
