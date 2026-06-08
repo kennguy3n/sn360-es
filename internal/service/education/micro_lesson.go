@@ -179,14 +179,27 @@ func (s *MicroLessonService) Serve(ctx context.Context, req ServeRequest) (Micro
 	// already degrades to the catalog lesson; we still guard here so a
 	// misconfigured bare generator can never fail the Serve call.
 	if s.gen != nil && !req.Context.IsZero() {
-		if gen, gerr := s.gen.Generate(ctx, l, req.Context, req.Locale); gerr == nil && gen.BodyHTML != "" {
-			l = gen
-		} else if gerr != nil {
+		gen, gerr := s.gen.Generate(ctx, l, req.Context, req.Locale)
+		switch {
+		case gerr != nil:
 			s.log.WarnContext(ctx, "education: lesson generation failed, serving catalog",
 				slog.String("tenant_id", req.TenantID),
 				slog.String("lesson_id", l.LessonID),
 				slog.Any("error", gerr),
 			)
+		case gen.BodyHTML == "":
+			// nil-error but empty body. With the standard
+			// FallbackLessonGenerator this branch is unreachable
+			// (Tier2 errors on empty content, Deterministic always
+			// returns the catalog HTML); a custom generator could hit
+			// it, so log at debug level for observability rather than
+			// degrading silently.
+			s.log.DebugContext(ctx, "education: generator returned empty lesson body, serving catalog",
+				slog.String("tenant_id", req.TenantID),
+				slog.String("lesson_id", l.LessonID),
+			)
+		default:
+			l = gen
 		}
 	}
 	if s.pub != nil {

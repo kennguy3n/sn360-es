@@ -80,6 +80,45 @@ func normalizeContextField(s string, maxLen int) string {
 	return strings.TrimSpace(string(r[:maxLen]))
 }
 
+// defaultLocale is used when no locale (or no usable locale) is supplied.
+const defaultLocale = "en"
+
+// maxLocaleLen caps the locale tag length. BCP-47 tags are short
+// (e.g. "pt-BR", "zh-Hans-CN"); anything longer is hostile or malformed.
+const maxLocaleLen = 35
+
+// normalizeLocale hardens the caller-supplied locale before it is
+// interpolated into the prompt. Unlike the free-text context fields,
+// a locale is a language tag, so we do not merely collapse whitespace
+// (which would still let an attacker inject space-separated words like
+// "en SYSTEM: ignore ..."). Instead we keep only the leading run of
+// BCP-47-legal characters (ASCII letters, digits, '-', '_'), which
+// drops any injected spaces, newlines, or instruction text outright,
+// and cap the length. An empty or fully-invalid value falls back to
+// "en" so the prompt always names a concrete language.
+func normalizeLocale(locale string) string {
+	locale = strings.TrimSpace(locale)
+	var b strings.Builder
+	for _, r := range locale {
+		if r == '-' || r == '_' ||
+			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			if b.Len() >= maxLocaleLen {
+				break
+			}
+			continue
+		}
+		// First disallowed character terminates the tag: a real locale
+		// has no internal spaces or punctuation beyond '-'/'_'.
+		break
+	}
+	if b.Len() == 0 {
+		return defaultLocale
+	}
+	return b.String()
+}
+
 // LessonGenerator produces a (possibly contextualised) lesson from a
 // deterministic base lesson. Implementations may be LLM-backed or
 // deterministic. The returned lesson MUST keep the base lesson's
@@ -189,9 +228,9 @@ func NewTier2LessonGenerator(cfg Tier2LessonGeneratorConfig) (*Tier2LessonGenera
 // empty-content failure so a FallbackLessonGenerator can fall back to
 // the deterministic catalog lesson.
 func (g *Tier2LessonGenerator) Generate(ctx context.Context, base MicroLesson, lc LessonContext, locale string) (MicroLesson, error) {
-	if locale == "" {
-		locale = "en"
-	}
+	// locale defaulting + sanitisation is owned by buildLessonPrompt
+	// (normalizeLocale), so there is a single source of truth for the
+	// "en" fallback and the injection-hardening rules.
 	prompt := buildLessonPrompt(base, lc, locale)
 
 	reqBody := lessonChatRequest{
@@ -310,7 +349,10 @@ func (f FallbackLessonGenerator) Generate(ctx context.Context, base MicroLesson,
 func buildLessonPrompt(base MicroLesson, lc LessonContext, locale string) string {
 	// Whitespace-normalise and length-cap the user-supplied signals
 	// before they enter the prompt (token-cost + injection hardening).
+	// The locale is a language tag, not free text, so it gets the
+	// stricter locale sanitiser rather than the free-text collapse.
 	lc = lc.normalized()
+	locale = normalizeLocale(locale)
 	var b strings.Builder
 	b.WriteString("You are a security-awareness coach writing a short micro-lesson for an employee. ")
 	fmt.Fprintf(&b, "Write the ENTIRE lesson in the '%s' language (use the correct locale/dialect). ", locale)

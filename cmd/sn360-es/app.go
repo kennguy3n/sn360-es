@@ -718,7 +718,12 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 					Fallback: education.DeterministicLessonGenerator{},
 					Logger:   logger,
 				}
-				logger.Info("sn360-es: education LLM lesson generation enabled")
+				// Surface the endpoint so operators can tell whether
+				// lessons will reach a real model or the AI_URL default
+				// (127.0.0.1:9000) — in the latter case every call fails
+				// closed to the catalog lesson, which is otherwise silent.
+				logger.Info("sn360-es: education LLM lesson generation enabled",
+					slog.String("endpoint", cfg.AI.URL))
 			} else {
 				logger.Warn("sn360-es: education lesson generator init failed; serving catalog only",
 					slog.Any("error", gerr))

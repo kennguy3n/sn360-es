@@ -278,10 +278,10 @@ Blocked, `dir="rtl"` injection for RTL locales.
   `pseudo_message_id`, plus contextualisation hints `industry`,
   `role`, `threat_profile`.
 - **LLM-contextualised lessons (4C.1)** —
-  `internal/service/education/llm_lesson.go`. When
-  `EDUCATION_LLM_LESSONS_ENABLED=true` and an `AI_URL` is configured,
-  a `Tier2LessonGenerator` rewrites the catalog body to the tenant's
-  industry / recipient role / active threat profile via the
+  `internal/service/education/llm_lesson.go`. Set
+  `EDUCATION_LLM_LESSONS_ENABLED=true` to enable; a
+  `Tier2LessonGenerator` then rewrites the catalog body to the
+  tenant's industry / recipient role / active threat profile via the
   OpenAI-compatible Tier 2 endpoint. The model returns plain text
   only; the body is escaped and wrapped in a fixed HTML envelope
   locally so it can never inject markup, scripts, or remote assets.
@@ -291,6 +291,17 @@ Blocked, `dir="rtl"` injection for RTL locales.
   works in demo mode (catalog-only) when the backend is unset. The
   served lesson's `source` (`catalog` | `llm`) is echoed on the
   `es.education.lesson.trigger` event.
+
+  > **Operator note:** `AI_URL` has a built-in default
+  > (`http://127.0.0.1:9000`), so enabling the flag is sufficient to
+  > *wire* the generator — but unless `AI_URL` (plus `AI_API_KEY` /
+  > `AI_MODEL`) points at a **real** Tier 2 endpoint, every generation
+  > call fails closed to the catalog lesson. That degradation is
+  > intentional and non-fatal, but it is otherwise quiet, so on startup
+  > the service logs the resolved endpoint
+  > (`education LLM lesson generation enabled endpoint=…`). If LLM
+  > lessons never appear, check that log line points at your model
+  > endpoint and not the localhost default.
 - **Phishing simulation engine** — `education/simulation.go`,
   `simulation_tracker.go` — campaign lifecycle, per-target dispatch,
   per-user interaction tracking, pseudonymised results.
