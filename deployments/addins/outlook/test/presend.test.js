@@ -539,10 +539,20 @@ test("locale: English locale produces English messages", async function () {
 });
 
 test("locale: unknown locale falls back to English", async function () {
+  const office = makeMockOffice({ locale: "zz-ZZ" });
+  const presend = loadPresend(office);
+  // "zz" is not a supported bundle, so t() falls back to English.
+  assert.match(presend._internals.t("external_on_internal_thread", { domain: "x.com" }), /external recipient/);
+});
+
+test("locale: supported non-English locale produces localized messages", async function () {
   const office = makeMockOffice({ locale: "ko-KR" });
   const presend = loadPresend(office);
-  // No "ko" bundle yet; falls back to English.
-  assert.match(presend._internals.t("external_on_internal_thread", { domain: "x.com" }), /external recipient/);
+  const msg = presend._internals.t("external_on_internal_thread", { domain: "x.com" });
+  // Korean bundle is present; output must be the localized string, not English.
+  assert.doesNotMatch(msg, /external recipient/);
+  assert.match(msg, /외부 수신자/);
+  assert.match(msg, /x\.com/);
 });
 
 // === Privacy: no raw email addresses in request body ==================

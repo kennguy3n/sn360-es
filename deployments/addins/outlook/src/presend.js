@@ -480,10 +480,11 @@
 
   // === Localization =======================================================
   //
-  // Initial scope is English-only. The wrapper is locale-aware so
-  // future translations can be dropped in without touching call
-  // sites. Office.context.displayLanguage gives the IETF tag
-  // (e.g. "en-US"); we key on the language subtag.
+  // The wrapper is locale-aware: Office.context.displayLanguage gives
+  // the IETF tag (e.g. "en-US", "pt-BR"); localeShort() keys on the
+  // language subtag (e.g. "pt"). Bundles below cover the 14 supported
+  // SN360 languages; any unrecognised subtag falls back to English via
+  // t(). Keep the key set identical across every bundle.
 
   const I18N = {
     en: {
@@ -494,6 +495,123 @@
       banner_high: "SN360 warning: ",
       confirm_suffix:
         "\n\nReview the recipient list before resending if this is intentional.",
+    },
+    vi: {
+      lookalike_recipient:
+        "Tên miền người nhận {domain} trông giống với {ref}. Bạn có ý định gửi tới {ref} không?",
+      external_on_internal_thread:
+        "Bạn đang thêm một người nhận bên ngoài ({domain}) vào một chuỗi thư trước đây chỉ nội bộ.",
+      banner_high: "Cảnh báo SN360: ",
+      confirm_suffix:
+        "\n\nHãy kiểm tra lại danh sách người nhận trước khi gửi lại nếu điều này là cố ý.",
+    },
+    th: {
+      lookalike_recipient:
+        "โดเมนผู้รับ {domain} มีลักษณะคล้ายกับ {ref} คุณต้องการส่งถึง {ref} ใช่หรือไม่",
+      external_on_internal_thread:
+        "คุณกำลังเพิ่มผู้รับภายนอก ({domain}) เข้าในเธรดที่ก่อนหน้านี้เป็นการสื่อสารภายในเท่านั้น",
+      banner_high: "คำเตือน SN360: ",
+      confirm_suffix:
+        "\n\nโปรดตรวจสอบรายชื่อผู้รับก่อนส่งอีกครั้งหากเป็นความตั้งใจ",
+    },
+    ja: {
+      lookalike_recipient:
+        "宛先ドメイン {domain} は {ref} に酷似しています。{ref} のことではありませんか？",
+      external_on_internal_thread:
+        "これまで社内のみだったスレッドに、社外の宛先（{domain}）を追加しようとしています。",
+      banner_high: "SN360 の警告: ",
+      confirm_suffix:
+        "\n\n意図的な場合は、再送信する前に宛先リストをご確認ください。",
+    },
+    ko: {
+      lookalike_recipient:
+        "받는 사람 도메인 {domain}이(가) {ref}과(와) 유사합니다. {ref}을(를) 의도하셨나요?",
+      external_on_internal_thread:
+        "이전에는 내부 전용이던 스레드에 외부 수신자({domain})를 추가하고 있습니다.",
+      banner_high: "SN360 경고: ",
+      confirm_suffix:
+        "\n\n의도한 것이라면 다시 보내기 전에 수신자 목록을 확인하세요.",
+    },
+    zh: {
+      lookalike_recipient:
+        "收件人域名 {domain} 与 {ref} 非常相似。您是否想发送给 {ref}？",
+      external_on_internal_thread:
+        "您正在将外部收件人（{domain}）添加到此前仅限内部的会话中。",
+      banner_high: "SN360 警告：",
+      confirm_suffix:
+        "\n\n如果这是有意的，请在重新发送前检查收件人列表。",
+    },
+    ar: {
+      lookalike_recipient:
+        "نطاق المستلِم {domain} يشبه {ref}. هل تقصد {ref}؟",
+      external_on_internal_thread:
+        "أنت تضيف مستلِمًا خارجيًا ({domain}) إلى محادثة كانت داخلية فقط في السابق.",
+      banner_high: "تحذير SN360: ",
+      confirm_suffix:
+        "\n\nراجع قائمة المستلِمين قبل إعادة الإرسال إذا كان ذلك مقصودًا.",
+    },
+    de: {
+      lookalike_recipient:
+        "Die Empfängerdomain {domain} ähnelt {ref}. Meinten Sie {ref}?",
+      external_on_internal_thread:
+        "Sie fügen einen externen Empfänger ({domain}) zu einem zuvor internen Thread hinzu.",
+      banner_high: "SN360-Warnung: ",
+      confirm_suffix:
+        "\n\nÜberprüfen Sie die Empfängerliste vor dem erneuten Senden, falls dies beabsichtigt ist.",
+    },
+    fr: {
+      lookalike_recipient:
+        "Le domaine du destinataire {domain} ressemble à {ref}. Vouliez-vous dire {ref} ?",
+      external_on_internal_thread:
+        "Vous ajoutez un destinataire externe ({domain}) à une conversation jusqu'ici interne.",
+      banner_high: "Avertissement SN360 : ",
+      confirm_suffix:
+        "\n\nVérifiez la liste des destinataires avant de renvoyer si cela est intentionnel.",
+    },
+    es: {
+      lookalike_recipient:
+        "El dominio del destinatario {domain} se parece a {ref}. ¿Quería decir {ref}?",
+      external_on_internal_thread:
+        "Está añadiendo un destinatario externo ({domain}) a una conversación que hasta ahora era interna.",
+      banner_high: "Advertencia de SN360: ",
+      confirm_suffix:
+        "\n\nRevise la lista de destinatarios antes de volver a enviar si esto es intencionado.",
+    },
+    pt: {
+      lookalike_recipient:
+        "O domínio do destinatário {domain} é parecido com {ref}. Você quis dizer {ref}?",
+      external_on_internal_thread:
+        "Você está adicionando um destinatário externo ({domain}) a uma conversa que antes era interna.",
+      banner_high: "Aviso do SN360: ",
+      confirm_suffix:
+        "\n\nRevise a lista de destinatários antes de reenviar, caso isso seja intencional.",
+    },
+    ms: {
+      lookalike_recipient:
+        "Domain penerima {domain} kelihatan serupa dengan {ref}. Adakah anda maksudkan {ref}?",
+      external_on_internal_thread:
+        "Anda sedang menambah penerima luar ({domain}) ke dalam bualan yang sebelum ini dalaman sahaja.",
+      banner_high: "Amaran SN360: ",
+      confirm_suffix:
+        "\n\nSemak senarai penerima sebelum menghantar semula jika ini disengajakan.",
+    },
+    id: {
+      lookalike_recipient:
+        "Domain penerima {domain} terlihat mirip dengan {ref}. Apakah maksud Anda {ref}?",
+      external_on_internal_thread:
+        "Anda menambahkan penerima eksternal ({domain}) ke percakapan yang sebelumnya hanya internal.",
+      banner_high: "Peringatan SN360: ",
+      confirm_suffix:
+        "\n\nPeriksa kembali daftar penerima sebelum mengirim ulang jika ini disengaja.",
+    },
+    tr: {
+      lookalike_recipient:
+        "Alıcı alan adı {domain}, {ref} adresine benziyor. {ref} demek mi istediniz?",
+      external_on_internal_thread:
+        "Daha önce yalnızca dahili olan bir konuşmaya harici bir alıcı ({domain}) ekliyorsunuz.",
+      banner_high: "SN360 uyarısı: ",
+      confirm_suffix:
+        "\n\nBu kasıtlıysa yeniden göndermeden önce alıcı listesini gözden geçirin.",
     },
   };
 

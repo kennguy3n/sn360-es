@@ -1,0 +1,43 @@
+{
+  "tier.Blocked.title": "Blockiert: Diese Nachricht ist gefährlich",
+  "tier.Blocked.body": "Wir haben diese E-Mail blockiert, da sie sehr wahrscheinlich ein Phishing-Versuch oder eine andere Bedrohung ist. Öffnen Sie keine Anhänge und klicken Sie auf keine Links.",
+  "tier.HighRisk.title": "Hohes Risiko: Reagieren Sie nicht auf diese E-Mail",
+  "tier.HighRisk.body": "Diese E-Mail weist deutliche Anzeichen von Identitätsmissbrauch, Betrug oder einer Kontokompromittierung auf. Überprüfen Sie den Absender über einen anderen Kanal, bevor Sie handeln.",
+  "tier.Warning.title": "Warnung: Diese E-Mail wirkt verdächtig",
+  "tier.Warning.body": "Diese E-Mail enthält Anzeichen, dass jemand versuchen könnte, Sie zu täuschen. Prüfen Sie den Absender sorgfältig, bevor Sie auf Links klicken oder antworten.",
+  "tier.Caution.title": "Vorsicht: Ungewöhnlicher Absender oder Inhalt",
+  "tier.Caution.body": "An dieser E-Mail ist etwas ungewöhnlich. Behandeln Sie Links, Anhänge oder Anfragen mit Vorsicht.",
+  "tier.Informational.title": "Erstmaliger externer Absender",
+  "tier.Informational.body": "Dies ist die erste E-Mail, die wir von diesem Absender gesehen haben. Bestätigen Sie dessen Identität, bevor Sie auf Anfragen reagieren.",
+  "tier.Trusted.title": "Vertrauenswürdiger Absender",
+  "tier.Trusted.body": "Diese Nachricht stammt von einem Absender, dem Ihre Organisation bereits vertraut. Es ist keine Aktion erforderlich.",
+
+  "category.LIKELY_PHISHING": "Wahrscheinlich Phishing",
+  "category.BEC_IMPERSONATION": "Mögliche Identitätsvortäuschung (BEC)",
+  "category.LOOKALIKE_DOMAIN": "Täuschend ähnliche Domain",
+  "category.SUSPICIOUS_URL": "Verdächtiger Link",
+  "category.SUSPICIOUS_ATTACHMENT": "Verdächtiger Anhang",
+  "category.FIRST_CONTACT_EXTERNAL": "Erstkontakt von außerhalb Ihrer Organisation",
+  "category.ACCOUNT_TAKEOVER_SUSPECTED": "Möglicher Kontomissbrauch",
+  "category.VENDOR_COMPROMISE": "Möglicher kompromittierter Lieferant",
+  "category.CREDENTIAL_HARVESTING": "Abgreifen von Zugangsdaten",
+  "category.INVOICE_FRAUD": "Rechnungsbetrug",
+  "category.QR_PHISHING": "QR-Code-Phishing",
+  "category.SCAM_FRAUD": "Betrug / Schwindel",
+  "category.AUTH_FAILED": "Absender-Authentifizierung fehlgeschlagen",
+  "category.INTERNAL_TRUSTED": "Interner Absender",
+  "category.VENDOR_TRUSTED": "Vertrauenswürdiger Lieferant",
+  "category.NEWSLETTER": "Newsletter",
+
+  "auth.verified": "Absender verifiziert",
+  "auth.unverified": "Absender nicht verifiziert",
+  "auth.failed": "Absender-Authentifizierung fehlgeschlagen",
+  "auth.unknown": "Absender-Authentifizierung unbekannt",
+
+  "action.report": "Phishing melden",
+  "action.mark_safe": "Als sicher markieren",
+  "action.trust_sender": "Diesem Absender vertrauen",
+  "action.learn_more": "Mehr erfahren",
+
+  "banner.degraded": "Einige Erkennungsdienste waren während der Auswertung nicht verfügbar."
+}

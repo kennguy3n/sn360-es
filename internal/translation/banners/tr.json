@@ -1,0 +1,43 @@
+{
+  "tier.Blocked.title": "Engellendi: bu ileti tehlikeli",
+  "tier.Blocked.body": "Bu e-postayı, büyük olasılıkla bir kimlik avı girişimi veya başka bir tehdit olduğu için engelledik. Ekleri açmayın ve hiçbir bağlantıya tıklamayın.",
+  "tier.HighRisk.title": "Yüksek risk: bu e-postaya göre işlem yapmayın",
+  "tier.HighRisk.body": "Bu e-posta; kimliğe bürünme, dolandırıcılık veya hesap ele geçirilmesine dair güçlü belirtiler taşıyor. Herhangi bir işlem yapmadan önce göndereni farklı bir kanaldan doğrulayın.",
+  "tier.Warning.title": "Uyarı: bu e-posta şüpheli görünüyor",
+  "tier.Warning.body": "Bu e-posta, birinin sizi kandırmaya çalışıyor olabileceğine dair belirtiler içeriyor. Bağlantılara tıklamadan veya yanıt vermeden önce göndereni dikkatlice kontrol edin.",
+  "tier.Caution.title": "Dikkat: olağan dışı gönderen veya içerik",
+  "tier.Caution.body": "Bu e-postada olağan dışı bir şey var. Tüm bağlantıları, ekleri veya istekleri dikkatle değerlendirin.",
+  "tier.Informational.title": "İlk kez gelen dış gönderen",
+  "tier.Informational.body": "Bu göndereniden gördüğümüz ilk e-posta. Herhangi bir isteğe göre işlem yapmadan önce kimliğini doğrulayın.",
+  "tier.Trusted.title": "Güvenilir gönderen",
+  "tier.Trusted.body": "Bu ileti, kuruluşunuzun zaten güvendiği bir gönderenden geliyor. Herhangi bir işlem gerekmiyor.",
+
+  "category.LIKELY_PHISHING": "Olası kimlik avı",
+  "category.BEC_IMPERSONATION": "Olası kimliğe bürünme (BEC)",
+  "category.LOOKALIKE_DOMAIN": "Benzer görünümlü alan adı",
+  "category.SUSPICIOUS_URL": "Şüpheli bağlantı",
+  "category.SUSPICIOUS_ATTACHMENT": "Şüpheli ek",
+  "category.FIRST_CONTACT_EXTERNAL": "Kuruluşunuzun dışından ilk temas",
+  "category.ACCOUNT_TAKEOVER_SUSPECTED": "Olası hesap ele geçirme",
+  "category.VENDOR_COMPROMISE": "Olası tedarikçi ihlali",
+  "category.CREDENTIAL_HARVESTING": "Kimlik bilgisi toplama",
+  "category.INVOICE_FRAUD": "Fatura dolandırıcılığı",
+  "category.QR_PHISHING": "QR kodlu kimlik avı",
+  "category.SCAM_FRAUD": "Dolandırıcılık / sahtekârlık",
+  "category.AUTH_FAILED": "Gönderen kimlik doğrulaması başarısız",
+  "category.INTERNAL_TRUSTED": "Dahili gönderen",
+  "category.VENDOR_TRUSTED": "Güvenilir tedarikçi",
+  "category.NEWSLETTER": "Bülten",
+
+  "auth.verified": "Gönderen doğrulandı",
+  "auth.unverified": "Gönderen doğrulanmadı",
+  "auth.failed": "Gönderen kimlik doğrulaması başarısız",
+  "auth.unknown": "Gönderen kimlik doğrulaması bilinmiyor",
+
+  "action.report": "Kimlik avını bildir",
+  "action.mark_safe": "Güvenli olarak işaretle",
+  "action.trust_sender": "Bu gönderene güven",
+  "action.learn_more": "Daha fazla bilgi",
+
+  "banner.degraded": "Değerlendirme sırasında bazı algılama hizmetleri kullanılamıyordu."
+}

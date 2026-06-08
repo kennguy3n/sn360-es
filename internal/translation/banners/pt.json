@@ -1,0 +1,43 @@
+{
+  "tier.Blocked.title": "Bloqueado: esta mensagem é perigosa",
+  "tier.Blocked.body": "Bloqueamos este e-mail porque é muito provável que seja uma tentativa de phishing ou outra ameaça. Não abra anexos nem clique em nenhum link.",
+  "tier.HighRisk.title": "Risco alto: não aja com base neste e-mail",
+  "tier.HighRisk.body": "Este e-mail apresenta fortes sinais de falsificação de identidade, fraude ou comprometimento de conta. Verifique o remetente por outro canal antes de tomar qualquer ação.",
+  "tier.Warning.title": "Aviso: este e-mail parece suspeito",
+  "tier.Warning.body": "Este e-mail contém sinais de que alguém pode estar tentando enganá-lo. Verifique o remetente com cuidado antes de clicar em links ou responder.",
+  "tier.Caution.title": "Cuidado: remetente ou conteúdo incomum",
+  "tier.Caution.body": "Há algo incomum neste e-mail. Trate qualquer link, anexo ou solicitação com cautela.",
+  "tier.Informational.title": "Remetente externo pela primeira vez",
+  "tier.Informational.body": "Este é o primeiro e-mail que vemos deste remetente. Confirme a identidade dele antes de atender a qualquer solicitação.",
+  "tier.Trusted.title": "Remetente confiável",
+  "tier.Trusted.body": "Esta mensagem vem de um remetente em quem sua organização já confia. Nenhuma ação é necessária.",
+
+  "category.LIKELY_PHISHING": "Provável phishing",
+  "category.BEC_IMPERSONATION": "Possível falsificação de identidade (BEC)",
+  "category.LOOKALIKE_DOMAIN": "Domínio parecido enganoso",
+  "category.SUSPICIOUS_URL": "Link suspeito",
+  "category.SUSPICIOUS_ATTACHMENT": "Anexo suspeito",
+  "category.FIRST_CONTACT_EXTERNAL": "Primeiro contato de fora da sua organização",
+  "category.ACCOUNT_TAKEOVER_SUSPECTED": "Possível invasão de conta",
+  "category.VENDOR_COMPROMISE": "Possível fornecedor comprometido",
+  "category.CREDENTIAL_HARVESTING": "Coleta de credenciais",
+  "category.INVOICE_FRAUD": "Fraude de faturas",
+  "category.QR_PHISHING": "Phishing por código QR",
+  "category.SCAM_FRAUD": "Golpe / fraude",
+  "category.AUTH_FAILED": "Falha na autenticação do remetente",
+  "category.INTERNAL_TRUSTED": "Remetente interno",
+  "category.VENDOR_TRUSTED": "Fornecedor confiável",
+  "category.NEWSLETTER": "Boletim informativo",
+
+  "auth.verified": "Remetente verificado",
+  "auth.unverified": "Remetente não verificado",
+  "auth.failed": "Falha na autenticação do remetente",
+  "auth.unknown": "Autenticação do remetente desconhecida",
+
+  "action.report": "Denunciar phishing",
+  "action.mark_safe": "Marcar como seguro",
+  "action.trust_sender": "Confiar neste remetente",
+  "action.learn_more": "Saiba mais",
+
+  "banner.degraded": "Alguns serviços de detecção estavam indisponíveis durante a avaliação."
+}
