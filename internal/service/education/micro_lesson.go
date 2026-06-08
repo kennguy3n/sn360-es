@@ -35,6 +35,11 @@ type MicroLesson struct {
 	Title            string            `json:"title"`
 	BodyHTML         string            `json:"body_html"`
 	EstimatedSeconds int               `json:"estimated_seconds"`
+	// Source records how the body was produced: "catalog" for the
+	// deterministic embedded lesson, "llm" when the LLM generation path
+	// (4C.1) contextualised it. Omitted (empty) on catalog rows loaded
+	// from JSON; the service stamps it when serving.
+	Source string `json:"source,omitempty"`
 }
 
 // Validate returns an error if l is missing required fields.
@@ -72,6 +77,12 @@ type MicroLessonConfig struct {
 	TriggerSubject string // default "es.education.lesson.trigger"
 	FallbackLocale string // default "en"
 	Logger         *slog.Logger
+	// Generator, when set, contextualises the catalog lesson to the
+	// tenant/recipient (4C.1) on Serve calls that carry a non-empty
+	// LessonContext. When nil, Serve always returns the deterministic
+	// catalog lesson (current behaviour). Wire a FallbackLessonGenerator
+	// so a model outage degrades to the catalog rather than failing.
+	Generator LessonGenerator
 }
 
 // MicroLessonService serves contextual lessons to clients and publishes
@@ -83,6 +94,7 @@ type MicroLessonService struct {
 	subject  string
 	fallback string
 	log      *slog.Logger
+	gen      LessonGenerator
 }
 
 // NewMicroLessonService constructs the service. Store is required.
@@ -109,6 +121,7 @@ func NewMicroLessonService(cfg MicroLessonConfig) (*MicroLessonService, error) {
 		subject:  cfg.TriggerSubject,
 		fallback: cfg.FallbackLocale,
 		log:      cfg.Logger,
+		gen:      cfg.Generator,
 	}, nil
 }
 
@@ -159,6 +172,23 @@ func (s *MicroLessonService) Serve(ctx context.Context, req ServeRequest) (Micro
 	if !ok {
 		return MicroLesson{}, fmt.Errorf("education: no lesson for category %q", req.Category)
 	}
+	l.Source = LessonSourceCatalog
+	// Contextualise via the LLM path (4C.1) only when a generator is
+	// wired AND the caller supplied contextual signal. The generator is
+	// expected to be a FallbackLessonGenerator, so any model failure
+	// already degrades to the catalog lesson; we still guard here so a
+	// misconfigured bare generator can never fail the Serve call.
+	if s.gen != nil && !req.Context.IsZero() {
+		if gen, gerr := s.gen.Generate(ctx, l, req.Context, req.Locale); gerr == nil && gen.BodyHTML != "" {
+			l = gen
+		} else if gerr != nil {
+			s.log.WarnContext(ctx, "education: lesson generation failed, serving catalog",
+				slog.String("tenant_id", req.TenantID),
+				slog.String("lesson_id", l.LessonID),
+				slog.Any("error", gerr),
+			)
+		}
+	}
 	if s.pub != nil {
 		envelope := struct {
 			TenantID  string `json:"tenant_id"`
@@ -166,6 +196,7 @@ func (s *MicroLessonService) Serve(ctx context.Context, req ServeRequest) (Micro
 			LessonID  string `json:"lesson_id"`
 			Category  string `json:"category"`
 			Locale    string `json:"locale"`
+			Source    string `json:"source"`
 			ServedAt  string `json:"served_at"`
 			MessageID string `json:"pseudo_message_id,omitempty"`
 		}{
@@ -174,6 +205,7 @@ func (s *MicroLessonService) Serve(ctx context.Context, req ServeRequest) (Micro
 			LessonID:  l.LessonID,
 			Category:  string(req.Category),
 			Locale:    req.Locale,
+			Source:    l.Source,
 			ServedAt:  time.Now().UTC().Format(time.RFC3339),
 			MessageID: req.PseudoMessageID,
 		}
@@ -204,6 +236,10 @@ type ServeRequest struct {
 	Category        constant.Category
 	Locale          string
 	PseudoMessageID string
+	// Context carries optional contextualisation signals (industry,
+	// role, threat profile). When non-empty and a Generator is wired,
+	// the served lesson is contextualised via the LLM path (4C.1).
+	Context LessonContext
 }
 
 // Validate returns an error if the request is missing required fields.

@@ -274,6 +274,23 @@ Blocked, `dir="rtl"` injection for RTL locales.
   language lesson for each of the 16 threat categories; locale
   fallback to `en`; served via
   `GET /v1/education/lesson/{category}?locale=en`.
+  Optional query params `tenant_id`, `user_hash`,
+  `pseudo_message_id`, plus contextualisation hints `industry`,
+  `role`, `threat_profile`.
+- **LLM-contextualised lessons (4C.1)** —
+  `internal/service/education/llm_lesson.go`. When
+  `EDUCATION_LLM_LESSONS_ENABLED=true` and an `AI_URL` is configured,
+  a `Tier2LessonGenerator` rewrites the catalog body to the tenant's
+  industry / recipient role / active threat profile via the
+  OpenAI-compatible Tier 2 endpoint. The model returns plain text
+  only; the body is escaped and wrapped in a fixed HTML envelope
+  locally so it can never inject markup, scripts, or remote assets.
+  Identity fields (`lesson_id`, `category`, `title`) stay
+  deterministic. A `FallbackLessonGenerator` degrades to the catalog
+  lesson on any model failure, so the path is always best-effort and
+  works in demo mode (catalog-only) when the backend is unset. The
+  served lesson's `source` (`catalog` | `llm`) is echoed on the
+  `es.education.lesson.trigger` event.
 - **Phishing simulation engine** — `education/simulation.go`,
   `simulation_tracker.go` — campaign lifecycle, per-target dispatch,
   per-user interaction tracking, pseudonymised results.

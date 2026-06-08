@@ -60,6 +60,15 @@ func (h *EducationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Category:        category,
 		Locale:          locale,
 		PseudoMessageID: pseudoMsg,
+		// Optional contextualisation signals (4C.1). When any are set
+		// and the service has an LLM generator wired, the served lesson
+		// is contextualised; otherwise the deterministic catalog lesson
+		// is returned unchanged.
+		Context: education.LessonContext{
+			Industry:      strings.TrimSpace(r.URL.Query().Get("industry")),
+			EmployeeRole:  strings.TrimSpace(r.URL.Query().Get("role")),
+			ThreatProfile: strings.TrimSpace(r.URL.Query().Get("threat_profile")),
+		},
 	}
 	if tenantID == "" {
 		// Allow anonymous lookups (e.g. content previews) — return the

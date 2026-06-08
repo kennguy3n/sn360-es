@@ -71,6 +71,14 @@ type AI struct {
 	// specifically so an operator that runs A/B experiments with
 	// TIER2_TEMPERATURE=0 is not silently overridden to 0.1.
 	Temperature *float64
+
+	// EducationLessonsEnabled gates the LLM micro-lesson generation
+	// path (Session 4C.1). When false (default) the education service
+	// serves only deterministic catalog lessons; when true it
+	// contextualises lessons to the tenant's industry / recipient role
+	// / threat profile via the same OpenAI-compatible endpoint as
+	// Tier 2, falling back to the catalog on any model failure.
+	EducationLessonsEnabled bool
 }
 
 // ParseProviderOpts is exported so callers (Validate, tests, the
@@ -97,6 +105,8 @@ func loadAI() AI {
 		ProviderOpts: ParseProviderOpts(getStr("TIER2_PROVIDER_OPTS", "")),
 		MaxTokens:    getInt("TIER2_MAX_TOKENS", 0),
 		Temperature:  getFloatPtr("TIER2_TEMPERATURE"),
+
+		EducationLessonsEnabled: getBool("EDUCATION_LLM_LESSONS_ENABLED", false),
 	}
 }
 
