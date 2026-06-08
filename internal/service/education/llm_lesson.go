@@ -66,8 +66,11 @@ func (c LessonContext) normalized() LessonContext {
 }
 
 // normalizeContextField collapses internal whitespace (including
-// newlines and tabs) to single spaces and truncates to max runes,
-// trimming any partial trailing word introduced by the cut.
+// newlines and tabs) to single spaces and truncates to maxLen runes.
+// If the cut lands exactly on a word boundary the resulting trailing
+// space is trimmed; a cut that lands mid-word leaves that word's
+// fragment intact (rune-count truncation is sufficient to bound prompt
+// size / token cost, so partial-word fragments are not stripped).
 func normalizeContextField(s string, maxLen int) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if maxLen <= 0 {
