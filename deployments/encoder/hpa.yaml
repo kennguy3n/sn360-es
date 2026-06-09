@@ -26,8 +26,14 @@ spec:
   # but the evaluation-latency SLO would breach fleet-wide. Two warm
   # replicas keep the SLO intact through single-pod failure and give
   # zero-gap rolling updates, at the cost of one extra idle GPU.
+  #
+  # maxReplicas: 12 matches the established Tier-1 ceiling. With the
+  # averageValue: 100 per-pod target below, the fleet can absorb a
+  # sustained backlog of ~1200 pending before saturating; the
+  # SN360ESEncoderCapacityExhausted alert pages well before that (at
+  # max replicas AND >200 pending).
   minReplicas: 2
-  maxReplicas: 4
+  maxReplicas: 12
   behavior:
     scaleDown:
       # 5-minute scale-down stabilization: the HPA holds the highest

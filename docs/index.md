@@ -63,7 +63,7 @@ on every alert in the PrometheusRule manifests
 
 Autoscaling reference: the encoder fleet (`deployments/encoder/`) scales
 on JetStream queue depth (`nats_consumer_pending_messages`) between 2 and
-4 replicas (a `minReplicas: 2` HA floor on the Tier-1 path); the Tier-2
+12 replicas (a `minReplicas: 2` HA floor on the Tier-1 path); the Tier-2
 LLM (`deployments/llm/`) is a StatefulSet with a per-pod PVC and scales
 between 1 and 2 replicas. See each directory's `hpa.yaml` for the exact
 thresholds and the rationale comments.
