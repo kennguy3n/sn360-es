@@ -43,9 +43,8 @@ func (h *DashboardHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "dashboard service not configured")
 		return
 	}
-	tenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
-	if tenantID == "" {
-		writeError(w, http.StatusBadRequest, "tenant_id is required")
+	tenantID, ok := resolveTenant(w, r, h.logger)
+	if !ok {
 		return
 	}
 	rangeStr := strings.TrimSpace(r.URL.Query().Get("range"))
