@@ -343,3 +343,83 @@ func TestComputeAnalytics_ResilienceTrendDistinctDates(t *testing.T) {
 		seen[p.Date] = struct{}{}
 	}
 }
+
+// noBatchInteractionStore wraps MemoryInteractionStore but deliberately
+// forwards only the InteractionStore interface (Append + ListByCampaign),
+// NOT ListByCampaigns. Both production stores implement the batch fast
+// path, so this is the only shape that drives loadInteractions down its
+// per-campaign fallback branch — the path a third-party store without a
+// batch method would hit. The fields use value receivers so the batch
+// method is never promoted.
+type noBatchInteractionStore struct{ inner *MemoryInteractionStore }
+
+func (s noBatchInteractionStore) Append(ctx context.Context, i dto.UserInteraction) error {
+	return s.inner.Append(ctx, i)
+}
+
+func (s noBatchInteractionStore) ListByCampaign(ctx context.Context, campaignID string) ([]dto.UserInteraction, error) {
+	return s.inner.ListByCampaign(ctx, campaignID)
+}
+
+// TestComputeAnalytics_FallbackInteractionLister exercises the
+// per-campaign fallback in loadInteractions, which is otherwise dead in
+// tests because both concrete stores satisfy batchInteractionLister.
+func TestComputeAnalytics_FallbackInteractionLister(t *testing.T) {
+	templates, err := LoadDefaultTemplates()
+	if err != nil {
+		t.Fatalf("LoadDefaultTemplates: %v", err)
+	}
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	store := noBatchInteractionStore{inner: NewMemoryInteractionStore()}
+	// Guard: if the wrapper ever satisfies the batch interface, the test
+	// would silently stop covering the fallback it exists to cover.
+	if _, ok := interface{}(store).(batchInteractionLister); ok {
+		t.Fatal("wrapper must NOT implement batchInteractionLister, else the fallback is not exercised")
+	}
+	campaigns := NewMemoryCampaignStore()
+	scorer := NewResilienceScorer(ResilienceScorerConfig{Clock: func() time.Time { return now }})
+	svc, err := NewAnalyticsService(AnalyticsConfig{
+		Campaigns:    campaigns,
+		Interactions: store,
+		Templates:    templates,
+		Scorer:       scorer,
+		Clock:        func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewAnalyticsService: %v", err)
+	}
+
+	created := now.Add(-5 * 24 * time.Hour)
+	const tmpl = "bec.easy.ceo_gift_card"
+	if serr := campaigns.SaveCampaign(context.Background(), dto.Campaign{
+		CampaignID: "c1", TenantID: "t1", TemplateID: tmpl,
+		Difficulty: dto.DifficultyEasy, CreatedAt: created, TargetCount: 2,
+	}); serr != nil {
+		t.Fatalf("SaveCampaign: %v", serr)
+	}
+	for _, u := range []string{"u1", "u2"} {
+		if aerr := store.Append(context.Background(), dto.UserInteraction{
+			CampaignID: "c1", UserHash: u, Action: dto.InteractionDelivered, OccurredAt: created,
+		}); aerr != nil {
+			t.Fatalf("Append: %v", aerr)
+		}
+	}
+	if aerr := store.Append(context.Background(), dto.UserInteraction{
+		CampaignID: "c1", UserHash: "u1", Action: dto.InteractionClickedLink, OccurredAt: created.Add(time.Hour),
+	}); aerr != nil {
+		t.Fatalf("Append: %v", aerr)
+	}
+
+	got, err := svc.ComputeAnalytics(context.Background(), "t1", dto.TimeRange{End: now})
+	if err != nil {
+		t.Fatalf("ComputeAnalytics: %v", err)
+	}
+	// The fallback must produce the same aggregation as the batch path:
+	// one template with one distinct clicker (u1).
+	if len(got.TopClickedTemplates) != 1 {
+		t.Fatalf("expected 1 template row via fallback, got %+v", got.TopClickedTemplates)
+	}
+	if got.TopClickedTemplates[0].ClickCount != 1 {
+		t.Errorf("click_count = %d, want 1 (distinct clicker u1)", got.TopClickedTemplates[0].ClickCount)
+	}
+}
