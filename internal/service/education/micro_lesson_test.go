@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -194,5 +195,122 @@ func TestMicroLesson_StaticStoreSupportsCustomLocale(t *testing.T) {
 	}
 	if got.LessonID != "lesson.phishing.vi" {
 		t.Fatalf("locale not respected: %q", got.LessonID)
+	}
+}
+
+// TestMicroLesson_ServeUsesGeneratorOnlyWithContext verifies the LLM
+// path (4C.1) is invoked only when a generator is wired AND the request
+// carries contextual signal; the trigger envelope records the resulting
+// source.
+func TestMicroLesson_ServeUsesGeneratorOnlyWithContext(t *testing.T) {
+	store, err := DefaultLessonStore()
+	if err != nil {
+		t.Fatalf("DefaultLessonStore: %v", err)
+	}
+	gen := &stubGenerator{out: MicroLesson{
+		LessonID:         "lesson.phishing.en",
+		Category:         constant.CategoryLikelyPhishing,
+		Title:            "Spotting a phishing email",
+		BodyHTML:         "<section><p>Contextualised for finance.</p></section>",
+		EstimatedSeconds: 120,
+		Source:           LessonSourceLLM,
+	}}
+	pub := &recordingPublisher{}
+	svc, err := NewMicroLessonService(MicroLessonConfig{Store: store, Publisher: pub, Generator: gen})
+	if err != nil {
+		t.Fatalf("NewMicroLessonService: %v", err)
+	}
+
+	// No context → generator must NOT be called; catalog source.
+	l, err := svc.Serve(context.Background(), ServeRequest{
+		TenantID: "acme", Category: constant.CategoryLikelyPhishing, Locale: "en",
+	})
+	if err != nil {
+		t.Fatalf("Serve (no context): %v", err)
+	}
+	if gen.hits != 0 {
+		t.Errorf("generator should not be called without context; hits=%d", gen.hits)
+	}
+	if l.Source != LessonSourceCatalog {
+		t.Errorf("expected catalog source, got %q", l.Source)
+	}
+
+	// With context → generator IS called; llm source propagates.
+	l, err = svc.Serve(context.Background(), ServeRequest{
+		TenantID: "acme", Category: constant.CategoryLikelyPhishing, Locale: "en",
+		Context: LessonContext{Industry: "financial-services"},
+	})
+	if err != nil {
+		t.Fatalf("Serve (context): %v", err)
+	}
+	if gen.hits != 1 {
+		t.Errorf("generator should be called once with context; hits=%d", gen.hits)
+	}
+	if l.Source != LessonSourceLLM || !strings.Contains(l.BodyHTML, "Contextualised") {
+		t.Errorf("expected generated lesson, got source=%q body=%q", l.Source, l.BodyHTML)
+	}
+	// Last trigger envelope should carry source=llm.
+	var env map[string]any
+	if err := json.Unmarshal(pub.payloads[len(pub.payloads)-1], &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if env["source"] != LessonSourceLLM {
+		t.Errorf("trigger source = %v, want llm", env["source"])
+	}
+}
+
+// TestMicroLesson_ServeFallsBackWhenGeneratorErrors verifies a generator
+// error degrades to the catalog lesson rather than failing Serve.
+func TestMicroLesson_ServeFallsBackWhenGeneratorErrors(t *testing.T) {
+	store, err := DefaultLessonStore()
+	if err != nil {
+		t.Fatalf("DefaultLessonStore: %v", err)
+	}
+	gen := &stubGenerator{err: errors.New("model down")}
+	svc, err := NewMicroLessonService(MicroLessonConfig{Store: store, Generator: gen})
+	if err != nil {
+		t.Fatalf("NewMicroLessonService: %v", err)
+	}
+	l, err := svc.Serve(context.Background(), ServeRequest{
+		TenantID: "acme", Category: constant.CategoryLikelyPhishing, Locale: "en",
+		Context: LessonContext{Industry: "x"},
+	})
+	if err != nil {
+		t.Fatalf("Serve should not fail on generator error: %v", err)
+	}
+	if l.Source != LessonSourceCatalog || l.BodyHTML == "" {
+		t.Errorf("expected catalog fallback, got source=%q", l.Source)
+	}
+}
+
+// TestMicroLesson_ServeFallsBackOnWhitespaceOnlyBody verifies the Serve
+// empty-body guard is whitespace-aware (matching FallbackLessonGenerator):
+// a custom generator returning a nil error with a blank-but-non-empty
+// body must degrade to the catalog lesson, not serve the blank body.
+func TestMicroLesson_ServeFallsBackOnWhitespaceOnlyBody(t *testing.T) {
+	store, err := DefaultLessonStore()
+	if err != nil {
+		t.Fatalf("DefaultLessonStore: %v", err)
+	}
+	gen := &stubGenerator{out: MicroLesson{
+		LessonID: "lesson.phishing.en",
+		Category: constant.CategoryLikelyPhishing,
+		Title:    "Spotting a phishing email",
+		BodyHTML: "   \n\t ",
+		Source:   LessonSourceLLM,
+	}}
+	svc, err := NewMicroLessonService(MicroLessonConfig{Store: store, Generator: gen})
+	if err != nil {
+		t.Fatalf("NewMicroLessonService: %v", err)
+	}
+	l, err := svc.Serve(context.Background(), ServeRequest{
+		TenantID: "acme", Category: constant.CategoryLikelyPhishing, Locale: "en",
+		Context: LessonContext{Industry: "x"},
+	})
+	if err != nil {
+		t.Fatalf("Serve should not fail on whitespace-only body: %v", err)
+	}
+	if l.Source != LessonSourceCatalog || strings.TrimSpace(l.BodyHTML) == "" {
+		t.Errorf("expected catalog fallback with real body, got source=%q body=%q", l.Source, l.BodyHTML)
 	}
 }

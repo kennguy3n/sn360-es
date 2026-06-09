@@ -691,10 +691,49 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 
 	// Micro-lesson service.
 	if store, serr := education.DefaultLessonStore(); serr == nil {
+		// Optional LLM contextualisation path (4C.1). Disabled unless
+		// EDUCATION_LLM_LESSONS_ENABLED=true; when enabled we wrap the
+		// Tier 2 endpoint in a FallbackLessonGenerator so any model
+		// failure degrades to the deterministic catalog lesson.
+		//
+		// The generator reuses the Tier 2 *connection* (URL / APIKey /
+		// Model) but takes its sampling budget from the dedicated
+		// EDUCATION_LLM_* knobs (zero/nil => generator defaults), so the
+		// classifier's TIER2_MAX_TOKENS / AI_TIMEOUT / TIER2_TEMPERATURE
+		// tuning does not silently truncate or re-temperature lessons.
+		var lessonGen education.LessonGenerator
+		if cfg.AI.EducationLessonsEnabled && cfg.AI.URL != "" {
+			primary, gerr := education.NewTier2LessonGenerator(education.Tier2LessonGeneratorConfig{
+				URL:         cfg.AI.URL,
+				APIKey:      cfg.AI.APIKey,
+				Model:       cfg.AI.Model,
+				Timeout:     cfg.AI.EducationTimeout,
+				MaxTokens:   cfg.AI.EducationMaxTokens,
+				Temperature: cfg.AI.EducationTemperature,
+				Logger:      logger,
+			})
+			if gerr == nil {
+				lessonGen = education.FallbackLessonGenerator{
+					Primary:  primary,
+					Fallback: education.DeterministicLessonGenerator{},
+					Logger:   logger,
+				}
+				// Surface the endpoint so operators can tell whether
+				// lessons will reach a real model or the AI_URL default
+				// (127.0.0.1:9000) — in the latter case every call fails
+				// closed to the catalog lesson, which is otherwise silent.
+				logger.Info("sn360-es: education LLM lesson generation enabled",
+					slog.String("endpoint", cfg.AI.URL))
+			} else {
+				logger.Warn("sn360-es: education lesson generator init failed; serving catalog only",
+					slog.Any("error", gerr))
+			}
+		}
 		svc, lerr := education.NewMicroLessonService(education.MicroLessonConfig{
 			Store:     store,
 			Publisher: eventBus,
 			Logger:    logger,
+			Generator: lessonGen,
 		})
 		if lerr == nil {
 			app.microLessonSvc = svc
