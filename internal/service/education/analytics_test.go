@@ -307,3 +307,39 @@ func TestComputeAnalytics_TopClickedDistinctAcrossCampaigns(t *testing.T) {
 		t.Errorf("click_count = %d, want 2 (distinct users u1,u2)", got.TopClickedTemplates[0].ClickCount)
 	}
 }
+
+// TestComputeAnalytics_ResilienceTrendDistinctDates guards the
+// one-point-per-date contract of the resilience trend. When the range
+// isn't a clean multiple of the bucket step, the last loop-generated
+// bucket and the always-appended range end can land on the same
+// calendar day; the series must collapse them to a single point.
+func TestComputeAnalytics_ResilienceTrendDistinctDates(t *testing.T) {
+	f := newAnalyticsFixture(t)
+	// 36h range with a 24h step yields bucket ends at start+24h and the
+	// appended end (start+36h) — both on the same calendar date.
+	start := time.Date(2026, 5, 31, 0, 0, 0, 0, time.UTC)
+	end := start.Add(36 * time.Hour) // 2026-06-01 12:00 UTC
+	const tmpl = "bec.easy.ceo_gift_card"
+	f.addCampaign(t, dto.Campaign{
+		CampaignID: "c1", TenantID: "t1", TemplateID: tmpl,
+		Difficulty: dto.DifficultyEasy, CreatedAt: start.Add(6 * time.Hour),
+		TargetCount: 1,
+	})
+	// Deliver before the first bucket so both buckets have a sent user.
+	f.record(t, "c1", "u1", dto.InteractionDelivered, start.Add(6*time.Hour))
+
+	got, err := f.svc.ComputeAnalytics(context.Background(), "t1", dto.TimeRange{Start: start, End: end})
+	if err != nil {
+		t.Fatalf("ComputeAnalytics: %v", err)
+	}
+	if len(got.ResilienceTrend) == 0 {
+		t.Fatalf("expected a non-empty resilience trend")
+	}
+	seen := map[string]struct{}{}
+	for _, p := range got.ResilienceTrend {
+		if _, dup := seen[p.Date]; dup {
+			t.Errorf("duplicate resilience-trend date %q in %+v", p.Date, got.ResilienceTrend)
+		}
+		seen[p.Date] = struct{}{}
+	}
+}

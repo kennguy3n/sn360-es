@@ -499,7 +499,18 @@ func (s *AnalyticsService) resilienceTrend(ctx context.Context, tenantID string,
 			)
 			continue
 		}
-		out = append(out, dto.DatedScore{Date: te.Format("2006-01-02"), Score: float64(score.Score)})
+		date := te.Format("2006-01-02")
+		// Buckets are strictly increasing in time, so two buckets that
+		// format to the same calendar date (possible when the range isn't
+		// a clean multiple of the step) must collapse to one point. Keep
+		// the later bucket: it folds in strictly more interactions and is
+		// the more complete score for that day. This preserves the
+		// one-point-per-date contract the trend series implies.
+		if n := len(out); n > 0 && out[n-1].Date == date {
+			out[n-1].Score = float64(score.Score)
+			continue
+		}
+		out = append(out, dto.DatedScore{Date: date, Score: float64(score.Score)})
 	}
 	return out
 }
