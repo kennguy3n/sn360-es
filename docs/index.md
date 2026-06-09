@@ -77,6 +77,15 @@ safe" view), see [`DEGRADATION_MODES.md`](./DEGRADATION_MODES.md).
 - Raw ML-inference manifests: `deployments/encoder/`, `deployments/llm/`.
 - Schema migrations: [`../migrations/README.md`](../migrations/README.md).
 
+> **Migration runbook — LLM Deployment → StatefulSet:** the Tier-2 LLM
+> moved from a `Deployment` backed by one shared PVC
+> (`sn360-es-llm-models`) to a `StatefulSet` with per-pod PVCs
+> (`models-sn360-es-llm-<ordinal>`). Kubernetes does not reclaim the old
+> PVC on a kind change, so after rollout — once the new per-pod claims
+> are bound and serving — delete the orphan to reclaim storage:
+> `kubectl -n sn360-es delete pvc sn360-es-llm-models`. Do not delete the
+> per-pod claims.
+
 ## Integration Points
 
 SN360-ES is the email-security data plane within the broader SN360

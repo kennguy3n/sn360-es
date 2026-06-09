@@ -376,18 +376,30 @@ func clickRatesByDifficulty(aggs []campaignAgg) []dto.DifficultyClickRate {
 	return out
 }
 
-// topClickedTemplates ranks templates by distinct clicking users,
-// summed across every campaign that used the template.
+// topClickedTemplates ranks templates by the number of DISTINCT users
+// who clicked them. A template reused across several campaigns must
+// count a user who clicked it in two of them only once, so we union the
+// per-campaign clicker sets into a per-template user set rather than
+// summing the per-campaign counts (which would double-count repeat
+// clickers and break the "distinct users" contract on TemplateClickCount).
 func topClickedTemplates(aggs []campaignAgg) []dto.TemplateClickCount {
-	byTemplate := map[string]int{}
+	byTemplate := map[string]map[string]struct{}{}
 	for _, a := range aggs {
 		if a.campaign.TemplateID == "" {
 			continue
 		}
-		byTemplate[a.campaign.TemplateID] += len(a.clicked)
+		set := byTemplate[a.campaign.TemplateID]
+		if set == nil {
+			set = map[string]struct{}{}
+			byTemplate[a.campaign.TemplateID] = set
+		}
+		for u := range a.clicked {
+			set[u] = struct{}{}
+		}
 	}
 	out := make([]dto.TemplateClickCount, 0, len(byTemplate))
-	for id, n := range byTemplate {
+	for id, set := range byTemplate {
+		n := len(set)
 		if n == 0 {
 			continue
 		}

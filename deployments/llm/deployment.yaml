@@ -1,3 +1,13 @@
+# MIGRATION NOTE (Deployment -> StatefulSet): this workload was
+# previously a Deployment backed by one shared PVC named
+# `sn360-es-llm-models`. Applying this manifest creates the new
+# StatefulSet but does NOT garbage-collect that old PVC — Kubernetes
+# never reclaims a PVC when the workload referencing it changes kind.
+# After rollout, manually delete the orphan to reclaim its storage,
+# once you've confirmed the new per-pod PVCs are bound and serving:
+#   kubectl -n sn360-es delete pvc sn360-es-llm-models
+# (The new per-pod claims are models-sn360-es-llm-<ordinal>; do NOT
+# delete those.) See docs/index.md "Deployment" for the runbook entry.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:

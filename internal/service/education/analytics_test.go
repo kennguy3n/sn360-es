@@ -272,3 +272,38 @@ func TestComputeAnalytics_TenantIsolation(t *testing.T) {
 		t.Errorf("tenant t2 leaked t1 data: %+v", got)
 	}
 }
+
+// TestComputeAnalytics_TopClickedDistinctAcrossCampaigns guards the
+// "distinct users" contract on TemplateClickCount: a user who clicks the
+// same template in two separate campaigns must be counted once, not
+// twice.
+func TestComputeAnalytics_TopClickedDistinctAcrossCampaigns(t *testing.T) {
+	f := newAnalyticsFixture(t)
+	created := f.now.Add(-5 * 24 * time.Hour)
+	const tmpl = "bec.easy.ceo_gift_card"
+	for _, cid := range []string{"q1", "q2"} {
+		f.addCampaign(t, dto.Campaign{
+			CampaignID: cid, TenantID: "t1", TemplateID: tmpl,
+			Difficulty: dto.DifficultyEasy, CreatedAt: created, TargetCount: 2,
+		})
+		// Same two users delivered in both campaigns.
+		f.record(t, cid, "u1", dto.InteractionDelivered, created)
+		f.record(t, cid, "u2", dto.InteractionDelivered, created)
+	}
+	// u1 clicks the template in BOTH campaigns; u2 clicks in one.
+	f.record(t, "q1", "u1", dto.InteractionClickedLink, created.Add(time.Hour))
+	f.record(t, "q2", "u1", dto.InteractionClickedLink, created.Add(time.Hour))
+	f.record(t, "q2", "u2", dto.InteractionClickedLink, created.Add(time.Hour))
+
+	got, err := f.svc.ComputeAnalytics(context.Background(), "t1", dto.TimeRange{End: f.now})
+	if err != nil {
+		t.Fatalf("ComputeAnalytics: %v", err)
+	}
+	if len(got.TopClickedTemplates) != 1 {
+		t.Fatalf("expected 1 template row, got %+v", got.TopClickedTemplates)
+	}
+	// Distinct clickers across both campaigns = {u1, u2} = 2 (not 3).
+	if got.TopClickedTemplates[0].ClickCount != 2 {
+		t.Errorf("click_count = %d, want 2 (distinct users u1,u2)", got.TopClickedTemplates[0].ClickCount)
+	}
+}
