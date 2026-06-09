@@ -282,3 +282,35 @@ func TestMicroLesson_ServeFallsBackWhenGeneratorErrors(t *testing.T) {
 		t.Errorf("expected catalog fallback, got source=%q", l.Source)
 	}
 }
+
+// TestMicroLesson_ServeFallsBackOnWhitespaceOnlyBody verifies the Serve
+// empty-body guard is whitespace-aware (matching FallbackLessonGenerator):
+// a custom generator returning a nil error with a blank-but-non-empty
+// body must degrade to the catalog lesson, not serve the blank body.
+func TestMicroLesson_ServeFallsBackOnWhitespaceOnlyBody(t *testing.T) {
+	store, err := DefaultLessonStore()
+	if err != nil {
+		t.Fatalf("DefaultLessonStore: %v", err)
+	}
+	gen := &stubGenerator{out: MicroLesson{
+		LessonID: "lesson.phishing.en",
+		Category: constant.CategoryLikelyPhishing,
+		Title:    "Spotting a phishing email",
+		BodyHTML: "   \n\t ",
+		Source:   LessonSourceLLM,
+	}}
+	svc, err := NewMicroLessonService(MicroLessonConfig{Store: store, Generator: gen})
+	if err != nil {
+		t.Fatalf("NewMicroLessonService: %v", err)
+	}
+	l, err := svc.Serve(context.Background(), ServeRequest{
+		TenantID: "acme", Category: constant.CategoryLikelyPhishing, Locale: "en",
+		Context: LessonContext{Industry: "x"},
+	})
+	if err != nil {
+		t.Fatalf("Serve should not fail on whitespace-only body: %v", err)
+	}
+	if l.Source != LessonSourceCatalog || strings.TrimSpace(l.BodyHTML) == "" {
+		t.Errorf("expected catalog fallback with real body, got source=%q body=%q", l.Source, l.BodyHTML)
+	}
+}

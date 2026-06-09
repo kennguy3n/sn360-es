@@ -187,13 +187,16 @@ func (s *MicroLessonService) Serve(ctx context.Context, req ServeRequest) (Micro
 				slog.String("lesson_id", l.LessonID),
 				slog.Any("error", gerr),
 			)
-		case gen.BodyHTML == "":
-			// nil-error but empty body. With the standard
-			// FallbackLessonGenerator this branch is unreachable
-			// (Tier2 errors on empty content, Deterministic always
-			// returns the catalog HTML); a custom generator could hit
-			// it, so log at debug level for observability rather than
-			// degrading silently.
+		case strings.TrimSpace(gen.BodyHTML) == "":
+			// nil-error but empty (or whitespace-only) body. The guard
+			// is whitespace-aware to match FallbackLessonGenerator's
+			// own `strings.TrimSpace(...) != ""` success check, so a
+			// blank-but-non-empty body degrades identically on both
+			// paths. With the standard FallbackLessonGenerator this
+			// branch is unreachable (Tier2 errors on empty content,
+			// Deterministic always returns the catalog HTML); a custom
+			// generator could hit it, so log at debug level for
+			// observability rather than degrading silently.
 			s.log.DebugContext(ctx, "education: generator returned empty lesson body, serving catalog",
 				slog.String("tenant_id", req.TenantID),
 				slog.String("lesson_id", l.LessonID),
