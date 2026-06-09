@@ -78,6 +78,16 @@ func (h *DashboardHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // ever propagated to the net/http recovery handler.
 var errInvalidRange = errors.New("dashboard: invalid range")
 
+// maxRange caps how far back any range-driven read (dashboard summary,
+// education analytics) may look. Without it a caller could pass an
+// arbitrarily large window (e.g. range=99999d) and force the underlying
+// stores to scan a tenant's entire campaign/interaction history in one
+// request. One year is comfortably above the largest documented default
+// (90d) while bounding worst-case query cost. parseRange clamps rather
+// than rejecting so an over-large request still returns useful data over
+// the widest supported window instead of a 400 the caller must handle.
+const maxRange = 366 * 24 * time.Hour
+
 func parseRange(s string) (time.Duration, error) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	if len(s) < 2 {
@@ -91,13 +101,22 @@ func parseRange(s string) (time.Duration, error) {
 	if n <= 0 {
 		return 0, fmt.Errorf("%w: value must be positive", errInvalidRange)
 	}
+	var unitDur time.Duration
 	switch unit {
 	case 'd':
-		return time.Duration(n) * 24 * time.Hour, nil
+		unitDur = 24 * time.Hour
 	case 'h':
-		return time.Duration(n) * time.Hour, nil
+		unitDur = time.Hour
 	case 'm':
-		return time.Duration(n) * time.Minute, nil
+		unitDur = time.Minute
+	default:
+		return 0, fmt.Errorf("%w: unknown unit %q", errInvalidRange, unit)
 	}
-	return 0, fmt.Errorf("%w: unknown unit %q", errInvalidRange, unit)
+	// Clamp n to the cap's worth of this unit *before* multiplying, so an
+	// absurd value (e.g. range=9999999999d) collapses to maxRange instead
+	// of overflowing int64 and wrapping to a negative duration.
+	if maxN := int(maxRange / unitDur); n > maxN {
+		return maxRange, nil
+	}
+	return time.Duration(n) * unitDur, nil
 }

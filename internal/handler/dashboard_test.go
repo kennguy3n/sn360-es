@@ -160,3 +160,50 @@ func TestDashboardHandler_GeneratorError(t *testing.T) {
 		t.Fatalf("status=%d", rec.Code)
 	}
 }
+
+func TestParseRange(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    time.Duration
+		wantErr bool
+	}{
+		{"7d", 7 * 24 * time.Hour, false},
+		{"90d", 90 * 24 * time.Hour, false},
+		{"12h", 12 * time.Hour, false},
+		{"30m", 30 * time.Minute, false},
+		{" 7D ", 7 * 24 * time.Hour, false}, // trimmed + lower-cased
+		// At and beyond the cap collapse to maxRange.
+		{"366d", maxRange, false},
+		{"400d", maxRange, false},
+		{"99999d", maxRange, false},
+		// Overflow: n large enough that n*24h wraps negative must also
+		// clamp to the cap, never return a negative window.
+		{"9999999999d", maxRange, false},
+		// Invalid inputs.
+		{"", 0, true},
+		{"d", 0, true},
+		{"0d", 0, true},
+		{"-5d", 0, true},
+		{"10y", 0, true},
+		{"abc", 0, true},
+	}
+	for _, c := range cases {
+		got, err := parseRange(c.in)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("parseRange(%q) = %v, want error", c.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseRange(%q) unexpected error: %v", c.in, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("parseRange(%q) = %v, want %v", c.in, got, c.want)
+		}
+		if got <= 0 || got > maxRange {
+			t.Errorf("parseRange(%q) = %v escapes (0, maxRange]", c.in, got)
+		}
+	}
+}

@@ -1,0 +1,49 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: sn360-es-llm-autoscaling
+  namespace: sn360-es
+  labels:
+    app.kubernetes.io/name: sn360-es-llm
+    app.kubernetes.io/component: tier2-inference
+    app.kubernetes.io/part-of: sn360-es
+    # `release: kube-prometheus-stack` (or your Prometheus Operator's
+    # ruleSelector label) is required for the operator to adopt this
+    # rule. Patch it in the overlay if your selector differs.
+spec:
+  groups:
+    - name: sn360-es-llm-capacity
+      interval: 30s
+      rules:
+        # Capacity exhausted: the Tier-2 LLM HPA is at its maxReplicas
+        # ceiling (now 2, since the StatefulSet+per-pod-PVC change let
+        # us lift it off 1) AND the Tier-2 backlog is still above 100
+        # pending. Tier 2 is the slow path (2-5s/request), so a backlog
+        # at the replica ceiling means contextualised micro-lessons /
+        # Tier-2 verdicts are falling behind with no autoscaling
+        # headroom left.
+        - alert: SN360ESLLMCapacityExhausted
+          expr: |
+            (
+              max(nats_consumer_pending_messages{stream="ES_EVALUATE",consumer="es-evaluate-tier2"}) > 100
+            )
+            and on()
+            (
+              max(kube_horizontalpodautoscaler_status_current_replicas{horizontalpodautoscaler="sn360-es-llm",namespace="sn360-es"})
+              >=
+              max(kube_horizontalpodautoscaler_spec_max_replicas{horizontalpodautoscaler="sn360-es-llm",namespace="sn360-es"})
+            )
+          for: 5m
+          labels:
+            severity: critical
+            component: llm
+          annotations:
+            summary: "Tier-2 LLM fleet at max replicas with a growing backlog"
+            description: |
+              The sn360-es-llm HPA has been at its maxReplicas ceiling
+              for 5m while the es.evaluate tier-2 backlog is above 100
+              pending messages. Tier-2 contextualisation is falling
+              behind. Raise llm maxReplicas in deployments/llm/hpa.yaml
+              (verify node CPU/memory headroom for the ~3GB model) or
+              reduce the fraction of traffic routed to Tier 2.
+            runbook_url: "https://github.com/kennguy3n/sn360-es/blob/main/docs/RUNBOOKS.md#llm-capacity-exhausted"

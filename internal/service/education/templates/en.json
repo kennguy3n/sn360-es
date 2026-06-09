@@ -262,5 +262,101 @@
     "sender_domain_template": "{{.partner_domain}}",
     "landing_page_type": "credential_harvest",
     "expected_detection_points": ["compromised real partner", "existing-thread context", "SSO credential harvest"]
+  },
+  {
+    "template_id": "hipaa.easy.phi_email",
+    "attack_type": "bec",
+    "difficulty": "easy",
+    "regulatory_category": "hipaa",
+    "subject_template": "Quick - lab results for Dr. {{.doctor_name}}",
+    "body_template": "<p>Hi {{.target_name}},</p><p>Dr. {{.doctor_name}} needs the lab results for patient {{.patient_initials}} right away. Can you just reply to this email with the full report attached, plus the patient's full name and date of birth so we can match the chart? They are with the patient now.</p><p>Thanks,<br>{{.doctor_name}}'s office</p>",
+    "sender_display_template": "{{.doctor_name}} Office",
+    "sender_domain_template": "{{.lookalike_internal_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": ["PHI requested over unencrypted email", "no secure-messaging channel used", "urgency pressure", "verify requester via known internal channel"]
+  },
+  {
+    "template_id": "hipaa.medium.vendor_phi_request",
+    "attack_type": "supply_chain",
+    "difficulty": "medium",
+    "regulatory_category": "hipaa",
+    "subject_template": "RE: {{.vendor_name}} data migration - patient export needed",
+    "body_template": "<p>Hi {{.target_name}},</p><p>As part of the migration covered under our BAA, we need {{.tenant_name}} to export the Q3 patient records and upload them to our secure transfer portal: <a href=\"{{.landing_url}}\">{{.vendor_name}} transfer portal</a>. Please sign in with your work account to authorise the transfer before end of day.</p><p>Regards,<br>{{.partner_contact}}, {{.vendor_name}}</p>",
+    "sender_display_template": "{{.partner_contact}} ({{.vendor_name}})",
+    "sender_domain_template": "{{.lookalike_vendor_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": ["BAA pretext used to lower suspicion", "bulk PHI export request", "lookalike vendor domain", "credential harvest via portal sign-in", "verify BAA scope with privacy officer"]
+  },
+  {
+    "template_id": "hipaa.hard.insurance_portal_phish",
+    "attack_type": "credential_phishing",
+    "difficulty": "hard",
+    "regulatory_category": "hipaa",
+    "subject_template": "Action required: {{.brand_name}} provider portal re-verification",
+    "body_template": "<p>Dear Provider,</p><p>{{.brand_name}} is upgrading the provider portal. To avoid interruption to claims and eligibility checks, re-verify your account today: <a href=\"{{.landing_url}}\">verify provider account</a>. You will need your portal credentials and the patient identifiers from a recent claim to confirm access.</p><p>{{.brand_name}} Provider Services</p>",
+    "sender_display_template": "{{.brand_name}} Provider Services",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": ["lookalike insurer domain", "credential and PHI harvest", "manufactured deadline", "no portal change announced through official channel", "hover link before clicking"]
+  },
+  {
+    "template_id": "pci.easy.card_data_email",
+    "attack_type": "bec",
+    "difficulty": "easy",
+    "regulatory_category": "pci_dss",
+    "subject_template": "Card details from yesterday's order {{.order_number}}",
+    "body_template": "<p>Hi {{.target_name}},</p><p>Could you send me the full card number, expiry and CVV from yesterday's transaction ({{.order_number}})? The customer is on the phone disputing the charge and I need to confirm it quickly.</p><p>Thanks,<br>{{.colleague_name}}</p>",
+    "sender_display_template": "{{.colleague_name}}",
+    "sender_domain_template": "{{.lookalike_internal_domain}}",
+    "landing_page_type": "none",
+    "expected_detection_points": ["full PAN and CVV requested over email", "CVV must never be stored or emailed", "urgency pressure", "verify request through the ticketing system"]
+  },
+  {
+    "template_id": "pci.medium.payment_portal_update",
+    "attack_type": "credential_phishing",
+    "difficulty": "medium",
+    "regulatory_category": "pci_dss",
+    "subject_template": "{{.brand_name}} merchant account - re-enter your processing credentials",
+    "body_template": "<p>Hello {{.tenant_name}} team,</p><p>Due to a scheduled security upgrade, all merchants must re-enter their payment-processing credentials before settlement resumes: <a href=\"{{.landing_url}}\">update merchant credentials</a>. Settlements are paused until this step is completed.</p><p>{{.brand_name}} Merchant Support</p>",
+    "sender_display_template": "{{.brand_name}} Merchant Support",
+    "sender_domain_template": "{{.fake_billing_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": ["processor would not request credential re-entry by email", "settlement-pause pressure", "lookalike billing domain", "credential harvest", "confirm via the processor dashboard"]
+  },
+  {
+    "template_id": "pci.hard.terminal_firmware_update",
+    "attack_type": "supply_chain",
+    "difficulty": "hard",
+    "regulatory_category": "pci_dss",
+    "subject_template": "Mandatory POS firmware update - {{.brand_name}} terminals",
+    "body_template": "<p>Hi {{.target_name}},</p><p>A mandatory PCI firmware patch is required on your {{.brand_name}} card terminals. Download the signed update and sign in with your terminal-management credentials to deploy it: <a href=\"{{.landing_url}}\">download firmware update</a>. Terminals not patched by Friday will stop processing cards.</p><p>{{.brand_name}} Terminal Operations</p>",
+    "sender_display_template": "{{.brand_name}} Terminal Operations",
+    "sender_domain_template": "{{.fake_msp_domain}}",
+    "landing_page_type": "malware_download",
+    "expected_detection_points": ["unsolicited firmware update", "credential harvest plus malware download", "lookalike vendor domain", "deadline pressure", "verify firmware via the terminal vendor portal"]
+  },
+  {
+    "template_id": "sox.easy.financial_report_preview",
+    "attack_type": "bec",
+    "difficulty": "easy",
+    "regulatory_category": "sox",
+    "subject_template": "Quarterly results - quick review before public release",
+    "body_template": "<p>Hi {{.target_name}},</p><p>{{.cfo_name}} wants you to review the quarterly results before they go public on Thursday. The draft figures are here - please do not forward, this is material non-public information: <a href=\"{{.landing_url}}\">Q3 results draft</a>.</p><p>{{.cfo_name}}'s office</p>",
+    "sender_display_template": "{{.cfo_name}} (CFO)",
+    "sender_domain_template": "{{.lookalike_domain}}",
+    "landing_page_type": "credential_harvest",
+    "expected_detection_points": ["material non-public information pretext", "display-name spoof of an executive", "confidentiality framing discourages verification", "credential harvest via document link", "verify with finance leadership directly"]
+  },
+  {
+    "template_id": "sox.medium.wire_transfer_approval",
+    "attack_type": "bec",
+    "difficulty": "medium",
+    "regulatory_category": "sox",
+    "subject_template": "RE: {{.thread_subject}} - approve updated wire details",
+    "body_template": "<p>Hi {{.target_name}},</p><p>Following the thread below, the beneficiary bank for this payment has changed. Please approve the wire of {{.amount}} to the new account before the 2pm cut-off so we do not miss the settlement window. Updated remittance details are attached.</p><blockquote>{{.original_quoted_thread}}</blockquote><p>{{.cfo_name}}</p>",
+    "sender_display_template": "{{.cfo_name}}",
+    "sender_domain_template": "{{.lookalike_internal_domain}}",
+    "landing_page_type": "approval_landing",
+    "expected_detection_points": ["thread hijack of a real finance conversation", "new beneficiary account", "cut-off time pressure", "out-of-band callback to confirm bank-detail change", "dual-approval control on wire changes"]
   }
 ]

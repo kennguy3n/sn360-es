@@ -125,6 +125,7 @@ type application struct {
 	microLessonSvc    *education.MicroLessonService
 	simulationEng     *education.SimulationEngine
 	simulationTracker *education.SimulationTracker
+	educationAnalytic *education.AnalyticsService
 	// usingMemoryCampaignStore / usingMemoryInteractionStore record
 	// whether newApplication had to fall back to the in-memory
 	// education stores even though pgDB was wired (e.g. EnsureSchema
@@ -821,6 +822,33 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		app.simulationTracker = tracker
 	} else {
 		logger.Warn("sn360-es: simulation tracker init failed", slog.Any("error", terr))
+	}
+
+	// Campaign analytics service (GET /v1/education/analytics). It is a
+	// read-only aggregator over the same campaign + interaction stores
+	// the engine and tracker write to, plus the default template catalog
+	// (for attack-type / regulatory-category resolution) and a
+	// resilience scorer (for the trend series). The scorer is wired
+	// without a cache: the trend recomputes group scores from the
+	// interaction history on each request, so a stale cached value would
+	// be misleading. Tenant isolation is enforced by RLS on
+	// education_campaigns (production) plus the handler's bound-tenant
+	// check; see AnalyticsService for the full argument.
+	if analyticsTemplates, lerr := education.LoadDefaultTemplates(); lerr != nil {
+		logger.Warn("sn360-es: analytics template load failed", slog.Any("error", lerr))
+	} else {
+		analyticsScorer := education.NewResilienceScorer(education.ResilienceScorerConfig{Logger: logger})
+		if analytics, aerr := education.NewAnalyticsService(education.AnalyticsConfig{
+			Campaigns:    campaignStore,
+			Interactions: interactionStore,
+			Templates:    analyticsTemplates,
+			Scorer:       analyticsScorer,
+			Logger:       logger,
+		}); aerr == nil {
+			app.educationAnalytic = analytics
+		} else {
+			logger.Warn("sn360-es: analytics service init failed", slog.Any("error", aerr))
+		}
 	}
 
 	// Recipient + Open predict services.

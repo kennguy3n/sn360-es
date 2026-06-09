@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/lib/pq"
+
 	"github.com/kennguy3n/sn360-es/internal/dto"
 	"github.com/kennguy3n/sn360-es/pkg/storage/postgres"
 )
@@ -226,6 +228,87 @@ func (s *PostgresInteractionStore) ListByCampaign(ctx context.Context, campaignI
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("education: iterate interactions: %w", err)
+	}
+	return out, nil
+}
+
+// ListByCampaigns returns the fanned-out interactions for every supplied
+// campaign in a single query. It is the batch fast path used by the
+// analytics aggregator to avoid an N+1 over ListByCampaign. The result
+// preserves the same one-row-per-action semantics as ListByCampaign;
+// callers must not assume any cross-campaign ordering beyond the
+// per-campaign first_seen_at ordering.
+func (s *PostgresInteractionStore) ListByCampaigns(ctx context.Context, campaignIDs []string) ([]dto.UserInteraction, error) {
+	if len(campaignIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT campaign_id, user_hash,
+		       delivered, opened, clicked, submitted_creds, reported, ignored,
+		       delivered_at, opened_at, clicked_at, submitted_creds_at,
+		       reported_at, ignored_at,
+		       updated_at
+		FROM education_interactions
+		WHERE campaign_id = ANY($1)
+		ORDER BY campaign_id ASC, first_seen_at ASC
+	`, pq.Array(campaignIDs))
+	if err != nil {
+		return nil, fmt.Errorf("education: list interactions (batch): %w", err)
+	}
+	defer rows.Close()
+
+	var out []dto.UserInteraction
+	for rows.Next() {
+		var (
+			campaignID, userHash                                     string
+			delivered, opened, clicked, submitted, reported, ignored bool
+			deliveredAt, openedAt, clickedAt                         sql.NullTime
+			submittedAt, reportedAt, ignoredAt                       sql.NullTime
+			updatedAt                                                sql.NullTime
+		)
+		if err := rows.Scan(
+			&campaignID, &userHash,
+			&delivered, &opened, &clicked, &submitted, &reported, &ignored,
+			&deliveredAt, &openedAt, &clickedAt, &submittedAt, &reportedAt, &ignoredAt,
+			&updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("education: scan interaction (batch): %w", err)
+		}
+		fallback := time.Time{}
+		if updatedAt.Valid {
+			fallback = updatedAt.Time.UTC()
+		}
+		pick := func(col sql.NullTime) time.Time {
+			if col.Valid {
+				return col.Time.UTC()
+			}
+			return fallback
+		}
+		for _, ent := range []struct {
+			flag bool
+			act  dto.UserInteractionType
+			ts   sql.NullTime
+		}{
+			{delivered, dto.InteractionDelivered, deliveredAt},
+			{opened, dto.InteractionOpened, openedAt},
+			{clicked, dto.InteractionClickedLink, clickedAt},
+			{submitted, dto.InteractionSubmittedCredentials, submittedAt},
+			{reported, dto.InteractionReportedPhishing, reportedAt},
+			{ignored, dto.InteractionIgnored, ignoredAt},
+		} {
+			if !ent.flag {
+				continue
+			}
+			out = append(out, dto.UserInteraction{
+				CampaignID: campaignID,
+				UserHash:   userHash,
+				Action:     ent.act,
+				OccurredAt: pick(ent.ts),
+			})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("education: iterate interactions (batch): %w", err)
 	}
 	return out, nil
 }
