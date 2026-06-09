@@ -1,0 +1,43 @@
+{
+  "tier.Blocked.title": "محظور: هذه الرسالة خطيرة",
+  "tier.Blocked.body": "حظرنا هذا البريد الإلكتروني لأنه على الأرجح محاولة تصيّد احتيالي أو تهديد آخر. لا تفتح أي مرفقات ولا تنقر على أي روابط.",
+  "tier.HighRisk.title": "خطر مرتفع: لا تتصرّف بناءً على هذا البريد",
+  "tier.HighRisk.body": "يُظهر هذا البريد علامات قوية على انتحال الهوية أو الاحتيال أو اختراق الحساب. تحقّق من المُرسِل عبر قناة أخرى قبل اتخاذ أي إجراء.",
+  "tier.Warning.title": "تحذير: يبدو هذا البريد مريبًا",
+  "tier.Warning.body": "يحتوي هذا البريد على علامات تشير إلى أن أحدهم قد يحاول خداعك. تحقّق من المُرسِل بعناية قبل النقر على الروابط أو الرد.",
+  "tier.Caution.title": "احترس: مُرسِل أو محتوى غير معتاد",
+  "tier.Caution.body": "هناك شيء غير معتاد في هذا البريد. تعامل مع أي روابط أو مرفقات أو طلبات بحذر.",
+  "tier.Informational.title": "مُرسِل خارجي لأول مرة",
+  "tier.Informational.body": "هذا أول بريد نراه من هذا المُرسِل. تأكّد من هويته قبل الاستجابة لأي طلبات.",
+  "tier.Trusted.title": "مُرسِل موثوق",
+  "tier.Trusted.body": "تأتي هذه الرسالة من مُرسِل تثق به مؤسستك بالفعل. لا حاجة لأي إجراء.",
+
+  "category.LIKELY_PHISHING": "تصيّد احتيالي محتمل",
+  "category.BEC_IMPERSONATION": "احتمال انتحال هوية (BEC)",
+  "category.LOOKALIKE_DOMAIN": "نطاق مُشابِه مُضلِّل",
+  "category.SUSPICIOUS_URL": "رابط مريب",
+  "category.SUSPICIOUS_ATTACHMENT": "مرفق مريب",
+  "category.FIRST_CONTACT_EXTERNAL": "أول اتصال من خارج مؤسستك",
+  "category.ACCOUNT_TAKEOVER_SUSPECTED": "احتمال الاستيلاء على الحساب",
+  "category.VENDOR_COMPROMISE": "احتمال اختراق أحد المورّدين",
+  "category.CREDENTIAL_HARVESTING": "سرقة بيانات الاعتماد",
+  "category.INVOICE_FRAUD": "احتيال على الفواتير",
+  "category.QR_PHISHING": "تصيّد عبر رمز الاستجابة السريعة (QR)",
+  "category.SCAM_FRAUD": "نصب / احتيال",
+  "category.AUTH_FAILED": "فشل مصادقة المُرسِل",
+  "category.INTERNAL_TRUSTED": "مُرسِل داخلي",
+  "category.VENDOR_TRUSTED": "مورّد موثوق",
+  "category.NEWSLETTER": "نشرة إخبارية",
+
+  "auth.verified": "تم التحقق من المُرسِل",
+  "auth.unverified": "لم يتم التحقق من المُرسِل",
+  "auth.failed": "فشل مصادقة المُرسِل",
+  "auth.unknown": "حالة مصادقة المُرسِل غير معروفة",
+
+  "action.report": "الإبلاغ عن تصيّد احتيالي",
+  "action.mark_safe": "وضع علامة \"آمن\"",
+  "action.trust_sender": "الوثوق بهذا المُرسِل",
+  "action.learn_more": "معرفة المزيد",
+
+  "banner.degraded": "بعض خدمات الكشف لم تكن متاحة أثناء التقييم."
+}

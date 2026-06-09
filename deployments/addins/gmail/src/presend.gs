@@ -552,6 +552,10 @@ function combineWarnings_(apiResponse, clientWarnings) {
 
 // === Localization =======================================================
 
+// Locale bundles for the 14 supported SN360 languages. localizedMessage_()
+// keys on the 2-letter language subtag of the user locale (e.g. "pt-BR" ->
+// "pt") and falls back to English for any unrecognised subtag. Keep the key
+// set identical across every bundle.
 var SN360_I18N = {
   en: {
     lookalike_recipient:
@@ -561,6 +565,123 @@ var SN360_I18N = {
     did_you_mean: "Did you mean: {suggestion}",
     warning_header: "SN360 Send Warning",
     ack_button: "Acknowledge",
+  },
+  vi: {
+    lookalike_recipient:
+      "Tên miền người nhận {domain} trông giống với {ref}. Bạn có ý định gửi tới {ref} không?",
+    external_on_internal_thread:
+      "Bạn đang thêm một người nhận bên ngoài ({domain}) vào một chuỗi thư trước đây chỉ nội bộ.",
+    did_you_mean: "Có phải bạn muốn: {suggestion}",
+    warning_header: "Cảnh báo gửi thư SN360",
+    ack_button: "Xác nhận",
+  },
+  th: {
+    lookalike_recipient:
+      "โดเมนผู้รับ {domain} มีลักษณะคล้ายกับ {ref} คุณต้องการส่งถึง {ref} ใช่หรือไม่",
+    external_on_internal_thread:
+      "คุณกำลังเพิ่มผู้รับภายนอก ({domain}) เข้าในเธรดที่ก่อนหน้านี้เป็นการสื่อสารภายในเท่านั้น",
+    did_you_mean: "คุณหมายถึง: {suggestion} ใช่หรือไม่",
+    warning_header: "คำเตือนการส่งของ SN360",
+    ack_button: "รับทราบ",
+  },
+  ja: {
+    lookalike_recipient:
+      "宛先ドメイン {domain} は {ref} に酷似しています。{ref} のことではありませんか？",
+    external_on_internal_thread:
+      "これまで社内のみだったスレッドに、社外の宛先（{domain}）を追加しようとしています。",
+    did_you_mean: "もしかして: {suggestion}",
+    warning_header: "SN360 送信警告",
+    ack_button: "確認しました",
+  },
+  ko: {
+    lookalike_recipient:
+      "받는 사람 도메인 {domain}이(가) {ref}과(와) 유사합니다. {ref}을(를) 의도하셨나요?",
+    external_on_internal_thread:
+      "이전에는 내부 전용이던 스레드에 외부 수신자({domain})를 추가하고 있습니다.",
+    did_you_mean: "혹시 이것을 찾으셨나요: {suggestion}",
+    warning_header: "SN360 보내기 경고",
+    ack_button: "확인",
+  },
+  zh: {
+    lookalike_recipient:
+      "收件人域名 {domain} 与 {ref} 非常相似。您是否想发送给 {ref}？",
+    external_on_internal_thread:
+      "您正在将外部收件人（{domain}）添加到此前仅限内部的会话中。",
+    did_you_mean: "您是否想要：{suggestion}",
+    warning_header: "SN360 发送警告",
+    ack_button: "确认",
+  },
+  ar: {
+    lookalike_recipient:
+      "نطاق المستلِم {domain} يشبه {ref}. هل تقصد {ref}؟",
+    external_on_internal_thread:
+      "أنت تضيف مستلِمًا خارجيًا ({domain}) إلى محادثة كانت داخلية فقط في السابق.",
+    did_you_mean: "هل تقصد: {suggestion}",
+    warning_header: "تحذير الإرسال من SN360",
+    ack_button: "أُقرّ بذلك",
+  },
+  de: {
+    lookalike_recipient:
+      "Die Empfängerdomain {domain} ähnelt {ref}. Meinten Sie {ref}?",
+    external_on_internal_thread:
+      "Sie fügen einen externen Empfänger ({domain}) zu einem zuvor internen Thread hinzu.",
+    did_you_mean: "Meinten Sie: {suggestion}",
+    warning_header: "SN360 Sendewarnung",
+    ack_button: "Bestätigen",
+  },
+  fr: {
+    lookalike_recipient:
+      "Le domaine du destinataire {domain} ressemble à {ref}. Vouliez-vous dire {ref} ?",
+    external_on_internal_thread:
+      "Vous ajoutez un destinataire externe ({domain}) à une conversation jusqu'ici interne.",
+    did_you_mean: "Vouliez-vous dire : {suggestion}",
+    warning_header: "Avertissement d'envoi SN360",
+    ack_button: "Confirmer",
+  },
+  es: {
+    lookalike_recipient:
+      "El dominio del destinatario {domain} se parece a {ref}. ¿Quería decir {ref}?",
+    external_on_internal_thread:
+      "Está añadiendo un destinatario externo ({domain}) a una conversación que hasta ahora era interna.",
+    did_you_mean: "¿Quería decir: {suggestion}?",
+    warning_header: "Advertencia de envío de SN360",
+    ack_button: "Confirmar",
+  },
+  pt: {
+    lookalike_recipient:
+      "O domínio do destinatário {domain} é parecido com {ref}. Você quis dizer {ref}?",
+    external_on_internal_thread:
+      "Você está adicionando um destinatário externo ({domain}) a uma conversa que antes era interna.",
+    did_you_mean: "Você quis dizer: {suggestion}",
+    warning_header: "Aviso de envio do SN360",
+    ack_button: "Confirmar",
+  },
+  ms: {
+    lookalike_recipient:
+      "Domain penerima {domain} kelihatan serupa dengan {ref}. Adakah anda maksudkan {ref}?",
+    external_on_internal_thread:
+      "Anda sedang menambah penerima luar ({domain}) ke dalam bualan yang sebelum ini dalaman sahaja.",
+    did_you_mean: "Adakah anda maksudkan: {suggestion}",
+    warning_header: "Amaran Hantar SN360",
+    ack_button: "Akui",
+  },
+  id: {
+    lookalike_recipient:
+      "Domain penerima {domain} terlihat mirip dengan {ref}. Apakah maksud Anda {ref}?",
+    external_on_internal_thread:
+      "Anda menambahkan penerima eksternal ({domain}) ke percakapan yang sebelumnya hanya internal.",
+    did_you_mean: "Apakah maksud Anda: {suggestion}",
+    warning_header: "Peringatan Kirim SN360",
+    ack_button: "Konfirmasi",
+  },
+  tr: {
+    lookalike_recipient:
+      "Alıcı alan adı {domain}, {ref} adresine benziyor. {ref} demek mi istediniz?",
+    external_on_internal_thread:
+      "Daha önce yalnızca dahili olan bir konuşmaya harici bir alıcı ({domain}) ekliyorsunuz.",
+    did_you_mean: "Şunu mu demek istediniz: {suggestion}",
+    warning_header: "SN360 Gönderme Uyarısı",
+    ack_button: "Onayla",
   },
 };
 

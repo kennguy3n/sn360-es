@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"testing"
 )
@@ -14,9 +15,12 @@ func TestLoadEmbeddedBanners(t *testing.T) {
 		t.Fatalf("LoadEmbeddedBanners: %v", err)
 	}
 	got := c.Locales()
-	want := []string{"en", "ja", "ko", "th", "vi", "zh"}
+	want := []string{
+		"ar", "de", "en", "es", "fr", "id", "ja", "ko",
+		"ms", "pt", "th", "tr", "vi", "zh",
+	}
 	sort.Strings(want)
-	if len(got) != len(want) {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("locales mismatch: got=%v want=%v", got, want)
 	}
 }

@@ -354,13 +354,25 @@ test("combineWarnings_ unions warnings and takes max level", function () {
 
 test("localizedMessage_ falls back to English for unknown locales", function () {
   const presend = loadPresend(makeStubs().globals);
-  assert.match(
-    presend.localizedMessage_("lookalike_recipient", "fr-FR", {
+  // "zz" is not a supported bundle, so the English string is returned.
+  assert.equal(
+    presend.localizedMessage_("lookalike_recipient", "zz-ZZ", {
       domain: "acm3.com",
       ref: "acme.com",
     }),
-    /acm3\.com.*acme\.com/
+    "Recipient domain acm3.com looks similar to acme.com. Did you mean acme.com?"
   );
+});
+
+test("localizedMessage_ returns the localized bundle for supported locales", function () {
+  const presend = loadPresend(makeStubs().globals);
+  const fr = presend.localizedMessage_("lookalike_recipient", "fr-FR", {
+    domain: "acm3.com",
+    ref: "acme.com",
+  });
+  assert.match(fr, /ressemble à/);
+  assert.match(fr, /acm3\.com/);
+  assert.match(fr, /acme\.com/);
 });
 
 // === Full flow: pre-send trigger ======================================

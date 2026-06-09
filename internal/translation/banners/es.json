@@ -1,0 +1,43 @@
+{
+  "tier.Blocked.title": "Bloqueado: este mensaje es peligroso",
+  "tier.Blocked.body": "Bloqueamos este correo porque es muy probable que sea un intento de phishing u otra amenaza. No abra archivos adjuntos ni haga clic en ningún enlace.",
+  "tier.HighRisk.title": "Riesgo alto: no actúe según este correo",
+  "tier.HighRisk.body": "Este correo muestra claros indicios de suplantación de identidad, fraude o cuenta comprometida. Verifique al remitente por otro medio antes de realizar cualquier acción.",
+  "tier.Warning.title": "Advertencia: este correo parece sospechoso",
+  "tier.Warning.body": "Este correo contiene señales de que alguien podría estar intentando engañarle. Compruebe al remitente con cuidado antes de hacer clic en enlaces o responder.",
+  "tier.Caution.title": "Precaución: remitente o contenido inusual",
+  "tier.Caution.body": "Hay algo inusual en este correo. Trate con cuidado cualquier enlace, archivo adjunto o solicitud.",
+  "tier.Informational.title": "Remitente externo por primera vez",
+  "tier.Informational.body": "Es el primer correo que vemos de este remitente. Confirme su identidad antes de actuar ante cualquier solicitud.",
+  "tier.Trusted.title": "Remitente de confianza",
+  "tier.Trusted.body": "Este mensaje proviene de un remitente en el que su organización ya confía. No se requiere ninguna acción.",
+
+  "category.LIKELY_PHISHING": "Probable phishing",
+  "category.BEC_IMPERSONATION": "Posible suplantación de identidad (BEC)",
+  "category.LOOKALIKE_DOMAIN": "Dominio similar engañoso",
+  "category.SUSPICIOUS_URL": "Enlace sospechoso",
+  "category.SUSPICIOUS_ATTACHMENT": "Archivo adjunto sospechoso",
+  "category.FIRST_CONTACT_EXTERNAL": "Primer contacto desde fuera de su organización",
+  "category.ACCOUNT_TAKEOVER_SUSPECTED": "Posible toma de control de la cuenta",
+  "category.VENDOR_COMPROMISE": "Posible proveedor comprometido",
+  "category.CREDENTIAL_HARVESTING": "Robo de credenciales",
+  "category.INVOICE_FRAUD": "Fraude de facturas",
+  "category.QR_PHISHING": "Phishing con código QR",
+  "category.SCAM_FRAUD": "Estafa / fraude",
+  "category.AUTH_FAILED": "Error de autenticación del remitente",
+  "category.INTERNAL_TRUSTED": "Remitente interno",
+  "category.VENDOR_TRUSTED": "Proveedor de confianza",
+  "category.NEWSLETTER": "Boletín",
+
+  "auth.verified": "Remitente verificado",
+  "auth.unverified": "Remitente no verificado",
+  "auth.failed": "Error de autenticación del remitente",
+  "auth.unknown": "Autenticación del remitente desconocida",
+
+  "action.report": "Denunciar phishing",
+  "action.mark_safe": "Marcar como seguro",
+  "action.trust_sender": "Confiar en este remitente",
+  "action.learn_more": "Más información",
+
+  "banner.degraded": "Algunos servicios de detección no estaban disponibles durante la evaluación."
+}

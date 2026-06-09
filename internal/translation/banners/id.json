@@ -1,0 +1,43 @@
+{
+  "tier.Blocked.title": "Diblokir: pesan ini berbahaya",
+  "tier.Blocked.body": "Kami memblokir email ini karena kemungkinan besar merupakan upaya phishing atau ancaman lain. Jangan buka lampiran atau klik tautan apa pun.",
+  "tier.HighRisk.title": "Risiko tinggi: jangan menindaklanjuti email ini",
+  "tier.HighRisk.body": "Email ini menunjukkan tanda kuat peniruan identitas, penipuan, atau akun yang disusupi. Verifikasi pengirim melalui saluran lain sebelum mengambil tindakan apa pun.",
+  "tier.Warning.title": "Peringatan: email ini tampak mencurigakan",
+  "tier.Warning.body": "Email ini mengandung tanda bahwa seseorang mungkin mencoba menipu Anda. Periksa pengirim dengan cermat sebelum mengeklik tautan atau membalas.",
+  "tier.Caution.title": "Hati-hati: pengirim atau konten tidak biasa",
+  "tier.Caution.body": "Ada sesuatu yang tidak biasa pada email ini. Perlakukan setiap tautan, lampiran, atau permintaan dengan hati-hati.",
+  "tier.Informational.title": "Pengirim eksternal untuk pertama kali",
+  "tier.Informational.body": "Ini email pertama yang kami lihat dari pengirim ini. Konfirmasikan identitas mereka sebelum menindaklanjuti permintaan apa pun.",
+  "tier.Trusted.title": "Pengirim tepercaya",
+  "tier.Trusted.body": "Pesan ini berasal dari pengirim yang sudah dipercaya oleh organisasi Anda. Tidak ada tindakan yang diperlukan.",
+
+  "category.LIKELY_PHISHING": "Kemungkinan phishing",
+  "category.BEC_IMPERSONATION": "Kemungkinan peniruan identitas (BEC)",
+  "category.LOOKALIKE_DOMAIN": "Domain yang menyerupai",
+  "category.SUSPICIOUS_URL": "Tautan mencurigakan",
+  "category.SUSPICIOUS_ATTACHMENT": "Lampiran mencurigakan",
+  "category.FIRST_CONTACT_EXTERNAL": "Kontak pertama dari luar organisasi Anda",
+  "category.ACCOUNT_TAKEOVER_SUSPECTED": "Kemungkinan pengambilalihan akun",
+  "category.VENDOR_COMPROMISE": "Kemungkinan vendor disusupi",
+  "category.CREDENTIAL_HARVESTING": "Pengumpulan kredensial",
+  "category.INVOICE_FRAUD": "Penipuan faktur",
+  "category.QR_PHISHING": "Phishing melalui kode QR",
+  "category.SCAM_FRAUD": "Penipuan / kecurangan",
+  "category.AUTH_FAILED": "Autentikasi pengirim gagal",
+  "category.INTERNAL_TRUSTED": "Pengirim internal",
+  "category.VENDOR_TRUSTED": "Vendor tepercaya",
+  "category.NEWSLETTER": "Buletin",
+
+  "auth.verified": "Pengirim terverifikasi",
+  "auth.unverified": "Pengirim tidak terverifikasi",
+  "auth.failed": "Autentikasi pengirim gagal",
+  "auth.unknown": "Status autentikasi pengirim tidak diketahui",
+
+  "action.report": "Laporkan phishing",
+  "action.mark_safe": "Tandai sebagai aman",
+  "action.trust_sender": "Percayai pengirim ini",
+  "action.learn_more": "Pelajari selengkapnya",
+
+  "banner.degraded": "Beberapa layanan deteksi tidak tersedia selama evaluasi."
+}
