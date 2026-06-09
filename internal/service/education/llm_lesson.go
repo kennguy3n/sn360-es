@@ -231,14 +231,12 @@ func NewTier2LessonGenerator(cfg Tier2LessonGeneratorConfig) (*Tier2LessonGenera
 // empty-content failure so a FallbackLessonGenerator can fall back to
 // the deterministic catalog lesson.
 func (g *Tier2LessonGenerator) Generate(ctx context.Context, base MicroLesson, lc LessonContext, locale string) (MicroLesson, error) {
-	// locale defaulting + sanitisation is owned by buildLessonPrompt
+	// locale defaulting + sanitisation is owned by buildLessonMessages
 	// (normalizeLocale), so there is a single source of truth for the
 	// "en" fallback and the injection-hardening rules.
-	prompt := buildLessonPrompt(base, lc, locale)
-
 	reqBody := lessonChatRequest{
 		Model:       g.model,
-		Messages:    []lessonChatMessage{{Role: "user", Content: prompt}},
+		Messages:    buildLessonMessages(base, lc, locale),
 		MaxTokens:   g.maxTokens,
 		Temperature: g.temperature,
 	}
@@ -349,7 +347,45 @@ func (f FallbackLessonGenerator) Generate(ctx context.Context, base MicroLesson,
 
 // --- prompt + rendering helpers --------------------------------------------
 
-func buildLessonPrompt(base MicroLesson, lc LessonContext, locale string) string {
+// lessonSystemPrompt is the fixed role + output contract handed to the
+// model as the system message. It is kept as a constant (rather than
+// assembled per request) for the same reason as slm.SystemPrompt: the
+// instructions are model-facing house style and must not vary with
+// caller-supplied data, which also keeps the injection surface to the
+// user message only.
+//
+// The rules are written as an explicit, enumerated contract because
+// ternary-bonsai-8b is an 8B-class local model: a single discursive
+// sentence (the previous prompt) under-constrains it and it tends to
+// emit a title, a "Sure, here is..." preamble, Markdown bullets, or a
+// closing sign-off. Naming each constraint — plain text, word budget,
+// paragraph separator, tone, no fabricated specifics, no preamble —
+// is what reliably lifts an 8B model's output to a servable lesson.
+const lessonSystemPrompt = "You are a security-awareness coach who writes short, practical micro-lessons for employees. " +
+	"Follow every rule exactly:\n" +
+	"1. Output PLAIN TEXT ONLY: no HTML, no Markdown, no headings, no bullet characters, no numbered lists.\n" +
+	"2. Target a 2-minute read: roughly 150-220 words.\n" +
+	"3. Separate paragraphs with a single blank line.\n" +
+	"4. Keep the tone calm, practical, and reassuring — never alarmist.\n" +
+	"5. Teach the reader how to recognise and respond to the threat. Do not invent product features, statistics, or the names of specific people or companies.\n" +
+	"6. Output ONLY the lesson body. Do not add a title, a preamble (e.g. \"Sure, here is\"), notes, or any closing remark."
+
+// buildLessonMessages assembles the system + user chat messages the
+// lesson model sees. The fixed contract lives in lessonSystemPrompt;
+// this builds only the per-request user message, mirroring the
+// slm.SystemPrompt / slm.BuildUserPrompt split used by the Tier 2
+// classifier so both LLM surfaces prompt ternary-bonsai-8b the same
+// way. The caller-supplied signals are whitespace-normalised and
+// length-capped, and the locale gets the stricter language-tag
+// sanitiser, so neither can inject extra instruction lines.
+func buildLessonMessages(base MicroLesson, lc LessonContext, locale string) []lessonChatMessage {
+	return []lessonChatMessage{
+		{Role: "system", Content: lessonSystemPrompt},
+		{Role: "user", Content: buildLessonUserPrompt(base, lc, locale)},
+	}
+}
+
+func buildLessonUserPrompt(base MicroLesson, lc LessonContext, locale string) string {
 	// Whitespace-normalise and length-cap the user-supplied signals
 	// before they enter the prompt (token-cost + injection hardening).
 	// The locale is a language tag, not free text, so it gets the
@@ -357,13 +393,7 @@ func buildLessonPrompt(base MicroLesson, lc LessonContext, locale string) string
 	lc = lc.normalized()
 	locale = normalizeLocale(locale)
 	var b strings.Builder
-	b.WriteString("You are a security-awareness coach writing a short micro-lesson for an employee. ")
-	fmt.Fprintf(&b, "Write the ENTIRE lesson in the '%s' language (use the correct locale/dialect). ", locale)
-	b.WriteString("Target length is a 2-minute read (roughly 150-220 words). ")
-	b.WriteString("Output PLAIN TEXT ONLY: no HTML, no Markdown, no headings, no bullet characters. ")
-	b.WriteString("Separate paragraphs with a blank line. Keep it practical and reassuring, not alarmist. ")
-	b.WriteString("Do not invent product features or specific people; teach the recipient how to recognise and respond to the threat.\n\n")
-
+	fmt.Fprintf(&b, "Write the lesson entirely in the '%s' language (use the correct locale/dialect).\n", locale)
 	fmt.Fprintf(&b, "Threat category: %s\n", base.Category)
 	if ref := stripHTMLToText(base.BodyHTML); ref != "" {
 		fmt.Fprintf(&b, "Reference (generic) lesson to expand on: %s\n", ref)
@@ -377,7 +407,7 @@ func buildLessonPrompt(base MicroLesson, lc LessonContext, locale string) string
 	if lc.ThreatProfile != "" {
 		fmt.Fprintf(&b, "Active threat profile: %s\n", lc.ThreatProfile)
 	}
-	b.WriteString("\nWrite the lesson body now.")
+	b.WriteString("\nWrite the lesson body now. Output only the lesson text.")
 	return b.String()
 }
 

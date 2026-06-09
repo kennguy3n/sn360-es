@@ -282,8 +282,13 @@ Blocked, `dir="rtl"` injection for RTL locales.
   `EDUCATION_LLM_LESSONS_ENABLED=true` to enable; a
   `Tier2LessonGenerator` then rewrites the catalog body to the
   tenant's industry / recipient role / active threat profile via the
-  OpenAI-compatible Tier 2 endpoint. The model returns plain text
-  only; the body is escaped and wrapped in a fixed HTML envelope
+  OpenAI-compatible Tier 2 endpoint (default model `ternary-bonsai-8b`).
+  The prompt mirrors the Tier 2 classifier's `slm.SystemPrompt` /
+  `slm.BuildUserPrompt` split: a fixed `lessonSystemPrompt` carries the
+  output contract (plain text only, 150-220 words, blank-line
+  paragraphs, no preamble/title) tuned for an 8B-class model, and only
+  the per-request signals go in the user message. The model returns
+  plain text only; the body is escaped and wrapped in a fixed HTML envelope
   locally so it can never inject markup, scripts, or remote assets.
   Identity fields (`lesson_id`, `category`, `title`) stay
   deterministic. A `FallbackLessonGenerator` degrades to the catalog
