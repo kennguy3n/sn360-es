@@ -17,6 +17,54 @@ fixed seed) used for CI gating on every PR. `soak` is a 30-minute hold of the
 `typical` profile gated to manual `workflow_dispatch` triggers in
 `.github/workflows/load.yml`.
 
+## Empirical single-VM 100-tenant soak (2026-06-09)
+
+The scenario rates above are sized for the 5,000-tenant GA fleet. To put
+**real** numbers behind the pipeline at a scale that fits one 8 vCPU / 16 GB
+VM, the `typical` profile was held for 30 minutes against 100 bootstrapped
+tenants on the dev docker-compose stack (NATS JetStream, Redis, PostgreSQL)
+with the eval service + loadgen publisher running:
+
+```bash
+LOAD_TENANTS=100 make load-bootstrap
+LOAD_TENANTS=100 LOAD_DURATION_MIN=30 LOAD_SOAK_ALLOW_NO_PROM=1 \
+  LOADGEN_PUBLISHER_URL=http://127.0.0.1:9099 \
+  LOAD_NATS_MON_URL=http://127.0.0.1:8222 make load-soak
+```
+
+The `typical` rate is **demand-scaled**: 5,000 tenants × 1,200 msgs/day ≈
+69 msg/s scales to **≈ 2 msg/s** at 100 tenants, so this measures
+100-tenant *steady-state* (no-leak / lag-bound) behaviour, not a saturation
+ceiling.
+
+| Metric | Measured (100-tenant, single VM) | Notes |
+|--------|----------------------------------|-------|
+| evaluation throughput | **2.0 msg/s** sustained (3,601 publishes over 30 min), **0 publish errors** | every published msg consumed + evaluated; k6 publish round-trip p99 3 ms |
+| eval pipeline latency (`sn360_es_evaluate_latency_seconds`, n=3,302) | p50/p95 ≈ **5 ms**, p99 ≈ **250 ms**, avg ≈ 10 ms | Tier 0 real; p99 tail is the Tier 2 circuit-breaker degradation path, not SLM compute |
+| NATS `es-evaluate-batch` consumer lag | **max 6** pending (else 0–1) for the full 30 min, 0 redeliveries | lag bound holds (config bound 1,500); no backlog growth |
+| NATS JetStream file store | grew to **~21 MiB** across 10 streams / 13 consumers over 30 min | JetStream retention accumulating events + results + audit; mem store 0 |
+| PostgreSQL pool | **1 active / 4 idle / 5 total** of `PG_MAX_OPEN_CONNS=40` (~12 %) | tiny footprint at this load |
+| Redis | ~1.01 MiB used (peak 1.03 MiB) | dev `maxmemory` unbounded |
+
+**Tier 1 / Tier 2 caveat (honest).** The Tier 1 encoder (XLM-RoBERTa, ONNX)
+and Tier 2 SLM (Ternary-Bonsai-8B) need model weights + serving infra not
+provisionable on this CPU-only VM. The Tier 1 encoder was run in the repo's
+own **degraded mode** (`deployments/encoder`, no `model.onnx` → uniform
+50/100 score) so evaluations complete and the plumbing is exercised; Tier 2
+stays circuit-open (degraded, non-blocking). **Throughput, NATS consumer
+lag, PG pool, and Tier 0 are real**, but Tier 1/2 *model-inference* latency
+is **not** measured here — those need the provisioned encoder + SLM on a
+host with the weights (e.g. the nightly perf lane).
+
+> One resilience observation worth a follow-up: while Tier 2 failures are
+> absorbed by a circuit breaker (verdict marked `degraded`, message acked),
+> a Tier 1 encoder that is *connection-refused* (pod down, distinct from the
+> in-process degraded mode) causes the evaluate consumer to NAK and
+> redeliver, so a sustained Tier 1 outage produces a redelivery storm rather
+> than a graceful degrade. In production the encoder runs `replicas: 2`
+> behind an HPA and serves the degraded path even with no model, so this is
+> latent; tracked as a hardening item, not fixed here.
+
 ## What gets captured
 
 Every run captures six metric families and persists them
