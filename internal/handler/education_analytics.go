@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/dto"
-	"github.com/kennguy3n/sn360-es/internal/middleware"
 	"github.com/kennguy3n/sn360-es/internal/service/education"
 )
 
@@ -52,31 +51,12 @@ func (h *EducationAnalyticsHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Resolve the effective tenant. The JWT-bound tenant (set by the
-	// TenantConnBinder/JWTAuth middleware) is authoritative: it is the
-	// tenant whose rows Postgres RLS will expose. When present we use
-	// it and reject any query tenant_id that disagrees with a 403 —
-	// defence in depth so a caller can never even appear to request
-	// another tenant's analytics, on top of RLS already returning zero
-	// rows for a mismatched bind. When no bound tenant is present
-	// (in-memory/dev deployments on the auth-skip path) we fall back to
-	// the query param.
-	queryTenant := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
-	boundTenant := middleware.TenantIDFromContext(r.Context())
-
-	tenantID := boundTenant
-	if boundTenant == "" {
-		tenantID = queryTenant
-	} else if queryTenant != "" && queryTenant != boundTenant {
-		h.logger.WarnContext(r.Context(), "education analytics: tenant mismatch",
-			slog.String("bound_tenant", boundTenant),
-			slog.String("query_tenant", queryTenant),
-		)
-		writeError(w, http.StatusForbidden, "tenant_id does not match authenticated tenant")
-		return
-	}
-	if tenantID == "" {
-		writeError(w, http.StatusBadRequest, "tenant_id is required")
+	// Resolve the effective tenant. The JWT-bound tenant is
+	// authoritative; a disagreeing query tenant_id is rejected 403.
+	// Shared with the dashboard handler via resolveTenant so the two
+	// endpoints enforce tenant scoping identically.
+	tenantID, ok := resolveTenant(w, r, h.logger)
+	if !ok {
 		return
 	}
 

@@ -421,6 +421,10 @@ paths:
     get:
       tags: [dashboard]
       summary: Aggregate dashboard for a tenant
+      description: |
+        Strictly tenant-scoped. When a JWT-bound tenant is present it is
+        authoritative and any `tenant_id` query value that disagrees with
+        it is rejected with 403.
       parameters:
         - in: query
           name: tenant_id
@@ -441,6 +445,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/DashboardSummary"
         "400":
+          $ref: "#/components/responses/Error"
+        "403":
           $ref: "#/components/responses/Error"
 
   /v1/education/analytics:

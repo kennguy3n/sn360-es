@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kennguy3n/sn360-es/internal/dto"
+	"github.com/kennguy3n/sn360-es/internal/middleware"
 	"github.com/kennguy3n/sn360-es/internal/service/dashboard"
 )
 
@@ -158,6 +159,52 @@ func TestDashboardHandler_GeneratorError(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d", rec.Code)
+	}
+}
+
+func TestDashboardHandler_TenantMismatch(t *testing.T) {
+	h := NewDashboardHandler(nil, newTestDashboard(t, &stubMetrics{}))
+	// Bound tenant t1 (from JWT), but query asks for t2 -> 403, matching
+	// the education-analytics handler's defence-in-depth contract.
+	ctx := middleware.ContextWithTenantID(context.Background(), "t1")
+	req := httptest.NewRequest(http.MethodGet, "/v1/dashboard/summary?tenant_id=t2", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want=403 body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDashboardHandler_BoundTenantWins(t *testing.T) {
+	src := &stubMetrics{emails: 7}
+	h := NewDashboardHandler(nil, newTestDashboard(t, src))
+	// No query tenant_id, but JWT-bound tenant is t1: the summary is
+	// scoped to the bound tenant.
+	ctx := middleware.ContextWithTenantID(context.Background(), "t1")
+	req := httptest.NewRequest(http.MethodGet, "/v1/dashboard/summary", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want=200 body=%s", rec.Code, rec.Body.String())
+	}
+	var resp dto.DashboardSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.TenantID != "t1" {
+		t.Fatalf("tenant_id=%q want t1", resp.TenantID)
+	}
+}
+
+func TestDashboardHandler_BoundTenantMatchingQueryAllowed(t *testing.T) {
+	h := NewDashboardHandler(nil, newTestDashboard(t, &stubMetrics{}))
+	// Query tenant_id equals the bound tenant: allowed (no mismatch).
+	ctx := middleware.ContextWithTenantID(context.Background(), "t1")
+	req := httptest.NewRequest(http.MethodGet, "/v1/dashboard/summary?tenant_id=t1", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want=200 body=%s", rec.Code, rec.Body.String())
 	}
 }
 
