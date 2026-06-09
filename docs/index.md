@@ -87,13 +87,26 @@ safe" view), see [`DEGRADATION_MODES.md`](./DEGRADATION_MODES.md).
 - Schema migrations: [`../migrations/README.md`](../migrations/README.md).
 
 > **Migration runbook — LLM Deployment → StatefulSet:** the Tier-2 LLM
-> moved from a `Deployment` backed by one shared PVC
+> moved from a `Deployment` named `sn360-es-llm` backed by one shared PVC
 > (`sn360-es-llm-models`) to a `StatefulSet` with per-pod PVCs
-> (`models-sn360-es-llm-<ordinal>`). Kubernetes does not reclaim the old
-> PVC on a kind change, so after rollout — once the new per-pod claims
-> are bound and serving — delete the orphan to reclaim storage:
+> (`models-sn360-es-llm-<ordinal>`). A kind change orphans **both** the
+> old `Deployment` object and that PVC — Kubernetes reclaims neither
+> automatically. After rollout, once the new per-pod claims are bound and
+> serving, remove both orphans:
+> `kubectl -n sn360-es delete deployment sn360-es-llm` and
 > `kubectl -n sn360-es delete pvc sn360-es-llm-models`. Do not delete the
 > per-pod claims.
+>
+> The `deployments/llm/` manifests are applied raw (not through the Helm
+> chart the ArgoCD apps in `deployments/argocd/application.yaml` track),
+> so a plain `kubectl apply` leaves the old `Deployment` Running next to
+> the new `StatefulSet` until you delete it. If you instead manage these
+> through a GitOps app: one with **automated prune** (the dev/qa/uat
+> apps) removes the old `Deployment` on the next sync; a **manual-sync**
+> app with no automated prune (the prod app) needs an explicit
+> `argocd app sync <app> --prune`. ArgoCD tracks resources by
+> `(group, kind, namespace, name)`, so a kind change always reads as
+> "remove old + add new" rather than an in-place update.
 
 ## Integration Points
 

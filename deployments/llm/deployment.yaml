@@ -1,13 +1,22 @@
 # MIGRATION NOTE (Deployment -> StatefulSet): this workload was
-# previously a Deployment backed by one shared PVC named
-# `sn360-es-llm-models`. Applying this manifest creates the new
-# StatefulSet but does NOT garbage-collect that old PVC — Kubernetes
-# never reclaims a PVC when the workload referencing it changes kind.
-# After rollout, manually delete the orphan to reclaim its storage,
-# once you've confirmed the new per-pod PVCs are bound and serving:
+# previously a Deployment named `sn360-es-llm` backed by one shared PVC
+# named `sn360-es-llm-models`. A kind change orphans BOTH the old
+# Deployment object and that PVC — neither is reclaimed automatically
+# when the workload referencing it changes kind. After rollout, once the
+# new per-pod PVCs are bound and serving, remove both orphans:
+#   kubectl -n sn360-es delete deployment sn360-es-llm
 #   kubectl -n sn360-es delete pvc sn360-es-llm-models
 # (The new per-pod claims are models-sn360-es-llm-<ordinal>; do NOT
-# delete those.) See docs/index.md "Deployment" for the runbook entry.
+# delete those.)
+#
+# These llm manifests are applied raw (kubectl/kustomize), not via the
+# Helm chart the ArgoCD apps track, so `kubectl apply` will leave the old
+# Deployment Running alongside the new StatefulSet until you delete it.
+# If you instead wire these into a GitOps app: an app with automated
+# prune (the dev/qa/uat pattern) removes the old Deployment on sync; a
+# manual-sync app with no automated prune (the prod pattern) needs an
+# explicit `argocd app sync <app> --prune`. See docs/index.md
+# "Deployment" for the runbook entry.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
