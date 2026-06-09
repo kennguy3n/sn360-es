@@ -62,10 +62,11 @@ on every alert in the PrometheusRule manifests
 | `SN360ESLLMCapacityExhausted` | Tier-2 LLM HPA at max replicas AND queue backlog > 100 for 5m | `RUNBOOKS.md#llm-capacity-exhausted` |
 
 Autoscaling reference: the encoder fleet (`deployments/encoder/`) scales
-on JetStream queue depth (`nats_consumer_pending_messages`) between 1 and
-4 replicas; the Tier-2 LLM (`deployments/llm/`) is a StatefulSet with a
-per-pod PVC and scales between 1 and 2 replicas. See each directory's
-`hpa.yaml` for the exact thresholds and the rationale comments.
+on JetStream queue depth (`nats_consumer_pending_messages`) between 2 and
+4 replicas (a `minReplicas: 2` HA floor on the Tier-1 path); the Tier-2
+LLM (`deployments/llm/`) is a StatefulSet with a per-pod PVC and scales
+between 1 and 2 replicas. See each directory's `hpa.yaml` for the exact
+thresholds and the rationale comments.
 
 For degraded-dependency behaviour (the "what breaks and how it fails
 safe" view), see [`DEGRADATION_MODES.md`](./DEGRADATION_MODES.md).
