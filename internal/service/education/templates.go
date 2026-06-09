@@ -25,8 +25,13 @@ type TemplateLibrary struct {
 	byID     map[string]dto.SimulationTemplate
 	byAttack map[dto.AttackType]map[dto.DifficultyLevel][]string
 	// byLocale indexes template IDs by (locale, attack_type, difficulty).
-	byLocale  map[string]map[dto.AttackType]map[dto.DifficultyLevel][]string
-	templates map[string]*template.Template // subject+body parsed
+	byLocale map[string]map[dto.AttackType]map[dto.DifficultyLevel][]string
+	// byRegulatory indexes template IDs by their regulatory category so
+	// the analytics layer can resolve "which templates satisfy HIPAA?"
+	// without scanning every entry. Templates with no regulatory
+	// dimension are absent from this index.
+	byRegulatory map[dto.RegulatoryCategory][]string
+	templates    map[string]*template.Template // subject+body parsed
 }
 
 // NewTemplateLibrary constructs an empty library. Use Register to
@@ -34,10 +39,11 @@ type TemplateLibrary struct {
 // from the embedded catalog.
 func NewTemplateLibrary() *TemplateLibrary {
 	return &TemplateLibrary{
-		byID:      map[string]dto.SimulationTemplate{},
-		byAttack:  map[dto.AttackType]map[dto.DifficultyLevel][]string{},
-		byLocale:  map[string]map[dto.AttackType]map[dto.DifficultyLevel][]string{},
-		templates: map[string]*template.Template{},
+		byID:         map[string]dto.SimulationTemplate{},
+		byAttack:     map[dto.AttackType]map[dto.DifficultyLevel][]string{},
+		byLocale:     map[string]map[dto.AttackType]map[dto.DifficultyLevel][]string{},
+		byRegulatory: map[dto.RegulatoryCategory][]string{},
+		templates:    map[string]*template.Template{},
 	}
 }
 
@@ -105,6 +111,21 @@ func (l *TemplateLibrary) Register(t dto.SimulationTemplate) error {
 	dedupLoc = append(dedupLoc, t.TemplateID)
 	sort.Strings(dedupLoc)
 	l.byLocale[loc][t.AttackType][t.Difficulty] = dedupLoc
+
+	// Update the regulatory index. A template can only belong to one
+	// regulatory category, but a re-register may MOVE it between
+	// categories (or clear it), so we first evict the ID from every
+	// category before re-inserting it under its current one. This keeps
+	// the index consistent under Register-as-upsert.
+	l.evictFromRegulatory(t.TemplateID)
+	if t.RegulatoryCategory != "" {
+		cat := t.RegulatoryCategory
+		ids := l.byRegulatory[cat]
+		ids = append(ids, t.TemplateID)
+		sort.Strings(ids)
+		l.byRegulatory[cat] = ids
+	}
+
 	l.templates[t.TemplateID+".subject"] = subjectTmpl
 	l.templates[t.TemplateID+".body"] = bodyTmpl
 	l.templates[t.TemplateID+".sender"] = senderTmpl
@@ -171,6 +192,49 @@ func (l *TemplateLibrary) Locales() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ListByRegulatory returns the template IDs tagged with the given
+// regulatory category, sorted. The returned slice is a copy, so callers
+// may retain or mutate it without affecting the library's index.
+func (l *TemplateLibrary) ListByRegulatory(cat dto.RegulatoryCategory) []string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	ids := l.byRegulatory[cat]
+	out := make([]string, len(ids))
+	copy(out, ids)
+	return out
+}
+
+// RegulatoryCategoryOf returns the regulatory category a template is
+// tagged with. ok is false when the template is unknown; an empty
+// (but ok=true) category means the template has no regulatory dimension.
+func (l *TemplateLibrary) RegulatoryCategoryOf(templateID string) (dto.RegulatoryCategory, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	t, ok := l.byID[templateID]
+	if !ok {
+		return "", false
+	}
+	return t.RegulatoryCategory, true
+}
+
+// evictFromRegulatory removes templateID from every regulatory bucket
+// and drops buckets that become empty. Must be called with l.mu held.
+func (l *TemplateLibrary) evictFromRegulatory(templateID string) {
+	for cat, ids := range l.byRegulatory {
+		filtered := ids[:0:0]
+		for _, id := range ids {
+			if id != templateID {
+				filtered = append(filtered, id)
+			}
+		}
+		if len(filtered) == 0 {
+			delete(l.byRegulatory, cat)
+			continue
+		}
+		l.byRegulatory[cat] = filtered
+	}
 }
 
 // localeIDs returns the template IDs for a locale/attack/difficulty combo,
@@ -305,6 +369,11 @@ func validateTemplate(t dto.SimulationTemplate) error {
 		return errors.New("templates: sender_domain_template is required")
 	case t.LandingPageType == "":
 		return errors.New("templates: landing_page_type is required")
+	case t.RegulatoryCategory != "" && !t.RegulatoryCategory.Valid():
+		// The regulatory dimension is optional, but when present it
+		// must be one of the known regimes so analytics aggregation
+		// never silently buckets a typo into "no category".
+		return fmt.Errorf("templates: invalid regulatory_category %q", t.RegulatoryCategory)
 	}
 	return nil
 }

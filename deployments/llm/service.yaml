@@ -20,3 +20,29 @@ spec:
       protocol: TCP
       port: 80
       targetPort: http
+---
+# Headless service backing the StatefulSet's spec.serviceName. It gives
+# each replica a stable DNS name (sn360-es-llm-<ordinal>.sn360-es-llm-
+# headless.sn360-es.svc.cluster.local) which the StatefulSet controller
+# requires to manage stable network identities. Clients keep talking to
+# the load-balanced ClusterIP service above; this one exists only so the
+# StatefulSet is valid and for any future per-replica addressing.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sn360-es-llm-headless
+  namespace: sn360-es
+  labels:
+    app.kubernetes.io/name: sn360-es-llm
+    app.kubernetes.io/component: tier2-inference
+    app.kubernetes.io/part-of: sn360-es
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: sn360-es-llm
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: http

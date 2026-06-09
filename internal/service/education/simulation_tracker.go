@@ -217,3 +217,22 @@ func (s *MemoryInteractionStore) ListByCampaign(_ context.Context, campaignID st
 	}
 	return out, nil
 }
+
+// ListByCampaigns implements the batch fast path used by the analytics
+// aggregator. It returns the deduped interactions for every supplied
+// campaign, grouped by campaign in the order the IDs were given and, for
+// each campaign, in first-observed insertion order.
+func (s *MemoryInteractionStore) ListByCampaigns(_ context.Context, campaignIDs []string) ([]dto.UserInteraction, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []dto.UserInteraction
+	for _, campaignID := range campaignIDs {
+		bucket := s.items[campaignID]
+		for _, k := range s.order[campaignID] {
+			if v, ok := bucket[k]; ok {
+				out = append(out, v)
+			}
+		}
+	}
+	return out, nil
+}

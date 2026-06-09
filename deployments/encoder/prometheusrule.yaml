@@ -1,0 +1,54 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: sn360-es-encoder-autoscaling
+  namespace: sn360-es
+  labels:
+    app.kubernetes.io/name: sn360-es-encoder
+    app.kubernetes.io/component: tier1-inference
+    app.kubernetes.io/part-of: sn360-es
+    # `release: kube-prometheus-stack` (or your Prometheus Operator's
+    # ruleSelector label) is required for the operator to adopt this
+    # rule. Patch it in the overlay if your selector differs.
+spec:
+  groups:
+    - name: sn360-es-encoder-capacity
+      interval: 30s
+      rules:
+        # Capacity exhausted: the encoder HPA is pinned at its
+        # maxReplicas ceiling AND the JetStream backlog feeding it is
+        # still climbing (> 200 pending). At that point autoscaling has
+        # nothing left to give — the queue can only be drained by
+        # raising maxReplicas (hpa.yaml) or shedding upstream load, so
+        # this pages rather than warns.
+        #
+        # `and on()` joins the two single-series vectors irrespective of
+        # their (disjoint) label sets: the alert fires only when BOTH
+        # the backlog expression and the at-ceiling expression return a
+        # sample. `>= maxReplicas` (not `==`) tolerates a transient
+        # status that briefly exceeds the spec during a cap change.
+        - alert: SN360ESEncoderCapacityExhausted
+          expr: |
+            (
+              max(nats_consumer_pending_messages{stream="ES_EVALUATE",consumer="es-evaluate-batch"}) > 200
+            )
+            and on()
+            (
+              max(kube_horizontalpodautoscaler_status_current_replicas{horizontalpodautoscaler="sn360-es-encoder",namespace="sn360-es"})
+              >=
+              max(kube_horizontalpodautoscaler_spec_max_replicas{horizontalpodautoscaler="sn360-es-encoder",namespace="sn360-es"})
+            )
+          for: 5m
+          labels:
+            severity: critical
+            component: encoder
+          annotations:
+            summary: "Encoder fleet at max replicas with a growing backlog"
+            description: |
+              The sn360-es-encoder HPA has been at its maxReplicas
+              ceiling for 5m while the es.evaluate.request backlog is
+              above 200 pending messages. Tier-1 evaluation latency is
+              about to climb. Raise encoder maxReplicas in
+              deployments/encoder/hpa.yaml (and confirm node capacity)
+              or shed upstream ingestion load.
+            runbook_url: "https://github.com/kennguy3n/sn360-es/blob/main/docs/RUNBOOKS.md#encoder-capacity-exhausted"

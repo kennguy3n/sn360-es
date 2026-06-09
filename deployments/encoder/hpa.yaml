@@ -11,10 +11,20 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: sn360-es-encoder
-  minReplicas: 2
-  maxReplicas: 12
+  # Tier-1 encoder fleet. The queue-depth external metric is the
+  # primary scaling signal; CPU/memory stay declared as guard rails so
+  # a hot pod still triggers scale-up even if the metrics adapter is
+  # momentarily unavailable. The HPA takes the MAX recommendation
+  # across all three metrics.
+  minReplicas: 1
+  maxReplicas: 4
   behavior:
     scaleDown:
+      # 5-minute scale-down stabilization: the HPA holds the highest
+      # desired-replica recommendation seen in this window before
+      # shrinking, so a queue that briefly drains below the target
+      # (pending < ~10) doesn't immediately remove a pod and flap on
+      # the next burst.
       stabilizationWindowSeconds: 300
       policies:
         - type: Percent
@@ -44,8 +54,17 @@ spec:
           type: Utilization
           averageUtilization: 75
     # Custom metric: queue depth on the JetStream consumer that feeds
-    # this encoder. The Prometheus adapter must surface this as
-    # `external.metrics.k8s.io/v1beta1` for this block to activate.
+    # this encoder (the es.evaluate.request stream). The Prometheus
+    # adapter must surface this as `external.metrics.k8s.io/v1beta1`
+    # for this block to activate.
+    #
+    # averageValue "100" encodes the scale-up target: the HPA adds
+    # encoder pods to keep the mean pending-message count per pod at
+    # ~100, so a sustained backlog above 100 grows the fleet (up to
+    # maxReplicas). Combined with the 300s scaleDown stabilization
+    # above, the fleet only shrinks once the backlog has stayed low
+    # (well under ~10/pod) for the full window — the scale-down floor
+    # the spec calls for.
     - type: External
       external:
         metric:
@@ -56,4 +75,4 @@ spec:
               stream: ES_EVALUATE
         target:
           type: AverageValue
-          averageValue: "50"
+          averageValue: "100"

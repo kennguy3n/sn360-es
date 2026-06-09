@@ -443,6 +443,44 @@ paths:
         "400":
           $ref: "#/components/responses/Error"
 
+  /v1/education/analytics:
+    get:
+      tags: [education]
+      summary: Campaign training analytics for a tenant
+      description: |
+        Aggregated phishing-simulation training analytics for a tenant
+        over a time window: campaign completion rates, click rates by
+        attack type and difficulty, the resilience-score trend, the
+        most-clicked templates, and per-regulatory-regime completion.
+
+        Strictly tenant-scoped: the result only covers campaigns owned
+        by the authenticated tenant. When a JWT-bound tenant is present
+        it is authoritative and any `tenant_id` query value that
+        disagrees with it is rejected with 403.
+      parameters:
+        - in: query
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: range
+          schema:
+            type: string
+            description: "Time range (`90d`, `30d`, `24h`, etc.)"
+            default: "90d"
+      responses:
+        "200":
+          description: Aggregated training analytics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EducationAnalytics"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+
   /v1/predict/recipient:
     post:
       tags: [predict]
@@ -1671,6 +1709,80 @@ components:
                 type: integer
         resilience_score:
           type: number
+
+    EducationAnalytics:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+        range:
+          type: object
+          properties:
+            start:
+              type: string
+              format: date-time
+            end:
+              type: string
+              format: date-time
+        campaign_completion_rates:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+                description: "Calendar date (YYYY-MM-DD)."
+              rate:
+                type: number
+                description: "Mean completion rate (0..1) for campaigns on this date."
+        click_rates_by_attack_type:
+          type: array
+          items:
+            type: object
+            properties:
+              attack_type:
+                type: string
+              click_rate:
+                type: number
+                description: "Distinct clickers / reached, 0..1."
+        click_rates_by_difficulty:
+          type: array
+          items:
+            type: object
+            properties:
+              difficulty:
+                type: string
+                enum: [easy, medium, hard]
+              click_rate:
+                type: number
+        resilience_trend:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+              score:
+                type: number
+                description: "Group resilience score (0..100) for the bucket."
+        top_clicked_templates:
+          type: array
+          items:
+            type: object
+            properties:
+              template_id:
+                type: string
+              click_count:
+                type: integer
+                description: "Distinct users who clicked this template."
+        regulatory_completion:
+          type: object
+          description: "Per-regulatory-regime completion ratio (0..1). Always carries hipaa, pci_dss, sox keys."
+          additionalProperties:
+            type: number
+        generated_at:
+          type: string
+          format: date-time
 
     PredictRecipientRequest:
       type: object

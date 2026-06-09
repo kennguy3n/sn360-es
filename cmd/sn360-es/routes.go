@@ -70,6 +70,10 @@ func buildMux(app *application) (http.Handler, error) {
 	educationH := handler.NewEducationHandler(logger, app.microLessonSvc)
 	mux.Handle("/v1/education/lesson/", educationH)
 
+	// Education campaign analytics.
+	educationAnalyticsH := handler.NewEducationAnalyticsHandler(logger, app.educationAnalytic)
+	mux.Handle("/v1/education/analytics", educationAnalyticsH)
+
 	// Predict (pre-send + pre-open).
 	predictH := handler.NewPredictHandler(logger, app.recipientSvc, app.openSvc)
 	mux.HandleFunc("/v1/predict/recipient", predictH.ServeRecipient)
@@ -523,6 +527,7 @@ func defaultKnownExactRoutes() map[string]struct{} {
 	return map[string]struct{}{
 		"/v1/banner/action":               {},
 		"/v1/dashboard/summary":           {},
+		"/v1/education/analytics":         {},
 		"/v1/predict/recipient":           {},
 		"/v1/predict/open":                {},
 		"/v1/quarantine/release":          {},

@@ -9,27 +9,21 @@ metadata:
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
-    kind: Deployment
+    kind: StatefulSet
     name: sn360-es-llm
-  # Ternary-Bonsai-8B Q2_0 on CPU is ~2-5s per request; aggressive
-  # scale-up would normally keep the Tier 2 queue from blocking the
-  # evaluate pipeline.
+  # Ternary-Bonsai-8B Q2_0 on CPU is ~2-5s per request; a deep Tier-2
+  # backlog otherwise blocks the evaluate pipeline, so we scale up on
+  # queue depth.
   #
-  # However: the deployment's PVC is currently ReadWriteOnce (see
-  # deployments/llm/deployment.yaml:230 and the comment block above
-  # it). RWO can only be attached by pods on a single node at a
-  # time, so any HPA scale-up that lands a replica on a second node
-  # would crash-loop with `Multi-Attach error` and turn a load spike
-  # into an outage rather than a scale-up.
-  #
-  # We therefore pin replicas to 1 here. The CPU / memory / queue
-  # metrics below stay declared so the eventual scaling intent is
-  # documented at the manifest level — once the StatefulSet-with-
-  # per-pod-PVC follow-up lands (or we move to an RWX storage class
-  # like EFS / CephFS / Filestore) we just lift these caps and the
-  # behaviour block underneath already does the right thing.
+  # The Multi-Attach constraint that previously pinned this to
+  # replicas=1 is gone: sn360-es-llm is now a StatefulSet whose
+  # volumeClaimTemplates give each pod its OWN ReadWriteOnce PVC (see
+  # deployments/llm/deployment.yaml), so a second replica no longer
+  # contends for a shared RWO volume. We therefore allow scale-up to
+  # maxReplicas=2 — Tier 2 only handles ~10-20% of traffic, so two
+  # replicas is ample headroom while keeping the GPU/CPU bill bounded.
   minReplicas: 1
-  maxReplicas: 1
+  maxReplicas: 2
   behavior:
     scaleDown:
       # llama-server takes 30-60s to warm up on a cold node, so be slow
@@ -66,6 +60,14 @@ spec:
     # Custom metric: queue depth on the Tier 2 NATS consumer that feeds
     # this LLM. The Prometheus adapter must surface this as
     # `external.metrics.k8s.io/v1beta1` for this block to activate.
+    #
+    # averageValue "50" encodes the scale-up target: the HPA brings up
+    # the second replica to keep the mean Tier-2 pending count per pod
+    # at ~50. Tier 2 is slower than the encoder, so this threshold is
+    # lower than the encoder's 100. The 600s scaleDown stabilization
+    # above keeps us from tearing the second replica down (and paying a
+    # 30-60s cold start on the next burst) until the backlog has been
+    # drained for the full window.
     - type: External
       external:
         metric:
@@ -76,4 +78,4 @@ spec:
               stream: ES_EVALUATE
         target:
           type: AverageValue
-          averageValue: "10"
+          averageValue: "50"

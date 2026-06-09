@@ -1,5 +1,5 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: sn360-es-llm
   namespace: sn360-es
@@ -8,20 +8,29 @@ metadata:
     app.kubernetes.io/component: tier2-inference
     app.kubernetes.io/part-of: sn360-es
 spec:
+  # Tier-2 LLM inference is now a StatefulSet so each replica gets its
+  # OWN PVC from volumeClaimTemplates (models-sn360-es-llm-<ordinal>)
+  # instead of all replicas contending for one ReadWriteOnce PVC. That
+  # was the constraint that previously pinned the HPA to replicas=1: a
+  # scale-up pod landing on a second node could not attach the shared
+  # RWO volume and would crash-loop with a Multi-Attach error. With a
+  # per-pod PVC the HPA can safely scale to maxReplicas=2 (see
+  # hpa.yaml); each new pod downloads the GGUF once via its init
+  # container (cheap on restart, paid once per pod on first scale-up).
+  serviceName: sn360-es-llm-headless
   replicas: 1
   revisionHistoryLimit: 5
-  # The PVC below is ReadWriteOnce and HPA is pinned to replicas=1
-  # (see hpa.yaml). A rolling update with maxSurge>=1 would try to
-  # bring up a second pod before the old one terminates and the new
-  # pod would block in ContainerCreating waiting for the RWO volume
-  # to detach — every rollout would deadlock until
-  # progressDeadlineSeconds (default 600s) before succeeding. Use
-  # Recreate so the old pod is torn down first; this accepts a brief
-  # outage per deploy as the cost of the RWO + replicas=1 lock.
-  # Lifts naturally to RollingUpdate once the StatefulSet-with-per-
-  # pod-PVC follow-up lands (or we move to an RWX storage class).
-  strategy:
-    type: Recreate
+  # RollingUpdate is safe now that each pod owns its PVC: a new pod no
+  # longer has to wait for a shared RWO volume to detach from the old
+  # one, so rollouts no longer deadlock the way they would on a
+  # Deployment+RWO. StatefulSet rolling updates replace pods in
+  # reverse-ordinal order, one at a time, respecting readiness.
+  updateStrategy:
+    type: RollingUpdate
+  # Parallel start so a scale-up from 1->2 brings the new replica up
+  # immediately rather than waiting for lower ordinals to be Ready
+  # first; ordinals are independent here (no clustering between pods).
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app.kubernetes.io/name: sn360-es-llm
@@ -64,12 +73,13 @@ spec:
                   matchLabels:
                     app.kubernetes.io/name: sn360-es-llm
       volumes:
-        # PVC for the GGUF weights — ~3GB, so the download persists
-        # across pod restarts. The init container writes into this PVC;
-        # the main container mounts it read-only.
-        - name: models
-          persistentVolumeClaim:
-            claimName: sn360-es-llm-models
+        # NOTE: the `models` volume is no longer declared here — it is
+        # provided per-pod by volumeClaimTemplates below, which the
+        # StatefulSet controller binds as a dedicated PVC for each
+        # replica and mounts under the same `models` name. The init
+        # container writes the GGUF into it; the main container mounts
+        # it read-only (see volumeMounts).
+        #
         # llama-server writes nothing to disk at runtime apart from
         # stderr logs, but readOnlyRootFilesystem still needs writable
         # tmpfs scratch space for libcurl / glibc.
@@ -218,40 +228,33 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+  # Per-pod PVC for the GGUF weights (~3GB). The StatefulSet
+  # controller provisions one PVC per replica named
+  # models-sn360-es-llm-<ordinal>; the download-model init container
+  # WRITES the GGUF into it and the main llama-server container mounts
+  # it readOnly. ReadWriteOnce is correct here precisely BECAUSE each
+  # pod has its own volume — there is no cross-pod contention, so the
+  # Multi-Attach failure mode that forced replicas=1 on the old
+  # Deployment+shared-PVC arrangement cannot occur. PVCs created from
+  # this template are NOT garbage-collected when the StatefulSet
+  # scales down; that is intentional, so a scale-up back to a higher
+  # ordinal reuses the already-downloaded weights instead of paying
+  # the HuggingFace fetch again.
+  volumeClaimTemplates:
+    - metadata:
+        name: models
+        labels:
+          app.kubernetes.io/name: sn360-es-llm
+          app.kubernetes.io/part-of: sn360-es
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 8Gi
+        storageClassName: standard
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: sn360-es-llm
   namespace: sn360-es
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: sn360-es-llm-models
-  namespace: sn360-es
-spec:
-  # The download-model init container WRITES the ~3GB GGUF into this
-  # PVC; the main llama-server container then mounts it `readOnly:
-  # true`. The PVC itself must therefore be a writable mode at the
-  # storage class level. ReadOnlyMany is rejected at admission by
-  # most CSI drivers (or silently coerced to a read-only mount, in
-  # which case `curl -o` exits with EROFS and the pod never starts).
-  #
-  # ReadWriteOnce is the highest-portability choice and works on
-  # every CSI provisioner. Caveat: HPA scale-up replicas that land on
-  # a different node will fail to attach this PVC; the deliberate
-  # follow-up for multi-node scale-up is either:
-  #   (a) RWX storage class (EFS / CephFS / Filestore) — swap the
-  #       accessMode below to ReadWriteMany; the download happens
-  #       once cluster-wide and all pods share the same PVC, or
-  #   (b) StatefulSet with a per-pod PVC template — each pod gets its
-  #       own PVC and downloads the GGUF once per pod ever (cheap on
-  #       restart, expensive on first scale-up).
-  # For now we lock to RWO + replicas=1 with HPA tuned to keep us
-  # there until the StatefulSet/RWX follow-up lands.
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: 8Gi
-  storageClassName: standard
