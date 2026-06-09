@@ -431,7 +431,7 @@ paths:
           name: range
           schema:
             type: string
-            description: "Time range (`7d`, `24h`, etc.)"
+            description: "Time range (`7d`, `24h`, etc.). Values larger than the maximum lookback of 366d are clamped to 366d."
             default: "7d"
       responses:
         "200":
@@ -467,7 +467,7 @@ paths:
           name: range
           schema:
             type: string
-            description: "Time range (`90d`, `30d`, `24h`, etc.)"
+            description: "Time range (`90d`, `30d`, `24h`, etc.). Values larger than the maximum lookback of 366d are clamped to 366d."
             default: "90d"
       responses:
         "200":
