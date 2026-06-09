@@ -61,6 +61,14 @@ on every alert in the PrometheusRule manifests
 | `SN360ESEncoderCapacityExhausted` | Encoder HPA at max replicas AND queue backlog > 200 for 5m | `RUNBOOKS.md#encoder-capacity-exhausted` |
 | `SN360ESLLMCapacityExhausted` | Tier-2 LLM HPA at max replicas AND queue backlog > 100 for 5m | `RUNBOOKS.md#llm-capacity-exhausted` |
 
+> **Operator adoption:** the Helm chart sets the Prometheus Operator
+> `ruleSelector` label via `.Values.prometheusRule.labels`. If you apply
+> the raw `deployments/encoder/` and `deployments/llm/` PrometheusRule
+> manifests directly (not through Helm/an overlay), patch in the label
+> your operator selects on (commonly `release: kube-prometheus-stack`),
+> or the operator will silently ignore the rules and the alerts above
+> will never fire.
+
 Autoscaling reference: the encoder fleet (`deployments/encoder/`) scales
 on JetStream queue depth (`nats_consumer_pending_messages`) between 2 and
 12 replicas (a `minReplicas: 2` HA floor on the Tier-1 path); the Tier-2
