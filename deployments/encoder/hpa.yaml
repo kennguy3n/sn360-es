@@ -16,7 +16,17 @@ spec:
   # a hot pod still triggers scale-up even if the metrics adapter is
   # momentarily unavailable. The HPA takes the MAX recommendation
   # across all three metrics.
-  minReplicas: 1
+  #
+  # minReplicas: 2 is a deliberate HA floor. Every email flows through
+  # this Tier-1 encoder, so a single-pod floor would mean any pod loss
+  # at a low-traffic trough (node drain/eviction, crash, or a rolling
+  # deploy) stalls Tier-1 throughput until the replacement GPU pod is
+  # Ready — for a GPU pod that's image pull + model load + scheduling,
+  # i.e. minutes. The queue is JetStream-backed so nothing is dropped,
+  # but the evaluation-latency SLO would breach fleet-wide. Two warm
+  # replicas keep the SLO intact through single-pod failure and give
+  # zero-gap rolling updates, at the cost of one extra idle GPU.
+  minReplicas: 2
   maxReplicas: 4
   behavior:
     scaleDown:
