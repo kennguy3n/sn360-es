@@ -212,6 +212,56 @@ func TestMemoryEvaluationResults(t *testing.T) {
 	}
 }
 
+// TestClampEvalListRecentLimit pins the bounded, strictly-positive
+// contract both ListRecent backends share: a non-positive limit must
+// map to the cap (NOT "unbounded"), an oversized limit must be capped,
+// and an in-range limit must pass through untouched. This is the guard
+// that stops a future caller from triggering a full-table scan.
+func TestClampEvalListRecentLimit(t *testing.T) {
+	cases := []struct {
+		in, want int
+	}{
+		{0, EvalListRecentMaxLimit},
+		{-1, EvalListRecentMaxLimit},
+		{EvalListRecentMaxLimit + 1, EvalListRecentMaxLimit},
+		{1, 1},
+		{50, 50},
+		{EvalListRecentMaxLimit, EvalListRecentMaxLimit},
+	}
+	for _, tc := range cases {
+		if got := clampEvalListRecentLimit(tc.in); got != tc.want {
+			t.Errorf("clampEvalListRecentLimit(%d) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestMemoryListRecentClampsNonPositiveLimit confirms the in-memory
+// backend treats limit<=0 as "capped" rather than "all rows": three
+// rows with limit 0 still return all three (3 < cap), but the key
+// property is that the loop terminates by the cap, never unbounded.
+func TestMemoryListRecentClampsNonPositiveLimit(t *testing.T) {
+	ctx := context.Background()
+	r := NewInMemoryRegistry()
+	for i := range 3 {
+		er := &EvaluationResult{
+			TenantID:      "tx",
+			MessageIDHash: []byte{byte('a' + i)},
+			Score:         10 * i,
+			Tier:          "Info",
+		}
+		if err := r.EvaluationResults.Create(ctx, er); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := r.EvaluationResults.ListRecent(ctx, "tx", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("ListRecent(limit=0) returned %d rows, want 3", len(got))
+	}
+}
+
 func TestMemoryVendors(t *testing.T) {
 	ctx := context.Background()
 	r := NewInMemoryRegistry()

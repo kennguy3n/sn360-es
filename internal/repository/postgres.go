@@ -789,8 +789,9 @@ func (p *pgEvalResults) GetByMessageHash(ctx context.Context, tenantID string, m
 }
 
 func (p *pgEvalResults) ListRecent(ctx context.Context, tenantID string, limit int) ([]EvaluationResult, error) {
+	limit = clampEvalListRecentLimit(limit)
 	rows, err := p.db.QueryContext(ctx, evalResultSelect+`
-  FROM evaluation_results WHERE tenant_id=$1 ORDER BY evaluated_at DESC LIMIT NULLIF($2,0)`, tenantID, limit)
+  FROM evaluation_results WHERE tenant_id=$1 ORDER BY evaluated_at DESC LIMIT $2`, tenantID, limit)
 	if err != nil {
 		return nil, err
 	}

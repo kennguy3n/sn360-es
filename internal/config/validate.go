@@ -27,6 +27,18 @@ func (c Config) validate() error {
 	if c.HTTP.Port <= 0 || c.HTTP.Port > 65535 {
 		return fmt.Errorf("HTTP_PORT out of range: %d", c.HTTP.Port)
 	}
+	// INTERNAL_HTTP_PORT is opt-in: 0 disables the internal listener.
+	// When set it must be a valid port and must not collide with the
+	// public HTTP_PORT, so a misconfiguration surfaces at boot with a
+	// clear message rather than as an opaque bind failure later.
+	if c.HTTP.InternalPort != 0 {
+		if c.HTTP.InternalPort < 0 || c.HTTP.InternalPort > 65535 {
+			return fmt.Errorf("INTERNAL_HTTP_PORT out of range: %d", c.HTTP.InternalPort)
+		}
+		if c.HTTP.InternalPort == c.HTTP.Port {
+			return fmt.Errorf("INTERNAL_HTTP_PORT (%d) must differ from HTTP_PORT (%d)", c.HTTP.InternalPort, c.HTTP.Port)
+		}
+	}
 	// RATE_LIMIT_BACKEND / RATE_LIMIT_FAILURE_MODE accept a closed
 	// set of values. A typo (e.g. "memry", "Closd") would silently
 	// fall through to the default code path and produce
@@ -374,6 +386,35 @@ func (c Config) validate() error {
 			}
 			if isLowEntropy(pcss) {
 				return errors.New("INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET has low entropy (all-same character, sequential bytes, or repeated short pattern); generate one with: openssl rand -base64 48")
+			}
+		}
+		// The internal listener carries the same row-level tenant data
+		// as the public plane but skips the public JWT/CORS/rate-limit
+		// chain (see cmd/sn360-es/main.go) — its only application-layer
+		// defence is the INTERNAL_AUTH_TOKEN shared secret on top of
+		// network isolation. Treating that token as optional in prod
+		// means a single network-policy slip exposes every tenant's
+		// verdicts with no second factor, so when the listener is
+		// enabled in UAT/prod the token is mandatory and held to the
+		// same low-entropy floor as the other HMAC-keyed secrets above.
+		// Dev keeps it optional so a laptop can run the portal BFF
+		// without minting a secret.
+		if c.HTTP.InternalPort != 0 {
+			token := strings.TrimSpace(c.HTTP.InternalAuthToken)
+			if token == "" {
+				return errors.New("INTERNAL_AUTH_TOKEN is required in production environments (UAT/prod) when INTERNAL_HTTP_PORT is set; the internal listener bypasses the public JWT/CORS/rate-limit chain, so its shared-secret gate must not be left open. Generate one with: openssl rand -base64 48")
+			}
+			// Same 32-byte floor as the other HMAC-keyed secrets above
+			// (BANNER_TOKEN_SECRET, INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET):
+			// a short token can be high-entropy yet brute-forceable, and
+			// this token is the internal listener's only application-layer
+			// defence, so the length floor must match, not just the
+			// entropy floor.
+			if len(token) < 32 {
+				return errors.New("INTERNAL_AUTH_TOKEN must be at least 32 bytes in production environments (UAT/prod); generate one with: openssl rand -base64 48")
+			}
+			if isLowEntropy(token) {
+				return errors.New("INTERNAL_AUTH_TOKEN has low entropy (all-same character, sequential bytes, or repeated short pattern); generate one with: openssl rand -base64 48")
 			}
 		}
 	}

@@ -80,6 +80,28 @@ func run() error {
 		WriteTimeout:      cfg.HTTP.WriteTimeout,
 	}
 
+	// Internal listener: serves the portal's tenant-scoped Email
+	// Security backend-for-frontend surface on a separate, non-public
+	// port. Only mounted for API-serving roles (consumer/worker pods
+	// have no request-time HTTP surface) and only when both a port is
+	// configured and at least one backing dependency is wired.
+	var internalSrv *http.Server
+	if cfg.Role.ServesAPI() && cfg.HTTP.InternalPort > 0 {
+		internalMux, ierr := buildInternalMux(app)
+		if ierr != nil {
+			return fmt.Errorf("build internal mux: %w", ierr)
+		}
+		if internalMux != nil {
+			internalSrv = &http.Server{
+				Addr:              fmt.Sprintf(":%d", cfg.HTTP.InternalPort),
+				Handler:           internalMux,
+				ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout,
+				ReadTimeout:       cfg.HTTP.ReadTimeout,
+				WriteTimeout:      cfg.HTTP.WriteTimeout,
+			}
+		}
+	}
+
 	if cfg.Role.RunsConsumers() {
 		if cerr := app.StartConsumers(ctx); cerr != nil {
 			app.StopConsumers(logger)
@@ -91,13 +113,25 @@ func run() error {
 
 	app.StartBackground(ctx)
 
-	serveErr := make(chan error, 1)
+	// Buffered for both potential senders (public + internal server
+	// goroutines) so that if both fail simultaneously neither blocks
+	// forever on the send after the select has drained the first error.
+	serveErr := make(chan error, 2)
 	go func() {
 		logger.Info("sn360-es: http server listening", slog.Int("port", cfg.HTTP.Port))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- err
 		}
 	}()
+
+	if internalSrv != nil {
+		go func() {
+			logger.Info("sn360-es: internal http server listening", slog.Int("port", cfg.HTTP.InternalPort))
+			if err := internalSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				serveErr <- err
+			}
+		}()
+	}
 
 	select {
 	case <-ctx.Done():
@@ -113,6 +147,11 @@ func run() error {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("sn360-es: http shutdown error", slog.Any("error", err))
+	}
+	if internalSrv != nil {
+		if err := internalSrv.Shutdown(shutdownCtx); err != nil {
+			logger.Warn("sn360-es: internal http shutdown error", slog.Any("error", err))
+		}
 	}
 
 	app.WaitBackground()

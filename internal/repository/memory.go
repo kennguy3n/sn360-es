@@ -582,6 +582,7 @@ func (m *memoryEvalResults) GetByMessageHash(_ context.Context, tenantID string,
 }
 
 func (m *memoryEvalResults) ListRecent(_ context.Context, tenantID string, limit int) ([]EvaluationResult, error) {
+	limit = clampEvalListRecentLimit(limit)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]EvaluationResult, 0, len(m.rows))
@@ -589,7 +590,7 @@ func (m *memoryEvalResults) ListRecent(_ context.Context, tenantID string, limit
 		r := m.rows[i]
 		if r.TenantID == tenantID {
 			out = append(out, r)
-			if limit > 0 && len(out) >= limit {
+			if len(out) >= limit {
 				break
 			}
 		}
