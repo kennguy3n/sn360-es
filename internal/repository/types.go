@@ -411,6 +411,30 @@ func clampEvalListBySenderLimit(limit int) int {
 	return limit
 }
 
+// EvalListRecentMaxLimit bounds ListRecent the same way
+// EvalListBySenderMaxLimit bounds ListBySender: the recent-verdicts
+// query also scans evaluation_results ordered by evaluated_at, so an
+// unbounded (or 0 ⇒ "unlimited") limit would let a single caller
+// stream a whole tenant's history through one request. 500 covers the
+// two real callers — the BFF Threat Explorer page and the escalation
+// correlation lookback — with headroom.
+const EvalListRecentMaxLimit = 500
+
+// clampEvalListRecentLimit normalises a caller-supplied `limit` for
+// ListRecent to a strictly positive, bounded value. Both backends
+// (memory.go, postgres.go) MUST clamp identically so the seam returns
+// the same effective slice regardless of the backend behind it.
+//
+//   - limit <= 0 ⇒ EvalListRecentMaxLimit (no longer "unbounded")
+//   - limit > EvalListRecentMaxLimit ⇒ EvalListRecentMaxLimit
+//   - otherwise ⇒ the caller's value.
+func clampEvalListRecentLimit(limit int) int {
+	if limit <= 0 || limit > EvalListRecentMaxLimit {
+		return EvalListRecentMaxLimit
+	}
+	return limit
+}
+
 // EvaluationResultRepository persists EvaluationResult rows.
 //
 // ListBySender returns rows for `tenantID` whose sender_hash matches
@@ -424,6 +448,11 @@ func clampEvalListBySenderLimit(limit int) int {
 type EvaluationResultRepository interface {
 	Create(ctx context.Context, r *EvaluationResult) error
 	GetByMessageHash(ctx context.Context, tenantID string, messageIDHash []byte) (*EvaluationResult, error)
+	// ListRecent returns the tenant's most recent evaluation results,
+	// newest first, capped at min(limit, EvalListRecentMaxLimit). A
+	// limit <= 0 is treated as EvalListRecentMaxLimit (NOT unbounded)
+	// so no caller can trigger a full-table scan. Both backends MUST
+	// clamp identically via clampEvalListRecentLimit.
 	ListRecent(ctx context.Context, tenantID string, limit int) ([]EvaluationResult, error)
 	// ListBySender returns evaluation results for the (tenant, sender)
 	// pair, newest first, capped at min(limit, EvalListBySenderMaxLimit).

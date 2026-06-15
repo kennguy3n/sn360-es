@@ -296,17 +296,15 @@ func (h *EmailBFFHandler) ServeMessages(w http.ResponseWriter, r *http.Request) 
 
 	// Over-fetch a bounded multiple so post-filtering by tier/verdict/
 	// time still tends to fill the requested page without an unbounded
-	// scan. We reuse EvalListBySenderMaxLimit (500) as the shared
-	// absolute ceiling rather than introduce a second tunable: ListRecent
-	// currently honours the caller's limit directly (no hard cap of its
-	// own), so this is the only guard bounding the scan here. If
-	// ListRecent ever gains its own cap, revisit so the two don't
-	// interact surprisingly.
+	// scan. ListRecent now clamps to EvalListRecentMaxLimit itself, so
+	// we cap the over-fetch at the same ceiling here to keep the
+	// request cheap and make the page-fill intent explicit at the call
+	// site (the repository would clamp anything larger anyway).
 	fetch := limit
 	if tierFilter != "" || verdictFilter != "" || since > 0 {
 		fetch = limit * 4
-		if fetch > repository.EvalListBySenderMaxLimit {
-			fetch = repository.EvalListBySenderMaxLimit
+		if fetch > repository.EvalListRecentMaxLimit {
+			fetch = repository.EvalListRecentMaxLimit
 		}
 	}
 	rows, err := h.eval.ListRecent(ctx, tenantID, fetch)

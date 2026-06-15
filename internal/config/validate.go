@@ -388,6 +388,26 @@ func (c Config) validate() error {
 				return errors.New("INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET has low entropy (all-same character, sequential bytes, or repeated short pattern); generate one with: openssl rand -base64 48")
 			}
 		}
+		// The internal listener carries the same row-level tenant data
+		// as the public plane but skips the public JWT/CORS/rate-limit
+		// chain (see cmd/sn360-es/main.go) — its only application-layer
+		// defence is the INTERNAL_AUTH_TOKEN shared secret on top of
+		// network isolation. Treating that token as optional in prod
+		// means a single network-policy slip exposes every tenant's
+		// verdicts with no second factor, so when the listener is
+		// enabled in UAT/prod the token is mandatory and held to the
+		// same low-entropy floor as the other HMAC-keyed secrets above.
+		// Dev keeps it optional so a laptop can run the portal BFF
+		// without minting a secret.
+		if c.HTTP.InternalPort != 0 {
+			token := strings.TrimSpace(c.HTTP.InternalAuthToken)
+			if token == "" {
+				return errors.New("INTERNAL_AUTH_TOKEN is required in production environments (UAT/prod) when INTERNAL_HTTP_PORT is set; the internal listener bypasses the public JWT/CORS/rate-limit chain, so its shared-secret gate must not be left open. Generate one with: openssl rand -base64 48")
+			}
+			if isLowEntropy(token) {
+				return errors.New("INTERNAL_AUTH_TOKEN has low entropy (all-same character, sequential bytes, or repeated short pattern); generate one with: openssl rand -base64 48")
+			}
+		}
 	}
 	return nil
 }

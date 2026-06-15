@@ -298,6 +298,11 @@ func TestValidate_InternalPort(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := validProdConfig()
 			cfg.HTTP.InternalPort = tc.internal
+			// Supply a valid token so this test isolates the
+			// port range/collision guard from the separate
+			// INTERNAL_AUTH_TOKEN prod gate (covered by its own
+			// tests below).
+			cfg.HTTP.InternalAuthToken = "kQ7Xp4mV9zL2eR8jB6nC1tH3yU5oA0sF7iD4gW8hJ2lP6vM9"
 			err := cfg.validate()
 			if tc.wantErr && err == nil {
 				t.Errorf("validate() accepted INTERNAL_HTTP_PORT=%d, want error", tc.internal)
@@ -952,6 +957,69 @@ func TestValidate_SMTPSkipVerifyAllowedInDev(t *testing.T) {
 	cfg.SMTP.SkipVerify = true
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("SMTP_SKIP_VERIFY should be allowed in dev: %v", err)
+	}
+}
+
+// TestValidate_InternalAuthTokenRequiredInProd pins the production
+// gate for the internal listener: enabling INTERNAL_HTTP_PORT in
+// UAT/prod without an INTERNAL_AUTH_TOKEN must refuse to boot, because
+// that listener bypasses the public JWT/CORS/rate-limit chain and the
+// token is its only application-layer defence on top of network
+// isolation.
+func TestValidate_InternalAuthTokenRequiredInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.HTTP.InternalPort = 9090
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for INTERNAL_HTTP_PORT set with empty INTERNAL_AUTH_TOKEN in prod")
+	}
+}
+
+// TestValidate_InternalAuthTokenLowEntropyBlockedInProd holds the
+// internal token to the same low-entropy floor as the other HMAC-keyed
+// secrets — a guessable token defeats the point of the gate.
+func TestValidate_InternalAuthTokenLowEntropyBlockedInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.HTTP.InternalPort = 9090
+	cfg.HTTP.InternalAuthToken = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for low-entropy INTERNAL_AUTH_TOKEN in prod")
+	}
+}
+
+// TestValidate_InternalAuthTokenGoodInProd is the happy path — a
+// high-entropy token (what `openssl rand -base64 48` produces) with
+// the listener enabled MUST pass.
+func TestValidate_InternalAuthTokenGoodInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.HTTP.InternalPort = 9090
+	cfg.HTTP.InternalAuthToken = "kQ7Xp4mV9zL2eR8jB6nC1tH3yU5oA0sF7iD4gW8hJ2lP6vM9"
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("high-entropy INTERNAL_AUTH_TOKEN with listener enabled rejected: %v", err)
+	}
+}
+
+// TestValidate_InternalPortDisabledNeedsNoTokenInProd confirms the
+// gate only fires when the listener is actually enabled: the default
+// prod config (INTERNAL_HTTP_PORT=0) needs no token.
+func TestValidate_InternalPortDisabledNeedsNoTokenInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.HTTP.InternalPort = 0
+	cfg.HTTP.InternalAuthToken = ""
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("disabled internal listener should not require a token: %v", err)
+	}
+}
+
+// TestValidate_InternalAuthTokenOptionalInDev keeps the dev ergonomics
+// the gate preserves — a laptop can run the portal BFF on the internal
+// listener without minting a secret.
+func TestValidate_InternalAuthTokenOptionalInDev(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.Environment = EnvironmentDev
+	cfg.HTTP.InternalPort = 9090
+	cfg.HTTP.InternalAuthToken = ""
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("INTERNAL_AUTH_TOKEN should be optional in dev: %v", err)
 	}
 }
 
