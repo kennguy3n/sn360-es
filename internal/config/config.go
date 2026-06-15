@@ -152,6 +152,15 @@ func Load() (Config, error) {
 	} else {
 		cfg.HTTP.Port = v
 	}
+	// INTERNAL_HTTP_PORT is re-parsed strictly for the same reason as
+	// HTTP_PORT: a typo (e.g. "9090a") under the lenient getInt would
+	// silently fall back to 0, quietly disabling the internal listener
+	// an operator believed was running. Fail boot loudly instead.
+	if v, err := getIntStrict("INTERNAL_HTTP_PORT", 0); err != nil {
+		strictErrs = append(strictErrs, err)
+	} else {
+		cfg.HTTP.InternalPort = v
+	}
 	if v, err := getDurationStrict("TIER1_TIMEOUT", 5*time.Second); err != nil {
 		strictErrs = append(strictErrs, err)
 	} else {

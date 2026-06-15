@@ -986,6 +986,22 @@ func TestValidate_InternalAuthTokenLowEntropyBlockedInProd(t *testing.T) {
 	}
 }
 
+// TestValidate_InternalAuthTokenTooShortBlockedInProd pins the 32-byte
+// minimum-length floor shared with the other HMAC-keyed secrets: a
+// short token can pass the entropy check yet still be brute-forceable,
+// and this token is the internal listener's only application-layer
+// defence.
+func TestValidate_InternalAuthTokenTooShortBlockedInProd(t *testing.T) {
+	cfg := validProdConfig()
+	cfg.HTTP.InternalPort = 9090
+	// 13 chars: high enough entropy to pass isLowEntropy but below the
+	// 32-byte floor.
+	cfg.HTTP.InternalAuthToken = "kQ7Xp4mV9zL2e"
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected error for sub-32-byte INTERNAL_AUTH_TOKEN in prod")
+	}
+}
+
 // TestValidate_InternalAuthTokenGoodInProd is the happy path — a
 // high-entropy token (what `openssl rand -base64 48` produces) with
 // the listener enabled MUST pass.

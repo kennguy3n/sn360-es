@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -71,6 +72,10 @@ type HTTP struct {
 	// network isolation that already keeps the internal listener off
 	// the public plane; leave it empty only where the network policy
 	// alone guarantees the listener is unreachable by tenants.
+	// Surrounding whitespace is stripped at load (see loadHTTP) so the
+	// value validate() checks and the value the auth gate compares are
+	// identical — an operator can't end up with an invisible trailing
+	// newline that passes validation but never matches the header.
 	InternalAuthToken string
 }
 
@@ -87,6 +92,6 @@ func loadHTTP() HTTP {
 		ReadHeaderTimeout: getDuration("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
 		WriteTimeout:      getDuration("HTTP_WRITE_TIMEOUT", 30*time.Second),
 		InternalPort:      getInt("INTERNAL_HTTP_PORT", 0),
-		InternalAuthToken: getStr("INTERNAL_AUTH_TOKEN", ""),
+		InternalAuthToken: strings.TrimSpace(getStr("INTERNAL_AUTH_TOKEN", "")),
 	}
 }

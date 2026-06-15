@@ -404,6 +404,15 @@ func (c Config) validate() error {
 			if token == "" {
 				return errors.New("INTERNAL_AUTH_TOKEN is required in production environments (UAT/prod) when INTERNAL_HTTP_PORT is set; the internal listener bypasses the public JWT/CORS/rate-limit chain, so its shared-secret gate must not be left open. Generate one with: openssl rand -base64 48")
 			}
+			// Same 32-byte floor as the other HMAC-keyed secrets above
+			// (BANNER_TOKEN_SECRET, INGESTION_PUSH_MICROSOFT_CLIENT_STATE_SECRET):
+			// a short token can be high-entropy yet brute-forceable, and
+			// this token is the internal listener's only application-layer
+			// defence, so the length floor must match, not just the
+			// entropy floor.
+			if len(token) < 32 {
+				return errors.New("INTERNAL_AUTH_TOKEN must be at least 32 bytes in production environments (UAT/prod); generate one with: openssl rand -base64 48")
+			}
 			if isLowEntropy(token) {
 				return errors.New("INTERNAL_AUTH_TOKEN has low entropy (all-same character, sequential bytes, or repeated short pattern); generate one with: openssl rand -base64 48")
 			}
