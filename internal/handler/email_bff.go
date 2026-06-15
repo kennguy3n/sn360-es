@@ -183,6 +183,11 @@ func deriveVerdict(r repository.EvaluationResult) string {
 
 func newEmailMessageJSON(r repository.EvaluationResult) emailMessageJSON {
 	return emailMessageJSON{
+		// MessageIDHash stores the UTF-8 bytes of the pseudonymised
+		// message identifier (written as []byte(res.MessageID) by the
+		// evaluate consumer), NOT a binary hash — so it round-trips with
+		// string(), unlike SenderHash below which is real BLAKE2 hash
+		// bytes and must be base64url-encoded for the wire.
 		MessageID:   string(r.MessageIDHash),
 		Tier:        r.Tier,
 		Score:       r.Score,
@@ -291,7 +296,12 @@ func (h *EmailBFFHandler) ServeMessages(w http.ResponseWriter, r *http.Request) 
 
 	// Over-fetch a bounded multiple so post-filtering by tier/verdict/
 	// time still tends to fill the requested page without an unbounded
-	// scan. The repository caps the absolute ceiling regardless.
+	// scan. We reuse EvalListBySenderMaxLimit (500) as the shared
+	// absolute ceiling rather than introduce a second tunable: ListRecent
+	// currently honours the caller's limit directly (no hard cap of its
+	// own), so this is the only guard bounding the scan here. If
+	// ListRecent ever gains its own cap, revisit so the two don't
+	// interact surprisingly.
 	fetch := limit
 	if tierFilter != "" || verdictFilter != "" || since > 0 {
 		fetch = limit * 4
