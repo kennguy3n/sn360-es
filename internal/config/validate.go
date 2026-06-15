@@ -27,6 +27,18 @@ func (c Config) validate() error {
 	if c.HTTP.Port <= 0 || c.HTTP.Port > 65535 {
 		return fmt.Errorf("HTTP_PORT out of range: %d", c.HTTP.Port)
 	}
+	// INTERNAL_HTTP_PORT is opt-in: 0 disables the internal listener.
+	// When set it must be a valid port and must not collide with the
+	// public HTTP_PORT, so a misconfiguration surfaces at boot with a
+	// clear message rather than as an opaque bind failure later.
+	if c.HTTP.InternalPort != 0 {
+		if c.HTTP.InternalPort < 0 || c.HTTP.InternalPort > 65535 {
+			return fmt.Errorf("INTERNAL_HTTP_PORT out of range: %d", c.HTTP.InternalPort)
+		}
+		if c.HTTP.InternalPort == c.HTTP.Port {
+			return fmt.Errorf("INTERNAL_HTTP_PORT (%d) must differ from HTTP_PORT (%d)", c.HTTP.InternalPort, c.HTTP.Port)
+		}
+	}
 	// RATE_LIMIT_BACKEND / RATE_LIMIT_FAILURE_MODE accept a closed
 	// set of values. A typo (e.g. "memry", "Closd") would silently
 	// fall through to the default code path and produce

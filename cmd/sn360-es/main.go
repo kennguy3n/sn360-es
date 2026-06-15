@@ -113,7 +113,10 @@ func run() error {
 
 	app.StartBackground(ctx)
 
-	serveErr := make(chan error, 1)
+	// Buffered for both potential senders (public + internal server
+	// goroutines) so that if both fail simultaneously neither blocks
+	// forever on the send after the select has drained the first error.
+	serveErr := make(chan error, 2)
 	go func() {
 		logger.Info("sn360-es: http server listening", slog.Int("port", cfg.HTTP.Port))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

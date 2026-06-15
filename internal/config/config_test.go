@@ -277,6 +277,38 @@ func TestValidate_Role_AcceptsDocumentedValues(t *testing.T) {
 	}
 }
 
+// TestValidate_InternalPort pins the boot-time guard on the opt-in
+// internal listener port: 0 disables it (must pass), a valid distinct
+// port is accepted, and an out-of-range or HTTP_PORT-colliding value
+// is rejected so the misconfig surfaces at boot rather than as an
+// opaque ListenAndServe bind error.
+func TestValidate_InternalPort(t *testing.T) {
+	cases := []struct {
+		name     string
+		internal int
+		wantErr  bool
+	}{
+		{"disabled", 0, false},
+		{"valid distinct", 9090, false},
+		{"out of range high", 70000, true},
+		{"negative", -1, true},
+		{"collides with public", 8080, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validProdConfig()
+			cfg.HTTP.InternalPort = tc.internal
+			err := cfg.validate()
+			if tc.wantErr && err == nil {
+				t.Errorf("validate() accepted INTERNAL_HTTP_PORT=%d, want error", tc.internal)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("validate() rejected INTERNAL_HTTP_PORT=%d: %v", tc.internal, err)
+			}
+		})
+	}
+}
+
 // TestValidate_IngestionMode_RejectsInvalidValues pins the
 // fail-fast guard against typos in INGESTION_MODE. Without it,
 // "polll" (or any other non-empty unknown value) silently falls
