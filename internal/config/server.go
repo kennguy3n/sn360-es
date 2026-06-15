@@ -79,11 +79,6 @@ func (h HTTP) Addr() string {
 	return fmt.Sprintf("%s:%d", h.Host, h.Port)
 }
 
-// InternalAddr returns the internal listener address (host:port).
-func (h HTTP) InternalAddr() string {
-	return fmt.Sprintf("%s:%d", h.Host, h.InternalPort)
-}
-
 func loadHTTP() HTTP {
 	return HTTP{
 		Host:              getStr("HTTP_HOST", "0.0.0.0"),
