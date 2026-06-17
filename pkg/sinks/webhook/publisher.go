@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -141,6 +143,20 @@ type HTTPPublisherConfig struct {
 	// http.Client — e.g. one with a captured Transport. When
 	// nil, a fresh client is built with Timeout.
 	Client *http.Client
+	// AllowPrivateDestinations disables the dial-time SSRF guard so
+	// the publisher may POST to private/loopback/link-local IPs. It
+	// is the operator escape hatch for a deployment that legitimately
+	// ships verdicts to a private SIEM with no public ingress.
+	// Default (false) blocks non-public destinations.
+	//
+	// Only consulted when Client is nil; a caller wiring its own
+	// http.Client is responsible for its own dial guard.
+	AllowPrivateDestinations bool
+	// AllowedDestinationCIDRs narrows the escape hatch: even with the
+	// guard active, destinations inside these prefixes are permitted.
+	// Only consulted when Client is nil and AllowPrivateDestinations
+	// is false.
+	AllowedDestinationCIDRs []netip.Prefix
 }
 
 // NewHTTPPublisher wires an HTTPPublisher with sensible defaults.
@@ -187,12 +203,58 @@ func NewHTTPPublisher(cfg ...HTTPPublisherConfig) *HTTPPublisher {
 				return http.ErrUseLastResponse
 			},
 		}
+		// SSRF dial-time guard: unless the operator has opted into
+		// private destinations, install a Control hook that refuses
+		// to connect to non-public IPs. This runs after DNS
+		// resolution on the concrete target IP, so it also defeats
+		// DNS-rebinding (a hostname that validates as public but
+		// resolves to 169.254.169.254 / 127.0.0.1 / an RFC1918 host
+		// at dial time). Cloning DefaultTransport preserves the
+		// stdlib's TLS, idle-conn and HTTP/2 defaults.
+		if !c.AllowPrivateDestinations {
+			transport := clonedDefaultTransport()
+			// Disable the inherited Proxy: http.ProxyFromEnvironment.
+			// With a forward proxy the dialer connects to the PROXY's
+			// IP, so the Control hook would validate the proxy (likely
+			// public) instead of the customer destination, leaving the
+			// guard trivially bypassable by setting HTTPS_PROXY. We
+			// dial the destination directly so the hook sees the real
+			// target IP. A deployment that genuinely needs an egress
+			// proxy can set WEBHOOK_EGRESS_ALLOW_PRIVATE=true (which
+			// disables the guard and restores the proxy) and rely on
+			// the proxy for egress filtering instead.
+			transport.Proxy = nil
+			guard := NewSSRFGuard(false, c.AllowedDestinationCIDRs)
+			transport.DialContext = (&net.Dialer{
+				Timeout:   timeout,
+				KeepAlive: 30 * time.Second,
+				Control:   guard.Control,
+			}).DialContext
+			client.Transport = transport
+		}
 	}
 	return &HTTPPublisher{
 		Client:               client,
 		MaxResponseBodyBytes: body,
 		UserAgent:            ua,
 	}
+}
+
+// clonedDefaultTransport returns a clone of http.DefaultTransport
+// when it is the stdlib *http.Transport (the universal case), or a
+// fresh *http.Transport otherwise. The checked assertion avoids a
+// startup panic if a test or init hook has swapped DefaultTransport
+// for a non-*http.Transport RoundTripper.
+func clonedDefaultTransport() *http.Transport {
+	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+		return t.Clone()
+	}
+	// Reached only if something replaced http.DefaultTransport with a
+	// non-*http.Transport RoundTripper (test/init hooks). Carry the
+	// stdlib's TLS-handshake timeout so a stalled handshake on a
+	// malicious endpoint can't hang the dial; the client-level Timeout
+	// also bounds the overall request.
+	return &http.Transport{TLSHandshakeTimeout: 10 * time.Second}
 }
 
 // Publish implements Publisher.
@@ -243,6 +305,19 @@ func (p *HTTPPublisher) Publish(ctx context.Context, req *Request) (PublishResul
 				Outcome:   OutcomeRetriable,
 				LatencyMS: latency,
 				Cause:     "timeout",
+			}, nil
+		}
+		if errors.Is(err, ErrBlockedDestination) {
+			// The SSRF guard refused the dial because the sink URL
+			// resolves to a non-public IP. This is deterministic — it
+			// keeps failing identically until the operator fixes the
+			// URL — so fail permanently instead of burning the DLQ
+			// retry budget on a dial that never reaches the network.
+			// Mirrors the 3xx redirect-not-followed handling below.
+			return PublishResult{
+				Outcome:   OutcomePermanentFailure,
+				LatencyMS: latency,
+				Cause:     "blocked: " + sanitiseError(err),
 			}, nil
 		}
 		return PublishResult{

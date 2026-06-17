@@ -53,6 +53,13 @@ func run() error {
 		slog.String("role", string(cfg.Role)),
 		slog.String("event_bus", string(cfg.EventBus)))
 
+	// Non-fatal production-posture advisories (e.g. an operator who
+	// disabled the webhook SSRF egress guard). These are logged loudly
+	// but never block boot — see config.Config.SecurityWarnings.
+	for _, w := range cfg.SecurityWarnings() {
+		logger.Warn("sn360-es: insecure production configuration", slog.String("detail", w))
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 

@@ -79,6 +79,7 @@ type Config struct {
 	Telemetry                Telemetry
 	Platform                 Platform
 	IAMCore                  IAMCore
+	WebhookEgress            WebhookEgress
 
 	// DirectorySyncSource selects where the directory-sync worker
 	// pulls its user roster from (native provider vs iam-core
@@ -225,6 +226,15 @@ func Load() (Config, error) {
 		return cfg, err
 	}
 	cfg.NATS.Supercluster = sc
+
+	// Webhook-sink egress SSRF guard. A malformed CIDR in the
+	// allow-list fails boot here rather than silently widening or
+	// narrowing the guard at first dispatch.
+	we, err := loadWebhookEgress()
+	if err != nil {
+		return cfg, err
+	}
+	cfg.WebhookEgress = we
 
 	if err := cfg.validate(); err != nil {
 		return cfg, err
