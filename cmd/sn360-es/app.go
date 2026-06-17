@@ -928,6 +928,9 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		if app.repos != nil && app.repos.FeedbackEvents != nil {
 			dcfg.Feedback = feedbackCountsAdapter{repo: app.repos.FeedbackEvents}
 		}
+		if app.repos != nil && app.repos.QuarantineReleaseAudit != nil {
+			dcfg.QuarantineRelease = quarantineReleaseCountsAdapter{repo: app.repos.QuarantineReleaseAudit}
+		}
 		src, serr := dashboard.NewPostgresSourceWithConfig(app.pgDB, dcfg)
 		if serr != nil {
 			logger.Warn("sn360-es: dashboard metrics source init failed",
