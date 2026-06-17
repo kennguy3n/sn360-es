@@ -1313,7 +1313,9 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		// /test endpoint would 503. Failing closed here keeps the
 		// API absent until the underlying issue is resolved.
 		publisher := webhook.NewHTTPPublisher(webhook.HTTPPublisherConfig{
-			Timeout: webhooksink.DefaultPublishTimeout,
+			Timeout:                  webhooksink.DefaultPublishTimeout,
+			AllowPrivateDestinations: cfg.WebhookEgress.AllowPrivate,
+			AllowedDestinationCIDRs:  cfg.WebhookEgress.AllowedCIDRs,
 		})
 		var limiter webhooksink.RateLimiter
 		if app.redis != nil {

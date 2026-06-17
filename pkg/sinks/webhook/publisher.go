@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -141,6 +143,20 @@ type HTTPPublisherConfig struct {
 	// http.Client — e.g. one with a captured Transport. When
 	// nil, a fresh client is built with Timeout.
 	Client *http.Client
+	// AllowPrivateDestinations disables the dial-time SSRF guard so
+	// the publisher may POST to private/loopback/link-local IPs. It
+	// is the operator escape hatch for a deployment that legitimately
+	// ships verdicts to a private SIEM with no public ingress.
+	// Default (false) blocks non-public destinations.
+	//
+	// Only consulted when Client is nil; a caller wiring its own
+	// http.Client is responsible for its own dial guard.
+	AllowPrivateDestinations bool
+	// AllowedDestinationCIDRs narrows the escape hatch: even with the
+	// guard active, destinations inside these prefixes are permitted.
+	// Only consulted when Client is nil and AllowPrivateDestinations
+	// is false.
+	AllowedDestinationCIDRs []netip.Prefix
 }
 
 // NewHTTPPublisher wires an HTTPPublisher with sensible defaults.
@@ -186,6 +202,24 @@ func NewHTTPPublisher(cfg ...HTTPPublisherConfig) *HTTPPublisher {
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
+		}
+		// SSRF dial-time guard: unless the operator has opted into
+		// private destinations, install a Control hook that refuses
+		// to connect to non-public IPs. This runs after DNS
+		// resolution on the concrete target IP, so it also defeats
+		// DNS-rebinding (a hostname that validates as public but
+		// resolves to 169.254.169.254 / 127.0.0.1 / an RFC1918 host
+		// at dial time). Cloning DefaultTransport preserves the
+		// stdlib's proxy, TLS, idle-conn and HTTP/2 defaults.
+		if !c.AllowPrivateDestinations {
+			transport := http.DefaultTransport.(*http.Transport).Clone()
+			guard := NewSSRFGuard(false, c.AllowedDestinationCIDRs)
+			transport.DialContext = (&net.Dialer{
+				Timeout:   timeout,
+				KeepAlive: 30 * time.Second,
+				Control:   guard.Control,
+			}).DialContext
+			client.Transport = transport
 		}
 	}
 	return &HTTPPublisher{
