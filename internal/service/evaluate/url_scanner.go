@@ -233,6 +233,12 @@ func dedupURLs(in []string) []string {
 
 // --- VirusTotal provider --------------------------------------------------
 
+// vtMaxResponseBytes caps how much of a VirusTotal response we read. A
+// VT v3 URL report is a few KiB of JSON; 1 MiB is ample headroom while
+// preventing a misbehaving or compromised upstream from exhausting
+// evaluator memory.
+const vtMaxResponseBytes = 1 << 20
+
 // VirusTotalProvider implements URLIntelProvider against the
 // VirusTotal v3 REST API. It uses standard library HTTP with an
 // optional override client for tests.
@@ -285,14 +291,14 @@ func (p *VirusTotalProvider) LookupURL(ctx context.Context, raw string) (URLScan
 		return URLScanResult{Verdict: URLVerdictUnknown}, fmt.Errorf("virustotal: request: %w", err)
 	}
 	defer resp.Body.Close()
-	// Cap the response read so a misbehaving or compromised upstream
-	// cannot exhaust evaluator memory with an unbounded body. A VT v3
-	// URL report is a few KiB of JSON; 1 MiB is ample headroom and
-	// matches the LimitReader convention used by every other external
-	// HTTP read in the codebase.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, vtMaxResponseBytes))
 	if err != nil {
 		return URLScanResult{Verdict: URLVerdictUnknown}, fmt.Errorf("virustotal: read response: %w", err)
+	}
+	// Hitting the cap means the body was truncated; report that explicitly
+	// rather than letting parseVTResponse surface an opaque JSON decode error.
+	if len(body) >= vtMaxResponseBytes {
+		return URLScanResult{Verdict: URLVerdictUnknown}, fmt.Errorf("virustotal: response exceeds %d byte cap", vtMaxResponseBytes)
 	}
 	switch resp.StatusCode {
 	case http.StatusOK:
