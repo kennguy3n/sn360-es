@@ -228,8 +228,11 @@ func neutralScore(subject string, now time.Time) dto.ResilienceScore {
 // MemoryResilienceCache is a goroutine-safe in-memory cache used for
 // tests and small deployments.
 type MemoryResilienceCache struct {
-	mu    sync.RWMutex
-	items map[string]cacheEntry
+	mu            sync.RWMutex
+	items         map[string]cacheEntry
+	now           func() time.Time
+	sweepInterval time.Duration
+	lastSweep     time.Time
 }
 
 type cacheEntry struct {
@@ -239,7 +242,13 @@ type cacheEntry struct {
 
 // NewMemoryResilienceCache returns an empty cache.
 func NewMemoryResilienceCache() *MemoryResilienceCache {
-	return &MemoryResilienceCache{items: map[string]cacheEntry{}}
+	now := time.Now
+	return &MemoryResilienceCache{
+		items:         map[string]cacheEntry{},
+		now:           now,
+		sweepInterval: 5 * time.Minute,
+		lastSweep:     now(),
+	}
 }
 
 // Get implements ResilienceCache.
@@ -250,7 +259,7 @@ func (c *MemoryResilienceCache) Get(_ context.Context, key string) (dto.Resilien
 	if !ok {
 		return dto.ResilienceScore{}, false, nil
 	}
-	if !e.expiresAt.IsZero() && time.Now().After(e.expiresAt) {
+	if !e.expiresAt.IsZero() && c.now().After(e.expiresAt) {
 		return dto.ResilienceScore{}, false, nil
 	}
 	return e.value, true, nil
@@ -260,12 +269,32 @@ func (c *MemoryResilienceCache) Get(_ context.Context, key string) (dto.Resilien
 func (c *MemoryResilienceCache) Set(_ context.Context, key string, value dto.ResilienceScore, ttl time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	now := c.now()
 	exp := time.Time{}
 	if ttl > 0 {
-		exp = time.Now().Add(ttl)
+		exp = now.Add(ttl)
 	}
 	c.items[key] = cacheEntry{value: value, expiresAt: exp}
+	c.sweepExpired(now)
 	return nil
+}
+
+// sweepExpired deletes expired entries at most once per sweepInterval.
+// It is piggy-backed on Set (which already holds the write lock), so it
+// adds no goroutine or shutdown surface. Without it, eviction is purely
+// lazy on the read path and a key that is written once, expires, and is
+// never read or overwritten again would linger for the process
+// lifetime; this keeps the map proportional to the live key set.
+func (c *MemoryResilienceCache) sweepExpired(now time.Time) {
+	if now.Sub(c.lastSweep) < c.sweepInterval {
+		return
+	}
+	c.lastSweep = now
+	for k, e := range c.items {
+		if !e.expiresAt.IsZero() && now.After(e.expiresAt) {
+			delete(c.items, k)
+		}
+	}
 }
 
 // MarshalSignals is a small convenience for callers that want to log

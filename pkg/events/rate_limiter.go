@@ -15,6 +15,15 @@ type RateLimitConfig struct {
 	// BurstSize is the token bucket burst capacity. Defaults to
 	// 2x MaxPerTenantPerSecond.
 	BurstSize int
+	// IdleTTL is how long a tenant's bucket may sit untouched before it
+	// becomes eligible for eviction. A bucket idle for this long has
+	// refilled to full capacity, so dropping it is lossless. Defaults
+	// to 10 minutes.
+	IdleTTL time.Duration
+	// SweepInterval bounds how often the idle-bucket sweep runs (it is
+	// piggy-backed on the consume path under the existing lock, so it
+	// never runs more than once per interval). Defaults to 1 minute.
+	SweepInterval time.Duration
 	// Logger for rate-limit events.
 	Logger *slog.Logger
 	// Clock for testing.
@@ -48,12 +57,15 @@ func (b *tokenBucket) allow(now time.Time) bool {
 // messages are nacked with a backoff so the broker re-delivers them
 // after the bucket refills.
 type RateLimitedEventService struct {
-	inner   EventService
-	cfg     RateLimitConfig
-	log     *slog.Logger
-	now     func() time.Time
-	mu      sync.Mutex
-	buckets map[string]*tokenBucket
+	inner         EventService
+	cfg           RateLimitConfig
+	log           *slog.Logger
+	now           func() time.Time
+	idleTTL       time.Duration
+	sweepInterval time.Duration
+	mu            sync.Mutex
+	buckets       map[string]*tokenBucket
+	lastSweep     time.Time
 }
 
 // NewRateLimitedEventService wraps the inner service with rate limiting.
@@ -64,6 +76,12 @@ func NewRateLimitedEventService(inner EventService, cfg RateLimitConfig) *RateLi
 	if cfg.BurstSize <= 0 {
 		cfg.BurstSize = cfg.MaxPerTenantPerSecond * 2
 	}
+	if cfg.IdleTTL <= 0 {
+		cfg.IdleTTL = 10 * time.Minute
+	}
+	if cfg.SweepInterval <= 0 {
+		cfg.SweepInterval = time.Minute
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
@@ -71,11 +89,14 @@ func NewRateLimitedEventService(inner EventService, cfg RateLimitConfig) *RateLi
 		cfg.Clock = time.Now
 	}
 	return &RateLimitedEventService{
-		inner:   inner,
-		cfg:     cfg,
-		log:     cfg.Logger,
-		now:     cfg.Clock,
-		buckets: make(map[string]*tokenBucket),
+		inner:         inner,
+		cfg:           cfg,
+		log:           cfg.Logger,
+		now:           cfg.Clock,
+		idleTTL:       cfg.IdleTTL,
+		sweepInterval: cfg.SweepInterval,
+		buckets:       make(map[string]*tokenBucket),
+		lastSweep:     cfg.Clock(),
 	}
 }
 
@@ -112,9 +133,10 @@ func (s *RateLimitedEventService) Close() error {
 func (s *RateLimitedEventService) allow(tenantID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.now()
+	s.sweepIdle(now)
 	b, ok := s.buckets[tenantID]
 	if !ok {
-		now := s.now()
 		b = &tokenBucket{
 			tokens:    float64(s.cfg.BurstSize),
 			maxTokens: float64(s.cfg.BurstSize),
@@ -123,7 +145,34 @@ func (s *RateLimitedEventService) allow(tenantID string) bool {
 		}
 		s.buckets[tenantID] = b
 	}
-	return b.allow(s.now())
+	return b.allow(now)
+}
+
+// sweepIdle evicts per-tenant buckets that have been untouched for at
+// least IdleTTL, at most once per SweepInterval. It is called on the
+// consume path with s.mu already held, so it adds no goroutine or
+// shutdown surface.
+//
+// Eviction is lossless: a bucket only qualifies once it has both sat
+// idle for IdleTTL and refilled back to full capacity, so a tenant
+// that returns after the idle window is handed a freshly-full bucket —
+// the identical state it would have observed had the entry survived.
+// This keeps the map proportional to the active-tenant working set
+// rather than the count of tenants ever seen by the process.
+func (s *RateLimitedEventService) sweepIdle(now time.Time) {
+	if now.Sub(s.lastSweep) < s.sweepInterval {
+		return
+	}
+	s.lastSweep = now
+	for id, b := range s.buckets {
+		if now.Sub(b.lastFill) < s.idleTTL {
+			continue
+		}
+		projected := b.tokens + now.Sub(b.lastFill).Seconds()*b.rate
+		if projected >= b.maxTokens {
+			delete(s.buckets, id)
+		}
+	}
 }
 
 // compile-time assertion

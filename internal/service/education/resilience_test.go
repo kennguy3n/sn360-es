@@ -142,3 +142,45 @@ func TestResilience_RejectsEmptyTenant(t *testing.T) {
 		t.Fatal("expected error for empty group")
 	}
 }
+
+func TestMemoryResilienceCache_SweepsExpiredOnSet(t *testing.T) {
+	base := time.Now()
+	cur := base
+	c := NewMemoryResilienceCache()
+	c.now = func() time.Time { return cur }
+	c.sweepInterval = time.Minute
+	c.lastSweep = cur
+
+	ctx := context.Background()
+	// A short-TTL entry, and a no-TTL (permanent) entry.
+	_ = c.Set(ctx, "tenant:a:resilience:u1", dto.ResilienceScore{Score: 70}, 30*time.Second)
+	_ = c.Set(ctx, "tenant:a:resilience:u2", dto.ResilienceScore{Score: 40}, 0)
+	if len(c.items) != 2 {
+		t.Fatalf("expected 2 entries before sweep, got %d", len(c.items))
+	}
+
+	// Advance past u1's expiry and past the sweep interval, then write a
+	// third key — the opportunistic sweep on Set should reclaim u1 while
+	// keeping the permanent u2 and the fresh u3.
+	cur = base.Add(2 * time.Minute)
+	_ = c.Set(ctx, "tenant:a:resilience:u3", dto.ResilienceScore{Score: 55}, 30*time.Second)
+
+	if _, ok := c.items["tenant:a:resilience:u1"]; ok {
+		t.Fatal("expired u1 should have been swept")
+	}
+	if _, ok := c.items["tenant:a:resilience:u2"]; !ok {
+		t.Fatal("permanent u2 (no TTL) should be retained")
+	}
+	if _, ok := c.items["tenant:a:resilience:u3"]; !ok {
+		t.Fatal("fresh u3 should be retained")
+	}
+
+	// The expired entry is also invisible via Get before the sweep runs.
+	if _, ok, _ := c.Get(ctx, "tenant:a:resilience:u3"); !ok {
+		t.Fatal("u3 should be readable while unexpired")
+	}
+	cur = base.Add(3 * time.Minute)
+	if _, ok, _ := c.Get(ctx, "tenant:a:resilience:u3"); ok {
+		t.Fatal("u3 should read as expired after its TTL elapses")
+	}
+}
