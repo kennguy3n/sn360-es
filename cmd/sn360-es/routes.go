@@ -158,7 +158,19 @@ func buildMux(app *application) (http.Handler, error) {
 	// rewriter is configured; the handler unconditionally calls into
 	// the rewriter and would panic on a nil dereference otherwise.
 	if app.urlRewriter != nil {
-		interstitialH := handler.NewInterstitialHandler(logger, app.urlRewriter, nil, nil, handler.InterstitialConfig{})
+		// Time-of-click recheck: reuse the same cache-fronted
+		// threat-intel checker the Tier 0 gate uses so a URL added
+		// to a feed after delivery is blocked when clicked. When the
+		// intel store is absent (dev configs) the handler degrades to
+		// a pass-through redirect.
+		var threatIntel handler.ThreatIntel
+		if app.tiChecker != nil {
+			threatIntel = interstitialThreatIntel{
+				checker: app.tiChecker,
+				logger:  logger.With(slog.String("component", "interstitial_ti")),
+			}
+		}
+		interstitialH := handler.NewInterstitialHandler(logger, app.urlRewriter, threatIntel, nil, handler.InterstitialConfig{})
 		mux.Handle("/l/", interstitialH)
 	}
 
