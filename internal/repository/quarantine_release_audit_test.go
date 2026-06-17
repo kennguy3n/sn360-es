@@ -248,6 +248,85 @@ func TestMemoryQuarantineReleaseAudit_CountExcludesAuthFailures(t *testing.T) {
 	}
 }
 
+// TestMemoryQuarantineReleaseAudit_CountByOutcome covers the
+// dashboard aggregate: Released counts only first-time `released`
+// rows (not `already_released` duplicate clicks), Refused counts the
+// two safety-stack refusal outcomes (`tier2_blocked`,
+// `release_refused`) but not throttle/auth-failure/not-found
+// outcomes, and the count is per-tenant and respects the half-open
+// [start, end) window.
+func TestMemoryQuarantineReleaseAudit_CountByOutcome(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryQuarantineReleaseAudit()
+	hash := []byte{0x01, 0x02, 0x03, 0x04}
+	t0 := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	start := t0.Add(-1 * time.Hour)
+	end := t0
+
+	seed := []struct {
+		outcome QuarantineReleaseOutcome
+		at      time.Time
+		tenant  string
+	}{
+		// acme, in window: 2 released + 1 already_released (excluded)
+		{QuarantineReleaseOutcomeReleased, t0.Add(-50 * time.Minute), "acme"},
+		{QuarantineReleaseOutcomeReleased, t0.Add(-40 * time.Minute), "acme"},
+		{QuarantineReleaseOutcomeAlreadyReleased, t0.Add(-39 * time.Minute), "acme"},
+		// acme, in window: 1 tier2_blocked + 1 release_refused → Refused=2
+		{QuarantineReleaseOutcomeTier2Blocked, t0.Add(-30 * time.Minute), "acme"},
+		{QuarantineReleaseOutcomeReleaseRefused, t0.Add(-20 * time.Minute), "acme"},
+		// acme, in window: throttle + auth-failure + not_found are NOT
+		// release/refusal and must not be counted in either bucket.
+		{QuarantineReleaseOutcomeRateLimited, t0.Add(-15 * time.Minute), "acme"},
+		{QuarantineReleaseOutcomeInvalidToken, t0.Add(-14 * time.Minute), "acme"},
+		{QuarantineReleaseOutcomeTokenExpired, t0.Add(-13 * time.Minute), "acme"},
+		{QuarantineReleaseOutcomeNotFound, t0.Add(-12 * time.Minute), "acme"},
+		// acme, OUT of window (before start): must not count.
+		{QuarantineReleaseOutcomeReleased, t0.Add(-2 * time.Hour), "acme"},
+		// acme, OUT of window (at end, exclusive): must not count.
+		{QuarantineReleaseOutcomeReleased, end, "acme"},
+		// other tenant, in window: must not leak into acme's count.
+		{QuarantineReleaseOutcomeReleased, t0.Add(-10 * time.Minute), "other"},
+		{QuarantineReleaseOutcomeReleaseRefused, t0.Add(-10 * time.Minute), "other"},
+	}
+	for i, s := range seed {
+		if _, err := repo.Record(ctx, QuarantineReleaseAuditEntry{
+			TenantID:          s.tenant,
+			PseudoMessageID:   fmt.Sprintf("pmid-%d", i),
+			RecipientUserHash: hash,
+			Outcome:           s.outcome,
+			RequestedAt:       s.at,
+		}); err != nil {
+			t.Fatalf("Record case %d: %v", i, err)
+		}
+	}
+
+	got, err := repo.CountByOutcome(ctx, "acme", start, end)
+	if err != nil {
+		t.Fatalf("CountByOutcome: %v", err)
+	}
+	if got.Released != 2 {
+		t.Errorf("Released: got %d want 2 (already_released must NOT inflate)", got.Released)
+	}
+	if got.Refused != 2 {
+		t.Errorf("Refused: got %d want 2 (only tier2_blocked + release_refused)", got.Refused)
+	}
+
+	// Per-tenant isolation: other tenant sees only its own rows.
+	other, err := repo.CountByOutcome(ctx, "other", start, end)
+	if err != nil {
+		t.Fatalf("CountByOutcome other: %v", err)
+	}
+	if other.Released != 1 || other.Refused != 1 {
+		t.Errorf("other tenant: got %+v want {Released:1 Refused:1}", other)
+	}
+
+	// Empty tenant is rejected.
+	if _, err := repo.CountByOutcome(ctx, "", start, end); err == nil {
+		t.Errorf("CountByOutcome with empty tenant: want error, got nil")
+	}
+}
+
 // TestMemoryQuarantineReleaseAudit_ListByMessageLimit ensures the
 // limit honours an upper bound.
 func TestMemoryQuarantineReleaseAudit_ListByMessageLimit(t *testing.T) {

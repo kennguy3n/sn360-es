@@ -143,6 +143,27 @@ type QuarantineReleaseAuditEntry struct {
 	CreatedAt time.Time
 }
 
+// QuarantineReleaseCounts is the per-window aggregate of
+// self-service release outcomes the dashboard reads from
+// `quarantine_release_audit`. It is the data the WS-3a release
+// flow makes available to the management dashboard's quarantine
+// panel — the operator (banner_action) release path does not write
+// this table (its tokens carry no recipient_user_hash), so these
+// counters reflect recipient self-service activity only.
+type QuarantineReleaseCounts struct {
+	// Released counts successful first-time releases
+	// (outcome='released'). `already_released` duplicates are
+	// deliberately excluded so a recipient double-clicking the
+	// same release link counts once, not twice.
+	Released int
+	// Refused counts attempts the safety stack kept quarantined:
+	// outcome IN ('tier2_blocked','release_refused'). The throttle
+	// outcome ('rate_limited') and the auth-failure outcomes
+	// ('token_expired','invalid_token','not_found') are excluded —
+	// they are not safety refusals of a genuine release.
+	Refused int
+}
+
 // QuarantineReleaseAuditRepository persists self-release attempts and
 // drives the per-recipient rate-limit lookup.
 type QuarantineReleaseAuditRepository interface {
@@ -188,6 +209,13 @@ type QuarantineReleaseAuditRepository interface {
 	// investigation API's message trail to surface release
 	// history alongside the verdict timeline.
 	ListByMessage(ctx context.Context, tenantID, pseudoMessageID string, limit int) ([]QuarantineReleaseAuditEntry, error)
+	// CountByOutcome returns the per-window release/refusal
+	// aggregate for a tenant over the half-open interval
+	// [start, end). It backs the management dashboard's quarantine
+	// panel (Released / Refused). The window predicate matches the
+	// dashboard's other aggregates: `requested_at >= start AND
+	// requested_at < end`.
+	CountByOutcome(ctx context.Context, tenantID string, start, end time.Time) (QuarantineReleaseCounts, error)
 }
 
 // pgQuarantineReleaseAudit implements QuarantineReleaseAuditRepository
@@ -323,6 +351,37 @@ LIMIT $3`,
 	return out, nil
 }
 
+// CountByOutcome aggregates release outcomes for the dashboard. The
+// `idx_qra_tenant_message_requested` / partition pruning on
+// tenant_id keep this a per-partition scan bounded by the window.
+// Reads route through the caller's bound connection scope, so RLS
+// confines the count to the caller's tenant; the explicit
+// `tenant_id = $1` predicate is defense-in-depth and satisfies the
+// tenant-lint analyser.
+//
+// tenant-lint:cross-tenant — the predicate already filters by
+// tenant_id; the annotation is here only for grep-ability when an
+// operator audits the cross-tenant surface.
+func (p *pgQuarantineReleaseAudit) CountByOutcome(ctx context.Context, tenantID string, start, end time.Time) (QuarantineReleaseCounts, error) {
+	if tenantID == "" {
+		return QuarantineReleaseCounts{}, fmt.Errorf("quarantine_release_audit: tenant_id is required")
+	}
+	var c QuarantineReleaseCounts
+	err := p.db.QueryRowContext(ctx, `
+SELECT
+    count(*) FILTER (WHERE outcome = 'released') AS released,
+    count(*) FILTER (WHERE outcome IN ('tier2_blocked', 'release_refused')) AS refused
+FROM quarantine_release_audit
+WHERE tenant_id = $1
+  AND requested_at >= $2
+  AND requested_at < $3`,
+		tenantID, start, end).Scan(&c.Released, &c.Refused)
+	if err != nil {
+		return QuarantineReleaseCounts{}, fmt.Errorf("quarantine_release_audit: count_by_outcome: %w", err)
+	}
+	return c, nil
+}
+
 // memoryQuarantineReleaseAudit implements the repository in-memory
 // for unit tests. Concurrent access is guarded by an RWMutex so the
 // fixture is safe for table-driven tests that share one instance
@@ -404,6 +463,37 @@ func (m *memoryQuarantineReleaseAudit) CountRecentByRecipient(_ context.Context,
 		count++
 	}
 	return count, nil
+}
+
+func (m *memoryQuarantineReleaseAudit) CountByOutcome(_ context.Context, tenantID string, start, end time.Time) (QuarantineReleaseCounts, error) {
+	if tenantID == "" {
+		return QuarantineReleaseCounts{}, fmt.Errorf("quarantine_release_audit: tenant_id is required")
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var c QuarantineReleaseCounts
+	for _, e := range m.entries {
+		if e.TenantID != tenantID {
+			continue
+		}
+		// Half-open window [start, end); mirror the Postgres
+		// `requested_at >= start AND requested_at < end`
+		// predicate, treating a zero bound as unbounded so a
+		// caller can ask for "all time" on either side.
+		if !start.IsZero() && e.RequestedAt.Before(start) {
+			continue
+		}
+		if !end.IsZero() && !e.RequestedAt.Before(end) {
+			continue
+		}
+		switch e.Outcome {
+		case QuarantineReleaseOutcomeReleased:
+			c.Released++
+		case QuarantineReleaseOutcomeTier2Blocked, QuarantineReleaseOutcomeReleaseRefused:
+			c.Refused++
+		}
+	}
+	return c, nil
 }
 
 func (m *memoryQuarantineReleaseAudit) ListByMessage(_ context.Context, tenantID, pseudoMessageID string, limit int) ([]QuarantineReleaseAuditEntry, error) {
