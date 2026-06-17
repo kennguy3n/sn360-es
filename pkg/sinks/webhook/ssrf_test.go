@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -42,6 +43,10 @@ func TestSSRFGuard_Control(t *testing.T) {
 		{"multicast v4", "224.0.0.1", true},
 		{"multicast v6", "ff02::1", true},
 		{"ipv4-mapped loopback", "::ffff:127.0.0.1", true},
+		{"rfc5737 test-net-1", "192.0.2.10", true},
+		{"rfc5737 test-net-2", "198.51.100.10", true},
+		{"rfc5737 test-net-3", "203.0.113.10", true},
+		{"rfc2544 benchmarking", "198.18.5.6", true},
 		{"public dns google", "8.8.8.8", false},
 		{"public dns cloudflare", "1.1.1.1", false},
 		{"public v6", "2606:4700:4700::1111", false},
@@ -134,6 +139,35 @@ func TestNewHTTPPublisher_GuardBlocksLoopback(t *testing.T) {
 	}
 	if res.Outcome == OutcomeSuccess {
 		t.Errorf("Outcome = success; want a dial-blocked retriable outcome")
+	}
+	// Assert the block came from the SSRF guard specifically, not
+	// from the self-signed TLS cert the httptest server presents:
+	// the guard refuses the dial before any TLS handshake, and its
+	// reason string is surfaced (URL-redacted) into the audit Cause.
+	if !strings.Contains(res.Cause, "refusing to dial non-public") {
+		t.Errorf("Cause = %q; want the SSRF guard's dial-refusal reason", res.Cause)
+	}
+}
+
+// TestNewHTTPPublisher_GuardDisablesProxy is a regression test for the
+// proxy-env SSRF bypass: when the guard is active the production
+// transport must NOT inherit http.ProxyFromEnvironment, otherwise a
+// forward proxy set via HTTPS_PROXY would make the dialer connect to
+// the (public) proxy IP and the Control hook would never see the
+// private destination.
+func TestNewHTTPPublisher_GuardDisablesProxy(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://203.0.113.9:3128")
+	t.Setenv("HTTP_PROXY", "http://203.0.113.9:3128")
+	p := NewHTTPPublisher(HTTPPublisherConfig{Timeout: 2 * time.Second})
+	tr, ok := p.Client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("guard-active publisher Transport = %T; want *http.Transport", p.Client.Transport)
+	}
+	if tr.Proxy != nil {
+		req, _ := http.NewRequest(http.MethodPost, "https://198.51.100.7/x", nil)
+		if u, err := tr.Proxy(req); err == nil && u != nil {
+			t.Errorf("transport resolved a proxy %s while the guard is active; want direct dial", u)
+		}
 	}
 }
 

@@ -14,6 +14,20 @@ import (
 // 100.100.100.200). Treat it as a blocked egress destination.
 var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
 
+// reservedPrefixes are additional non-globally-routable ranges that
+// none of netip.Addr's IsPrivate / IsLoopback / IsLinkLocal* helpers
+// flag: the RFC 5737 documentation blocks and the RFC 2544
+// benchmarking block. They are not expected to host a reachable
+// service in production, but blocking them at dial time keeps the
+// guard's "public unicast only" contract explicit rather than
+// relying on a connection timeout.
+var reservedPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("192.0.2.0/24"),    // RFC 5737 TEST-NET-1
+	netip.MustParsePrefix("198.51.100.0/24"), // RFC 5737 TEST-NET-2
+	netip.MustParsePrefix("203.0.113.0/24"),  // RFC 5737 TEST-NET-3
+	netip.MustParsePrefix("198.18.0.0/15"),   // RFC 2544 benchmarking
+}
+
 // SSRFGuard rejects outbound webhook connections whose resolved
 // destination IP is not a publicly routable unicast address —
 // loopback, RFC 1918 private, link-local (which includes the
@@ -108,6 +122,11 @@ func blockedReason(addr netip.Addr) string {
 		return "private (RFC1918/ULA)"
 	case cgnatPrefix.Contains(addr):
 		return "carrier-grade NAT (RFC6598)"
+	}
+	for _, p := range reservedPrefixes {
+		if p.Contains(addr) {
+			return "reserved (RFC5737/RFC2544)"
+		}
 	}
 	return ""
 }

@@ -210,9 +210,20 @@ func NewHTTPPublisher(cfg ...HTTPPublisherConfig) *HTTPPublisher {
 		// DNS-rebinding (a hostname that validates as public but
 		// resolves to 169.254.169.254 / 127.0.0.1 / an RFC1918 host
 		// at dial time). Cloning DefaultTransport preserves the
-		// stdlib's proxy, TLS, idle-conn and HTTP/2 defaults.
+		// stdlib's TLS, idle-conn and HTTP/2 defaults.
 		if !c.AllowPrivateDestinations {
-			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport := clonedDefaultTransport()
+			// Disable the inherited Proxy: http.ProxyFromEnvironment.
+			// With a forward proxy the dialer connects to the PROXY's
+			// IP, so the Control hook would validate the proxy (likely
+			// public) instead of the customer destination, leaving the
+			// guard trivially bypassable by setting HTTPS_PROXY. We
+			// dial the destination directly so the hook sees the real
+			// target IP. A deployment that genuinely needs an egress
+			// proxy can set WEBHOOK_EGRESS_ALLOW_PRIVATE=true (which
+			// disables the guard and restores the proxy) and rely on
+			// the proxy for egress filtering instead.
+			transport.Proxy = nil
 			guard := NewSSRFGuard(false, c.AllowedDestinationCIDRs)
 			transport.DialContext = (&net.Dialer{
 				Timeout:   timeout,
@@ -227,6 +238,18 @@ func NewHTTPPublisher(cfg ...HTTPPublisherConfig) *HTTPPublisher {
 		MaxResponseBodyBytes: body,
 		UserAgent:            ua,
 	}
+}
+
+// clonedDefaultTransport returns a clone of http.DefaultTransport
+// when it is the stdlib *http.Transport (the universal case), or a
+// fresh *http.Transport otherwise. The checked assertion avoids a
+// startup panic if a test or init hook has swapped DefaultTransport
+// for a non-*http.Transport RoundTripper.
+func clonedDefaultTransport() *http.Transport {
+	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+		return t.Clone()
+	}
+	return &http.Transport{}
 }
 
 // Publish implements Publisher.
