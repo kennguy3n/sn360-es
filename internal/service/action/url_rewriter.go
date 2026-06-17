@@ -188,6 +188,11 @@ func (rw *URLRewriter) issueToken(ctx context.Context, tenantID, pseudoMessage s
 		Tier:    string(tier),
 		Action:  "url_redirect",
 		URLHash: hash,
+		// Interstitial tokens belong to the banner-action surface.
+		// Set the scope explicitly so the contract Resolve enforces
+		// (AllowedScopes=[ScopeBannerAction]) is self-documenting
+		// here rather than relying on the empty-means-banner default.
+		Scope: privacy.ScopeBannerAction,
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("issue: %w", err)
