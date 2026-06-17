@@ -363,6 +363,51 @@ func TestStoreTIChecker_CheckURL(t *testing.T) {
 	}
 }
 
+// TestStoreTIChecker_CheckURL_NonHTTPSchemesSkipLookup verifies the
+// isHTTPURL guard: a value that is not an http(s) URL (the rewriter
+// never emits one, so this is only reachable via a malformed/tampered
+// token) produces no candidates and therefore never touches the
+// store, mirroring ExtractCandidates. The shared countingStore lets
+// us assert the lookup was skipped, not just that it returned no
+// match.
+func TestStoreTIChecker_CheckURL_NonHTTPSchemesSkipLookup(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{
+		"",
+		"   ",
+		"mailto:user@evil.example",
+		"ftp://evil.example/x",
+		"file:///etc/passwd",
+		"javascript:alert(1)",
+		"data:text/html,<script>0</script>",
+		"evil.example/login", // bare host, no scheme
+	} {
+		store := &countingStore{}
+		c := &StoreTIChecker{Store: store}
+		matches, err := c.CheckURL(context.Background(), raw)
+		if err != nil {
+			t.Fatalf("CheckURL(%q): %v", raw, err)
+		}
+		if len(matches) != 0 {
+			t.Errorf("CheckURL(%q): want 0 matches, got %d", raw, len(matches))
+		}
+		if store.callCount != 0 {
+			t.Errorf("CheckURL(%q): want 0 store lookups, got %d", raw, store.callCount)
+		}
+	}
+
+	// Positive control: a well-formed http URL still reaches the
+	// store exactly once, so the guard isn't over-broad.
+	store := &countingStore{}
+	c := &StoreTIChecker{Store: store}
+	if _, err := c.CheckURL(context.Background(), "http://bad.example/login"); err != nil {
+		t.Fatalf("CheckURL(http): %v", err)
+	}
+	if store.callCount != 1 {
+		t.Errorf("http URL: want 1 store lookup, got %d", store.callCount)
+	}
+}
+
 // TestStoreTIChecker_CheckURL_Error propagates store errors so the
 // caller can fail open.
 func TestStoreTIChecker_CheckURL_Error(t *testing.T) {

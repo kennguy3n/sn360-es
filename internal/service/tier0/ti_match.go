@@ -135,7 +135,7 @@ func (s *StoreTIChecker) CheckURL(ctx context.Context, rawURL string) ([]intel.M
 		return nil, nil
 	}
 	candidates := make([]IndicatorCandidate, 0, 2)
-	if u := strings.TrimSpace(rawURL); u != "" {
+	if u := strings.TrimSpace(rawURL); isHTTPURL(u) {
 		candidates = append(candidates, IndicatorCandidate{Type: intel.IndicatorURL, Value: u})
 		if host := hostFromURL(u); host != "" {
 			candidates = append(candidates, IndicatorCandidate{Type: intel.IndicatorDomain, Value: host})
@@ -358,6 +358,17 @@ func domainFromAddress(addr string) string {
 		return strings.ToLower(addr[at+1:])
 	}
 	return strings.ToLower(addr)
+}
+
+// isHTTPURL reports whether raw carries an http(s) scheme. The
+// interstitial rewriter only ever emits http/https links, so a
+// non-http value can reach CheckURL only via a malformed or tampered
+// token. Gating the candidate list on this mirrors ExtractCandidates
+// — whose urlBodyPattern matches only `https?://` — so both entry
+// points feed the lookup the same shape of URL and we never hash a
+// scheme the feeds cannot contain.
+func isHTTPURL(raw string) bool {
+	return strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")
 }
 
 // hostFromURL extracts the host portion of a URL. Returns the empty
