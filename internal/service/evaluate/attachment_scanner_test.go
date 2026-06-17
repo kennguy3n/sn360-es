@@ -217,6 +217,25 @@ func TestClamdClient_OversizedResponseReturnsCapError(t *testing.T) {
 	}
 }
 
+func TestClamdClient_ResponseExactlyAtCapIsAccepted(t *testing.T) {
+	// A reply of exactly maxClamdResponseBytes must be read in full and
+	// parsed, not rejected as oversized.
+	const suffix = "stream: OK\x00"
+	reply := strings.Repeat("A", maxClamdResponseBytes-len(suffix)) + suffix
+	if len(reply) != maxClamdResponseBytes {
+		t.Fatalf("setup: reply is %d bytes, want %d", len(reply), maxClamdResponseBytes)
+	}
+	addr := startFakeClamd(t, func(_ []byte) string { return reply })
+	c := NewClamdClient(addr, time.Second)
+	clean, sig, err := c.ScanBytes(context.Background(), []byte("benign"))
+	if err != nil {
+		t.Fatalf("ScanBytes at exact cap: %v", err)
+	}
+	if !clean || sig != "" {
+		t.Fatalf("got clean=%v sig=%q", clean, sig)
+	}
+}
+
 // startFakeClamd brings up a one-shot TCP server that speaks enough
 // of the INSTREAM protocol to consume the entire client request, then
 // replies with the supplied string, drains any trailing bytes, and
