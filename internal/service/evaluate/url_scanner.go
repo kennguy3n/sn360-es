@@ -291,13 +291,15 @@ func (p *VirusTotalProvider) LookupURL(ctx context.Context, raw string) (URLScan
 		return URLScanResult{Verdict: URLVerdictUnknown}, fmt.Errorf("virustotal: request: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, vtMaxResponseBytes))
+	// Read one byte past the cap so a body of exactly vtMaxResponseBytes is
+	// accepted and only a genuinely larger body trips the limit.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, vtMaxResponseBytes+1))
 	if err != nil {
 		return URLScanResult{Verdict: URLVerdictUnknown}, fmt.Errorf("virustotal: read response: %w", err)
 	}
-	// Hitting the cap means the body was truncated; report that explicitly
+	// Exceeding the cap means the body was truncated; report that explicitly
 	// rather than letting parseVTResponse surface an opaque JSON decode error.
-	if len(body) >= vtMaxResponseBytes {
+	if len(body) > vtMaxResponseBytes {
 		return URLScanResult{Verdict: URLVerdictUnknown}, fmt.Errorf("virustotal: response exceeds %d byte cap", vtMaxResponseBytes)
 	}
 	switch resp.StatusCode {
