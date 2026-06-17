@@ -198,7 +198,14 @@ func (rw *URLRewriter) issueToken(ctx context.Context, tenantID, pseudoMessage s
 // Resolve verifies a token and returns the decrypted original URL. It
 // is consumed by the interstitial HTTP handler.
 func (rw *URLRewriter) Resolve(ctx context.Context, token string) (originalURL string, claims *privacy.ActionClaims, err error) {
-	claims, err = rw.issuer.Verify(token)
+	// Interstitial tokens are minted with the implicit
+	// ScopeBannerAction (see issueToken). Pin the accepted scope so a
+	// leaked quarantine_release / admin_api token can never resolve a
+	// rewritten URL even if it somehow carried a urlh claim — defence
+	// in depth alongside the OriginalURLHash + pre-image checks below.
+	claims, err = rw.issuer.VerifyWithOptions(token, privacy.VerifyOptions{
+		AllowedScopes: []string{privacy.ScopeBannerAction},
+	})
 	if err != nil {
 		return "", nil, fmt.Errorf("verify: %w", err)
 	}

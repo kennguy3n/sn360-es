@@ -104,7 +104,16 @@ func (s *FeedbackService) Process(ctx context.Context, req FeedbackRequest) (str
 	if !req.Action.Valid() {
 		return "", fmt.Errorf("feedback: invalid action %q", req.Action)
 	}
-	claims, err := s.verifier.Verify(req.Token)
+	// Restrict to banner-action scope: a banner-click token carries
+	// the implicit ScopeBannerAction (empty `scp`), so this is
+	// transparent for legitimate traffic, but it refuses a leaked
+	// quarantine_release or admin_api token replayed against this
+	// public endpoint. Without it, a quarantine_release token (empty
+	// Action, so it sails past the Action check below) would publish
+	// feedback and trigger a re-evaluation under the victim's tenant.
+	claims, err := s.verifier.VerifyWithOptions(req.Token, privacy.VerifyOptions{
+		AllowedScopes: []string{privacy.ScopeBannerAction},
+	})
 	if err != nil {
 		return "", fmt.Errorf("feedback: verify token: %w", err)
 	}

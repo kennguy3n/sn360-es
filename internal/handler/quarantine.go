@@ -150,10 +150,7 @@ func (h *QuarantineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	correlationID := strings.TrimSpace(r.Header.Get("X-Correlation-ID"))
 
-	scope := claims.Scope
-	if scope == "" {
-		scope = privacy.ScopeBannerAction
-	}
+	scope := privacy.EffectiveScope(claims.Scope)
 	switch scope {
 	case privacy.ScopeQuarantineRelease:
 		h.serveSelfRelease(r, w, claims, correlationID)

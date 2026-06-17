@@ -181,3 +181,51 @@ func TestFeedbackServiceTokenBoundActionRejected(t *testing.T) {
 		t.Error("token bound to a different action must be rejected")
 	}
 }
+
+// TestFeedbackServiceRejectsCrossScopeToken is the regression guard
+// for the cross-scope replay gap: a quarantine_release token carries
+// an empty Action (so it would slip past the action check) but a
+// different scope. The feedback endpoint must refuse it — publishing
+// feedback or triggering a re-evaluation under the victim tenant on a
+// token minted for the self-release surface would be a scope-confusion
+// bug. A valid signature is not enough; the scope must match.
+func TestFeedbackServiceRejectsCrossScopeToken(t *testing.T) {
+	svc, iss, pub, re := newFeedbackTestRig(t)
+	tok, err := iss.Issue("tenant-x", "msg-x", privacy.IssueOptions{
+		Scope:             privacy.ScopeQuarantineRelease,
+		RecipientUserHash: "deadbeefcafebabe",
+	})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	_, err = svc.Process(context.Background(), FeedbackRequest{Token: tok, Action: FeedbackReportPhishing})
+	if err == nil {
+		t.Fatal("quarantine_release token must be rejected by the banner-action endpoint")
+	}
+	if !errors.Is(err, privacy.ErrScopeNotPermitted) {
+		t.Errorf("error = %v; want errors.Is(privacy.ErrScopeNotPermitted)", err)
+	}
+	if len(pub.calls) != 0 {
+		t.Errorf("publisher must not be called on a cross-scope token, got %d calls", len(pub.calls))
+	}
+	if len(re.calls) != 0 {
+		t.Errorf("re-evaluator must not be called on a cross-scope token, got %d calls", len(re.calls))
+	}
+}
+
+// TestFeedbackServiceAcceptsExplicitBannerScope confirms the scope
+// restriction is transparent for a token that carries an explicit
+// ScopeBannerAction (not just the empty-claim default).
+func TestFeedbackServiceAcceptsExplicitBannerScope(t *testing.T) {
+	svc, iss, pub, _ := newFeedbackTestRig(t)
+	tok, err := iss.Issue("tenant-x", "msg-x", privacy.IssueOptions{Scope: privacy.ScopeBannerAction})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if _, err := svc.Process(context.Background(), FeedbackRequest{Token: tok, Action: FeedbackReportPhishing}); err != nil {
+		t.Fatalf("explicit banner-scope token must be accepted: %v", err)
+	}
+	if len(pub.calls) != 1 {
+		t.Errorf("expected 1 publish, got %d", len(pub.calls))
+	}
+}
