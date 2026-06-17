@@ -107,6 +107,28 @@ type ActionClaims struct {
 	jwt.RegisteredClaims
 }
 
+// ErrScopeNotPermitted is returned by VerifyWithOptions /
+// VerifyDetailWithOptions when a cryptographically valid token carries
+// a `scp` claim that is not in the caller's allowed set. It is the
+// centralised form of the cross-scope replay guard described in the
+// Scope* doc comment: rather than relying on every verify site to
+// remember the check, a call site declares the scope(s) it accepts and
+// a leaked token minted for a different surface is refused here.
+var ErrScopeNotPermitted = errors.New("privacy/jwt: token scope not permitted")
+
+// EffectiveScope returns the scope a token is treated as carrying: its
+// literal `scp` claim, or ScopeBannerAction when the claim is empty
+// (the documented backward-compatibility default — a token minted
+// before the `scp` claim existed is a banner-action token). Dispatch
+// and enforcement logic should funnel through this so the
+// empty-means-banner rule lives in exactly one place.
+func EffectiveScope(scope string) string {
+	if scope == "" {
+		return ScopeBannerAction
+	}
+	return scope
+}
+
 // VerifyResult is the verifier's return type when the caller needs
 // to distinguish "expired token" from "invalid signature" for audit
 // purposes WITHOUT differentiating them on the wire. The handler
@@ -249,4 +271,67 @@ func (i *JWTIssuer) VerifyDetail(token string) (VerifyResult, error) {
 		return VerifyResult{}, errors.New("privacy/jwt: invalid token")
 	}
 	return VerifyResult{Claims: claims}, nil
+}
+
+// VerifyOptions tunes the scope-aware verify entry points. The zero
+// value imposes no scope restriction, so VerifyWithOptions /
+// VerifyDetailWithOptions with a zero VerifyOptions behave exactly
+// like Verify / VerifyDetail.
+type VerifyOptions struct {
+	// AllowedScopes is the closed set of `scp` values the caller
+	// accepts. Empty means "accept any scope" (the historical
+	// behaviour). When non-empty, a cryptographically valid token is
+	// rejected with ErrScopeNotPermitted unless its EffectiveScope is
+	// a member — so a banner-action endpoint that passes
+	// []string{ScopeBannerAction} refuses a leaked quarantine_release
+	// or admin_api token, while still accepting legacy tokens minted
+	// without an explicit `scp` (their empty claim normalises to
+	// ScopeBannerAction).
+	AllowedScopes []string
+}
+
+// VerifyWithOptions verifies token like Verify and then enforces the
+// scope restriction in opts. Callers that need to distinguish expired
+// from invalid for audit should use VerifyDetailWithOptions.
+func (i *JWTIssuer) VerifyWithOptions(token string, opts VerifyOptions) (*ActionClaims, error) {
+	res, err := i.VerifyDetailWithOptions(token, opts)
+	if err != nil {
+		return nil, err
+	}
+	return res.Claims, nil
+}
+
+// VerifyDetailWithOptions verifies token like VerifyDetail and then,
+// when opts.AllowedScopes is non-empty, enforces that the token's
+// EffectiveScope is a member of it — returning ErrScopeNotPermitted
+// otherwise. The scope check runs strictly after signature, issuer and
+// expiry validation succeed: a token that fails VerifyDetail surfaces
+// that error (and its Expired distinction) unchanged, so the
+// auth-failure audit path is unaffected.
+func (i *JWTIssuer) VerifyDetailWithOptions(token string, opts VerifyOptions) (VerifyResult, error) {
+	res, err := i.VerifyDetail(token)
+	if err != nil {
+		return res, err
+	}
+	if len(opts.AllowedScopes) > 0 {
+		got := EffectiveScope(res.Claims.Scope)
+		if !scopeAllowed(got, opts.AllowedScopes) {
+			return VerifyResult{Claims: res.Claims},
+				fmt.Errorf("%w: have %q", ErrScopeNotPermitted, got)
+		}
+	}
+	return res, nil
+}
+
+// scopeAllowed reports whether scope (already normalised via
+// EffectiveScope) matches any entry in allowed. Allowed entries are
+// normalised too so a caller may pass "" as shorthand for
+// ScopeBannerAction.
+func scopeAllowed(scope string, allowed []string) bool {
+	for _, a := range allowed {
+		if EffectiveScope(a) == scope {
+			return true
+		}
+	}
+	return false
 }

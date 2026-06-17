@@ -346,6 +346,13 @@ func indexOf(haystack, needle []byte) int {
 
 // --- ClamAV (clamd TCP) ---------------------------------------------------
 
+// maxClamdResponseBytes caps how much of a clamd reply we read. An
+// INSTREAM status line ("stream: OK\0", "stream: <sig> FOUND\0") is at
+// most a few hundred bytes; 64 KiB is far more than any legitimate
+// reply yet bounds memory if a misbehaving or hostile clamd endpoint
+// streams unbounded data on the scan socket.
+const maxClamdResponseBytes = 64 << 10
+
 // ClamdClient speaks the INSTREAM protocol against a clamd TCP socket.
 // The implementation uses only the standard library so it can run in
 // any deployment.
@@ -407,9 +414,14 @@ func (c *ClamdClient) ScanBytes(ctx context.Context, content []byte) (bool, stri
 		return false, "", fmt.Errorf("clamd terminator: %w", err)
 	}
 
-	body, err := io.ReadAll(conn)
+	// Read one byte past the cap so a reply of exactly the cap is accepted
+	// and only a genuinely larger one trips the limit.
+	body, err := io.ReadAll(io.LimitReader(conn, maxClamdResponseBytes+1))
 	if err != nil {
 		return false, "", fmt.Errorf("clamd read: %w", err)
+	}
+	if len(body) > maxClamdResponseBytes {
+		return false, "", fmt.Errorf("clamd: response exceeds %d byte cap", maxClamdResponseBytes)
 	}
 	resp := strings.TrimRight(string(body), "\x00 \n\r")
 	switch {

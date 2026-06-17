@@ -391,6 +391,26 @@ func interstitialBlockReason(category constant.Category) string {
 	}
 }
 
+// quarantineReleaseCountsAdapter converts a
+// repository.QuarantineReleaseAuditRepository into the dashboard
+// QuarantineReleaseCountsReader interface so the dashboard's
+// quarantine panel can surface Released / Refused counts from the
+// WS-3a self-service release audit trail (migration 0022).
+type quarantineReleaseCountsAdapter struct {
+	repo repository.QuarantineReleaseAuditRepository
+}
+
+func (a quarantineReleaseCountsAdapter) CountByOutcome(ctx context.Context, tenantID string, start, end time.Time) (dashboard.QuarantineReleaseCounts, error) {
+	counts, err := a.repo.CountByOutcome(ctx, tenantID, start, end)
+	if err != nil {
+		return dashboard.QuarantineReleaseCounts{}, err
+	}
+	return dashboard.QuarantineReleaseCounts{
+		Released: counts.Released,
+		Refused:  counts.Refused,
+	}, nil
+}
+
 // passthroughEncryptor is a last-resort URLEncryptor that returns the
 // input unchanged.
 type passthroughEncryptor struct{}

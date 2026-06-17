@@ -14,6 +14,13 @@ import (
 	"time"
 )
 
+// defaultPushHTTPClient is the fallback client the push receivers use
+// when no HTTPClient is injected. Unlike http.DefaultClient it carries
+// an overall timeout, so a hung or slow provider connection cannot
+// block a receiver indefinitely on the rare path where the caller's
+// context lacks a deadline.
+var defaultPushHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 // GmailPushReceiver implements PushReceiver for Gmail via Google
 // Cloud Pub/Sub push subscriptions. Gmail's users.watch API registers
 // a Pub/Sub topic that receives notifications on mailbox changes.
@@ -310,7 +317,7 @@ func (g *GmailPushReceiver) do(ctx context.Context, method, endpoint string, in,
 
 	client := g.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultPushHTTPClient
 	}
 	resp, err := client.Do(req)
 	if err != nil {

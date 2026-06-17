@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -173,6 +174,40 @@ func TestVirusTotalProvider_NotFoundIsUnknown(t *testing.T) {
 	res, err := p.LookupURL(context.Background(), "https://nope")
 	if err != nil || res.Verdict != URLVerdictUnknown {
 		t.Fatalf("expected unknown verdict, got %+v / %v", res, err)
+	}
+}
+
+func TestVirusTotalProvider_BodyExactlyAtCapIsAccepted(t *testing.T) {
+	// A valid response padded with insignificant trailing whitespace to
+	// exactly the cap must parse, not be rejected as oversized.
+	core := `{"data":{"attributes":{"last_analysis_stats":{"harmless":80,"malicious":3,"suspicious":1,"undetected":5,"timeout":0}}}}`
+	body := core + strings.Repeat(" ", vtMaxResponseBytes-len(core))
+	if len(body) != vtMaxResponseBytes {
+		t.Fatalf("setup: body is %d bytes, want %d", len(body), vtMaxResponseBytes)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	p, _ := NewVirusTotalProvider(VirusTotalConfig{APIKey: "key-1", BaseURL: srv.URL, Client: srv.Client()})
+	res, err := p.LookupURL(context.Background(), "https://example.com")
+	if err != nil {
+		t.Fatalf("LookupURL at exact cap: %v", err)
+	}
+	if res.MaliciousEngine != 3 {
+		t.Fatalf("unexpected parse: %+v", res)
+	}
+}
+
+func TestVirusTotalProvider_OversizedBodyReturnsCapError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("a", vtMaxResponseBytes+1)))
+	}))
+	t.Cleanup(srv.Close)
+	p, _ := NewVirusTotalProvider(VirusTotalConfig{APIKey: "key-1", BaseURL: srv.URL, Client: srv.Client()})
+	_, err := p.LookupURL(context.Background(), "https://example.com")
+	if err == nil || !strings.Contains(err.Error(), "byte cap") {
+		t.Fatalf("expected cap error, got %v", err)
 	}
 }
 

@@ -188,7 +188,10 @@ func (h *IntelFeedsHandler) assertAdmin(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusUnauthorized, "missing_claims")
 		return false
 	}
-	if claims.Scope != privacy.ScopeAdminAPI {
+	// Normalise via EffectiveScope so the empty-means-banner_action
+	// default is treated uniformly with the rest of the scope sites
+	// (a legacy empty-scope token must never satisfy admin_api).
+	if privacy.EffectiveScope(claims.Scope) != privacy.ScopeAdminAPI {
 		// Uniform 403 — no claim leak.
 		writeError(w, http.StatusForbidden, "forbidden")
 		return false

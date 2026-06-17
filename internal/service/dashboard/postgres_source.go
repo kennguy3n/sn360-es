@@ -27,6 +27,25 @@ type FeedbackCounts struct {
 	TrustedSender    int
 }
 
+// QuarantineReleaseCountsReader returns the per-window self-service
+// release/refusal aggregate from whatever store the repository layer
+// is wired against (`quarantine_release_audit`, migration 0022). The
+// dashboard depends on this minimal contract (not the full
+// repository.QuarantineReleaseAuditRepository) so unit tests can
+// supply a fake and the package avoids importing the repository
+// package.
+type QuarantineReleaseCountsReader interface {
+	CountByOutcome(ctx context.Context, tenantID string, start, end time.Time) (QuarantineReleaseCounts, error)
+}
+
+// QuarantineReleaseCounts mirrors repository.QuarantineReleaseCounts.
+// Defined locally so the dashboard package does not import the
+// repository package.
+type QuarantineReleaseCounts struct {
+	Released int
+	Refused  int
+}
+
 // pgQuerier is the subset of pkg/storage/postgres.DB this package
 // needs. Defined locally so tests can pass a *sql.DB / *sql.Tx
 // directly without pulling in the wrapper.
@@ -48,15 +67,19 @@ type pgQuerier interface {
 // resolution_code column on escalation_tickets (migration 0003)
 // rather than ILIKE pattern matching against free-form text.
 type PostgresSource struct {
-	db       pgQuerier
-	feedback FeedbackCountsReader
+	db                pgQuerier
+	feedback          FeedbackCountsReader
+	quarantineRelease QuarantineReleaseCountsReader
 }
 
 // PostgresSourceConfig wires the optional dependencies. When
 // Feedback is nil, PostgresSource.Feedback() falls back to a direct
-// query against feedback_events using the supplied pgQuerier.
+// query against feedback_events using the supplied pgQuerier; when
+// QuarantineRelease is nil, PostgresSource.Quarantine() falls back
+// to a direct query against quarantine_release_audit.
 type PostgresSourceConfig struct {
-	Feedback FeedbackCountsReader
+	Feedback          FeedbackCountsReader
+	QuarantineRelease QuarantineReleaseCountsReader
 }
 
 // NewPostgresSource constructs a MetricsSource backed by the given
@@ -73,7 +96,11 @@ func NewPostgresSourceWithConfig(db pgQuerier, cfg PostgresSourceConfig) (*Postg
 	if db == nil {
 		return nil, errors.New("dashboard: postgres source requires a non-nil querier")
 	}
-	return &PostgresSource{db: db, feedback: cfg.Feedback}, nil
+	return &PostgresSource{
+		db:                db,
+		feedback:          cfg.Feedback,
+		quarantineRelease: cfg.QuarantineRelease,
+	}, nil
 }
 
 // EmailsProcessed counts evaluation_results rows in the window.
@@ -200,24 +227,56 @@ func (s *PostgresSource) Feedback(ctx context.Context, tenantID string, r dto.Ti
 }
 
 // Quarantine counts evaluation_results rows that match the canonical
-// quarantine tier. The architecture (PROPOSAL.md §3) only
+// quarantine tier and folds in the self-service release outcomes
+// recorded by the WS-3a flow. The architecture (PROPOSAL.md §3) only
 // auto-quarantines at Blocked — HighRisk surfaces a warning banner
-// but does NOT pull the message — so this filter is intentionally
-// "Blocked" only. Released / false-quarantine counts are zero;
-// they require a dedicated quarantine_actions table the v1 schema
-// does not yet have.
+// but does NOT pull the message — so the Quarantined filter is
+// intentionally "Blocked" only.
+//
+// Released / Refused are sourced from `quarantine_release_audit`
+// (migration 0022): Released = successful recipient self-releases,
+// Refused = attempts the safety stack kept quarantined. When a
+// QuarantineReleaseCountsReader is configured (the production path
+// when main.go wires the repository) the call is delegated to it;
+// otherwise PostgresSource issues the aggregate query directly. The
+// operator (banner_action) release path does not write that table,
+// so these counters reflect recipient self-service activity only.
 func (s *PostgresSource) Quarantine(ctx context.Context, tenantID string, r dto.TimeRange) (dto.QuarantineStats, error) {
+	start, end := r.Start.UTC(), r.End.UTC()
 	const q = `
         SELECT COUNT(*)
         FROM evaluation_results
         WHERE tenant_id = $1 AND evaluated_at >= $2 AND evaluated_at < $3
               AND tier = 'Blocked'
     `
-	var n int
-	if err := s.db.QueryRowContext(ctx, q, tenantID, r.Start.UTC(), r.End.UTC()).Scan(&n); err != nil {
+	var quarantined int
+	if err := s.db.QueryRowContext(ctx, q, tenantID, start, end).Scan(&quarantined); err != nil {
 		return dto.QuarantineStats{}, fmt.Errorf("dashboard: quarantine: %w", err)
 	}
-	return dto.QuarantineStats{Quarantined: n}, nil
+	stats := dto.QuarantineStats{Quarantined: quarantined}
+
+	if s.quarantineRelease != nil {
+		counts, err := s.quarantineRelease.CountByOutcome(ctx, tenantID, start, end)
+		if err != nil {
+			return dto.QuarantineStats{}, fmt.Errorf("dashboard: quarantine release counts: %w", err)
+		}
+		stats.Released = counts.Released
+		stats.Refused = counts.Refused
+		return stats, nil
+	}
+
+	const rq = `
+        SELECT
+            COUNT(*) FILTER (WHERE outcome = 'released')                          AS released,
+            COUNT(*) FILTER (WHERE outcome IN ('tier2_blocked', 'release_refused')) AS refused
+        FROM quarantine_release_audit
+        WHERE tenant_id = $1 AND requested_at >= $2 AND requested_at < $3
+    `
+	if err := s.db.QueryRowContext(ctx, rq, tenantID, start, end).
+		Scan(&stats.Released, &stats.Refused); err != nil {
+		return dto.QuarantineStats{}, fmt.Errorf("dashboard: quarantine release counts: %w", err)
+	}
+	return stats, nil
 }
 
 // Simulation aggregates simulation_results for the tenant. "Sent"

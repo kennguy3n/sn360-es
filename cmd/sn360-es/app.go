@@ -934,6 +934,9 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		if app.repos != nil && app.repos.FeedbackEvents != nil {
 			dcfg.Feedback = feedbackCountsAdapter{repo: app.repos.FeedbackEvents}
 		}
+		if app.repos != nil && app.repos.QuarantineReleaseAudit != nil {
+			dcfg.QuarantineRelease = quarantineReleaseCountsAdapter{repo: app.repos.QuarantineReleaseAudit}
+		}
 		src, serr := dashboard.NewPostgresSourceWithConfig(app.pgDB, dcfg)
 		if serr != nil {
 			logger.Warn("sn360-es: dashboard metrics source init failed",
@@ -1322,7 +1325,9 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		// /test endpoint would 503. Failing closed here keeps the
 		// API absent until the underlying issue is resolved.
 		publisher := webhook.NewHTTPPublisher(webhook.HTTPPublisherConfig{
-			Timeout: webhooksink.DefaultPublishTimeout,
+			Timeout:                  webhooksink.DefaultPublishTimeout,
+			AllowPrivateDestinations: cfg.WebhookEgress.AllowPrivate,
+			AllowedDestinationCIDRs:  cfg.WebhookEgress.AllowedCIDRs,
 		})
 		var limiter webhooksink.RateLimiter
 		if app.redis != nil {
