@@ -249,7 +249,12 @@ func clonedDefaultTransport() *http.Transport {
 	if t, ok := http.DefaultTransport.(*http.Transport); ok {
 		return t.Clone()
 	}
-	return &http.Transport{}
+	// Reached only if something replaced http.DefaultTransport with a
+	// non-*http.Transport RoundTripper (test/init hooks). Carry the
+	// stdlib's TLS-handshake timeout so a stalled handshake on a
+	// malicious endpoint can't hang the dial; the client-level Timeout
+	// also bounds the overall request.
+	return &http.Transport{TLSHandshakeTimeout: 10 * time.Second}
 }
 
 // Publish implements Publisher.
@@ -300,6 +305,19 @@ func (p *HTTPPublisher) Publish(ctx context.Context, req *Request) (PublishResul
 				Outcome:   OutcomeRetriable,
 				LatencyMS: latency,
 				Cause:     "timeout",
+			}, nil
+		}
+		if errors.Is(err, ErrBlockedDestination) {
+			// The SSRF guard refused the dial because the sink URL
+			// resolves to a non-public IP. This is deterministic — it
+			// keeps failing identically until the operator fixes the
+			// URL — so fail permanently instead of burning the DLQ
+			// retry budget on a dial that never reaches the network.
+			// Mirrors the 3xx redirect-not-followed handling below.
+			return PublishResult{
+				Outcome:   OutcomePermanentFailure,
+				LatencyMS: latency,
+				Cause:     "blocked: " + sanitiseError(err),
 			}, nil
 		}
 		return PublishResult{

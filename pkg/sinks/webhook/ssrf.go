@@ -1,11 +1,20 @@
 package webhook
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"syscall"
 )
+
+// ErrBlockedDestination is wrapped by the guard's Control hook when a
+// dial is refused because the resolved IP is not publicly routable.
+// Publish checks for it (errors.Is) to classify the failure as
+// permanent: the sink URL will keep resolving to the same non-public
+// address until the operator fixes it, so retrying through the DLQ
+// budget only produces identical failures and audit noise.
+var ErrBlockedDestination = errors.New("webhook: refusing to dial non-public address")
 
 // cgnatPrefix is RFC 6598 shared address space (100.64.0.0/10). It is
 // not RFC 1918 private (so netip.Addr.IsPrivate reports false) but is
@@ -94,7 +103,7 @@ func (g *SSRFGuard) Control(network, address string, _ syscall.RawConn) error {
 		}
 	}
 	if reason := blockedReason(addr); reason != "" {
-		return fmt.Errorf("webhook: refusing to dial non-public address %s (%s)", addr, reason)
+		return fmt.Errorf("%w %s (%s)", ErrBlockedDestination, addr, reason)
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -59,6 +60,12 @@ func TestSSRFGuard_Control(t *testing.T) {
 			if tc.blocked && err == nil {
 				t.Errorf("Control(%s) = nil; want blocked", tc.ip)
 			}
+			// A blocked address must wrap ErrBlockedDestination so
+			// Publish can classify the dispatch as a permanent failure
+			// rather than retrying a deterministically-doomed dial.
+			if tc.blocked && err != nil && !errors.Is(err, ErrBlockedDestination) {
+				t.Errorf("Control(%s) err = %v; want errors.Is(ErrBlockedDestination)", tc.ip, err)
+			}
 			if !tc.blocked && err != nil {
 				t.Errorf("Control(%s) = %v; want allowed", tc.ip, err)
 			}
@@ -112,7 +119,7 @@ func TestSSRFGuard_NilReceiverAllows(t *testing.T) {
 // TestNewHTTPPublisher_GuardBlocksLoopback proves the production
 // constructor installs the dial guard: a Publish to a loopback HTTPS
 // endpoint is refused at dial time, so the endpoint handler is never
-// invoked and the outcome is retriable (a dial/network error).
+// invoked and the outcome is a permanent failure (deterministic block).
 func TestNewHTTPPublisher_GuardBlocksLoopback(t *testing.T) {
 	t.Parallel()
 	var hits atomic.Int64
@@ -137,8 +144,10 @@ func TestNewHTTPPublisher_GuardBlocksLoopback(t *testing.T) {
 	if got := hits.Load(); got != 0 {
 		t.Errorf("loopback endpoint was hit %d times; want 0 (guard must block the dial)", got)
 	}
-	if res.Outcome == OutcomeSuccess {
-		t.Errorf("Outcome = success; want a dial-blocked retriable outcome")
+	// A guard-blocked dial is deterministic, so Publish classifies it
+	// as a permanent failure (no DLQ retries) rather than retriable.
+	if res.Outcome != OutcomePermanentFailure {
+		t.Errorf("Outcome = %v; want OutcomePermanentFailure for a guard-blocked dial", res.Outcome)
 	}
 	// Assert the block came from the SSRF guard specifically, not
 	// from the self-signed TLS cert the httptest server presents:
