@@ -285,7 +285,15 @@ func (p *VirusTotalProvider) LookupURL(ctx context.Context, raw string) (URLScan
 		return URLScanResult{Verdict: URLVerdictUnknown}, fmt.Errorf("virustotal: request: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	// Cap the response read so a misbehaving or compromised upstream
+	// cannot exhaust evaluator memory with an unbounded body. A VT v3
+	// URL report is a few KiB of JSON; 1 MiB is ample headroom and
+	// matches the LimitReader convention used by every other external
+	// HTTP read in the codebase.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return URLScanResult{Verdict: URLVerdictUnknown}, fmt.Errorf("virustotal: read response: %w", err)
+	}
 	switch resp.StatusCode {
 	case http.StatusOK:
 		return parseVTResponse(body)
