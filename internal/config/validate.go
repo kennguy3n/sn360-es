@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -419,6 +420,54 @@ func (c Config) validate() error {
 		}
 	}
 	return nil
+}
+
+// cloudMetadataIP is the link-local cloud instance-metadata service
+// address (IMDS) used by AWS / GCP / Azure / OpenStack. It is the
+// highest-value SSRF target the webhook-sink egress guard blocks, so an
+// allow-list entry that re-permits it warrants a loud boot-time warning
+// even though adding such a CIDR is a deliberate operator choice.
+var cloudMetadataIP = netip.MustParseAddr("169.254.169.254")
+
+// SecurityWarnings returns non-fatal production-posture advisories that
+// should be logged loudly at boot but must NOT fail startup. Unlike the
+// fail-closed guards in validate(), these cover deliberate operator
+// escape hatches that weaken a security control: refusing them outright
+// would break legitimate deployments (e.g. shipping verdicts to a
+// private SIEM with no public ingress), but an operator who enables
+// them in production should see an explicit warning rather than a
+// silent downgrade — mirroring the posture validate() applies to
+// NATS_TLS_INSECURE / SMTP_SKIP_VERIFY / KMS_USE_MOCK as hard errors.
+//
+// It is called once at boot (cmd/sn360-es/main.go) and each returned
+// string is emitted via logger.Warn. Non-production environments return
+// nil: the escape hatches are expected in local/dev/QA/staging.
+func (c Config) SecurityWarnings() []string {
+	if !c.Environment.IsProduction() {
+		return nil
+	}
+	var warns []string
+	// WEBHOOK_EGRESS_ALLOW_PRIVATE=true turns the dial-time SSRF
+	// egress guard off entirely; the allow-list is then moot, so emit
+	// a single warning rather than one per CIDR.
+	if c.WebhookEgress.AllowPrivate {
+		return append(warns, "WEBHOOK_EGRESS_ALLOW_PRIVATE=true disables the webhook-sink SSRF egress guard entirely: the dispatcher will POST verdict payloads to any private/loopback/link-local destination a tenant registers, including the 169.254.169.254 cloud-metadata endpoint. Prefer WEBHOOK_EGRESS_ALLOWED_CIDRS to whitelist only the specific internal receiver subnet.")
+	}
+	// With the guard active, an allow-list entry can still re-open it.
+	// Two cases warrant a warning: a default-route prefix that
+	// whitelists the entire address space (functionally identical to
+	// AllowPrivate=true), and any prefix that re-permits the
+	// cloud-metadata endpoint (the canonical SSRF target). A narrow
+	// internal subnet — the allow-list's intended use — trips neither.
+	for _, p := range c.WebhookEgress.AllowedCIDRs {
+		switch {
+		case p.Bits() == 0:
+			warns = append(warns, fmt.Sprintf("WEBHOOK_EGRESS_ALLOWED_CIDRS contains %s, which covers the entire address space and effectively disables the SSRF egress guard; whitelist only the specific internal receiver subnet instead.", p))
+		case p.Contains(cloudMetadataIP):
+			warns = append(warns, fmt.Sprintf("WEBHOOK_EGRESS_ALLOWED_CIDRS entry %s re-permits the cloud-metadata endpoint %s, re-opening the primary SSRF target the egress guard exists to block.", p, cloudMetadataIP))
+		}
+	}
+	return warns
 }
 
 // isLowEntropy reports whether s is so obviously non-random that we
