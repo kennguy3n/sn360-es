@@ -325,6 +325,24 @@ func TestMemoryQuarantineReleaseAudit_CountByOutcome(t *testing.T) {
 	if _, err := repo.CountByOutcome(ctx, "", start, end); err == nil {
 		t.Errorf("CountByOutcome with empty tenant: want error, got nil")
 	}
+
+	// Zero bounds are passed straight through to match Postgres
+	// exactly (no "zero means unbounded" special-casing). A zero
+	// `end` is `requested_at < '0001-01-01'`, so it yields zero
+	// rows; a zero `start` is `requested_at >= '0001-01-01'`, so
+	// it includes every acme row before the concrete `end` —
+	// here that pulls in the released row at t0-2h that the
+	// concrete-start window excluded, giving Released=3.
+	if zeroEnd, err := repo.CountByOutcome(ctx, "acme", start, time.Time{}); err != nil {
+		t.Fatalf("CountByOutcome zero end: %v", err)
+	} else if zeroEnd.Released != 0 || zeroEnd.Refused != 0 {
+		t.Errorf("zero end: got %+v want {Released:0 Refused:0} (matches Postgres requested_at < '0001-01-01')", zeroEnd)
+	}
+	if zeroStart, err := repo.CountByOutcome(ctx, "acme", time.Time{}, end); err != nil {
+		t.Fatalf("CountByOutcome zero start: %v", err)
+	} else if zeroStart.Released != 3 || zeroStart.Refused != 2 {
+		t.Errorf("zero start: got %+v want {Released:3 Refused:2} (all acme rows before end)", zeroStart)
+	}
 }
 
 // TestMemoryQuarantineReleaseAudit_ListByMessageLimit ensures the

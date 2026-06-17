@@ -478,12 +478,15 @@ func (m *memoryQuarantineReleaseAudit) CountByOutcome(_ context.Context, tenantI
 		}
 		// Half-open window [start, end); mirror the Postgres
 		// `requested_at >= start AND requested_at < end`
-		// predicate, treating a zero bound as unbounded so a
-		// caller can ask for "all time" on either side.
-		if !start.IsZero() && e.RequestedAt.Before(start) {
+		// predicate exactly. Bounds are passed straight through
+		// with no zero-value special-casing, so a zero `end`
+		// matches Postgres' `requested_at < '0001-01-01'` (zero
+		// rows) rather than meaning "unbounded". The dashboard
+		// always supplies concrete UTC window edges.
+		if e.RequestedAt.Before(start) {
 			continue
 		}
-		if !end.IsZero() && !e.RequestedAt.Before(end) {
+		if !e.RequestedAt.Before(end) {
 			continue
 		}
 		switch e.Outcome {
