@@ -351,3 +351,92 @@ func TestJWTUnsetScopeDoesNotEqualQuarantineRelease(t *testing.T) {
 		t.Fatal("unset scope must not equal ScopeQuarantineRelease")
 	}
 }
+
+func TestEffectiveScope(t *testing.T) {
+	if got := EffectiveScope(""); got != ScopeBannerAction {
+		t.Errorf("EffectiveScope(\"\") = %q; want %q", got, ScopeBannerAction)
+	}
+	if got := EffectiveScope(ScopeQuarantineRelease); got != ScopeQuarantineRelease {
+		t.Errorf("EffectiveScope(quarantine_release) = %q; want unchanged", got)
+	}
+}
+
+// TestVerifyWithOptions_ScopeEnforcement is the centralised
+// cross-scope replay guard: a call site that declares the scope(s) it
+// accepts must reject a valid token minted for any other surface,
+// while remaining transparent for the legacy empty-scope (banner)
+// token and for an empty AllowedScopes (no restriction).
+func TestVerifyWithOptions_ScopeEnforcement(t *testing.T) {
+	iss := mustIssuer(t, time.Hour)
+
+	mint := func(t *testing.T, scope string) string {
+		t.Helper()
+		tok, err := iss.Issue("t", "m", IssueOptions{Scope: scope})
+		if err != nil {
+			t.Fatalf("issue: %v", err)
+		}
+		return tok
+	}
+
+	t.Run("empty-scope token accepted as banner_action", func(t *testing.T) {
+		tok := mint(t, "")
+		if _, err := iss.VerifyWithOptions(tok, VerifyOptions{AllowedScopes: []string{ScopeBannerAction}}); err != nil {
+			t.Fatalf("legacy empty-scope token must satisfy banner_action: %v", err)
+		}
+	})
+
+	t.Run("quarantine_release token rejected by banner_action site", func(t *testing.T) {
+		tok := mint(t, ScopeQuarantineRelease)
+		_, err := iss.VerifyWithOptions(tok, VerifyOptions{AllowedScopes: []string{ScopeBannerAction}})
+		if err == nil {
+			t.Fatal("cross-scope token must be rejected")
+		}
+		if !errors.Is(err, ErrScopeNotPermitted) {
+			t.Errorf("err = %v; want errors.Is(ErrScopeNotPermitted)", err)
+		}
+	})
+
+	t.Run("quarantine_release token accepted by matching site", func(t *testing.T) {
+		tok := mint(t, ScopeQuarantineRelease)
+		if _, err := iss.VerifyWithOptions(tok, VerifyOptions{AllowedScopes: []string{ScopeQuarantineRelease}}); err != nil {
+			t.Fatalf("matching-scope token must be accepted: %v", err)
+		}
+	})
+
+	t.Run("membership across a multi-scope allow set", func(t *testing.T) {
+		tok := mint(t, ScopeAdminAPI)
+		if _, err := iss.VerifyWithOptions(tok, VerifyOptions{AllowedScopes: []string{ScopeBannerAction, ScopeAdminAPI}}); err != nil {
+			t.Fatalf("admin_api token must be accepted when listed: %v", err)
+		}
+	})
+
+	t.Run("empty AllowedScopes imposes no restriction", func(t *testing.T) {
+		tok := mint(t, ScopeQuarantineRelease)
+		if _, err := iss.VerifyWithOptions(tok, VerifyOptions{}); err != nil {
+			t.Fatalf("zero VerifyOptions must accept any scope: %v", err)
+		}
+	})
+}
+
+// TestVerifyDetailWithOptions_ExpiryBeforeScope confirms the scope
+// check runs strictly after cryptographic validation: an expired
+// token surfaces the expiry error (Expired=true) regardless of scope,
+// so the auth-failure audit path keeps its expired-vs-invalid signal.
+func TestVerifyDetailWithOptions_ExpiryBeforeScope(t *testing.T) {
+	iss := mustIssuer(t, time.Hour)
+	tok, err := iss.Issue("t", "m", IssueOptions{Scope: ScopeQuarantineRelease, TTL: 5 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	res, err := iss.VerifyDetailWithOptions(tok, VerifyOptions{AllowedScopes: []string{ScopeBannerAction}})
+	if err == nil {
+		t.Fatal("expired token must error")
+	}
+	if errors.Is(err, ErrScopeNotPermitted) {
+		t.Error("expired token must surface the expiry error, not the scope error")
+	}
+	if !res.Expired {
+		t.Error("Expired must be true so the audit path can record token_expired")
+	}
+}

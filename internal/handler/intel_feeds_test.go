@@ -314,13 +314,18 @@ func TestIntelFeeds_Indicators(t *testing.T) {
 func TestIntelFeeds_ForbiddenWithoutScope(t *testing.T) {
 	t.Parallel()
 	h, _ := newTestHandler(nil)
-	// Wrong scope -> 403
-	req := httptest.NewRequest(http.MethodGet, "/v1/intel/feeds", nil).
-		WithContext(adminCtx(context.Background(), privacy.ScopeBannerAction))
-	rec := httptest.NewRecorder()
-	h.ServeFeeds(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("wrong scope: status = %d; want 403", rec.Code)
+	// Wrong scope -> 403. The empty-scope case exercises the
+	// EffectiveScope normalisation in assertAdmin: a legacy token
+	// with no scp claim defaults to banner_action, which must NOT
+	// satisfy the admin_api gate.
+	for _, scope := range []string{privacy.ScopeBannerAction, privacy.ScopeQuarantineRelease, ""} {
+		req := httptest.NewRequest(http.MethodGet, "/v1/intel/feeds", nil).
+			WithContext(adminCtx(context.Background(), scope))
+		rec := httptest.NewRecorder()
+		h.ServeFeeds(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("scope %q: status = %d; want 403", scope, rec.Code)
+		}
 	}
 	// No claims -> 401
 	noClaims := httptest.NewRequest(http.MethodGet, "/v1/intel/feeds", nil)

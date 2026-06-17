@@ -150,10 +150,7 @@ func (h *QuarantineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	correlationID := strings.TrimSpace(r.Header.Get("X-Correlation-ID"))
 
-	scope := claims.Scope
-	if scope == "" {
-		scope = privacy.ScopeBannerAction
-	}
+	scope := privacy.EffectiveScope(claims.Scope)
 	switch scope {
 	case privacy.ScopeQuarantineRelease:
 		h.serveSelfRelease(r, w, claims, correlationID)
@@ -315,7 +312,7 @@ func (h *QuarantineHandler) handleAuthFailure(r *http.Request, w http.ResponseWr
 	// Only attempt to audit if the partial claims carry a
 	// quarantine_release scope; auth failures on banner-action
 	// tokens are out of scope for the WS-3a audit table.
-	if h.selfRelease != nil && res.Claims != nil && res.Claims.Scope == privacy.ScopeQuarantineRelease {
+	if h.selfRelease != nil && res.Claims != nil && privacy.EffectiveScope(res.Claims.Scope) == privacy.ScopeQuarantineRelease {
 		outcome := repository.QuarantineReleaseOutcomeInvalidToken
 		reason := "token signature / claims invalid"
 		if res.Expired {
