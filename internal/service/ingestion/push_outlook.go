@@ -184,7 +184,7 @@ func (o *OutlookPushReceiver) Unsubscribe(ctx context.Context, _, subscriptionID
 
 	client := o.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultPushHTTPClient
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -380,7 +380,7 @@ func (o *OutlookPushReceiver) do(ctx context.Context, method, endpoint string, i
 
 	client := o.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultPushHTTPClient
 	}
 	resp, err := client.Do(req)
 	if err != nil {
