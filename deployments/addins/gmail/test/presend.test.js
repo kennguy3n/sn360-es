@@ -360,7 +360,7 @@ test("localizedMessage_ falls back to English for unknown locales", function () 
       domain: "acm3.com",
       ref: "acme.com",
     }),
-    "Recipient domain acm3.com looks similar to acme.com. Did you mean acme.com?"
+    "acm3.com looks almost identical to acme.com, a contact you've emailed before. Did you mean acme.com?"
   );
 });
 
@@ -373,6 +373,25 @@ test("localizedMessage_ returns the localized bundle for supported locales", fun
   assert.match(fr, /ressemble à/);
   assert.match(fr, /acm3\.com/);
   assert.match(fr, /acme\.com/);
+});
+
+test("open_generic_flagged is present and localized across the bundle", function () {
+  // The pre-open fallback (unknown tier + empty server message) renders
+  // localizedMessage_("open_generic_flagged", ...). It must resolve to a
+  // distinct localized line on every supported locale — never empty.
+  const presend = loadPresend(makeStubs().globals);
+  assert.equal(
+    presend.localizedMessage_("open_generic_flagged", "en-US", {}),
+    "This message was flagged — open it with care."
+  );
+  // A non-English locale must return its own translation, not English.
+  const de = presend.localizedMessage_("open_generic_flagged", "de-DE", {});
+  assert.match(de, /Diese Nachricht wurde markiert/);
+  // Unknown locale falls back to English (never empty).
+  assert.equal(
+    presend.localizedMessage_("open_generic_flagged", "zz-ZZ", {}),
+    "This message was flagged — open it with care."
+  );
 });
 
 // === Full flow: pre-send trigger ======================================
@@ -617,6 +636,36 @@ test("buildSendWarningCard_ renders one paragraph per warning and an acknowledge
   // 2 warnings × (paragraph + optional did-you-mean paragraph for the
   // one with a suggestion) + 1 acknowledge button = 4 widgets.
   assert.equal(sec._children.length, 4);
+  const button = sec._children[sec._children.length - 1];
+  assert.equal(button._type, "textButton");
+  assert.equal(button._props.onClickAction._props.functionName, "sn360AcknowledgeWarning");
+});
+
+test("buildSendWarningCard_ synthesizes a non-empty body when warnings is empty", function () {
+  const stubs = makeStubs();
+  const presend = loadPresend(stubs.globals);
+  // High level with no per-warning detail (older/partial backend) must
+  // still produce an explanatory card + the safe action, mirroring the
+  // Outlook add-in — never a body that is just the acknowledge button.
+  const card = presend.buildSendWarningCard_({ overall_level: 3, warnings: [] }, "en");
+  const sec = card._children[0];
+  // 1 synthesized paragraph + 1 acknowledge button.
+  assert.equal(sec._children.length, 2);
+  const para = sec._children[0];
+  assert.equal(para._type, "textParagraph");
+  assert.notEqual((para._props.text || "").length, 0, "fallback paragraph must not be empty");
+  assert.notEqual(
+    para._props.text.indexOf("Take a moment before you send"),
+    -1,
+    "expected the generic plain-language headline in the fallback body"
+  );
+  // The synthesized detail must be a distinct body line, not the headline
+  // echoed back at the user.
+  assert.notEqual(
+    para._props.text.indexOf("We spotted something worth a quick look"),
+    -1,
+    "expected a distinct generic body line, not a repeat of the headline"
+  );
   const button = sec._children[sec._children.length - 1];
   assert.equal(button._type, "textButton");
   assert.equal(button._props.onClickAction._props.functionName, "sn360AcknowledgeWarning");

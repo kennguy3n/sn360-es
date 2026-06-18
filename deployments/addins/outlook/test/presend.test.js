@@ -280,7 +280,7 @@ test("onMessageSend Flow 1: high-risk API response blocks send", async function 
   });
   assert.equal(completed.allowEvent, false, "high-risk should block send");
   assert.equal(office._notifications.length, 1);
-  assert.match(office._notifications[0].msg.message, /SN360 warning/);
+  assert.match(office._notifications[0].msg.message, /ShieldNet 360/);
 });
 
 test("onMessageSend Flow 1: low-risk API response allows send", async function () {
@@ -406,6 +406,32 @@ test("onMessageSend Flow 2: exact-match domain does NOT trigger lookalike", asyn
   });
   assert.equal(completed.allowEvent, true);
   assert.equal(office._notifications.length, 0);
+});
+
+test("showWarning: empty warnings synthesizes a distinct body, not a repeat of the title", function () {
+  // High level with no per-warning detail (older/partial backend). The
+  // dialog must still explain itself with a body line that differs from
+  // the headline — mirroring the Gmail add-on. Never echo the title back.
+  const office = makeMockOffice({ sender: "alice@acme.com" });
+  const presend = loadPresend(office);
+
+  let completed = null;
+  presend._internals.showWarning(
+    { completed: function (arg) { completed = arg; } },
+    { overall_level: 3, warnings: [] }
+  );
+
+  assert.equal(completed.allowEvent, false, "high level must surface the blocking dialog");
+  assert.notEqual(
+    completed.errorMessage.indexOf("Take a moment before you send"),
+    -1,
+    "expected the generic headline in the dialog"
+  );
+  assert.notEqual(
+    completed.errorMessage.indexOf("We spotted something worth a quick look"),
+    -1,
+    "expected a distinct generic body line, not a repeat of the headline"
+  );
 });
 
 // === Flow 3: External-thread-going-external ============================
@@ -534,7 +560,7 @@ test("locale: English locale produces English messages", async function () {
   const presend = loadPresend(office);
   assert.equal(
     presend._internals.t("lookalike_recipient", { domain: "acm3.com", ref: "acme.com" }),
-    "Recipient domain acm3.com looks similar to acme.com. Did you mean acme.com?"
+    "acm3.com looks almost identical to acme.com, a contact you've emailed before. Did you mean acme.com?"
   );
 });
 

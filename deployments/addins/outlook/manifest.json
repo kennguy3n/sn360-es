@@ -1,10 +1,10 @@
 {
   "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
   "manifestVersion": "1.16",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "id": "8cdd9e69-680e-40d1-9bb7-7dfa0bb33165",
   "developer": {
-    "name": "SN360",
+    "name": "ShieldNet 360",
     "websiteUrl": "https://sn360.example.com",
     "privacyUrl": "https://sn360.example.com/privacy",
     "termsOfUseUrl": "https://sn360.example.com/terms"
@@ -14,14 +14,14 @@
     "outline": "icon-outline.png"
   },
   "name": {
-    "short": "SN360",
-    "full": "SN360 Email Security"
+    "short": "ShieldNet 360",
+    "full": "ShieldNet 360 Email Security"
   },
   "description": {
-    "short": "Pre-send and pre-open phishing warnings.",
-    "full": "SN360 protects users from phishing and BEC by warning before suspicious sends and before opening risky messages. Runs entirely against your tenant's SN360 API; no message contents leave the mailbox."
+    "short": "Plain-language phishing warnings as you read and send.",
+    "full": "ShieldNet 360 quietly checks your email and warns you in plain language when something looks risky — a lookalike address, an unexpected outsider, or a message that may be a scam. It always tells you what to do next and never blocks legitimate work. Runs entirely against your organisation's ShieldNet 360 service; no message contents leave the mailbox."
   },
-  "accentColor": "#1f3a8a",
+  "accentColor": "#255fe5",
   "permissions": [
     "identity",
     "messageTeamMembers"
@@ -51,13 +51,13 @@
             {
               "id": "sn360-on-message-send",
               "type": "executeFunction",
-              "displayName": "SN360 Pre-Send Check",
+              "displayName": "ShieldNet 360 safety check",
               "supportsNoItemContext": false
             },
             {
               "id": "sn360-on-message-recipients-changed",
               "type": "executeFunction",
-              "displayName": "SN360 Recipient Check"
+              "displayName": "ShieldNet 360 recipient check"
             }
           ]
         },
@@ -73,7 +73,7 @@
             {
               "id": "sn360-on-message-read",
               "type": "executeFunction",
-              "displayName": "SN360 Pre-Open Check"
+              "displayName": "ShieldNet 360 open check"
             }
           ]
         }

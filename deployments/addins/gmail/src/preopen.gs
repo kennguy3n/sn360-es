@@ -22,6 +22,7 @@ function sn360PreOpenTrigger(e) {
   var meta = parseBannerHeader_(readMessageHeaders_(msg));
   if (!meta || !meta.pseudo_message_id) return [];
   var tenant = tenantIdFromUser_();
+  var locale = sn360Locale_(e);
   var resp = callPredict_("/v1/predict/open", {
     tenant_id: tenant,
     pseudo_message_id: meta.pseudo_message_id,
@@ -29,15 +30,81 @@ function sn360PreOpenTrigger(e) {
     category: meta.category || "",
   });
   if (!resp || !resp.show_warning) return [];
-  return [buildOpenWarningCard_(resp)];
+  return [buildOpenWarningCard_(resp, meta.tier, locale)];
 }
 
-function buildOpenWarningCard_(resp) {
-  var section = CardService.newCardSection()
-    .addWidget(CardService.newTextParagraph().setText("<b>" + (resp.code || "warning") + "</b>"))
-    .addWidget(CardService.newTextParagraph().setText(resp.message || ""));
+// Map the SN360 banner tier to the shared severity ramp and the
+// plain-language title / why / "what to do" keys. Mirrors the Outlook
+// pre-open add-in so a given tier reads identically on both platforms.
+// Returns null for tiers we don't warn on, so the caller falls back to
+// the server-supplied message rather than an empty banner.
+function presentationForTier_(tier) {
+  var key = String(tier || "").toLowerCase();
+  if (key === "blocked" || key === "block") {
+    return { titleKey: "open_title_blocked", bodyKey: "open_body_blocked", actionKey: "open_action_report", level: 4 };
+  }
+  if (key === "high_risk" || key === "high") {
+    return { titleKey: "open_title_high", bodyKey: "open_body_high", actionKey: "open_action_report", level: 3 };
+  }
+  if (key === "warning" || key === "warn") {
+    return { titleKey: "open_title_warning", bodyKey: "open_body_warning", actionKey: "open_action_proceed", level: 2 };
+  }
+  if (key === "caution") {
+    return { titleKey: "open_title_caution", bodyKey: "open_body_caution", actionKey: "open_action_proceed", level: 1 };
+  }
+  return null;
+}
+
+function buildOpenWarningCard_(resp, tier, locale) {
+  // severityForLevel_, localizedMessage_, escapeHtml_ and sn360Locale_
+  // all live in presend.gs; Apps Script loads every .gs file into one
+  // global scope, so they are available here (same pattern as
+  // callPredict_ / tenantIdFromUser_ above).
+  var pres = presentationForTier_(tier || (resp && resp.tier));
+  var section = CardService.newCardSection();
+  if (pres) {
+    var sev = severityForLevel_(pres.level, locale);
+    section
+      .addWidget(
+        CardService.newTextParagraph().setText(
+          "<b>" + escapeHtml_(localizedMessage_(pres.titleKey, locale, {})) + "</b>"
+        )
+      )
+      .addWidget(
+        CardService.newTextParagraph().setText(
+          '<font color="' +
+            sev.color +
+            '"><b>' +
+            escapeHtml_(sev.label) +
+            "</b></font> · " +
+            escapeHtml_(localizedMessage_(pres.bodyKey, locale, {}))
+        )
+      )
+      .addWidget(
+        CardService.newTextParagraph().setText(
+          escapeHtml_(localizedMessage_(pres.actionKey, locale, {}))
+        )
+      );
+  } else {
+    // Unknown tier: keep the branded header but fall back to whatever
+    // message the server supplied; if it's empty, use the localized
+    // generic flag line so we never render an empty card (mirrors the
+    // Outlook pre-open fallback).
+    section.addWidget(
+      CardService.newTextParagraph().setText(
+        escapeHtml_(
+          (resp && resp.message) ||
+            localizedMessage_("open_generic_flagged", locale, {})
+        )
+      )
+    );
+  }
   return CardService.newCardBuilder()
-    .setHeader(CardService.newCardHeader().setTitle("SN360 Open Warning"))
+    .setHeader(
+      CardService.newCardHeader().setTitle(
+        localizedMessage_("safety_check", locale, {})
+      )
+    )
     .addSection(section)
     .build();
 }
