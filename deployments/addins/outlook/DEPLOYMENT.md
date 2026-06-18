@@ -22,9 +22,37 @@ checks (see [the source](src/presend.js) for the full implementation):
    internal-only and the user is adding an external recipient, surface a
    warning.
 
-If any check fires at level ≥ 3 (WarnWarning tier), the user sees an
-`InsightMessage` notification and the send is held up until they
-acknowledge.
+If any check fires at level ≥ 3, the user sees a branded in-compose
+notification strip plus a smart-alert dialog written in plain language
+(what's risky, why it matters, the one safe action). The user keeps a
+clear override path ("Send anyway"). See **Branding & warning UX** below.
+
+## Branding & warning UX (ShieldNet 360)
+
+The warning surfaces follow the ShieldNet 360 brand and plain-language
+voice (implemented in [`src/presend.js`](src/presend.js) and
+[`src/preopen.js`](src/preopen.js)):
+
+- **One message taxonomy, shared with Gmail.** Pre-send and pre-open
+  warnings use the same localized bundle and the same severity ramp, so
+  a given risk reads identically in Outlook and Gmail.
+- **Plain language, no jargon.** The dialog says what's risky, why it
+  matters, and the one safe action — never internal codes or tiers — and
+  never dead-ends the user (the override is always available).
+- **Severity ramp** (brand tokens): critical `#e40014`, high `#ff6900`,
+  medium `#edb200`, low/info `#255fe5`; `accentColor` in the manifest is
+  the brand blue `#255fe5`.
+- **14 locales, RTL-correct.** All copy is keyed; `ar` renders
+  right-to-left.
+
+### Office.js styling limits (documented)
+
+| Surface | Styling control | What we do |
+|---|---|---|
+| Manifest icon / `accentColor` | ✅ full | Brand mark + brand-blue `#255fe5` accent. |
+| In-compose notification strip | ⚠️ system-rendered (text + type only, ~150-char cap, no custom color/font) | Lead with the brand name + plain headline so the meaning survives truncation; severity is carried by the wording. |
+| Smart-alert dialog (`sendMode: promptUser`) | ⚠️ host-rendered; we control the copy via `errorMessage` + `errorMessageMarkdown` (bold/italic emphasis), not its colors/fonts | Plain-language headline with the severity label, a one-line "why", and the safe action; Outlook supplies the "Send anyway" override button. |
+| Task-pane HTML (if/when added) | ✅ full CSS/HTML — Noto Sans, brand tokens | Reserved for richer flows; the current warning UX uses the host dialog above. |
 
 ## Performance budget
 

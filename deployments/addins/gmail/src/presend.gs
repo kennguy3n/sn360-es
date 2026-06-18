@@ -62,13 +62,18 @@ var SN360_MAX_LOOKALIKE_DISTANCE = 2;
 var SN360_CACHE_KEY_KNOWN_PREFIX = "sn360.known.";
 var SN360_CACHE_KEY_PREDICT_PREFIX = "sn360.predict.";
 
-function sn360HomepageTrigger() {
+function sn360HomepageTrigger(e) {
+  var locale = sn360Locale_(e);
   var card = CardService.newCardBuilder()
-    .setHeader(CardService.newCardHeader().setTitle("SN360"))
+    .setHeader(
+      CardService.newCardHeader().setTitle(
+        localizedMessage_("safety_check", locale, {})
+      )
+    )
     .addSection(
       CardService.newCardSection().addWidget(
         CardService.newTextParagraph().setText(
-          "SN360 monitors this mailbox for phishing and BEC. Open the add-on inside a draft to run a pre-send check."
+          localizedMessage_("home_body", locale, {})
         )
       )
     )
@@ -216,14 +221,54 @@ function sn360PreSendTriggerImpl_(e) {
 
 // === Card rendering =====================================================
 
+// ShieldNet 360 severity ramp, shared with the Outlook add-in and the
+// pre-open card. Colours mirror the brand tokens (critical #e40014,
+// high #ff6900, medium #edb200, low/info #255fe5) so a given risk level
+// looks identical across every SN360 surface.
+function severityForLevel_(level, locale) {
+  if (level >= 4) return { label: localizedMessage_("sev_critical", locale, {}), color: "#e40014" };
+  if (level === 3) return { label: localizedMessage_("sev_high", locale, {}), color: "#ff6900" };
+  if (level === 2) return { label: localizedMessage_("sev_medium", locale, {}), color: "#edb200" };
+  return { label: localizedMessage_("sev_low", locale, {}), color: "#255fe5" };
+}
+
+// Pick the plain-language headline for the dominant pre-send concern.
+// We lead with the most actionable issue (a lookalike address) and fall
+// back to a neutral, reassuring prompt. The "_client" suffix on
+// client-side warnings is stripped so they resolve to the same title as
+// their server-side equivalents.
+function sendTitleKey_(warnings) {
+  var codes = (warnings || []).map(function (w) {
+    return String((w && w.code) || "").replace(/_client$/, "");
+  });
+  if (codes.indexOf("lookalike_recipient") >= 0) return "send_title_lookalike";
+  if (codes.indexOf("external_on_internal_thread") >= 0) return "send_title_external";
+  return "send_title_generic";
+}
+
 function buildSendWarningCard_(resp, locale) {
+  var warnings = (resp && resp.warnings) || [];
+  var level = (resp && resp.overall_level) || 0;
+  var sev = severityForLevel_(level, locale);
+  var headline = localizedMessage_(sendTitleKey_(warnings), locale, {});
   var section = CardService.newCardSection();
-  (resp.warnings || []).forEach(function (w) {
-    section.addWidget(
-      CardService.newTextParagraph().setText(
-        "<b>" + escapeHtml_(w.code || "warning") + "</b> — " + escapeHtml_(w.message || "")
-      )
-    );
+  warnings.forEach(function (w, idx) {
+    var msg = escapeHtml_(w.message || "");
+    var text;
+    if (idx === 0) {
+      // Lead the card with the plain headline, a colour-coded severity
+      // badge, the primary concern, then the one safe action — so the
+      // "what happened / what to do" sit together at the top, the way a
+      // first-time non-technical user reads it.
+      text =
+        "<b>" + escapeHtml_(headline) + "</b><br>" +
+        '<font color="' + sev.color + '"><b>' + escapeHtml_(sev.label) + "</b></font> · " +
+        msg +
+        "<br><br>" + escapeHtml_(localizedMessage_("send_action", locale, {}));
+    } else {
+      text = msg;
+    }
+    section.addWidget(CardService.newTextParagraph().setText(text));
     if (w.suggestion) {
       // The API may emit a suggestion field on lookalike warnings.
       // CardService.newTextParagraph().setText renders a subset of
@@ -244,8 +289,9 @@ function buildSendWarningCard_(resp, locale) {
     }
   });
   // The "acknowledge" button doesn't actually send the email — Gmail
-  // Add-ons can't intercept the send button itself. It dismisses the
-  // notification so the user has explicitly clicked through.
+  // Add-ons can't intercept the send button itself. It confirms the
+  // user has read the check and is choosing to continue (the override
+  // path), then they press Gmail's own Send.
   section.addWidget(
     CardService.newTextButton()
       .setText(localizedMessage_("ack_button", locale, {}))
@@ -256,18 +302,19 @@ function buildSendWarningCard_(resp, locale) {
   return CardService.newCardBuilder()
     .setHeader(
       CardService.newCardHeader().setTitle(
-        localizedMessage_("warning_header", locale, {})
+        localizedMessage_("safety_check", locale, {})
       )
     )
     .addSection(section)
     .build();
 }
 
-function sn360AcknowledgeWarning() {
+function sn360AcknowledgeWarning(e) {
+  var locale = sn360Locale_(e);
   return CardService.newActionResponseBuilder()
     .setNotification(
       CardService.newNotification().setText(
-        "Warning acknowledged. Click Send when ready."
+        localizedMessage_("ack_confirmation", locale, {})
       )
     )
     .build();
@@ -559,129 +606,520 @@ function combineWarnings_(apiResponse, clientWarnings) {
 var SN360_I18N = {
   en: {
     lookalike_recipient:
-      "Recipient domain {domain} looks similar to {ref}. Did you mean {ref}?",
+      "{domain} looks almost identical to {ref}, a contact you've emailed before. Did you mean {ref}?",
     external_on_internal_thread:
-      "You're adding an external recipient ({domain}) to a previously internal thread.",
-    did_you_mean: "Did you mean: {suggestion}",
-    warning_header: "SN360 Send Warning",
-    ack_button: "Acknowledge",
+      "You're adding an external recipient ({domain}) to a thread that's only included your colleagues until now.",
+    did_you_mean: "Did you mean {suggestion}?",
+    safety_check: "ShieldNet 360 safety check",
+    send_title_lookalike: "Double-check this email address",
+    send_title_external: "You're emailing someone outside your company",
+    send_title_generic: "Take a moment before you send",
+    send_action:
+      "If you recognise everyone here, you can send. If not, fix the address or remove them first.",
+    ack_button: "I've checked — looks right",
+    ack_confirmation: "Got it — we've noted your check. Send when you're ready.",
+    home_body:
+      "ShieldNet 360 keeps an eye on your email. Open a draft and we'll check it before you send — and we'll flag risky messages as you read them. Nothing to set up.",
+    sev_critical: "High risk",
+    sev_high: "Worth a check",
+    sev_medium: "Heads-up",
+    sev_low: "For your awareness",
+    open_title_blocked: "This message looks dangerous",
+    open_title_high: "This looks like a phishing attempt",
+    open_title_warning: "Take care with this message",
+    open_title_caution: "A quick heads-up about this message",
+    open_body_blocked:
+      "It has strong signs of a scam built to steal information, money, or passwords.",
+    open_body_high:
+      "Someone may be pretending to be a person or company you trust.",
+    open_body_warning:
+      "Something here is unusual. Check who really sent it before you act on it.",
+    open_body_caution:
+      "It's probably fine — just stay alert before sharing anything sensitive.",
+    open_action_report:
+      "Don't click links or open attachments. If you weren't expecting this, report and delete it.",
+    open_action_proceed:
+      "It's okay to read — just don't share passwords, payment details, or codes until you're sure.",
   },
   vi: {
     lookalike_recipient:
-      "Tên miền người nhận {domain} trông giống với {ref}. Bạn có ý định gửi tới {ref} không?",
+      "{domain} trông gần giống hệt {ref}, một địa chỉ bạn từng gửi trước đây. Bạn có muốn gửi tới {ref} không?",
     external_on_internal_thread:
-      "Bạn đang thêm một người nhận bên ngoài ({domain}) vào một chuỗi thư trước đây chỉ nội bộ.",
-    did_you_mean: "Có phải bạn muốn: {suggestion}",
-    warning_header: "Cảnh báo gửi thư SN360",
-    ack_button: "Xác nhận",
+      "Bạn đang thêm một người nhận bên ngoài ({domain}) vào cuộc trò chuyện mà đến nay chỉ có đồng nghiệp của bạn.",
+    did_you_mean: "Bạn có muốn gửi tới {suggestion} không?",
+    safety_check: "Kiểm tra an toàn ShieldNet 360",
+    send_title_lookalike: "Kiểm tra lại địa chỉ email này",
+    send_title_external: "Bạn đang gửi cho người ngoài công ty",
+    send_title_generic: "Hãy kiểm tra một chút trước khi gửi",
+    send_action:
+      "Nếu bạn nhận ra tất cả người nhận, bạn có thể gửi. Nếu không, hãy sửa địa chỉ hoặc xóa họ trước.",
+    ack_button: "Tôi đã kiểm tra — ổn rồi",
+    ack_confirmation: "Đã rõ — chúng tôi đã ghi nhận. Gửi khi bạn sẵn sàng.",
+    home_body:
+      "ShieldNet 360 luôn để mắt đến email của bạn. Hãy mở một thư nháp và chúng tôi sẽ kiểm tra trước khi bạn gửi — và đánh dấu thư đáng ngờ khi bạn đọc. Không cần thiết lập.",
+    sev_critical: "Rủi ro cao",
+    sev_high: "Nên kiểm tra",
+    sev_medium: "Lưu ý",
+    sev_low: "Để bạn biết",
+    open_title_blocked: "Thư này có vẻ nguy hiểm",
+    open_title_high: "Đây có vẻ là một nỗ lực lừa đảo",
+    open_title_warning: "Hãy thận trọng với thư này",
+    open_title_caution: "Một lưu ý nhanh về thư này",
+    open_body_blocked:
+      "Thư có nhiều dấu hiệu rõ ràng của lừa đảo nhằm đánh cắp thông tin, tiền hoặc mật khẩu.",
+    open_body_high:
+      "Có thể ai đó đang mạo danh một người hoặc công ty bạn tin tưởng.",
+    open_body_warning:
+      "Có điều gì đó bất thường ở đây. Hãy kiểm tra ai thực sự gửi thư trước khi hành động.",
+    open_body_caution:
+      "Có thể không sao — chỉ cần cẩn thận trước khi chia sẻ thông tin nhạy cảm.",
+    open_action_report:
+      "Đừng nhấp liên kết hoặc mở tệp đính kèm. Nếu bạn không mong đợi thư này, hãy báo cáo và xóa nó.",
+    open_action_proceed:
+      "Bạn có thể đọc — chỉ đừng chia sẻ mật khẩu, thông tin thanh toán hoặc mã cho đến khi bạn chắc chắn.",
   },
   th: {
     lookalike_recipient:
-      "โดเมนผู้รับ {domain} มีลักษณะคล้ายกับ {ref} คุณต้องการส่งถึง {ref} ใช่หรือไม่",
+      "{domain} ดูเกือบเหมือนกับ {ref} ซึ่งเป็นที่อยู่ที่คุณเคยส่งถึงมาก่อน คุณต้องการส่งถึง {ref} ใช่หรือไม่",
     external_on_internal_thread:
-      "คุณกำลังเพิ่มผู้รับภายนอก ({domain}) เข้าในเธรดที่ก่อนหน้านี้เป็นการสื่อสารภายในเท่านั้น",
-    did_you_mean: "คุณหมายถึง: {suggestion} ใช่หรือไม่",
-    warning_header: "คำเตือนการส่งของ SN360",
-    ack_button: "รับทราบ",
+      "คุณกำลังเพิ่มผู้รับภายนอก ({domain}) เข้าในการสนทนาที่จนถึงตอนนี้มีแต่เพื่อนร่วมงานของคุณ",
+    did_you_mean: "คุณหมายถึง {suggestion} ใช่หรือไม่",
+    safety_check: "การตรวจสอบความปลอดภัย ShieldNet 360",
+    send_title_lookalike: "ตรวจสอบที่อยู่อีเมลนี้อีกครั้ง",
+    send_title_external: "คุณกำลังส่งอีเมลถึงคนนอกบริษัท",
+    send_title_generic: "หยุดสักครู่ก่อนส่ง",
+    send_action:
+      "หากคุณรู้จักผู้รับทุกคน คุณสามารถส่งได้ หากไม่ใช่ โปรดแก้ไขที่อยู่หรือเอาออกก่อน",
+    ack_button: "ฉันตรวจสอบแล้ว — ดูถูกต้อง",
+    ack_confirmation: "รับทราบ — เราบันทึกไว้แล้ว ส่งได้เมื่อคุณพร้อม",
+    home_body:
+      "ShieldNet 360 คอยดูแลอีเมลของคุณ เปิดอีเมลฉบับร่างแล้วเราจะตรวจสอบก่อนคุณส่ง และจะแจ้งเตือนข้อความที่เสี่ยงขณะคุณอ่าน ไม่ต้องตั้งค่าใด ๆ",
+    sev_critical: "ความเสี่ยงสูง",
+    sev_high: "ควรตรวจสอบ",
+    sev_medium: "ข้อควรทราบ",
+    sev_low: "เพื่อให้คุณทราบ",
+    open_title_blocked: "ข้อความนี้ดูเป็นอันตราย",
+    open_title_high: "ดูเหมือนเป็นความพยายามฟิชชิง",
+    open_title_warning: "โปรดระมัดระวังกับข้อความนี้",
+    open_title_caution: "ข้อควรทราบสั้น ๆ เกี่ยวกับข้อความนี้",
+    open_body_blocked:
+      "มีสัญญาณชัดเจนว่าเป็นการหลอกลวงเพื่อขโมยข้อมูล เงิน หรือรหัสผ่าน",
+    open_body_high:
+      "อาจมีใครบางคนแอบอ้างเป็นบุคคลหรือบริษัทที่คุณไว้วางใจ",
+    open_body_warning:
+      "มีบางอย่างผิดปกติ โปรดตรวจสอบว่าใครส่งมาจริง ๆ ก่อนดำเนินการ",
+    open_body_caution:
+      "อาจไม่มีปัญหา — เพียงระวังก่อนแบ่งปันข้อมูลที่ละเอียดอ่อน",
+    open_action_report:
+      "อย่าคลิกลิงก์หรือเปิดไฟล์แนบ หากคุณไม่ได้คาดหวังข้อความนี้ โปรดรายงานและลบทิ้ง",
+    open_action_proceed:
+      "อ่านได้ — เพียงอย่าแบ่งปันรหัสผ่าน ข้อมูลการชำระเงิน หรือรหัส จนกว่าคุณจะแน่ใจ",
   },
   ja: {
     lookalike_recipient:
-      "宛先ドメイン {domain} は {ref} に酷似しています。{ref} のことではありませんか？",
+      "{domain} は、以前に送信したことのある {ref} とほぼ同じに見えます。{ref} のことではありませんか？",
     external_on_internal_thread:
-      "これまで社内のみだったスレッドに、社外の宛先（{domain}）を追加しようとしています。",
-    did_you_mean: "もしかして: {suggestion}",
-    warning_header: "SN360 送信警告",
-    ack_button: "確認しました",
+      "これまで社内の同僚だけだったスレッドに、社外の宛先（{domain}）を追加しようとしています。",
+    did_you_mean: "{suggestion} のことではありませんか？",
+    safety_check: "ShieldNet 360 セーフティチェック",
+    send_title_lookalike: "このメールアドレスをもう一度確認してください",
+    send_title_external: "社外の相手にメールを送ろうとしています",
+    send_title_generic: "送信する前に少し確認しましょう",
+    send_action:
+      "宛先の全員に心当たりがあれば送信できます。なければ、アドレスを修正するか宛先から削除してください。",
+    ack_button: "確認しました — 問題ありません",
+    ack_confirmation: "確認しました。準備ができたら送信してください。",
+    home_body:
+      "ShieldNet 360 がメールを見守ります。下書きを開くと送信前にチェックし、受信メールを読むときも危険なものをお知らせします。設定は不要です。",
+    sev_critical: "高リスク",
+    sev_high: "要確認",
+    sev_medium: "ご注意",
+    sev_low: "ご参考",
+    open_title_blocked: "このメッセージは危険な可能性があります",
+    open_title_high: "フィッシングの可能性があります",
+    open_title_warning: "このメッセージにご注意ください",
+    open_title_caution: "このメッセージについての簡単なお知らせ",
+    open_body_blocked:
+      "情報・金銭・パスワードを盗む詐欺の強い兆候があります。",
+    open_body_high:
+      "信頼している人物や会社になりすましている可能性があります。",
+    open_body_warning:
+      "通常と異なる点があります。対応する前に、本当の差出人を確認してください。",
+    open_body_caution:
+      "おそらく問題ありませんが、機密情報を共有する前にご注意ください。",
+    open_action_report:
+      "リンクのクリックや添付ファイルの開封は避けてください。心当たりがなければ、報告して削除してください。",
+    open_action_proceed:
+      "読んでも問題ありませんが、確信が持てるまでパスワード・支払い情報・コードは共有しないでください。",
   },
   ko: {
     lookalike_recipient:
-      "받는 사람 도메인 {domain}이(가) {ref}과(와) 유사합니다. {ref}을(를) 의도하셨나요?",
+      "{domain}은(는) 이전에 보낸 적 있는 {ref}과(와) 거의 똑같아 보입니다. {ref}을(를) 의도하셨나요?",
     external_on_internal_thread:
-      "이전에는 내부 전용이던 스레드에 외부 수신자({domain})를 추가하고 있습니다.",
-    did_you_mean: "혹시 이것을 찾으셨나요: {suggestion}",
-    warning_header: "SN360 보내기 경고",
-    ack_button: "확인",
+      "지금까지 동료들만 있던 대화에 외부 수신자({domain})를 추가하고 있습니다.",
+    did_you_mean: "{suggestion}을(를) 의도하셨나요?",
+    safety_check: "ShieldNet 360 보안 점검",
+    send_title_lookalike: "이 이메일 주소를 다시 확인하세요",
+    send_title_external: "회사 외부 사람에게 메일을 보내고 있습니다",
+    send_title_generic: "보내기 전에 잠시 확인하세요",
+    send_action:
+      "여기 모든 수신자를 알아본다면 보내도 됩니다. 그렇지 않다면 주소를 고치거나 먼저 삭제하세요.",
+    ack_button: "확인했습니다 — 맞습니다",
+    ack_confirmation: "확인했습니다. 준비되면 보내세요.",
+    home_body:
+      "ShieldNet 360이 메일을 지켜봅니다. 초안을 열면 보내기 전에 확인하고, 읽을 때 위험한 메시지를 알려드립니다. 설정이 필요 없습니다.",
+    sev_critical: "높은 위험",
+    sev_high: "확인 권장",
+    sev_medium: "참고",
+    sev_low: "안내",
+    open_title_blocked: "이 메시지는 위험해 보입니다",
+    open_title_high: "피싱 시도로 보입니다",
+    open_title_warning: "이 메시지에 주의하세요",
+    open_title_caution: "이 메시지에 대한 간단한 안내",
+    open_body_blocked:
+      "정보, 돈 또는 비밀번호를 노리는 사기의 강한 징후가 있습니다.",
+    open_body_high:
+      "신뢰하는 사람이나 회사를 사칭하고 있을 수 있습니다.",
+    open_body_warning:
+      "비정상적인 점이 있습니다. 조치하기 전에 실제 보낸 사람을 확인하세요.",
+    open_body_caution:
+      "괜찮을 가능성이 높지만, 민감한 정보를 공유하기 전에 주의하세요.",
+    open_action_report:
+      "링크를 클릭하거나 첨부 파일을 열지 마세요. 예상치 못한 메시지라면 신고하고 삭제하세요.",
+    open_action_proceed:
+      "읽어도 괜찮습니다 — 확실해질 때까지 비밀번호, 결제 정보, 인증 코드는 공유하지 마세요.",
   },
   zh: {
     lookalike_recipient:
-      "收件人域名 {domain} 与 {ref} 非常相似。您是否想发送给 {ref}？",
+      "{domain} 与您以前发送过的 {ref} 几乎一模一样。您是想发送给 {ref} 吗？",
     external_on_internal_thread:
-      "您正在将外部收件人（{domain}）添加到此前仅限内部的会话中。",
-    did_you_mean: "您是否想要：{suggestion}",
-    warning_header: "SN360 发送警告",
-    ack_button: "确认",
+      "您正在将外部收件人（{domain}）添加到一个至今只有同事参与的会话中。",
+    did_you_mean: "您是想发送给 {suggestion} 吗？",
+    safety_check: "ShieldNet 360 安全检查",
+    send_title_lookalike: "请再次核对这个邮箱地址",
+    send_title_external: "您正在给公司以外的人发邮件",
+    send_title_generic: "发送前请稍作确认",
+    send_action:
+      "如果您认识这里的每个人，就可以发送。如果不认识，请先更正地址或将其移除。",
+    ack_button: "我已核对 — 没问题",
+    ack_confirmation: "已记录。准备好后即可发送。",
+    home_body:
+      "ShieldNet 360 会留意您的邮件。打开草稿，我们会在发送前检查；阅读邮件时也会标记可疑内容。无需任何设置。",
+    sev_critical: "高风险",
+    sev_high: "建议核对",
+    sev_medium: "提醒",
+    sev_low: "供您参考",
+    open_title_blocked: "这封邮件看起来很危险",
+    open_title_high: "这看起来像是网络钓鱼",
+    open_title_warning: "请谨慎对待这封邮件",
+    open_title_caution: "关于这封邮件的简短提醒",
+    open_body_blocked:
+      "它有明显的诈骗迹象，意在窃取信息、钱财或密码。",
+    open_body_high: "可能有人在冒充您信任的人或公司。",
+    open_body_warning:
+      "这里有些异常。在采取行动前，请核实真正的发件人。",
+    open_body_caution:
+      "可能没问题——只是在分享敏感信息前请保持警惕。",
+    open_action_report:
+      "不要点击链接或打开附件。如果您没有预料到这封邮件，请举报并删除。",
+    open_action_proceed:
+      "可以阅读——但在确认之前，请勿分享密码、支付信息或验证码。",
   },
   ar: {
     lookalike_recipient:
-      "نطاق المستلِم {domain} يشبه {ref}. هل تقصد {ref}؟",
+      "يبدو {domain} مطابقًا تقريبًا لـ {ref}، وهو عنوان راسلته من قبل. هل تقصد {ref}؟",
     external_on_internal_thread:
-      "أنت تضيف مستلِمًا خارجيًا ({domain}) إلى محادثة كانت داخلية فقط في السابق.",
-    did_you_mean: "هل تقصد: {suggestion}",
-    warning_header: "تحذير الإرسال من SN360",
-    ack_button: "أُقرّ بذلك",
+      "أنت تضيف مستلِمًا خارجيًا ({domain}) إلى محادثة لم تضم سوى زملائك حتى الآن.",
+    did_you_mean: "هل تقصد {suggestion}؟",
+    safety_check: "فحص أمان ShieldNet 360",
+    send_title_lookalike: "تحقق جيدًا من عنوان البريد هذا",
+    send_title_external: "أنت تراسل شخصًا خارج شركتك",
+    send_title_generic: "تمهّل لحظة قبل الإرسال",
+    send_action:
+      "إذا كنت تعرف كل المستلِمين هنا، يمكنك الإرسال. وإن لم تكن كذلك، فصحّح العنوان أو احذفهم أولًا.",
+    ack_button: "لقد تحققت — يبدو صحيحًا",
+    ack_confirmation: "تم — سجّلنا ذلك. أرسل عندما تكون جاهزًا.",
+    home_body:
+      "يراقب ShieldNet 360 بريدك. افتح مسودة وسنفحصها قبل الإرسال، وسننبهك إلى الرسائل الخطيرة أثناء قراءتها. لا حاجة لأي إعداد.",
+    sev_critical: "خطر مرتفع",
+    sev_high: "يستحق التحقق",
+    sev_medium: "تنبيه",
+    sev_low: "للعلم",
+    open_title_blocked: "تبدو هذه الرسالة خطيرة",
+    open_title_high: "يبدو أن هذه محاولة تصيّد احتيالي",
+    open_title_warning: "توخَّ الحذر مع هذه الرسالة",
+    open_title_caution: "تنبيه سريع بشأن هذه الرسالة",
+    open_body_blocked:
+      "تحمل علامات قوية على احتيال يهدف إلى سرقة المعلومات أو الأموال أو كلمات المرور.",
+    open_body_high:
+      "قد يكون أحدهم ينتحل شخصية شخص أو شركة تثق بها.",
+    open_body_warning:
+      "هناك أمر غير معتاد. تحقق ممن أرسلها فعلًا قبل أن تتصرف.",
+    open_body_caution:
+      "غالبًا لا بأس بها — لكن كن حذرًا قبل مشاركة أي معلومات حساسة.",
+    open_action_report:
+      "لا تنقر على الروابط ولا تفتح المرفقات. إذا لم تكن تتوقع هذه الرسالة، فأبلغ عنها واحذفها.",
+    open_action_proceed:
+      "لا بأس بقراءتها — لكن لا تشارك كلمات المرور أو تفاصيل الدفع أو الرموز حتى تتأكد.",
   },
   de: {
     lookalike_recipient:
-      "Die Empfängerdomain {domain} ähnelt {ref}. Meinten Sie {ref}?",
+      "{domain} sieht fast genauso aus wie {ref}, eine Adresse, an die Sie schon einmal geschrieben haben. Meinten Sie {ref}?",
     external_on_internal_thread:
-      "Sie fügen einen externen Empfänger ({domain}) zu einem zuvor internen Thread hinzu.",
-    did_you_mean: "Meinten Sie: {suggestion}",
-    warning_header: "SN360 Sendewarnung",
-    ack_button: "Bestätigen",
+      "Sie fügen einen externen Empfänger ({domain}) zu einer Unterhaltung hinzu, an der bisher nur Ihre Kolleginnen und Kollegen beteiligt waren.",
+    did_you_mean: "Meinten Sie {suggestion}?",
+    safety_check: "ShieldNet 360 Sicherheitscheck",
+    send_title_lookalike: "Prüfen Sie diese E-Mail-Adresse noch einmal",
+    send_title_external: "Sie schreiben jemandem außerhalb Ihres Unternehmens",
+    send_title_generic: "Nehmen Sie sich vor dem Senden einen Moment",
+    send_action:
+      "Wenn Sie alle Empfänger kennen, können Sie senden. Andernfalls korrigieren Sie die Adresse oder entfernen Sie sie zuerst.",
+    ack_button: "Geprüft — sieht richtig aus",
+    ack_confirmation: "Erledigt — notiert. Senden Sie, wenn Sie bereit sind.",
+    home_body:
+      "ShieldNet 360 behält Ihre E-Mails im Blick. Öffnen Sie einen Entwurf, und wir prüfen ihn vor dem Senden – und markieren riskante Nachrichten beim Lesen. Keine Einrichtung nötig.",
+    sev_critical: "Hohes Risiko",
+    sev_high: "Bitte prüfen",
+    sev_medium: "Hinweis",
+    sev_low: "Zur Info",
+    open_title_blocked: "Diese Nachricht sieht gefährlich aus",
+    open_title_high: "Das sieht nach einem Phishing-Versuch aus",
+    open_title_warning: "Seien Sie bei dieser Nachricht vorsichtig",
+    open_title_caution: "Ein kurzer Hinweis zu dieser Nachricht",
+    open_body_blocked:
+      "Sie zeigt deutliche Anzeichen eines Betrugs, der Informationen, Geld oder Passwörter stehlen soll.",
+    open_body_high:
+      "Möglicherweise gibt sich jemand als eine Person oder ein Unternehmen aus, dem Sie vertrauen.",
+    open_body_warning:
+      "Etwas ist hier ungewöhnlich. Prüfen Sie, wer die Nachricht wirklich gesendet hat, bevor Sie handeln.",
+    open_body_caution:
+      "Wahrscheinlich unbedenklich – seien Sie nur vorsichtig, bevor Sie Sensibles teilen.",
+    open_action_report:
+      "Klicken Sie nicht auf Links und öffnen Sie keine Anhänge. Wenn Sie diese Nachricht nicht erwartet haben, melden und löschen Sie sie.",
+    open_action_proceed:
+      "Lesen ist in Ordnung – teilen Sie nur keine Passwörter, Zahlungsdaten oder Codes, bis Sie sicher sind.",
   },
   fr: {
     lookalike_recipient:
-      "Le domaine du destinataire {domain} ressemble à {ref}. Vouliez-vous dire {ref} ?",
+      "{domain} ressemble à s'y méprendre à {ref}, une adresse à laquelle vous avez déjà écrit. Vouliez-vous dire {ref} ?",
     external_on_internal_thread:
-      "Vous ajoutez un destinataire externe ({domain}) à une conversation jusqu'ici interne.",
-    did_you_mean: "Vouliez-vous dire : {suggestion}",
-    warning_header: "Avertissement d'envoi SN360",
-    ack_button: "Confirmer",
+      "Vous ajoutez un destinataire externe ({domain}) à une conversation qui n'incluait que vos collègues jusqu'à présent.",
+    did_you_mean: "Vouliez-vous dire {suggestion} ?",
+    safety_check: "Contrôle de sécurité ShieldNet 360",
+    send_title_lookalike: "Vérifiez bien cette adresse e-mail",
+    send_title_external: "Vous écrivez à une personne extérieure à votre entreprise",
+    send_title_generic: "Prenez un instant avant d'envoyer",
+    send_action:
+      "Si vous reconnaissez tous les destinataires, vous pouvez envoyer. Sinon, corrigez l'adresse ou retirez-les d'abord.",
+    ack_button: "J'ai vérifié — c'est correct",
+    ack_confirmation: "C'est noté. Envoyez quand vous êtes prêt.",
+    home_body:
+      "ShieldNet 360 veille sur vos e-mails. Ouvrez un brouillon et nous le vérifierons avant l'envoi — et nous signalerons les messages à risque pendant que vous les lisez. Aucune configuration requise.",
+    sev_critical: "Risque élevé",
+    sev_high: "À vérifier",
+    sev_medium: "À noter",
+    sev_low: "Pour information",
+    open_title_blocked: "Ce message semble dangereux",
+    open_title_high: "Cela ressemble à une tentative d'hameçonnage",
+    open_title_warning: "Soyez prudent avec ce message",
+    open_title_caution: "Une petite mise en garde à propos de ce message",
+    open_body_blocked:
+      "Il présente de forts signes d'une arnaque visant à voler des informations, de l'argent ou des mots de passe.",
+    open_body_high:
+      "Quelqu'un se fait peut-être passer pour une personne ou une entreprise de confiance.",
+    open_body_warning:
+      "Quelque chose d'inhabituel ici. Vérifiez qui l'a réellement envoyé avant d'agir.",
+    open_body_caution:
+      "C'est probablement sans danger — restez simplement vigilant avant de partager des informations sensibles.",
+    open_action_report:
+      "Ne cliquez pas sur les liens et n'ouvrez pas les pièces jointes. Si vous n'attendiez pas ce message, signalez-le et supprimez-le.",
+    open_action_proceed:
+      "Vous pouvez le lire — ne partagez simplement pas de mots de passe, d'informations de paiement ou de codes avant d'être sûr.",
   },
   es: {
     lookalike_recipient:
-      "El dominio del destinatario {domain} se parece a {ref}. ¿Quería decir {ref}?",
+      "{domain} se parece muchísimo a {ref}, una dirección a la que ya has escrito. ¿Querías decir {ref}?",
     external_on_internal_thread:
-      "Está añadiendo un destinatario externo ({domain}) a una conversación que hasta ahora era interna.",
-    did_you_mean: "¿Quería decir: {suggestion}?",
-    warning_header: "Advertencia de envío de SN360",
-    ack_button: "Confirmar",
+      "Estás añadiendo un destinatario externo ({domain}) a una conversación en la que hasta ahora solo participaban tus compañeros.",
+    did_you_mean: "¿Querías decir {suggestion}?",
+    safety_check: "Comprobación de seguridad de ShieldNet 360",
+    send_title_lookalike: "Vuelve a comprobar esta dirección de correo",
+    send_title_external: "Estás escribiendo a alguien de fuera de tu empresa",
+    send_title_generic: "Tómate un momento antes de enviar",
+    send_action:
+      "Si reconoces a todos los destinatarios, puedes enviar. Si no, corrige la dirección o quítalos primero.",
+    ack_button: "Lo he comprobado — está bien",
+    ack_confirmation: "Hecho — lo anotamos. Envía cuando quieras.",
+    home_body:
+      "ShieldNet 360 vigila tu correo. Abre un borrador y lo revisaremos antes de enviar, y marcaremos los mensajes de riesgo mientras los lees. Sin configuración.",
+    sev_critical: "Riesgo alto",
+    sev_high: "Conviene comprobar",
+    sev_medium: "Aviso",
+    sev_low: "Para tu información",
+    open_title_blocked: "Este mensaje parece peligroso",
+    open_title_high: "Esto parece un intento de phishing",
+    open_title_warning: "Ten cuidado con este mensaje",
+    open_title_caution: "Un aviso rápido sobre este mensaje",
+    open_body_blocked:
+      "Tiene claros indicios de una estafa creada para robar información, dinero o contraseñas.",
+    open_body_high:
+      "Puede que alguien se esté haciendo pasar por una persona o empresa de confianza.",
+    open_body_warning:
+      "Hay algo inusual aquí. Comprueba quién lo envió realmente antes de actuar.",
+    open_body_caution:
+      "Probablemente no haya problema, pero mantente alerta antes de compartir algo sensible.",
+    open_action_report:
+      "No hagas clic en enlaces ni abras adjuntos. Si no esperabas este mensaje, denúncialo y elimínalo.",
+    open_action_proceed:
+      "Puedes leerlo, pero no compartas contraseñas, datos de pago ni códigos hasta estar seguro.",
   },
   pt: {
     lookalike_recipient:
-      "O domínio do destinatário {domain} é parecido com {ref}. Você quis dizer {ref}?",
+      "{domain} parece quase idêntico a {ref}, um endereço para o qual você já enviou. Você quis dizer {ref}?",
     external_on_internal_thread:
-      "Você está adicionando um destinatário externo ({domain}) a uma conversa que antes era interna.",
-    did_you_mean: "Você quis dizer: {suggestion}",
-    warning_header: "Aviso de envio do SN360",
-    ack_button: "Confirmar",
+      "Você está adicionando um destinatário externo ({domain}) a uma conversa que até agora só incluía seus colegas.",
+    did_you_mean: "Você quis dizer {suggestion}?",
+    safety_check: "Verificação de segurança do ShieldNet 360",
+    send_title_lookalike: "Confira novamente este endereço de e-mail",
+    send_title_external: "Você está enviando para alguém de fora da sua empresa",
+    send_title_generic: "Reserve um momento antes de enviar",
+    send_action:
+      "Se você reconhece todos os destinatários, pode enviar. Caso contrário, corrija o endereço ou remova-os primeiro.",
+    ack_button: "Eu verifiquei — está certo",
+    ack_confirmation: "Pronto — anotado. Envie quando estiver pronto.",
+    home_body:
+      "O ShieldNet 360 fica de olho no seu e-mail. Abra um rascunho e nós o verificaremos antes do envio — e sinalizaremos mensagens arriscadas enquanto você lê. Sem configuração.",
+    sev_critical: "Risco alto",
+    sev_high: "Vale conferir",
+    sev_medium: "Atenção",
+    sev_low: "Para sua informação",
+    open_title_blocked: "Esta mensagem parece perigosa",
+    open_title_high: "Isto parece uma tentativa de phishing",
+    open_title_warning: "Tenha cuidado com esta mensagem",
+    open_title_caution: "Um aviso rápido sobre esta mensagem",
+    open_body_blocked:
+      "Ela tem fortes sinais de um golpe criado para roubar informações, dinheiro ou senhas.",
+    open_body_high:
+      "Alguém pode estar se passando por uma pessoa ou empresa em que você confia.",
+    open_body_warning:
+      "Há algo incomum aqui. Verifique quem realmente enviou antes de agir.",
+    open_body_caution:
+      "Provavelmente está tudo bem — apenas fique atento antes de compartilhar algo sensível.",
+    open_action_report:
+      "Não clique em links nem abra anexos. Se você não esperava esta mensagem, denuncie e exclua.",
+    open_action_proceed:
+      "Pode ler — só não compartilhe senhas, dados de pagamento ou códigos até ter certeza.",
   },
   ms: {
     lookalike_recipient:
-      "Domain penerima {domain} kelihatan serupa dengan {ref}. Adakah anda maksudkan {ref}?",
+      "{domain} kelihatan hampir sama dengan {ref}, alamat yang pernah anda hantar sebelum ini. Adakah anda maksudkan {ref}?",
     external_on_internal_thread:
-      "Anda sedang menambah penerima luar ({domain}) ke dalam bualan yang sebelum ini dalaman sahaja.",
-    did_you_mean: "Adakah anda maksudkan: {suggestion}",
-    warning_header: "Amaran Hantar SN360",
-    ack_button: "Akui",
+      "Anda sedang menambah penerima luar ({domain}) ke dalam perbualan yang setakat ini hanya melibatkan rakan sekerja anda.",
+    did_you_mean: "Adakah anda maksudkan {suggestion}?",
+    safety_check: "Pemeriksaan keselamatan ShieldNet 360",
+    send_title_lookalike: "Semak semula alamat e-mel ini",
+    send_title_external: "Anda menghantar e-mel kepada seseorang di luar syarikat anda",
+    send_title_generic: "Luangkan seketika sebelum menghantar",
+    send_action:
+      "Jika anda mengenali semua penerima di sini, anda boleh menghantar. Jika tidak, betulkan alamat atau keluarkan mereka dahulu.",
+    ack_button: "Saya sudah semak — nampak betul",
+    ack_confirmation: "Selesai — kami catat. Hantar apabila anda sedia.",
+    home_body:
+      "ShieldNet 360 memerhati e-mel anda. Buka draf dan kami akan menyemaknya sebelum anda menghantar — dan menandai mesej berisiko semasa anda membaca. Tiada persediaan diperlukan.",
+    sev_critical: "Risiko tinggi",
+    sev_high: "Patut disemak",
+    sev_medium: "Perhatian",
+    sev_low: "Untuk makluman",
+    open_title_blocked: "Mesej ini kelihatan berbahaya",
+    open_title_high: "Ini kelihatan seperti percubaan pancingan data",
+    open_title_warning: "Berhati-hati dengan mesej ini",
+    open_title_caution: "Peringatan ringkas tentang mesej ini",
+    open_body_blocked:
+      "Ia menunjukkan tanda kuat penipuan yang direka untuk mencuri maklumat, wang atau kata laluan.",
+    open_body_high:
+      "Seseorang mungkin menyamar sebagai orang atau syarikat yang anda percayai.",
+    open_body_warning:
+      "Ada sesuatu yang luar biasa di sini. Sahkan siapa sebenarnya yang menghantar sebelum bertindak.",
+    open_body_caution:
+      "Mungkin tiada masalah — cuma berwaspada sebelum berkongsi maklumat sensitif.",
+    open_action_report:
+      "Jangan klik pautan atau buka lampiran. Jika anda tidak menjangkakan mesej ini, laporkan dan padamkannya.",
+    open_action_proceed:
+      "Anda boleh membacanya — cuma jangan kongsi kata laluan, butiran pembayaran atau kod sehingga anda pasti.",
   },
   id: {
     lookalike_recipient:
-      "Domain penerima {domain} terlihat mirip dengan {ref}. Apakah maksud Anda {ref}?",
+      "{domain} terlihat hampir sama dengan {ref}, alamat yang pernah Anda kirimi sebelumnya. Apakah maksud Anda {ref}?",
     external_on_internal_thread:
-      "Anda menambahkan penerima eksternal ({domain}) ke percakapan yang sebelumnya hanya internal.",
-    did_you_mean: "Apakah maksud Anda: {suggestion}",
-    warning_header: "Peringatan Kirim SN360",
-    ack_button: "Konfirmasi",
+      "Anda menambahkan penerima eksternal ({domain}) ke percakapan yang sampai sekarang hanya melibatkan rekan kerja Anda.",
+    did_you_mean: "Apakah maksud Anda {suggestion}?",
+    safety_check: "Pemeriksaan keamanan ShieldNet 360",
+    send_title_lookalike: "Periksa kembali alamat email ini",
+    send_title_external: "Anda mengirim email ke seseorang di luar perusahaan Anda",
+    send_title_generic: "Luangkan waktu sejenak sebelum mengirim",
+    send_action:
+      "Jika Anda mengenali semua penerima di sini, Anda bisa mengirim. Jika tidak, perbaiki alamatnya atau hapus mereka terlebih dahulu.",
+    ack_button: "Saya sudah memeriksa — sudah benar",
+    ack_confirmation: "Selesai — kami catat. Kirim saat Anda siap.",
+    home_body:
+      "ShieldNet 360 mengawasi email Anda. Buka draf dan kami akan memeriksanya sebelum Anda mengirim — dan menandai pesan berisiko saat Anda membaca. Tanpa pengaturan.",
+    sev_critical: "Risiko tinggi",
+    sev_high: "Perlu diperiksa",
+    sev_medium: "Perhatian",
+    sev_low: "Sebagai informasi",
+    open_title_blocked: "Pesan ini tampak berbahaya",
+    open_title_high: "Ini tampak seperti upaya phishing",
+    open_title_warning: "Berhati-hatilah dengan pesan ini",
+    open_title_caution: "Pemberitahuan singkat tentang pesan ini",
+    open_body_blocked:
+      "Pesan ini menunjukkan tanda kuat penipuan untuk mencuri informasi, uang, atau kata sandi.",
+    open_body_high:
+      "Seseorang mungkin menyamar sebagai orang atau perusahaan yang Anda percaya.",
+    open_body_warning:
+      "Ada yang tidak biasa di sini. Pastikan siapa yang benar-benar mengirim sebelum bertindak.",
+    open_body_caution:
+      "Mungkin tidak apa-apa — tetap waspada sebelum membagikan informasi sensitif.",
+    open_action_report:
+      "Jangan klik tautan atau buka lampiran. Jika Anda tidak mengharapkan pesan ini, laporkan dan hapus.",
+    open_action_proceed:
+      "Boleh dibaca — hanya saja jangan bagikan kata sandi, detail pembayaran, atau kode sampai Anda yakin.",
   },
   tr: {
     lookalike_recipient:
-      "Alıcı alan adı {domain}, {ref} adresine benziyor. {ref} demek mi istediniz?",
+      "{domain}, daha önce yazıştığınız {ref} adresine neredeyse birebir benziyor. {ref} demek mi istediniz?",
     external_on_internal_thread:
-      "Daha önce yalnızca dahili olan bir konuşmaya harici bir alıcı ({domain}) ekliyorsunuz.",
-    did_you_mean: "Şunu mu demek istediniz: {suggestion}",
-    warning_header: "SN360 Gönderme Uyarısı",
-    ack_button: "Onayla",
+      "Şimdiye kadar yalnızca iş arkadaşlarınızın bulunduğu bir konuşmaya harici bir alıcı ({domain}) ekliyorsunuz.",
+    did_you_mean: "{suggestion} demek mi istediniz?",
+    safety_check: "ShieldNet 360 güvenlik kontrolü",
+    send_title_lookalike: "Bu e-posta adresini bir kez daha kontrol edin",
+    send_title_external: "Şirketinizin dışından birine e-posta gönderiyorsunuz",
+    send_title_generic: "Göndermeden önce bir an durun",
+    send_action:
+      "Buradaki herkesi tanıyorsanız gönderebilirsiniz. Tanımıyorsanız adresi düzeltin veya onları önce çıkarın.",
+    ack_button: "Kontrol ettim — doğru görünüyor",
+    ack_confirmation: "Tamam — not aldık. Hazır olduğunuzda gönderin.",
+    home_body:
+      "ShieldNet 360 e-postanıza göz kulak olur. Bir taslak açın, göndermeden önce kontrol edelim — okurken riskli iletileri de işaretleriz. Kurulum gerekmez.",
+    sev_critical: "Yüksek risk",
+    sev_high: "Kontrol edilmeli",
+    sev_medium: "Uyarı",
+    sev_low: "Bilginize",
+    open_title_blocked: "Bu ileti tehlikeli görünüyor",
+    open_title_high: "Bu bir kimlik avı girişimine benziyor",
+    open_title_warning: "Bu iletiye dikkat edin",
+    open_title_caution: "Bu ileti hakkında kısa bir hatırlatma",
+    open_body_blocked:
+      "Bilgi, para veya parolaları çalmak için tasarlanmış bir dolandırıcılığın güçlü işaretlerini taşıyor.",
+    open_body_high:
+      "Biri güvendiğiniz bir kişi veya şirket gibi davranıyor olabilir.",
+    open_body_warning:
+      "Burada olağan dışı bir şey var. Harekete geçmeden önce gerçekte kimin gönderdiğini doğrulayın.",
+    open_body_caution:
+      "Muhtemelen sorun yok — yalnızca hassas bilgileri paylaşmadan önce dikkatli olun.",
+    open_action_report:
+      "Bağlantılara tıklamayın, ekleri açmayın. Bu iletiyi beklemiyorduysanız bildirin ve silin.",
+    open_action_proceed:
+      "Okuyabilirsiniz — yalnızca emin olana kadar parola, ödeme bilgisi veya kod paylaşmayın.",
   },
 };
 

@@ -489,129 +489,255 @@
   const I18N = {
     en: {
       lookalike_recipient:
-        "Recipient domain {domain} looks similar to {ref}. Did you mean {ref}?",
+        "{domain} looks almost identical to {ref}, a contact you've emailed before. Did you mean {ref}?",
       external_on_internal_thread:
-        "You're adding an external recipient ({domain}) to a previously internal thread.",
-      banner_high: "SN360 warning: ",
-      confirm_suffix:
-        "\n\nReview the recipient list before resending if this is intentional.",
+        "You're adding an external recipient ({domain}) to a thread that's only included your colleagues until now.",
+      did_you_mean: "Did you mean {suggestion}?",
+      safety_check: "ShieldNet 360 safety check",
+      send_title_lookalike: "Double-check this email address",
+      send_title_external: "You're emailing someone outside your company",
+      send_title_generic: "Take a moment before you send",
+      send_action:
+        "If you recognise everyone here, you can send. If not, fix the address or remove them first.",
+      ack_button: "I've checked — looks right",
+      sev_critical: "High risk",
+      sev_high: "Worth a check",
+      sev_medium: "Heads-up",
+      sev_low: "For your awareness",
     },
     vi: {
       lookalike_recipient:
-        "Tên miền người nhận {domain} trông giống với {ref}. Bạn có ý định gửi tới {ref} không?",
+        "{domain} trông gần giống hệt {ref}, một địa chỉ bạn từng gửi trước đây. Bạn có muốn gửi tới {ref} không?",
       external_on_internal_thread:
-        "Bạn đang thêm một người nhận bên ngoài ({domain}) vào một chuỗi thư trước đây chỉ nội bộ.",
-      banner_high: "Cảnh báo SN360: ",
-      confirm_suffix:
-        "\n\nHãy kiểm tra lại danh sách người nhận trước khi gửi lại nếu điều này là cố ý.",
+        "Bạn đang thêm một người nhận bên ngoài ({domain}) vào cuộc trò chuyện mà đến nay chỉ có đồng nghiệp của bạn.",
+      did_you_mean: "Bạn có muốn gửi tới {suggestion} không?",
+      safety_check: "Kiểm tra an toàn ShieldNet 360",
+      send_title_lookalike: "Kiểm tra lại địa chỉ email này",
+      send_title_external: "Bạn đang gửi cho người ngoài công ty",
+      send_title_generic: "Hãy kiểm tra một chút trước khi gửi",
+      send_action:
+        "Nếu bạn nhận ra tất cả người nhận, bạn có thể gửi. Nếu không, hãy sửa địa chỉ hoặc xóa họ trước.",
+      ack_button: "Tôi đã kiểm tra — ổn rồi",
+      sev_critical: "Rủi ro cao",
+      sev_high: "Nên kiểm tra",
+      sev_medium: "Lưu ý",
+      sev_low: "Để bạn biết",
     },
     th: {
       lookalike_recipient:
-        "โดเมนผู้รับ {domain} มีลักษณะคล้ายกับ {ref} คุณต้องการส่งถึง {ref} ใช่หรือไม่",
+        "{domain} ดูเกือบเหมือนกับ {ref} ซึ่งเป็นที่อยู่ที่คุณเคยส่งถึงมาก่อน คุณต้องการส่งถึง {ref} ใช่หรือไม่",
       external_on_internal_thread:
-        "คุณกำลังเพิ่มผู้รับภายนอก ({domain}) เข้าในเธรดที่ก่อนหน้านี้เป็นการสื่อสารภายในเท่านั้น",
-      banner_high: "คำเตือน SN360: ",
-      confirm_suffix:
-        "\n\nโปรดตรวจสอบรายชื่อผู้รับก่อนส่งอีกครั้งหากเป็นความตั้งใจ",
+        "คุณกำลังเพิ่มผู้รับภายนอก ({domain}) เข้าในการสนทนาที่จนถึงตอนนี้มีแต่เพื่อนร่วมงานของคุณ",
+      did_you_mean: "คุณหมายถึง {suggestion} ใช่หรือไม่",
+      safety_check: "การตรวจสอบความปลอดภัย ShieldNet 360",
+      send_title_lookalike: "ตรวจสอบที่อยู่อีเมลนี้อีกครั้ง",
+      send_title_external: "คุณกำลังส่งอีเมลถึงคนนอกบริษัท",
+      send_title_generic: "หยุดสักครู่ก่อนส่ง",
+      send_action:
+        "หากคุณรู้จักผู้รับทุกคน คุณสามารถส่งได้ หากไม่ใช่ โปรดแก้ไขที่อยู่หรือเอาออกก่อน",
+      ack_button: "ฉันตรวจสอบแล้ว — ดูถูกต้อง",
+      sev_critical: "ความเสี่ยงสูง",
+      sev_high: "ควรตรวจสอบ",
+      sev_medium: "ข้อควรทราบ",
+      sev_low: "เพื่อให้คุณทราบ",
     },
     ja: {
       lookalike_recipient:
-        "宛先ドメイン {domain} は {ref} に酷似しています。{ref} のことではありませんか？",
+        "{domain} は、以前に送信したことのある {ref} とほぼ同じに見えます。{ref} のことではありませんか？",
       external_on_internal_thread:
-        "これまで社内のみだったスレッドに、社外の宛先（{domain}）を追加しようとしています。",
-      banner_high: "SN360 の警告: ",
-      confirm_suffix:
-        "\n\n意図的な場合は、再送信する前に宛先リストをご確認ください。",
+        "これまで社内の同僚だけだったスレッドに、社外の宛先（{domain}）を追加しようとしています。",
+      did_you_mean: "{suggestion} のことではありませんか？",
+      safety_check: "ShieldNet 360 セーフティチェック",
+      send_title_lookalike: "このメールアドレスをもう一度確認してください",
+      send_title_external: "社外の相手にメールを送ろうとしています",
+      send_title_generic: "送信する前に少し確認しましょう",
+      send_action:
+        "宛先の全員に心当たりがあれば送信できます。なければ、アドレスを修正するか宛先から削除してください。",
+      ack_button: "確認しました — 問題ありません",
+      sev_critical: "高リスク",
+      sev_high: "要確認",
+      sev_medium: "ご注意",
+      sev_low: "ご参考",
     },
     ko: {
       lookalike_recipient:
-        "받는 사람 도메인 {domain}이(가) {ref}과(와) 유사합니다. {ref}을(를) 의도하셨나요?",
+        "{domain}은(는) 이전에 보낸 적 있는 {ref}과(와) 거의 똑같아 보입니다. {ref}을(를) 의도하셨나요?",
       external_on_internal_thread:
-        "이전에는 내부 전용이던 스레드에 외부 수신자({domain})를 추가하고 있습니다.",
-      banner_high: "SN360 경고: ",
-      confirm_suffix:
-        "\n\n의도한 것이라면 다시 보내기 전에 수신자 목록을 확인하세요.",
+        "지금까지 동료들만 있던 대화에 외부 수신자({domain})를 추가하고 있습니다.",
+      did_you_mean: "{suggestion}을(를) 의도하셨나요?",
+      safety_check: "ShieldNet 360 보안 점검",
+      send_title_lookalike: "이 이메일 주소를 다시 확인하세요",
+      send_title_external: "회사 외부 사람에게 메일을 보내고 있습니다",
+      send_title_generic: "보내기 전에 잠시 확인하세요",
+      send_action:
+        "여기 모든 수신자를 알아본다면 보내도 됩니다. 그렇지 않다면 주소를 고치거나 먼저 삭제하세요.",
+      ack_button: "확인했습니다 — 맞습니다",
+      sev_critical: "높은 위험",
+      sev_high: "확인 권장",
+      sev_medium: "참고",
+      sev_low: "안내",
     },
     zh: {
       lookalike_recipient:
-        "收件人域名 {domain} 与 {ref} 非常相似。您是否想发送给 {ref}？",
+        "{domain} 与您以前发送过的 {ref} 几乎一模一样。您是想发送给 {ref} 吗？",
       external_on_internal_thread:
-        "您正在将外部收件人（{domain}）添加到此前仅限内部的会话中。",
-      banner_high: "SN360 警告：",
-      confirm_suffix:
-        "\n\n如果这是有意的，请在重新发送前检查收件人列表。",
+        "您正在将外部收件人（{domain}）添加到一个至今只有同事参与的会话中。",
+      did_you_mean: "您是想发送给 {suggestion} 吗？",
+      safety_check: "ShieldNet 360 安全检查",
+      send_title_lookalike: "请再次核对这个邮箱地址",
+      send_title_external: "您正在给公司以外的人发邮件",
+      send_title_generic: "发送前请稍作确认",
+      send_action:
+        "如果您认识这里的每个人，就可以发送。如果不认识，请先更正地址或将其移除。",
+      ack_button: "我已核对 — 没问题",
+      sev_critical: "高风险",
+      sev_high: "建议核对",
+      sev_medium: "提醒",
+      sev_low: "供您参考",
     },
     ar: {
       lookalike_recipient:
-        "نطاق المستلِم {domain} يشبه {ref}. هل تقصد {ref}؟",
+        "يبدو {domain} مطابقًا تقريبًا لـ {ref}، وهو عنوان راسلته من قبل. هل تقصد {ref}؟",
       external_on_internal_thread:
-        "أنت تضيف مستلِمًا خارجيًا ({domain}) إلى محادثة كانت داخلية فقط في السابق.",
-      banner_high: "تحذير SN360: ",
-      confirm_suffix:
-        "\n\nراجع قائمة المستلِمين قبل إعادة الإرسال إذا كان ذلك مقصودًا.",
+        "أنت تضيف مستلِمًا خارجيًا ({domain}) إلى محادثة لم تضم سوى زملائك حتى الآن.",
+      did_you_mean: "هل تقصد {suggestion}؟",
+      safety_check: "فحص أمان ShieldNet 360",
+      send_title_lookalike: "تحقق جيدًا من عنوان البريد هذا",
+      send_title_external: "أنت تراسل شخصًا خارج شركتك",
+      send_title_generic: "تمهّل لحظة قبل الإرسال",
+      send_action:
+        "إذا كنت تعرف كل المستلِمين هنا، يمكنك الإرسال. وإن لم تكن كذلك، فصحّح العنوان أو احذفهم أولًا.",
+      ack_button: "لقد تحققت — يبدو صحيحًا",
+      sev_critical: "خطر مرتفع",
+      sev_high: "يستحق التحقق",
+      sev_medium: "تنبيه",
+      sev_low: "للعلم",
     },
     de: {
       lookalike_recipient:
-        "Die Empfängerdomain {domain} ähnelt {ref}. Meinten Sie {ref}?",
+        "{domain} sieht fast genauso aus wie {ref}, eine Adresse, an die Sie schon einmal geschrieben haben. Meinten Sie {ref}?",
       external_on_internal_thread:
-        "Sie fügen einen externen Empfänger ({domain}) zu einem zuvor internen Thread hinzu.",
-      banner_high: "SN360-Warnung: ",
-      confirm_suffix:
-        "\n\nÜberprüfen Sie die Empfängerliste vor dem erneuten Senden, falls dies beabsichtigt ist.",
+        "Sie fügen einen externen Empfänger ({domain}) zu einer Unterhaltung hinzu, an der bisher nur Ihre Kolleginnen und Kollegen beteiligt waren.",
+      did_you_mean: "Meinten Sie {suggestion}?",
+      safety_check: "ShieldNet 360 Sicherheitscheck",
+      send_title_lookalike: "Prüfen Sie diese E-Mail-Adresse noch einmal",
+      send_title_external: "Sie schreiben jemandem außerhalb Ihres Unternehmens",
+      send_title_generic: "Nehmen Sie sich vor dem Senden einen Moment",
+      send_action:
+        "Wenn Sie alle Empfänger kennen, können Sie senden. Andernfalls korrigieren Sie die Adresse oder entfernen Sie sie zuerst.",
+      ack_button: "Geprüft — sieht richtig aus",
+      sev_critical: "Hohes Risiko",
+      sev_high: "Bitte prüfen",
+      sev_medium: "Hinweis",
+      sev_low: "Zur Info",
     },
     fr: {
       lookalike_recipient:
-        "Le domaine du destinataire {domain} ressemble à {ref}. Vouliez-vous dire {ref} ?",
+        "{domain} ressemble à s'y méprendre à {ref}, une adresse à laquelle vous avez déjà écrit. Vouliez-vous dire {ref} ?",
       external_on_internal_thread:
-        "Vous ajoutez un destinataire externe ({domain}) à une conversation jusqu'ici interne.",
-      banner_high: "Avertissement SN360 : ",
-      confirm_suffix:
-        "\n\nVérifiez la liste des destinataires avant de renvoyer si cela est intentionnel.",
+        "Vous ajoutez un destinataire externe ({domain}) à une conversation qui n'incluait que vos collègues jusqu'à présent.",
+      did_you_mean: "Vouliez-vous dire {suggestion} ?",
+      safety_check: "Contrôle de sécurité ShieldNet 360",
+      send_title_lookalike: "Vérifiez bien cette adresse e-mail",
+      send_title_external: "Vous écrivez à une personne extérieure à votre entreprise",
+      send_title_generic: "Prenez un instant avant d'envoyer",
+      send_action:
+        "Si vous reconnaissez tous les destinataires, vous pouvez envoyer. Sinon, corrigez l'adresse ou retirez-les d'abord.",
+      ack_button: "J'ai vérifié — c'est correct",
+      sev_critical: "Risque élevé",
+      sev_high: "À vérifier",
+      sev_medium: "À noter",
+      sev_low: "Pour information",
     },
     es: {
       lookalike_recipient:
-        "El dominio del destinatario {domain} se parece a {ref}. ¿Quería decir {ref}?",
+        "{domain} se parece muchísimo a {ref}, una dirección a la que ya has escrito. ¿Querías decir {ref}?",
       external_on_internal_thread:
-        "Está añadiendo un destinatario externo ({domain}) a una conversación que hasta ahora era interna.",
-      banner_high: "Advertencia de SN360: ",
-      confirm_suffix:
-        "\n\nRevise la lista de destinatarios antes de volver a enviar si esto es intencionado.",
+        "Estás añadiendo un destinatario externo ({domain}) a una conversación en la que hasta ahora solo participaban tus compañeros.",
+      did_you_mean: "¿Querías decir {suggestion}?",
+      safety_check: "Comprobación de seguridad de ShieldNet 360",
+      send_title_lookalike: "Vuelve a comprobar esta dirección de correo",
+      send_title_external: "Estás escribiendo a alguien de fuera de tu empresa",
+      send_title_generic: "Tómate un momento antes de enviar",
+      send_action:
+        "Si reconoces a todos los destinatarios, puedes enviar. Si no, corrige la dirección o quítalos primero.",
+      ack_button: "Lo he comprobado — está bien",
+      sev_critical: "Riesgo alto",
+      sev_high: "Conviene comprobar",
+      sev_medium: "Aviso",
+      sev_low: "Para tu información",
     },
     pt: {
       lookalike_recipient:
-        "O domínio do destinatário {domain} é parecido com {ref}. Você quis dizer {ref}?",
+        "{domain} parece quase idêntico a {ref}, um endereço para o qual você já enviou. Você quis dizer {ref}?",
       external_on_internal_thread:
-        "Você está adicionando um destinatário externo ({domain}) a uma conversa que antes era interna.",
-      banner_high: "Aviso do SN360: ",
-      confirm_suffix:
-        "\n\nRevise a lista de destinatários antes de reenviar, caso isso seja intencional.",
+        "Você está adicionando um destinatário externo ({domain}) a uma conversa que até agora só incluía seus colegas.",
+      did_you_mean: "Você quis dizer {suggestion}?",
+      safety_check: "Verificação de segurança do ShieldNet 360",
+      send_title_lookalike: "Confira novamente este endereço de e-mail",
+      send_title_external: "Você está enviando para alguém de fora da sua empresa",
+      send_title_generic: "Reserve um momento antes de enviar",
+      send_action:
+        "Se você reconhece todos os destinatários, pode enviar. Caso contrário, corrija o endereço ou remova-os primeiro.",
+      ack_button: "Eu verifiquei — está certo",
+      sev_critical: "Risco alto",
+      sev_high: "Vale conferir",
+      sev_medium: "Atenção",
+      sev_low: "Para sua informação",
     },
     ms: {
       lookalike_recipient:
-        "Domain penerima {domain} kelihatan serupa dengan {ref}. Adakah anda maksudkan {ref}?",
+        "{domain} kelihatan hampir sama dengan {ref}, alamat yang pernah anda hantar sebelum ini. Adakah anda maksudkan {ref}?",
       external_on_internal_thread:
-        "Anda sedang menambah penerima luar ({domain}) ke dalam bualan yang sebelum ini dalaman sahaja.",
-      banner_high: "Amaran SN360: ",
-      confirm_suffix:
-        "\n\nSemak senarai penerima sebelum menghantar semula jika ini disengajakan.",
+        "Anda sedang menambah penerima luar ({domain}) ke dalam perbualan yang setakat ini hanya melibatkan rakan sekerja anda.",
+      did_you_mean: "Adakah anda maksudkan {suggestion}?",
+      safety_check: "Pemeriksaan keselamatan ShieldNet 360",
+      send_title_lookalike: "Semak semula alamat e-mel ini",
+      send_title_external: "Anda menghantar e-mel kepada seseorang di luar syarikat anda",
+      send_title_generic: "Luangkan seketika sebelum menghantar",
+      send_action:
+        "Jika anda mengenali semua penerima di sini, anda boleh menghantar. Jika tidak, betulkan alamat atau keluarkan mereka dahulu.",
+      ack_button: "Saya sudah semak — nampak betul",
+      sev_critical: "Risiko tinggi",
+      sev_high: "Patut disemak",
+      sev_medium: "Perhatian",
+      sev_low: "Untuk makluman",
     },
     id: {
       lookalike_recipient:
-        "Domain penerima {domain} terlihat mirip dengan {ref}. Apakah maksud Anda {ref}?",
+        "{domain} terlihat hampir sama dengan {ref}, alamat yang pernah Anda kirimi sebelumnya. Apakah maksud Anda {ref}?",
       external_on_internal_thread:
-        "Anda menambahkan penerima eksternal ({domain}) ke percakapan yang sebelumnya hanya internal.",
-      banner_high: "Peringatan SN360: ",
-      confirm_suffix:
-        "\n\nPeriksa kembali daftar penerima sebelum mengirim ulang jika ini disengaja.",
+        "Anda menambahkan penerima eksternal ({domain}) ke percakapan yang sampai sekarang hanya melibatkan rekan kerja Anda.",
+      did_you_mean: "Apakah maksud Anda {suggestion}?",
+      safety_check: "Pemeriksaan keamanan ShieldNet 360",
+      send_title_lookalike: "Periksa kembali alamat email ini",
+      send_title_external: "Anda mengirim email ke seseorang di luar perusahaan Anda",
+      send_title_generic: "Luangkan waktu sejenak sebelum mengirim",
+      send_action:
+        "Jika Anda mengenali semua penerima di sini, Anda bisa mengirim. Jika tidak, perbaiki alamatnya atau hapus mereka terlebih dahulu.",
+      ack_button: "Saya sudah memeriksa — sudah benar",
+      sev_critical: "Risiko tinggi",
+      sev_high: "Perlu diperiksa",
+      sev_medium: "Perhatian",
+      sev_low: "Sebagai informasi",
     },
     tr: {
       lookalike_recipient:
-        "Alıcı alan adı {domain}, {ref} adresine benziyor. {ref} demek mi istediniz?",
+        "{domain}, daha önce yazıştığınız {ref} adresine neredeyse birebir benziyor. {ref} demek mi istediniz?",
       external_on_internal_thread:
-        "Daha önce yalnızca dahili olan bir konuşmaya harici bir alıcı ({domain}) ekliyorsunuz.",
-      banner_high: "SN360 uyarısı: ",
-      confirm_suffix:
-        "\n\nBu kasıtlıysa yeniden göndermeden önce alıcı listesini gözden geçirin.",
+        "Şimdiye kadar yalnızca iş arkadaşlarınızın bulunduğu bir konuşmaya harici bir alıcı ({domain}) ekliyorsunuz.",
+      did_you_mean: "{suggestion} demek mi istediniz?",
+      safety_check: "ShieldNet 360 güvenlik kontrolü",
+      send_title_lookalike: "Bu e-posta adresini bir kez daha kontrol edin",
+      send_title_external: "Şirketinizin dışından birine e-posta gönderiyorsunuz",
+      send_title_generic: "Göndermeden önce bir an durun",
+      send_action:
+        "Buradaki herkesi tanıyorsanız gönderebilirsiniz. Tanımıyorsanız adresi düzeltin veya onları önce çıkarın.",
+      ack_button: "Kontrol ettim — doğru görünüyor",
+      sev_critical: "Yüksek risk",
+      sev_high: "Kontrol edilmeli",
+      sev_medium: "Uyarı",
+      sev_low: "Bilginize",
     },
   };
 
@@ -642,37 +768,105 @@
     return out;
   }
 
+  // The product brand name. Rendered in plain language everywhere a
+  // warning surfaces; we never show the internal "SN360" code-name or
+  // jargon like tier/level in the UI the end user reads.
+  const BRAND = "ShieldNet 360";
+
+  // Strip the "_client" suffix the add-in appends to client-side
+  // warnings so client + server variants of the same warning resolve
+  // to one plain-language title.
+  function baseCode(code) {
+    return String(code || "").replace(/_client$/, "");
+  }
+
+  // Map an overall warning level to a single, consistent severity ramp
+  // shared with the Gmail add-on. Colours mirror the ShieldNet 360
+  // brand tokens; Outlook's system notification strip can't render
+  // custom colours, so the label carries the meaning there and the
+  // colour is used by surfaces that can (the smart-alert markdown
+  // honours the host theme).
+  function severityFor(level) {
+    if (level >= 4) return { label: t("sev_critical"), color: "#e40014" };
+    if (level === 3) return { label: t("sev_high"), color: "#ff6900" };
+    if (level === 2) return { label: t("sev_medium"), color: "#edb200" };
+    return { label: t("sev_low"), color: "#255fe5" };
+  }
+
+  // Pick the plain-language headline for the dominant warning. We lead
+  // with the most actionable concern (a lookalike address) and fall
+  // back to a neutral, reassuring prompt.
+  function titleForWarnings(warnings) {
+    const codes = (warnings || []).map(function (w) {
+      return baseCode(w && w.code);
+    });
+    if (codes.indexOf("lookalike_recipient") >= 0) {
+      return t("send_title_lookalike");
+    }
+    if (codes.indexOf("external_on_internal_thread") >= 0) {
+      return t("send_title_external");
+    }
+    return t("send_title_generic");
+  }
+
   function showWarning(eventArgs, response) {
     if (!response || (response.overall_level || 0) < 3) {
       eventArgs.completed({ allowEvent: true });
       return;
     }
-    const top =
-      (response.warnings && response.warnings[0]) ||
-      { message: "Suspicious recipient detected." };
+    const level = response.overall_level || 0;
+    const sev = severityFor(level);
+    const warnings =
+      response.warnings && response.warnings.length
+        ? response.warnings
+        : [{ message: t("send_title_generic") }];
+    const title = titleForWarnings(warnings);
     // A warning object can arrive without a message field (older
-    // backend versions or partial responses). Fall back to a generic
-    // string rather than rendering "SN360 warning: undefined ..." in
-    // the InsightMessage banner.
-    const topMessage =
-      (top && top.message) || "Suspicious recipient detected.";
-    const banner = t("banner_high") + topMessage + t("confirm_suffix");
+    // backend versions or partial responses). Fall back to the plain
+    // title rather than rendering an empty detail line.
+    const detail = (warnings[0] && warnings[0].message) || title;
+
+    // 1) In-compose notification strip. System-rendered, capped at
+    //    ~150 chars and no custom colour, so we lead with the brand +
+    //    plain headline and let the detail trail (truncated cleanly).
+    const strip = BRAND + " — " + title + ": " + detail;
     try {
       Office.context.mailbox.item.notificationMessages.replaceAsync("sn360-presend", {
         type: Office.MailboxEnums.ItemNotificationMessageType.ErrorMessage,
-        // The notification message strip is capped at 150 chars by
-        // Outlook; longer messages are silently truncated server-side
-        // and look unprofessional. We truncate explicitly so the
-        // suffix doesn't get chopped mid-word.
-        message: banner.length > 150 ? banner.substring(0, 147) + "..." : banner,
+        message: strip.length > 150 ? strip.substring(0, 147) + "..." : strip,
       });
     } catch (_) {
       // Best-effort UI; we never block sends on a UI render error.
     }
-    // For Manifest v3 smart-alerts, allowEvent: false causes Outlook
-    // to surface the smart-alert dialog declared on the runtime; the
-    // user can override and resend, at which point Outlook fires
-    // onMessageSend again with the user's confirmation context.
+
+    // 2) Smart-alert dialog. With sendMode "promptUser", allowEvent:
+    //    false surfaces a blocking dialog the user can override. We
+    //    supply our own plain-language copy (what's risky, why it
+    //    matters, the one safe action) via errorMessage, plus a richer
+    //    markdown variant for hosts that render it. The user keeps a
+    //    clear override path — Outlook's dialog offers "Send anyway".
+    const plain = title + "\n\n" + detail + "\n\n" + t("send_action");
+    const markdown =
+      "**" +
+      sev.label +
+      " · " +
+      title +
+      "**\n\n" +
+      detail +
+      "\n\n*" +
+      t("send_action") +
+      "*";
+    try {
+      eventArgs.completed({
+        allowEvent: false,
+        errorMessage: plain,
+        errorMessageMarkdown: markdown,
+      });
+      return;
+    } catch (_) {
+      // Older hosts reject the extended options object; fall back to a
+      // bare block so we still honour the security decision.
+    }
     eventArgs.completed({ allowEvent: false });
   }
 

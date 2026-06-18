@@ -360,7 +360,7 @@ test("localizedMessage_ falls back to English for unknown locales", function () 
       domain: "acm3.com",
       ref: "acme.com",
     }),
-    "Recipient domain acm3.com looks similar to acme.com. Did you mean acme.com?"
+    "acm3.com looks almost identical to acme.com, a contact you've emailed before. Did you mean acme.com?"
   );
 });
 

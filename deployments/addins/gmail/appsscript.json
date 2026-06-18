@@ -19,8 +19,8 @@
   ],
   "addOns": {
     "common": {
-      "name": "SN360 Email Security",
-      "logoUrl": "https://sn360.example.com/icons/logo.png",
+      "name": "ShieldNet 360 Email Security",
+      "logoUrl": "https://shieldnet360.com/icon.png",
       "openLinkUrlPrefixes": [
         "https://sn360.example.com/",
         "https://api.sn360.example.com/"
@@ -45,7 +45,7 @@
       "composeTrigger": {
         "selectActions": [
           {
-            "text": "SN360 Pre-Send Check",
+            "text": "ShieldNet 360 safety check",
             "runFunction": "sn360PreSendTrigger"
           }
         ],

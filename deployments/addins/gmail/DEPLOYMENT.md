@@ -26,9 +26,41 @@ implementation):
    surface a warning. Thread participants are fetched via
    `Gmail.Users.Threads.get(METADATA)` from the advanced Gmail service.
 
-If any check fires at level ≥ 3, the add-in returns a `Card` containing
-a `Notification` plus a textual breakdown and an Acknowledge button. The
-user must click Acknowledge before the send proceeds.
+If any check fires, the add-in returns a branded `Card` that leads with
+a plain-language headline (what's risky), a colored severity label and a
+one-line "why it matters", and the single safe action to take. The user
+confirms before the send proceeds. See **Branding & warning UX** below.
+
+## Branding & warning UX (ShieldNet 360)
+
+The warning surfaces follow the ShieldNet 360 brand and plain-language
+voice (implemented in [`src/presend.gs`](src/presend.gs) and
+[`src/preopen.gs`](src/preopen.gs)):
+
+- **One message taxonomy, shared with Outlook.** Pre-send and pre-open
+  warnings use the same 23-key localized bundle and the same severity
+  ramp, so a given risk reads identically in Gmail and Outlook.
+- **Plain language, no jargon.** Cards say what's risky, why it matters,
+  and the one safe action — never internal codes, tiers, or categories.
+- **Severity ramp** (brand tokens): critical `#e40014`, high `#ff6900`,
+  medium `#edb200`, low/info `#255fe5`, rendered as a colored severity
+  label inside the card body.
+- **14 locales, RTL-correct.** All copy is keyed; `ar` renders
+  right-to-left.
+
+### Gmail CardService styling limits (documented)
+
+CardService is intentionally constrained — an add-on cannot ship custom
+CSS, web fonts, or arbitrary colors the way an Office.js task pane can.
+We match the brand within those limits:
+
+| Brand element | Gmail support | What we do |
+|---|---|---|
+| Logo | ✅ `logoUrl` in `appsscript.json` | ShieldNet 360 mark (`https://shieldnet360.com/icon.png`). |
+| Severity colors | ⚠️ inline `<font color>` only | Severity label colored with the brand token via `<font color="…">`. |
+| Brand-blue primary action | ⚠️ `TextButton` only | Action is a `TextButton`; Google controls the exact button chrome (it cannot be a filled brand-blue button). |
+| Noto Sans typeface | ❌ not configurable | Cards render in Google's card font. This is a platform limit, not a brand deviation. |
+| Custom layout / spacing | ❌ fixed | Card header + text paragraphs + text button only. |
 
 ## Performance budget
 
