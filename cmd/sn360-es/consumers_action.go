@@ -344,7 +344,8 @@ func (a *application) handleIngestionAction(ctx context.Context, msg events.Mess
 		}
 		if a.jwtIssuer != nil {
 			if tok, terr := a.jwtIssuer.Issue(res.TenantID, res.MessageID, privacy.IssueOptions{
-				Tier: string(res.Tier),
+				Tier:     string(res.Tier),
+				Audience: []string{privacy.AudienceActionFeedback},
 			}); terr == nil {
 				input.ActionToken = tok
 			} else {

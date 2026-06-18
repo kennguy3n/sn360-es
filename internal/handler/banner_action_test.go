@@ -45,13 +45,16 @@ func newTestFeedback(t *testing.T) (*action.FeedbackService, *privacy.JWTIssuer,
 		t.Fatalf("issuer: %v", err)
 	}
 	pub := &stubPublisher{}
-	svc := action.NewFeedbackService(slog.New(slog.NewTextHandler(io.Discard, nil)), issuer, pub, nil)
+	svc := action.NewFeedbackService(slog.New(slog.NewTextHandler(io.Discard, nil)), issuer, pub, nil, action.NewInMemorySingleUseStore())
 	return svc, issuer, pub
 }
 
 func issueBannerToken(t *testing.T, issuer *privacy.JWTIssuer, tenant, pmid, act string) string {
 	t.Helper()
-	tok, err := issuer.Issue(tenant, pmid, privacy.IssueOptions{Action: act})
+	tok, err := issuer.Issue(tenant, pmid, privacy.IssueOptions{
+		Action:   act,
+		Audience: []string{privacy.AudienceActionFeedback},
+	})
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}

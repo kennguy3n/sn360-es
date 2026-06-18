@@ -164,6 +164,36 @@ func (s redisURLStore) Get(ctx context.Context, key string) (string, bool, error
 	return s.client.Get(ctx, key)
 }
 
+// redisSingleUseStore adapts redis.Client to action.SingleUseStore via
+// SET NX: the first MarkConsumed for a token id creates the key (so the
+// caller is the first redeemer) and a replay finds it present. The key
+// carries a TTL >= the token's remaining lifetime so a jti cannot be
+// replayed within its validity window, after which Redis reclaims it.
+type redisSingleUseStore struct {
+	client *redis.Client
+	prefix string
+}
+
+func (s redisSingleUseStore) MarkConsumed(ctx context.Context, id string, ttl time.Duration) (bool, error) {
+	if id == "" {
+		return false, errors.New("action: empty token id")
+	}
+	// Floor a non-positive TTL the same way InMemorySingleUseStore does:
+	// a zero TTL would tell Redis to create a key with no expiry, leaking
+	// the consumed-jti entry forever. Both SingleUseStore backends must
+	// honor the same contract regardless of caller.
+	if ttl <= 0 {
+		ttl = time.Minute
+	}
+	set, err := s.client.SetNX(ctx, s.prefix+id, "1", ttl)
+	if err != nil {
+		return false, fmt.Errorf("action: single-use store: %w", err)
+	}
+	// SetNX set=true => key created (fresh token); set=false => the
+	// key already existed (token already redeemed within its TTL).
+	return !set, nil
+}
+
 // redisQuarantineStore adapts redis.Client to action.QuarantineStore.
 // The quarantine service writes hex-encoded encrypted records keyed by
 // QuarantineKey(tenant, pseudo_message_id).

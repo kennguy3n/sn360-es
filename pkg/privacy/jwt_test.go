@@ -440,3 +440,92 @@ func TestVerifyDetailWithOptions_ExpiryBeforeScope(t *testing.T) {
 		t.Error("Expired must be true so the audit path can record token_expired")
 	}
 }
+
+// TestJWTIssueStampsUniqueJTI is the replay-protection foundation: every
+// minted token carries a non-empty `jti`, and two tokens minted from the
+// same inputs get different ids — so the consume path can record a
+// per-token handle and refuse a second redemption.
+func TestJWTIssueStampsUniqueJTI(t *testing.T) {
+	iss := mustIssuer(t, time.Hour)
+	tokA, err := iss.Issue("tenant-1", "msg-abc", IssueOptions{})
+	if err != nil {
+		t.Fatalf("issue A: %v", err)
+	}
+	tokB, err := iss.Issue("tenant-1", "msg-abc", IssueOptions{})
+	if err != nil {
+		t.Fatalf("issue B: %v", err)
+	}
+	claimsA, err := iss.Verify(tokA)
+	if err != nil {
+		t.Fatalf("verify A: %v", err)
+	}
+	claimsB, err := iss.Verify(tokB)
+	if err != nil {
+		t.Fatalf("verify B: %v", err)
+	}
+	if claimsA.ID == "" {
+		t.Fatal("jti must be set on every token")
+	}
+	if claimsA.ID == claimsB.ID {
+		t.Errorf("two mints share jti %q; must be unique per token", claimsA.ID)
+	}
+}
+
+// TestJWTAudienceRoundTrip confirms the `aud` claim survives the
+// Issue → Verify round trip so the consume path can read it back.
+func TestJWTAudienceRoundTrip(t *testing.T) {
+	iss := mustIssuer(t, time.Hour)
+	tok, err := iss.Issue("tenant-1", "msg-abc", IssueOptions{
+		Audience: []string{AudienceActionFeedback},
+	})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	claims, err := iss.Verify(tok)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if len(claims.Audience) != 1 || claims.Audience[0] != AudienceActionFeedback {
+		t.Errorf("aud = %v, want [%s]", claims.Audience, AudienceActionFeedback)
+	}
+}
+
+// TestVerifyWithOptions_Audience covers audience binding at the verify
+// layer: a token bound to the expected audience is accepted, a token
+// bound to a different audience is rejected with ErrAudienceNotPermitted,
+// and a token with no `aud` claim is accepted (backward compatibility for
+// tokens minted before audience binding).
+func TestVerifyWithOptions_Audience(t *testing.T) {
+	iss := mustIssuer(t, time.Hour)
+
+	t.Run("matching audience accepted", func(t *testing.T) {
+		tok, err := iss.Issue("t", "m", IssueOptions{Audience: []string{AudienceActionFeedback}})
+		if err != nil {
+			t.Fatalf("issue: %v", err)
+		}
+		if _, err := iss.VerifyWithOptions(tok, VerifyOptions{ExpectedAudience: AudienceActionFeedback}); err != nil {
+			t.Errorf("token with matching aud must verify: %v", err)
+		}
+	})
+
+	t.Run("wrong audience rejected", func(t *testing.T) {
+		tok, err := iss.Issue("t", "m", IssueOptions{Audience: []string{"sn360-es:other"}})
+		if err != nil {
+			t.Fatalf("issue: %v", err)
+		}
+		_, err = iss.VerifyWithOptions(tok, VerifyOptions{ExpectedAudience: AudienceActionFeedback})
+		if !errors.Is(err, ErrAudienceNotPermitted) {
+			t.Errorf("err = %v; want ErrAudienceNotPermitted", err)
+		}
+	})
+
+	t.Run("absent audience accepted for backward compat", func(t *testing.T) {
+		tok, err := iss.Issue("t", "m", IssueOptions{})
+		if err != nil {
+			t.Fatalf("issue: %v", err)
+		}
+		if _, err := iss.VerifyWithOptions(tok, VerifyOptions{ExpectedAudience: AudienceActionFeedback}); err != nil {
+			t.Errorf("token without aud must be accepted (legacy): %v", err)
+		}
+	})
+}

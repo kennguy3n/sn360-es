@@ -140,6 +140,14 @@ type application struct {
 	// assertProductionDurableStores so the prod boot gate fires on
 	// the real in-memory state.
 	usingMemoryConfigStore bool
+	// usingMemorySingleUseStore records whether the banner-action
+	// single-use (replay) guard fell back to the process-local
+	// InMemorySingleUseStore because no Redis was configured. Read by
+	// assertProductionDurableStores so the prod boot gate fires: a
+	// process-local guard makes replay protection node-local in a
+	// multi-replica deployment (a token can be redeemed once per
+	// instance), which is unacceptable in production.
+	usingMemorySingleUseStore bool
 	// tenantScoringConfig is the shared evaluator-side cache of
 	// per-tenant score_engine rows. It is read by the evaluator and
 	// batch orchestrator at verdict time and invalidated by
@@ -665,9 +673,23 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		logger.Warn("sn360-es: banner i18n catalog load failed", slog.Any("error", cerr))
 	}
 
-	// Feedback service.
+	// Feedback service. The single-use store enforces banner-token
+	// replay protection: Redis-backed when configured (fleet-wide
+	// guarantee, key TTL >= token expiry), else a process-local
+	// in-memory store for single-instance dev so the guard is never
+	// silently off. The in-memory fallback is node-local, so
+	// assertProductionDurableStores refuses to boot in production
+	// when it is the active store (replay protection must be
+	// fleet-wide there).
 	if app.jwtIssuer != nil {
-		app.feedbackSvc = action.NewFeedbackService(logger, app.jwtIssuer, eventBus, nil)
+		var singleUse action.SingleUseStore
+		if app.redis != nil {
+			singleUse = redisSingleUseStore{client: app.redis, prefix: "action:jti:"}
+		} else {
+			singleUse = action.NewInMemorySingleUseStore()
+			app.usingMemorySingleUseStore = true
+		}
+		app.feedbackSvc = action.NewFeedbackService(logger, app.jwtIssuer, eventBus, nil, singleUse)
 	}
 
 	// Quarantine store — a single instance shared by both the quarantine
@@ -1439,12 +1461,14 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 }
 
 // assertProductionDurableStores refuses to boot in production (UAT or
-// prod) when any service that owns durable state is backed by an
-// in-memory store. The matching persistent backends — Postgres for
-// ticket state, Redis for quarantine — are both already optional at
-// startup; this check is the safety belt that turns "silently
-// degraded" into "fail fast at boot" when running in an environment
-// where data loss would constitute an incident.
+// prod) when a service that owns durable state — or a security
+// guarantee that depends on shared state — is backed by an in-memory
+// store. The matching persistent backends — Postgres for ticket
+// state, Redis for quarantine and action-token replay protection —
+// are all already optional at startup; this check is the safety belt
+// that turns "silently degraded" into "fail fast at boot" when
+// running in an environment where data loss (or node-local replay
+// protection across replicas) would constitute an incident.
 //
 // In non-production environments this still logs each in-memory
 // fallback at warn level so operators see what's running with what
@@ -1500,6 +1524,19 @@ func assertProductionDurableStores(cfg *config.Config, app *application, logger 
 			blocker: true,
 		})
 	}
+	// The banner-action single-use store guards against action-token
+	// replay. The in-memory fallback is process-local, so in a
+	// multi-replica deployment a captured token could be redeemed once
+	// per instance (and consumed jtis are also forgotten across a
+	// restart) — both defeat the single-use guarantee, so this is a
+	// production blocker.
+	if app.feedbackSvc != nil && app.usingMemorySingleUseStore {
+		inMemory = append(inMemory, memStore{
+			name:    "banner action single-use store",
+			fix:     "configure REDIS_ADDR so action-token replay protection is enforced fleet-wide (the in-memory fallback is process-local: a captured token can be redeemed once per replica)",
+			blocker: true,
+		})
+	}
 
 	if len(inMemory) == 0 {
 		return nil
@@ -1514,14 +1551,14 @@ func assertProductionDurableStores(cfg *config.Config, app *application, logger 
 			blockerMsgs = append(blockerMsgs, s.name+" ("+s.fix+")")
 		}
 		logger.Log(context.Background(), level,
-			"sn360-es: in-memory store in use — data lost on restart",
+			"sn360-es: in-memory store in use — not durable across restarts or shared across instances",
 			slog.String("store", s.name),
 			slog.String("fix", s.fix),
 			slog.String("environment", string(cfg.Environment)),
 		)
 	}
 	if len(blockerMsgs) > 0 {
-		return fmt.Errorf("refusing to boot in %s: in-memory stores would lose data on restart: %s",
+		return fmt.Errorf("refusing to boot in %s: in-memory fallback stores are not durable across restarts or shared across instances: %s",
 			cfg.Environment, strings.Join(blockerMsgs, "; "))
 	}
 	return nil
