@@ -247,8 +247,14 @@ function sendTitleKey_(warnings) {
 }
 
 function buildSendWarningCard_(resp, locale) {
-  var warnings = (resp && resp.warnings) || [];
   var level = (resp && resp.overall_level) || 0;
+  // Mirror the Outlook add-in: if the backend returns a high level with no
+  // per-warning detail, synthesize a generic prompt so the card always
+  // explains itself and offers the safe action — never an empty body.
+  var warnings =
+    resp && resp.warnings && resp.warnings.length
+      ? resp.warnings
+      : [{ message: localizedMessage_("send_title_generic", locale, {}) }];
   var sev = severityForLevel_(level, locale);
   var headline = localizedMessage_(sendTitleKey_(warnings), locale, {});
   var section = CardService.newCardSection();

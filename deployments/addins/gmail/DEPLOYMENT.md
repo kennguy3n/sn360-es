@@ -39,7 +39,7 @@ voice (implemented in [`src/presend.gs`](src/presend.gs) and
 [`src/preopen.gs`](src/preopen.gs)):
 
 - **One message taxonomy, shared with Outlook.** Pre-send and pre-open
-  warnings use the same 23-key localized bundle and the same severity
+  warnings use the same 25-key localized bundle and the same severity
   ramp, so a given risk reads identically in Gmail and Outlook.
 - **Plain language, no jargon.** Cards say what's risky, why it matters,
   and the one safe action — never internal codes, tiers, or categories.

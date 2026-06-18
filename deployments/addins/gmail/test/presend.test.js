@@ -622,6 +622,29 @@ test("buildSendWarningCard_ renders one paragraph per warning and an acknowledge
   assert.equal(button._props.onClickAction._props.functionName, "sn360AcknowledgeWarning");
 });
 
+test("buildSendWarningCard_ synthesizes a non-empty body when warnings is empty", function () {
+  const stubs = makeStubs();
+  const presend = loadPresend(stubs.globals);
+  // High level with no per-warning detail (older/partial backend) must
+  // still produce an explanatory card + the safe action, mirroring the
+  // Outlook add-in — never a body that is just the acknowledge button.
+  const card = presend.buildSendWarningCard_({ overall_level: 3, warnings: [] }, "en");
+  const sec = card._children[0];
+  // 1 synthesized paragraph + 1 acknowledge button.
+  assert.equal(sec._children.length, 2);
+  const para = sec._children[0];
+  assert.equal(para._type, "textParagraph");
+  assert.notEqual((para._props.text || "").length, 0, "fallback paragraph must not be empty");
+  assert.notEqual(
+    para._props.text.indexOf("Take a moment before you send"),
+    -1,
+    "expected the generic plain-language headline in the fallback body"
+  );
+  const button = sec._children[sec._children.length - 1];
+  assert.equal(button._type, "textButton");
+  assert.equal(button._props.onClickAction._props.functionName, "sn360AcknowledgeWarning");
+});
+
 // === Fail-open contract ==============================================
 
 test("sn360PreSendTrigger swallows unexpected exceptions and returns no card", function () {
