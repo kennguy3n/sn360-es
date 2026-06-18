@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: "1.25.x"
+  GO_VERSION: "1.25.11"
   GHCR_IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
