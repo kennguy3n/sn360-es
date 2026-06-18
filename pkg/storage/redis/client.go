@@ -115,6 +115,18 @@ func (c *Client) Set(ctx context.Context, key, value string, ttl time.Duration) 
 	return c.rdb.Set(ctx, key, value, ttl).Err()
 }
 
+// SetNX atomically sets key=value with the given TTL (0 = no expiry)
+// only if key does not already exist. It returns set=true when the
+// key was created (the caller is the first writer) and set=false when
+// the key was already present, leaving the existing value untouched.
+//
+// It is the primitive behind single-use / replay guards (e.g. the
+// action-token jti store): the first holder of an identifier wins and
+// every later attempt observes set=false within the key's TTL window.
+func (c *Client) SetNX(ctx context.Context, key, value string, ttl time.Duration) (bool, error) {
+	return c.rdb.SetNX(ctx, key, value, ttl).Result()
+}
+
 // Del removes one or more keys.
 func (c *Client) Del(ctx context.Context, keys ...string) error {
 	return c.rdb.Del(ctx, keys...).Err()

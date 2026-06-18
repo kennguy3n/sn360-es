@@ -665,9 +665,19 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		logger.Warn("sn360-es: banner i18n catalog load failed", slog.Any("error", cerr))
 	}
 
-	// Feedback service.
+	// Feedback service. The single-use store enforces banner-token
+	// replay protection: Redis-backed when configured (fleet-wide
+	// guarantee, key TTL >= token expiry), else a process-local
+	// in-memory store for single-instance dev so the guard is never
+	// silently off.
 	if app.jwtIssuer != nil {
-		app.feedbackSvc = action.NewFeedbackService(logger, app.jwtIssuer, eventBus, nil)
+		var singleUse action.SingleUseStore
+		if app.redis != nil {
+			singleUse = redisSingleUseStore{client: app.redis, prefix: "action:jti:"}
+		} else {
+			singleUse = action.NewInMemorySingleUseStore()
+		}
+		app.feedbackSvc = action.NewFeedbackService(logger, app.jwtIssuer, eventBus, nil, singleUse)
 	}
 
 	// Quarantine store — a single instance shared by both the quarantine

@@ -71,16 +71,21 @@ type FeedbackService struct {
 	verifier  *privacy.JWTIssuer
 	publisher FeedbackPublisher
 	reEval    ReEvaluator
+	singleUse SingleUseStore
 }
 
 // NewFeedbackService wires up the dependencies. reEval may be nil if
 // the caller does not want to trigger re-evaluation; in that case
-// mark_safe / trust_sender still publish their events.
-func NewFeedbackService(logger *slog.Logger, verifier *privacy.JWTIssuer, publisher FeedbackPublisher, reEval ReEvaluator) *FeedbackService {
+// mark_safe / trust_sender still publish their events. singleUse is
+// the replay-protection store and is required: a banner token is
+// redeemable at most once, enforced by recording its `jti` before any
+// side effect (see Process). Callers without Redis pass an
+// InMemorySingleUseStore for single-instance enforcement.
+func NewFeedbackService(logger *slog.Logger, verifier *privacy.JWTIssuer, publisher FeedbackPublisher, reEval ReEvaluator, singleUse SingleUseStore) *FeedbackService {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &FeedbackService{logger: logger, verifier: verifier, publisher: publisher, reEval: reEval}
+	return &FeedbackService{logger: logger, verifier: verifier, publisher: publisher, reEval: reEval, singleUse: singleUse}
 }
 
 // FeedbackRequest is the validated form of an HTTP POST body. The
@@ -101,6 +106,12 @@ func (s *FeedbackService) Process(ctx context.Context, req FeedbackRequest) (str
 	if s.publisher == nil {
 		return "", errors.New("feedback: publisher not configured")
 	}
+	// The single-use store is mandatory: it is the replay guard, so a
+	// missing one is a fail-closed misconfiguration rather than a
+	// silently weaker code path.
+	if s.singleUse == nil {
+		return "", errors.New("feedback: single-use store not configured")
+	}
 	if !req.Action.Valid() {
 		return "", fmt.Errorf("feedback: invalid action %q", req.Action)
 	}
@@ -112,13 +123,21 @@ func (s *FeedbackService) Process(ctx context.Context, req FeedbackRequest) (str
 	// Action, so it sails past the Action check below) would publish
 	// feedback and trigger a re-evaluation under the victim's tenant.
 	claims, err := s.verifier.VerifyWithOptions(req.Token, privacy.VerifyOptions{
-		AllowedScopes: []string{privacy.ScopeBannerAction},
+		AllowedScopes:    []string{privacy.ScopeBannerAction},
+		ExpectedAudience: privacy.AudienceActionFeedback,
 	})
 	if err != nil {
 		return "", fmt.Errorf("feedback: verify token: %w", err)
 	}
 	if claims.Action != "" && claims.Action != string(req.Action) {
 		return "", fmt.Errorf("feedback: token bound to action %q, got %q", claims.Action, req.Action)
+	}
+	// Enforce single use before any side effect so a captured token
+	// cannot be redeemed twice (at-most-once). The jti is recorded
+	// for at least the token's remaining lifetime, so a replay within
+	// the validity window is refused; the store reclaims it after.
+	if err := s.consumeOnce(ctx, claims); err != nil {
+		return "", err
 	}
 	evt := FeedbackEvent{
 		TenantID:             claims.TenantID,
@@ -157,4 +176,40 @@ func (s *FeedbackService) Process(ctx context.Context, req FeedbackRequest) (str
 		}
 	}
 	return claims.PseudonymizedMessage, nil
+}
+
+// ErrTokenReplayed is returned by Process when a banner token is
+// redeemed a second time. The handler maps it to the same uniform 401
+// the other token-rejection paths return; it is a distinct error so
+// the audit layer can record a replay attempt separately from a
+// malformed or expired token.
+var ErrTokenReplayed = errors.New("feedback: token already used")
+
+// consumeOnce records the token's `jti` as consumed and refuses a
+// replay. A store error fails closed (the action is rejected) because
+// proceeding would silently disable replay protection. Tokens minted
+// before the `jti` claim existed carry no id; they cannot be deduped
+// and are allowed through with a warning during the (<= token-TTL)
+// drain window, after which every token carries a jti.
+func (s *FeedbackService) consumeOnce(ctx context.Context, claims *privacy.ActionClaims) error {
+	if claims.ID == "" {
+		s.logger.WarnContext(ctx, "action.feedback: token has no jti; replay protection skipped (legacy token)",
+			slog.String("tenant_id", claims.TenantID),
+		)
+		return nil
+	}
+	ttl := time.Minute
+	if exp := claims.ExpiresAt; exp != nil {
+		if remaining := time.Until(exp.Time) + time.Minute; remaining > ttl {
+			ttl = remaining
+		}
+	}
+	alreadyUsed, err := s.singleUse.MarkConsumed(ctx, claims.ID, ttl)
+	if err != nil {
+		return fmt.Errorf("feedback: replay check: %w", err)
+	}
+	if alreadyUsed {
+		return fmt.Errorf("%w (jti %s)", ErrTokenReplayed, claims.ID)
+	}
+	return nil
 }

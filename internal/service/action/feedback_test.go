@@ -61,12 +61,16 @@ func newFeedbackTestRig(t *testing.T) (*FeedbackService, *privacy.JWTIssuer, *fa
 	}
 	pub := &fakePublisher{}
 	re := &fakeReEvaluator{}
-	return NewFeedbackService(nil, iss, pub, re), iss, pub, re
+	return NewFeedbackService(nil, iss, pub, re, NewInMemorySingleUseStore()), iss, pub, re
 }
 
 func issueTestToken(t *testing.T, iss *privacy.JWTIssuer, tier, action string) string {
 	t.Helper()
-	tok, err := iss.Issue("tenant-x", "msg-x", privacy.IssueOptions{Tier: tier, Action: action})
+	tok, err := iss.Issue("tenant-x", "msg-x", privacy.IssueOptions{
+		Tier:     tier,
+		Action:   action,
+		Audience: []string{privacy.AudienceActionFeedback},
+	})
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -218,12 +222,89 @@ func TestFeedbackServiceRejectsCrossScopeToken(t *testing.T) {
 // ScopeBannerAction (not just the empty-claim default).
 func TestFeedbackServiceAcceptsExplicitBannerScope(t *testing.T) {
 	svc, iss, pub, _ := newFeedbackTestRig(t)
-	tok, err := iss.Issue("tenant-x", "msg-x", privacy.IssueOptions{Scope: privacy.ScopeBannerAction})
+	tok, err := iss.Issue("tenant-x", "msg-x", privacy.IssueOptions{
+		Scope:    privacy.ScopeBannerAction,
+		Audience: []string{privacy.AudienceActionFeedback},
+	})
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	if _, err := svc.Process(context.Background(), FeedbackRequest{Token: tok, Action: FeedbackReportPhishing}); err != nil {
 		t.Fatalf("explicit banner-scope token must be accepted: %v", err)
+	}
+	if len(pub.calls) != 1 {
+		t.Errorf("expected 1 publish, got %d", len(pub.calls))
+	}
+}
+
+// TestFeedbackServiceRejectsReplayedToken is the replay-protection
+// regression guard: a banner token is single-use. The first redemption
+// succeeds and publishes; presenting the same token (same `jti`) again
+// is refused with ErrTokenReplayed, and no second event is published.
+func TestFeedbackServiceRejectsReplayedToken(t *testing.T) {
+	svc, iss, pub, _ := newFeedbackTestRig(t)
+	tok := issueTestToken(t, iss, "Warning", "")
+
+	if _, err := svc.Process(context.Background(), FeedbackRequest{Token: tok, Action: FeedbackReportPhishing}); err != nil {
+		t.Fatalf("first redemption must succeed: %v", err)
+	}
+	if len(pub.calls) != 1 {
+		t.Fatalf("expected 1 publish after first use, got %d", len(pub.calls))
+	}
+
+	_, err := svc.Process(context.Background(), FeedbackRequest{Token: tok, Action: FeedbackReportPhishing})
+	if err == nil {
+		t.Fatal("replayed token must be rejected")
+	}
+	if !errors.Is(err, ErrTokenReplayed) {
+		t.Errorf("error = %v; want errors.Is(ErrTokenReplayed)", err)
+	}
+	if len(pub.calls) != 1 {
+		t.Errorf("replay must not publish a second event, got %d publishes", len(pub.calls))
+	}
+}
+
+// TestFeedbackServiceRejectsWrongAudience proves the audience binding:
+// a cryptographically valid banner-scope token minted for a different
+// `aud` is refused by the feedback endpoint with ErrAudienceNotPermitted
+// and never reaches the bus.
+func TestFeedbackServiceRejectsWrongAudience(t *testing.T) {
+	svc, iss, pub, _ := newFeedbackTestRig(t)
+	tok, err := iss.Issue("tenant-x", "msg-x", privacy.IssueOptions{
+		Audience: []string{"sn360-es:some-other-endpoint"},
+	})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	_, err = svc.Process(context.Background(), FeedbackRequest{Token: tok, Action: FeedbackReportPhishing})
+	if err == nil {
+		t.Fatal("token bound to a different audience must be rejected")
+	}
+	if !errors.Is(err, privacy.ErrAudienceNotPermitted) {
+		t.Errorf("error = %v; want errors.Is(privacy.ErrAudienceNotPermitted)", err)
+	}
+	if len(pub.calls) != 0 {
+		t.Errorf("wrong-audience token must not publish, got %d", len(pub.calls))
+	}
+}
+
+// TestFeedbackServiceAcceptsLegacyTokenWithoutAudience documents the
+// rollout policy: a token minted before audience binding (no `aud`
+// claim) is still accepted during the drain window, so in-flight
+// banners keep working. Such a token also has no `jti` (legacy mint),
+// so replay protection is skipped — a property that disappears once
+// every token carries the new claims.
+func TestFeedbackServiceAcceptsLegacyTokenWithoutAudience(t *testing.T) {
+	svc, iss, pub, _ := newFeedbackTestRig(t)
+	// A token with neither aud nor an explicit scope is the pre-change
+	// shape (Issue still stamps a jti, but the audience claim is
+	// absent, exercising the backward-compat branch).
+	tok, err := iss.Issue("tenant-x", "msg-x", privacy.IssueOptions{})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if _, err := svc.Process(context.Background(), FeedbackRequest{Token: tok, Action: FeedbackReportPhishing}); err != nil {
+		t.Fatalf("legacy token without aud must be accepted: %v", err)
 	}
 	if len(pub.calls) != 1 {
 		t.Errorf("expected 1 publish, got %d", len(pub.calls))

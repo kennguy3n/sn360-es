@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 // JWTIssuer signs and verifies action tokens used by the banner UX
@@ -69,6 +70,21 @@ const (
 	RoleAdmin = "admin"
 )
 
+// Audience constants define the `aud` values that bind a token to the
+// single endpoint allowed to consume it. A consume path declares the
+// audience it serves via VerifyOptions.ExpectedAudience; a token whose
+// `aud` claim is present but does not contain that value is refused
+// (ErrAudienceNotPermitted), so a token captured from one surface
+// cannot be presented to another even within the same scope.
+const (
+	// AudienceActionFeedback binds one-click banner feedback tokens
+	// (Report Phishing / Mark Safe / Trust Sender) to the feedback
+	// consume endpoint (action.FeedbackService / POST
+	// /v1/banner/action). It is the audience the banner token minted
+	// alongside the rendered banner carries.
+	AudienceActionFeedback = "sn360-es:action-feedback"
+)
+
 // ActionClaims is the canonical claim shape for banner / interstitial
 // and self-release tokens. The intent is to carry zero PII so a
 // leaked token cannot be used to enumerate users or messages from a
@@ -115,6 +131,16 @@ type ActionClaims struct {
 // remember the check, a call site declares the scope(s) it accepts and
 // a leaked token minted for a different surface is refused here.
 var ErrScopeNotPermitted = errors.New("privacy/jwt: token scope not permitted")
+
+// ErrAudienceNotPermitted is returned by VerifyWithOptions /
+// VerifyDetailWithOptions when a cryptographically valid token carries
+// an `aud` claim that does not contain the audience the caller serves
+// (VerifyOptions.ExpectedAudience). It is the audience-binding analogue
+// of ErrScopeNotPermitted: a token minted for one consumer endpoint is
+// refused at any other, closing the gap that lets a captured token be
+// replayed against a different surface. A token with no `aud` claim is
+// accepted for backward compatibility (see audienceAllowed).
+var ErrAudienceNotPermitted = errors.New("privacy/jwt: token audience not permitted")
 
 // EffectiveScope returns the scope a token is treated as carrying: its
 // literal `scp` claim, or ScopeBannerAction when the claim is empty
@@ -177,6 +203,12 @@ type IssueOptions struct {
 	// claim. Used for operator-issued admin tokens — see
 	// privacy.RoleAdmin.
 	Role string
+	// Audience is the set of `aud` values the issued token is bound
+	// to. When non-empty it is written to the standard `aud` claim;
+	// a consume path pins the audience it serves via
+	// VerifyOptions.ExpectedAudience. Empty mints no `aud` claim
+	// (the legacy shape).
+	Audience []string
 }
 
 // Issue signs a fresh ActionClaims token for tenantID + pseudoMessageID.
@@ -195,6 +227,11 @@ func (i *JWTIssuer) Issue(tenantID, pseudoMessageID string, opts IssueOptions) (
 		ttl = i.ttl
 	}
 	now := time.Now().UTC()
+	// Every token gets a random `jti`. It is the handle a consume
+	// path records to enforce single use (replay protection): a
+	// captured token presented twice is rejected on the second
+	// attempt because its `jti` is already marked consumed. A v4
+	// UUID is unguessable and collision-free for this purpose.
 	claims := ActionClaims{
 		TenantID:             tenantID,
 		PseudonymizedMessage: pseudoMessageID,
@@ -205,11 +242,15 @@ func (i *JWTIssuer) Issue(tenantID, pseudoMessageID string, opts IssueOptions) (
 		RecipientUserHash:    opts.RecipientUserHash,
 		Role:                 opts.Role,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.NewString(),
 			Issuer:    i.issuer,
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
 			NotBefore: jwt.NewNumericDate(now.Add(-1 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(now),
 		},
+	}
+	if len(opts.Audience) > 0 {
+		claims.Audience = jwt.ClaimStrings(opts.Audience)
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := tok.SignedString(i.secret)
@@ -288,6 +329,14 @@ type VerifyOptions struct {
 	// without an explicit `scp` (their empty claim normalises to
 	// ScopeBannerAction).
 	AllowedScopes []string
+	// ExpectedAudience is the `aud` value the calling endpoint
+	// serves. When non-empty, a cryptographically valid token is
+	// rejected with ErrAudienceNotPermitted unless its `aud` claim
+	// contains this value — so a token minted for one consumer
+	// endpoint cannot be replayed against another. A token with no
+	// `aud` claim is accepted (backward compatibility for tokens
+	// minted before audience binding; see audienceAllowed).
+	ExpectedAudience string
 }
 
 // VerifyWithOptions verifies token like Verify and then enforces the
@@ -320,6 +369,12 @@ func (i *JWTIssuer) VerifyDetailWithOptions(token string, opts VerifyOptions) (V
 				fmt.Errorf("%w: have %q", ErrScopeNotPermitted, got)
 		}
 	}
+	if opts.ExpectedAudience != "" {
+		if !audienceAllowed(res.Claims.Audience, opts.ExpectedAudience) {
+			return VerifyResult{Claims: res.Claims},
+				fmt.Errorf("%w: want %q", ErrAudienceNotPermitted, opts.ExpectedAudience)
+		}
+	}
 	return res, nil
 }
 
@@ -330,6 +385,25 @@ func (i *JWTIssuer) VerifyDetailWithOptions(token string, opts VerifyOptions) (V
 func scopeAllowed(scope string, allowed []string) bool {
 	for _, a := range allowed {
 		if EffectiveScope(a) == scope {
+			return true
+		}
+	}
+	return false
+}
+
+// audienceAllowed reports whether a token bearing the `aud` claim set
+// aud may be consumed at an endpoint that serves want. A token with no
+// `aud` claim is permitted for backward compatibility with tokens
+// minted before audience binding landed — those drain within the
+// token TTL, after which every token carries an `aud`. Once a token
+// carries any audience it must contain want, so a token minted for a
+// different endpoint is refused even though it is otherwise valid.
+func audienceAllowed(aud jwt.ClaimStrings, want string) bool {
+	if len(aud) == 0 {
+		return true
+	}
+	for _, a := range aud {
+		if a == want {
 			return true
 		}
 	}
