@@ -178,6 +178,13 @@ func (s redisSingleUseStore) MarkConsumed(ctx context.Context, id string, ttl ti
 	if id == "" {
 		return false, errors.New("action: empty token id")
 	}
+	// Floor a non-positive TTL the same way InMemorySingleUseStore does:
+	// a zero TTL would tell Redis to create a key with no expiry, leaking
+	// the consumed-jti entry forever. Both SingleUseStore backends must
+	// honor the same contract regardless of caller.
+	if ttl <= 0 {
+		ttl = time.Minute
+	}
 	set, err := s.client.SetNX(ctx, s.prefix+id, "1", ttl)
 	if err != nil {
 		return false, fmt.Errorf("action: single-use store: %w", err)
