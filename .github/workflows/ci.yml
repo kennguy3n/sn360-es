@@ -62,7 +62,7 @@ jobs:
         run: make cover
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.out
@@ -176,7 +176,7 @@ jobs:
 
       - name: Upload corpus-eval report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: corpus-eval-report-${{ github.run_id }}
           path: testdata/corpus-eval/reports/

@@ -89,7 +89,7 @@ jobs:
 
       - name: Upload chaos test logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: chaos-logs
           # Go test writes nothing to disk by default, but the
