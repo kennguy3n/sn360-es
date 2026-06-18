@@ -434,14 +434,13 @@
     // server supplied so we never show an empty banner.
     var pres = presentationForTier(tier || resp.tier);
     var headline;
-    var icon;
+    var dangerous;
     if (pres) {
-      headline =
-        t(pres.titleKey) + ": " + t(pres.actionKey);
-      icon = pres.dangerous ? "ErrorMessage" : "InformationalMessage";
+      headline = t(pres.titleKey) + ": " + t(pres.actionKey);
+      dangerous = pres.dangerous;
     } else {
       headline = resp.message || "This message has been flagged. Open with care.";
-      icon = "ErrorMessage";
+      dangerous = true;
     }
     // The notification strip is system-rendered (no custom colour) and
     // capped at ~150 chars; we lead with the brand + plain headline so
@@ -449,15 +448,23 @@
     var strip = BRAND + " — " + headline;
     if (strip.length > 150) strip = strip.substring(0, 147) + "...";
     try {
-      Office.context.mailbox.item.notificationMessages.replaceAsync("sn360-preopen", {
-        type:
-          icon === "ErrorMessage"
-            ? Office.MailboxEnums.ItemNotificationMessageType.ErrorMessage
-            : Office.MailboxEnums.ItemNotificationMessageType.InformationalMessage,
-        message: strip,
-        icon: "icon-color",
-        persistent: true,
-      });
+      // Dangerous tiers use ErrorMessage (Outlook paints its own red
+      // glyph); calmer tiers use a persistent InformationalMessage with
+      // our brand icon. Office.js only honours `icon`/`persistent` on
+      // InformationalMessage, so we omit them from the ErrorMessage
+      // payload rather than ship properties the host ignores.
+      var details = dangerous
+        ? {
+            type: Office.MailboxEnums.ItemNotificationMessageType.ErrorMessage,
+            message: strip,
+          }
+        : {
+            type: Office.MailboxEnums.ItemNotificationMessageType.InformationalMessage,
+            message: strip,
+            icon: "icon-color",
+            persistent: true,
+          };
+      Office.context.mailbox.item.notificationMessages.replaceAsync("sn360-preopen", details);
     } catch (_) {
       // Best-effort UI.
     }

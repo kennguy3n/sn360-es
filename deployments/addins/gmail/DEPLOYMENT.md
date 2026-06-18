@@ -26,10 +26,11 @@ implementation):
    surface a warning. Thread participants are fetched via
    `Gmail.Users.Threads.get(METADATA)` from the advanced Gmail service.
 
-If any check fires, the add-in returns a branded `Card` that leads with
-a plain-language headline (what's risky), a colored severity label and a
-one-line "why it matters", and the single safe action to take. The user
-confirms before the send proceeds. See **Branding & warning UX** below.
+If any check fires at level ≥ 3, the add-in returns a branded `Card`
+that leads with a plain-language headline (what's risky), a colored
+severity label and a one-line "why it matters", and the single safe
+action to take. The user confirms before the send proceeds. See
+**Branding & warning UX** below.
 
 ## Branding & warning UX (ShieldNet 360)
 
