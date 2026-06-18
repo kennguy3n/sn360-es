@@ -179,10 +179,11 @@ func (s *FeedbackService) Process(ctx context.Context, req FeedbackRequest) (str
 }
 
 // ErrTokenReplayed is returned by Process when a banner token is
-// redeemed a second time. The handler maps it to the same uniform 401
-// the other token-rejection paths return; it is a distinct error so
-// the audit layer can record a replay attempt separately from a
-// malformed or expired token.
+// redeemed a second time. The handler maps it to the same uniform 400
+// ("invalid request") the other token-rejection paths return, so a
+// replay leaks nothing to the caller; it is a distinct error so the
+// audit layer can record a replay attempt separately from a malformed
+// or expired token.
 var ErrTokenReplayed = errors.New("feedback: token already used")
 
 // consumeOnce records the token's `jti` as consumed and refuses a
