@@ -116,7 +116,41 @@ func (s *StoreTIChecker) Check(ctx context.Context, req dto.EvaluateRequest, sig
 	if len(candidates) > maxCand {
 		candidates = candidates[:maxCand]
 	}
+	return s.lookupCandidates(ctx, candidates)
+}
 
+// CheckURL is the interstitial click-time entry point. It resolves a
+// single URL (and its host domain) against threat intel, reusing the
+// exact dedup + negative-cache + batched LookupByHash pipeline as
+// Check. A URL that was clean at delivery but later added to a feed
+// (URLhaus, MISP, …) is therefore caught when the recipient clicks
+// the rewritten link.
+//
+// Like Check it returns an empty slice (never an error) for "no
+// match"; a non-nil error signals an intel-store / cache outage and
+// callers SHOULD fail open (the message already passed full
+// evaluation at delivery time).
+func (s *StoreTIChecker) CheckURL(ctx context.Context, rawURL string) ([]intel.MatchedIndicator, error) {
+	if s == nil || s.Store == nil {
+		return nil, nil
+	}
+	candidates := make([]IndicatorCandidate, 0, 2)
+	if u := strings.TrimSpace(rawURL); isHTTPURL(u) {
+		candidates = append(candidates, IndicatorCandidate{Type: intel.IndicatorURL, Value: u})
+		if host := hostFromURL(u); host != "" {
+			candidates = append(candidates, IndicatorCandidate{Type: intel.IndicatorDomain, Value: host})
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	return s.lookupCandidates(ctx, candidates)
+}
+
+// lookupCandidates hashes + dedups the candidate list, then resolves
+// it through the optional negative cache and a single batched
+// LookupByHash. It is the shared core of Check and CheckURL.
+func (s *StoreTIChecker) lookupCandidates(ctx context.Context, candidates []IndicatorCandidate) ([]intel.MatchedIndicator, error) {
 	hashes := make([][]byte, 0, len(candidates))
 	seen := make(map[string]struct{}, len(candidates))
 	for _, c := range candidates {
@@ -324,6 +358,17 @@ func domainFromAddress(addr string) string {
 		return strings.ToLower(addr[at+1:])
 	}
 	return strings.ToLower(addr)
+}
+
+// isHTTPURL reports whether raw carries an http(s) scheme. The
+// interstitial rewriter only ever emits http/https links, so a
+// non-http value can reach CheckURL only via a malformed or tampered
+// token. Gating the candidate list on this mirrors ExtractCandidates
+// — whose urlBodyPattern matches only `https?://` — so both entry
+// points feed the lookup the same shape of URL and we never hash a
+// scheme the feeds cannot contain.
+func isHTTPURL(raw string) bool {
+	return strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")
 }
 
 // hostFromURL extracts the host portion of a URL. Returns the empty

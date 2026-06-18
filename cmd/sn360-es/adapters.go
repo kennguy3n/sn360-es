@@ -21,6 +21,7 @@ import (
 	"github.com/kennguy3n/sn360-es/internal/service/dashboard"
 	"github.com/kennguy3n/sn360-es/internal/service/evaluate"
 	"github.com/kennguy3n/sn360-es/internal/service/onboarding"
+	"github.com/kennguy3n/sn360-es/internal/service/tier0"
 	"github.com/kennguy3n/sn360-es/pkg/events"
 	"github.com/kennguy3n/sn360-es/pkg/privacy"
 	"github.com/kennguy3n/sn360-es/pkg/storage/redis"
@@ -335,6 +336,59 @@ func (a feedbackCountsAdapter) Counts(ctx context.Context, tenantID string, star
 		MarkedSafe:       counts.MarkedSafe,
 		TrustedSender:    counts.TrustedSender,
 	}, nil
+}
+
+// interstitialThreatIntel adapts the cache-fronted Tier 0 threat-intel
+// checker to handler.ThreatIntel, giving the interstitial click handler
+// a time-of-click recheck. It reuses the SAME StoreTIChecker (and its
+// Redis negative cache) the evaluation pipeline uses, so a URL that was
+// clean at delivery but later added to a feed is blocked when the
+// recipient clicks the rewritten link — and cache entries are shared
+// across the delivery-time and click-time lookups.
+type interstitialThreatIntel struct {
+	checker *tier0.StoreTIChecker
+	logger  *slog.Logger
+}
+
+// CheckURL implements handler.ThreatIntel. It fails OPEN: an intel
+// store / cache outage must not break legitimate clicks, since the
+// message already passed full evaluation at delivery time. Only a
+// confirmed block/quarantine-tier match (severity >= 50) blocks the
+// click; lower-severity (flag-only) matches still redirect.
+func (a interstitialThreatIntel) CheckURL(ctx context.Context, original string) (bool, string) {
+	if a.checker == nil {
+		return true, ""
+	}
+	matches, err := a.checker.CheckURL(ctx, original)
+	if err != nil {
+		if a.logger != nil {
+			a.logger.WarnContext(ctx, "interstitial: threat-intel recheck failed; allowing click",
+				slog.Any("error", err))
+		}
+		return true, ""
+	}
+	if len(matches) == 0 {
+		return true, ""
+	}
+	strongest, _ := tier0.PickStrongest(matches)
+	category, forced := tier0.SeverityTier(strongest.Severity)
+	if !forced {
+		return true, ""
+	}
+	return false, interstitialBlockReason(category)
+}
+
+// interstitialBlockReason renders a recipient-appropriate (no PII,
+// no raw URL) explanation for the block page from the forced category.
+func interstitialBlockReason(category constant.Category) string {
+	switch category {
+	case constant.CategoryLikelyPhishing:
+		return "This destination is on a known phishing or malware threat-intelligence list."
+	case constant.CategorySuspiciousURL:
+		return "This destination matches a suspicious-URL threat-intelligence indicator."
+	default:
+		return "This destination matches a threat-intelligence indicator."
+	}
 }
 
 // quarantineReleaseCountsAdapter converts a

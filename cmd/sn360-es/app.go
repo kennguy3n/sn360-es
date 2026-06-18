@@ -209,7 +209,13 @@ type application struct {
 	quarantineSvc *action.QuarantineService
 
 	// Evaluation pipeline.
-	tier0Gate    *tier0.Gate
+	tier0Gate *tier0.Gate
+	// tiChecker is the cache-fronted threat-intel checker wired into
+	// the Tier 0 gate. It is also reused by the interstitial click
+	// handler for a time-of-click URL recheck. Nil only when the
+	// intel store is absent (dev configs without Postgres or memory
+	// fallback).
+	tiChecker    *tier0.StoreTIChecker
 	tier1Raw     *tier1.Client
 	tier1Client  evaluate.Tier1Client
 	tier2Client  evaluate.Tier2Client
@@ -977,6 +983,9 @@ func newApplication(ctx context.Context, cfg *config.Config, logger *slog.Logger
 				Logger: logger.With(slog.String("component", "ti_cache")),
 			}
 		}
+		// Retain the checker so the interstitial click handler can
+		// reuse it (and its negative cache) for a time-of-click recheck.
+		app.tiChecker = ticker
 		app.tier0Gate = app.tier0Gate.
 			WithTIChecker(ticker).
 			WithTIObserver(intelTier0Observer{m: app.metrics}).

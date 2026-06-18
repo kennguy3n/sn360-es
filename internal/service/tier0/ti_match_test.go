@@ -313,6 +313,131 @@ func TestStoreTIChecker_CacheShortcircuit(t *testing.T) {
 	}
 }
 
+// TestStoreTIChecker_CheckURL exercises the interstitial click-time
+// entry point: a single URL is looked up both as a `url` indicator
+// and as a `domain` indicator, so a feed that lists only the host
+// still matches.
+func TestStoreTIChecker_CheckURL(t *testing.T) {
+	urlHash, _ := intel.HashIndicator(intel.IndicatorURL, "http://bad.example/login")
+	domainHash, _ := intel.HashIndicator(intel.IndicatorDomain, "evil.example")
+
+	urlMatch := intel.MatchedIndicator{Hash: urlHash, Indicator: "http://bad.example/login", IndicatorType: intel.IndicatorURL, FeedName: "urlhaus", Severity: 90}
+	domainMatch := intel.MatchedIndicator{Hash: domainHash, Indicator: "evil.example", IndicatorType: intel.IndicatorDomain, FeedName: "misp", Severity: 60}
+
+	store := &hashLookupStore{
+		countingStore: &countingStore{},
+		byHash: map[string][]intel.MatchedIndicator{
+			string(urlHash):    {urlMatch},
+			string(domainHash): {domainMatch},
+		},
+	}
+	c := &StoreTIChecker{Store: store}
+
+	cases := []struct {
+		name      string
+		url       string
+		wantLen   int
+		wantFeeds []string
+	}{
+		{name: "url-listed", url: "http://bad.example/login", wantLen: 1, wantFeeds: []string{"urlhaus"}},
+		{name: "domain-listed", url: "https://evil.example/anything?q=1", wantLen: 1, wantFeeds: []string{"misp"}},
+		{name: "clean", url: "https://good.example/", wantLen: 0},
+		{name: "empty", url: "", wantLen: 0},
+		{name: "non-http-scheme", url: "mailto:user@evil.example", wantLen: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			matches, err := c.CheckURL(context.Background(), tc.url)
+			if err != nil {
+				t.Fatalf("CheckURL: %v", err)
+			}
+			if len(matches) != tc.wantLen {
+				t.Fatalf("want %d matches, got %d (%+v)", tc.wantLen, len(matches), matches)
+			}
+			for i, feed := range tc.wantFeeds {
+				if matches[i].FeedName != feed {
+					t.Errorf("match %d: want feed %q, got %q", i, feed, matches[i].FeedName)
+				}
+			}
+		})
+	}
+}
+
+// TestStoreTIChecker_CheckURL_NonHTTPSchemesSkipLookup verifies the
+// isHTTPURL guard: a value that is not an http(s) URL (the rewriter
+// never emits one, so this is only reachable via a malformed/tampered
+// token) produces no candidates and therefore never touches the
+// store, mirroring ExtractCandidates. The shared countingStore lets
+// us assert the lookup was skipped, not just that it returned no
+// match.
+func TestStoreTIChecker_CheckURL_NonHTTPSchemesSkipLookup(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{
+		"",
+		"   ",
+		"mailto:user@evil.example",
+		"ftp://evil.example/x",
+		"file:///etc/passwd",
+		"javascript:alert(1)",
+		"data:text/html,<script>0</script>",
+		"evil.example/login", // bare host, no scheme
+	} {
+		store := &countingStore{}
+		c := &StoreTIChecker{Store: store}
+		matches, err := c.CheckURL(context.Background(), raw)
+		if err != nil {
+			t.Fatalf("CheckURL(%q): %v", raw, err)
+		}
+		if len(matches) != 0 {
+			t.Errorf("CheckURL(%q): want 0 matches, got %d", raw, len(matches))
+		}
+		if store.callCount != 0 {
+			t.Errorf("CheckURL(%q): want 0 store lookups, got %d", raw, store.callCount)
+		}
+	}
+
+	// Positive control: a well-formed http URL still reaches the
+	// store exactly once, so the guard isn't over-broad.
+	store := &countingStore{}
+	c := &StoreTIChecker{Store: store}
+	if _, err := c.CheckURL(context.Background(), "http://bad.example/login"); err != nil {
+		t.Fatalf("CheckURL(http): %v", err)
+	}
+	if store.callCount != 1 {
+		t.Errorf("http URL: want 1 store lookup, got %d", store.callCount)
+	}
+}
+
+// TestStoreTIChecker_CheckURL_Error propagates store errors so the
+// caller can fail open.
+func TestStoreTIChecker_CheckURL_Error(t *testing.T) {
+	store := &hashLookupStore{countingStore: &countingStore{}, err: errors.New("db down")}
+	c := &StoreTIChecker{Store: store}
+	if _, err := c.CheckURL(context.Background(), "http://bad.example/login"); err == nil {
+		t.Fatal("expected error to propagate")
+	}
+}
+
+// hashLookupStore resolves LookupByHash against an in-memory map so a
+// test can assert per-hash matching. The embedded *countingStore
+// supplies the no-op implementations of the rest of intel.IntelStore.
+type hashLookupStore struct {
+	*countingStore
+	byHash map[string][]intel.MatchedIndicator
+	err    error
+}
+
+func (s *hashLookupStore) LookupByHash(_ context.Context, hashes [][]byte) ([]intel.MatchedIndicator, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	var out []intel.MatchedIndicator
+	for _, h := range hashes {
+		out = append(out, s.byHash[string(h)]...)
+	}
+	return out, nil
+}
+
 type countingStore struct {
 	callCount     int
 	lastHashCount int
