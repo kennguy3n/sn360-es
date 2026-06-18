@@ -408,6 +408,32 @@ test("onMessageSend Flow 2: exact-match domain does NOT trigger lookalike", asyn
   assert.equal(office._notifications.length, 0);
 });
 
+test("showWarning: empty warnings synthesizes a distinct body, not a repeat of the title", function () {
+  // High level with no per-warning detail (older/partial backend). The
+  // dialog must still explain itself with a body line that differs from
+  // the headline — mirroring the Gmail add-on. Never echo the title back.
+  const office = makeMockOffice({ sender: "alice@acme.com" });
+  const presend = loadPresend(office);
+
+  let completed = null;
+  presend._internals.showWarning(
+    { completed: function (arg) { completed = arg; } },
+    { overall_level: 3, warnings: [] }
+  );
+
+  assert.equal(completed.allowEvent, false, "high level must surface the blocking dialog");
+  assert.notEqual(
+    completed.errorMessage.indexOf("Take a moment before you send"),
+    -1,
+    "expected the generic headline in the dialog"
+  );
+  assert.notEqual(
+    completed.errorMessage.indexOf("We spotted something worth a quick look"),
+    -1,
+    "expected a distinct generic body line, not a repeat of the headline"
+  );
+});
+
 // === Flow 3: External-thread-going-external ============================
 
 test("onMessageSend Flow 3: warns when an internal-only thread gains an external recipient", async function () {

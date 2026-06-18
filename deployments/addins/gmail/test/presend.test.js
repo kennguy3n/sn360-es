@@ -640,6 +640,13 @@ test("buildSendWarningCard_ synthesizes a non-empty body when warnings is empty"
     -1,
     "expected the generic plain-language headline in the fallback body"
   );
+  // The synthesized detail must be a distinct body line, not the headline
+  // echoed back at the user.
+  assert.notEqual(
+    para._props.text.indexOf("We spotted something worth a quick look"),
+    -1,
+    "expected a distinct generic body line, not a repeat of the headline"
+  );
   const button = sec._children[sec._children.length - 1];
   assert.equal(button._type, "textButton");
   assert.equal(button._props.onClickAction._props.functionName, "sn360AcknowledgeWarning");

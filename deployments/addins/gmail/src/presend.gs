@@ -249,12 +249,14 @@ function sendTitleKey_(warnings) {
 function buildSendWarningCard_(resp, locale) {
   var level = (resp && resp.overall_level) || 0;
   // Mirror the Outlook add-in: if the backend returns a high level with no
-  // per-warning detail, synthesize a generic prompt so the card always
-  // explains itself and offers the safe action — never an empty body.
+  // per-warning detail, synthesize a prompt so the card always explains
+  // itself and offers the safe action — never an empty body. We use a
+  // distinct body line (not the headline key) so the detail doesn't simply
+  // repeat the title back to the user.
   var warnings =
     resp && resp.warnings && resp.warnings.length
       ? resp.warnings
-      : [{ message: localizedMessage_("send_title_generic", locale, {}) }];
+      : [{ message: localizedMessage_("send_body_generic", locale, {}) }];
   var sev = severityForLevel_(level, locale);
   var headline = localizedMessage_(sendTitleKey_(warnings), locale, {});
   var section = CardService.newCardSection();
@@ -620,6 +622,8 @@ var SN360_I18N = {
     send_title_lookalike: "Double-check this email address",
     send_title_external: "You're emailing someone outside your company",
     send_title_generic: "Take a moment before you send",
+    send_body_generic:
+      "We spotted something worth a quick look before this message goes out.",
     send_action:
       "If you recognise everyone here, you can send. If not, fix the address or remove them first.",
     ack_button: "I've checked — looks right",
@@ -657,6 +661,8 @@ var SN360_I18N = {
     send_title_lookalike: "Kiểm tra lại địa chỉ email này",
     send_title_external: "Bạn đang gửi cho người ngoài công ty",
     send_title_generic: "Hãy kiểm tra một chút trước khi gửi",
+    send_body_generic:
+      "Chúng tôi nhận thấy điều gì đó đáng xem lại trước khi thư này được gửi đi.",
     send_action:
       "Nếu bạn nhận ra tất cả người nhận, bạn có thể gửi. Nếu không, hãy sửa địa chỉ hoặc xóa họ trước.",
     ack_button: "Tôi đã kiểm tra — ổn rồi",
@@ -694,6 +700,8 @@ var SN360_I18N = {
     send_title_lookalike: "ตรวจสอบที่อยู่อีเมลนี้อีกครั้ง",
     send_title_external: "คุณกำลังส่งอีเมลถึงคนนอกบริษัท",
     send_title_generic: "หยุดสักครู่ก่อนส่ง",
+    send_body_generic:
+      "เราพบบางอย่างที่ควรตรวจสอบสักครู่ก่อนที่ข้อความนี้จะถูกส่งออกไป",
     send_action:
       "หากคุณรู้จักผู้รับทุกคน คุณสามารถส่งได้ หากไม่ใช่ โปรดแก้ไขที่อยู่หรือเอาออกก่อน",
     ack_button: "ฉันตรวจสอบแล้ว — ดูถูกต้อง",
@@ -731,6 +739,7 @@ var SN360_I18N = {
     send_title_lookalike: "このメールアドレスをもう一度確認してください",
     send_title_external: "社外の相手にメールを送ろうとしています",
     send_title_generic: "送信する前に少し確認しましょう",
+    send_body_generic: "送信する前に、少し確認しておきたい点が見つかりました。",
     send_action:
       "宛先の全員に心当たりがあれば送信できます。なければ、アドレスを修正するか宛先から削除してください。",
     ack_button: "確認しました — 問題ありません",
@@ -768,6 +777,7 @@ var SN360_I18N = {
     send_title_lookalike: "이 이메일 주소를 다시 확인하세요",
     send_title_external: "회사 외부 사람에게 메일을 보내고 있습니다",
     send_title_generic: "보내기 전에 잠시 확인하세요",
+    send_body_generic: "이 메일을 보내기 전에 한 번 확인해 볼 만한 점을 발견했습니다.",
     send_action:
       "여기 모든 수신자를 알아본다면 보내도 됩니다. 그렇지 않다면 주소를 고치거나 먼저 삭제하세요.",
     ack_button: "확인했습니다 — 맞습니다",
@@ -805,6 +815,7 @@ var SN360_I18N = {
     send_title_lookalike: "请再次核对这个邮箱地址",
     send_title_external: "您正在给公司以外的人发邮件",
     send_title_generic: "发送前请稍作确认",
+    send_body_generic: "在这封邮件发出之前，我们发现有一处值得快速核对。",
     send_action:
       "如果您认识这里的每个人，就可以发送。如果不认识，请先更正地址或将其移除。",
     ack_button: "我已核对 — 没问题",
@@ -841,6 +852,8 @@ var SN360_I18N = {
     send_title_lookalike: "تحقق جيدًا من عنوان البريد هذا",
     send_title_external: "أنت تراسل شخصًا خارج شركتك",
     send_title_generic: "تمهّل لحظة قبل الإرسال",
+    send_body_generic:
+      "لاحظنا أمرًا يستحق نظرة سريعة قبل إرسال هذه الرسالة.",
     send_action:
       "إذا كنت تعرف كل المستلِمين هنا، يمكنك الإرسال. وإن لم تكن كذلك، فصحّح العنوان أو احذفهم أولًا.",
     ack_button: "لقد تحققت — يبدو صحيحًا",
@@ -878,6 +891,8 @@ var SN360_I18N = {
     send_title_lookalike: "Prüfen Sie diese E-Mail-Adresse noch einmal",
     send_title_external: "Sie schreiben jemandem außerhalb Ihres Unternehmens",
     send_title_generic: "Nehmen Sie sich vor dem Senden einen Moment",
+    send_body_generic:
+      "Uns ist etwas aufgefallen, das vor dem Senden einen kurzen Blick wert ist.",
     send_action:
       "Wenn Sie alle Empfänger kennen, können Sie senden. Andernfalls korrigieren Sie die Adresse oder entfernen Sie sie zuerst.",
     ack_button: "Geprüft — sieht richtig aus",
@@ -915,6 +930,8 @@ var SN360_I18N = {
     send_title_lookalike: "Vérifiez bien cette adresse e-mail",
     send_title_external: "Vous écrivez à une personne extérieure à votre entreprise",
     send_title_generic: "Prenez un instant avant d'envoyer",
+    send_body_generic:
+      "Nous avons remarqué un détail à vérifier rapidement avant l'envoi de ce message.",
     send_action:
       "Si vous reconnaissez tous les destinataires, vous pouvez envoyer. Sinon, corrigez l'adresse ou retirez-les d'abord.",
     ack_button: "J'ai vérifié — c'est correct",
@@ -952,6 +969,8 @@ var SN360_I18N = {
     send_title_lookalike: "Vuelve a comprobar esta dirección de correo",
     send_title_external: "Estás escribiendo a alguien de fuera de tu empresa",
     send_title_generic: "Tómate un momento antes de enviar",
+    send_body_generic:
+      "Hemos detectado algo que conviene revisar antes de enviar este mensaje.",
     send_action:
       "Si reconoces a todos los destinatarios, puedes enviar. Si no, corrige la dirección o quítalos primero.",
     ack_button: "Lo he comprobado — está bien",
@@ -989,6 +1008,8 @@ var SN360_I18N = {
     send_title_lookalike: "Confira novamente este endereço de e-mail",
     send_title_external: "Você está enviando para alguém de fora da sua empresa",
     send_title_generic: "Reserve um momento antes de enviar",
+    send_body_generic:
+      "Notamos algo que vale uma verificação rápida antes de enviar esta mensagem.",
     send_action:
       "Se você reconhece todos os destinatários, pode enviar. Caso contrário, corrija o endereço ou remova-os primeiro.",
     ack_button: "Eu verifiquei — está certo",
@@ -1026,6 +1047,8 @@ var SN360_I18N = {
     send_title_lookalike: "Semak semula alamat e-mel ini",
     send_title_external: "Anda menghantar e-mel kepada seseorang di luar syarikat anda",
     send_title_generic: "Luangkan seketika sebelum menghantar",
+    send_body_generic:
+      "Kami perasan sesuatu yang wajar disemak sebentar sebelum mesej ini dihantar.",
     send_action:
       "Jika anda mengenali semua penerima di sini, anda boleh menghantar. Jika tidak, betulkan alamat atau keluarkan mereka dahulu.",
     ack_button: "Saya sudah semak — nampak betul",
@@ -1063,6 +1086,8 @@ var SN360_I18N = {
     send_title_lookalike: "Periksa kembali alamat email ini",
     send_title_external: "Anda mengirim email ke seseorang di luar perusahaan Anda",
     send_title_generic: "Luangkan waktu sejenak sebelum mengirim",
+    send_body_generic:
+      "Kami menemukan sesuatu yang sebaiknya diperiksa sebelum pesan ini dikirim.",
     send_action:
       "Jika Anda mengenali semua penerima di sini, Anda bisa mengirim. Jika tidak, perbaiki alamatnya atau hapus mereka terlebih dahulu.",
     ack_button: "Saya sudah memeriksa — sudah benar",
@@ -1100,6 +1125,8 @@ var SN360_I18N = {
     send_title_lookalike: "Bu e-posta adresini bir kez daha kontrol edin",
     send_title_external: "Şirketinizin dışından birine e-posta gönderiyorsunuz",
     send_title_generic: "Göndermeden önce bir an durun",
+    send_body_generic:
+      "Bu mesaj gönderilmeden önce hızlıca göz atmaya değer bir şey fark ettik.",
     send_action:
       "Buradaki herkesi tanıyorsanız gönderebilirsiniz. Tanımıyorsanız adresi düzeltin veya onları önce çıkarın.",
     ack_button: "Kontrol ettim — doğru görünüyor",

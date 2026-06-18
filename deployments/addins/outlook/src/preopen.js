@@ -305,9 +305,17 @@
     return "en";
   }
 
-  function t(key) {
+  function t(key, params) {
     const lang = I18N[localeShort()] || I18N.en;
-    return lang[key] || I18N.en[key] || key;
+    let msg = lang[key] || I18N.en[key] || key;
+    if (params) {
+      for (const k in params) {
+        if (Object.prototype.hasOwnProperty.call(params, k)) {
+          msg = msg.split("{" + k + "}").join(params[k]);
+        }
+      }
+    }
+    return msg;
   }
 
   function tenantId() {
