@@ -16,7 +16,7 @@
 # Compiles llama-server from kennguy3n/llama.cpp. We pin to a specific
 # commit at deploy time via the LLAMA_CPP_REF build arg; the default is
 # `main` for development convenience.
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:26.04 AS builder
 
 ARG LLAMA_CPP_REPO=https://github.com/kennguy3n/llama.cpp
 ARG LLAMA_CPP_REF=main
@@ -55,7 +55,7 @@ RUN cmake -B build \
 # ---- runtime ---------------------------------------------------------
 # Minimal runtime image. No build toolchain, no model weights — those
 # come from the init container into /models.
-FROM ubuntu:22.04 AS runtime
+FROM ubuntu:26.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     MODEL_DIR=/models \
