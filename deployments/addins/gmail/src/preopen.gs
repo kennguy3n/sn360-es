@@ -87,9 +87,16 @@ function buildOpenWarningCard_(resp, tier, locale) {
       );
   } else {
     // Unknown tier: keep the branded header but fall back to whatever
-    // message the server supplied so we never render an empty card.
+    // message the server supplied; if it's empty, use the localized
+    // generic flag line so we never render an empty card (mirrors the
+    // Outlook pre-open fallback).
     section.addWidget(
-      CardService.newTextParagraph().setText(escapeHtml_((resp && resp.message) || ""))
+      CardService.newTextParagraph().setText(
+        escapeHtml_(
+          (resp && resp.message) ||
+            localizedMessage_("open_generic_flagged", locale, {})
+        )
+      )
     );
   }
   return CardService.newCardBuilder()

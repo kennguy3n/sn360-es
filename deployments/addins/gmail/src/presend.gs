@@ -650,6 +650,8 @@ var SN360_I18N = {
       "Don't click links or open attachments. If you weren't expecting this, report and delete it.",
     open_action_proceed:
       "It's okay to read — just don't share passwords, payment details, or codes until you're sure.",
+    open_generic_flagged:
+      "This message was flagged — open it with care.",
   },
   vi: {
     lookalike_recipient:
@@ -689,6 +691,8 @@ var SN360_I18N = {
       "Đừng nhấp liên kết hoặc mở tệp đính kèm. Nếu bạn không mong đợi thư này, hãy báo cáo và xóa nó.",
     open_action_proceed:
       "Bạn có thể đọc — chỉ đừng chia sẻ mật khẩu, thông tin thanh toán hoặc mã cho đến khi bạn chắc chắn.",
+    open_generic_flagged:
+      "Thư này đã được gắn cờ — hãy mở một cách thận trọng.",
   },
   th: {
     lookalike_recipient:
@@ -728,6 +732,8 @@ var SN360_I18N = {
       "อย่าคลิกลิงก์หรือเปิดไฟล์แนบ หากคุณไม่ได้คาดหวังข้อความนี้ โปรดรายงานและลบทิ้ง",
     open_action_proceed:
       "อ่านได้ — เพียงอย่าแบ่งปันรหัสผ่าน ข้อมูลการชำระเงิน หรือรหัส จนกว่าคุณจะแน่ใจ",
+    open_generic_flagged:
+      "ข้อความนี้ถูกทำเครื่องหมายไว้ — โปรดเปิดด้วยความระมัดระวัง",
   },
   ja: {
     lookalike_recipient:
@@ -766,6 +772,8 @@ var SN360_I18N = {
       "リンクのクリックや添付ファイルの開封は避けてください。心当たりがなければ、報告して削除してください。",
     open_action_proceed:
       "読んでも問題ありませんが、確信が持てるまでパスワード・支払い情報・コードは共有しないでください。",
+    open_generic_flagged:
+      "このメッセージはフラグが付けられました。注意して開いてください。",
   },
   ko: {
     lookalike_recipient:
@@ -804,6 +812,8 @@ var SN360_I18N = {
       "링크를 클릭하거나 첨부 파일을 열지 마세요. 예상치 못한 메시지라면 신고하고 삭제하세요.",
     open_action_proceed:
       "읽어도 괜찮습니다 — 확실해질 때까지 비밀번호, 결제 정보, 인증 코드는 공유하지 마세요.",
+    open_generic_flagged:
+      "이 메시지는 플래그가 지정되었습니다 — 주의해서 여세요.",
   },
   zh: {
     lookalike_recipient:
@@ -841,6 +851,8 @@ var SN360_I18N = {
       "不要点击链接或打开附件。如果您没有预料到这封邮件，请举报并删除。",
     open_action_proceed:
       "可以阅读——但在确认之前，请勿分享密码、支付信息或验证码。",
+    open_generic_flagged:
+      "这封邮件已被标记——请谨慎打开。",
   },
   ar: {
     lookalike_recipient:
@@ -880,6 +892,8 @@ var SN360_I18N = {
       "لا تنقر على الروابط ولا تفتح المرفقات. إذا لم تكن تتوقع هذه الرسالة، فأبلغ عنها واحذفها.",
     open_action_proceed:
       "لا بأس بقراءتها — لكن لا تشارك كلمات المرور أو تفاصيل الدفع أو الرموز حتى تتأكد.",
+    open_generic_flagged:
+      "تم وضع علامة على هذه الرسالة — افتحها بحذر.",
   },
   de: {
     lookalike_recipient:
@@ -919,6 +933,8 @@ var SN360_I18N = {
       "Klicken Sie nicht auf Links und öffnen Sie keine Anhänge. Wenn Sie diese Nachricht nicht erwartet haben, melden und löschen Sie sie.",
     open_action_proceed:
       "Lesen ist in Ordnung – teilen Sie nur keine Passwörter, Zahlungsdaten oder Codes, bis Sie sicher sind.",
+    open_generic_flagged:
+      "Diese Nachricht wurde markiert – öffnen Sie sie mit Vorsicht.",
   },
   fr: {
     lookalike_recipient:
@@ -958,6 +974,8 @@ var SN360_I18N = {
       "Ne cliquez pas sur les liens et n'ouvrez pas les pièces jointes. Si vous n'attendiez pas ce message, signalez-le et supprimez-le.",
     open_action_proceed:
       "Vous pouvez le lire — ne partagez simplement pas de mots de passe, d'informations de paiement ou de codes avant d'être sûr.",
+    open_generic_flagged:
+      "Ce message a été signalé — ouvrez-le avec précaution.",
   },
   es: {
     lookalike_recipient:
@@ -997,6 +1015,8 @@ var SN360_I18N = {
       "No hagas clic en enlaces ni abras adjuntos. Si no esperabas este mensaje, denúncialo y elimínalo.",
     open_action_proceed:
       "Puedes leerlo, pero no compartas contraseñas, datos de pago ni códigos hasta estar seguro.",
+    open_generic_flagged:
+      "Este mensaje se ha marcado: ábrelo con cuidado.",
   },
   pt: {
     lookalike_recipient:
@@ -1036,6 +1056,8 @@ var SN360_I18N = {
       "Não clique em links nem abra anexos. Se você não esperava esta mensagem, denuncie e exclua.",
     open_action_proceed:
       "Pode ler — só não compartilhe senhas, dados de pagamento ou códigos até ter certeza.",
+    open_generic_flagged:
+      "Esta mensagem foi sinalizada — abra-a com cuidado.",
   },
   ms: {
     lookalike_recipient:
@@ -1075,6 +1097,8 @@ var SN360_I18N = {
       "Jangan klik pautan atau buka lampiran. Jika anda tidak menjangkakan mesej ini, laporkan dan padamkannya.",
     open_action_proceed:
       "Anda boleh membacanya — cuma jangan kongsi kata laluan, butiran pembayaran atau kod sehingga anda pasti.",
+    open_generic_flagged:
+      "Mesej ini telah ditandai — bukanya dengan berhati-hati.",
   },
   id: {
     lookalike_recipient:
@@ -1114,6 +1138,8 @@ var SN360_I18N = {
       "Jangan klik tautan atau buka lampiran. Jika Anda tidak mengharapkan pesan ini, laporkan dan hapus.",
     open_action_proceed:
       "Boleh dibaca — hanya saja jangan bagikan kata sandi, detail pembayaran, atau kode sampai Anda yakin.",
+    open_generic_flagged:
+      "Pesan ini telah ditandai — buka dengan hati-hati.",
   },
   tr: {
     lookalike_recipient:
@@ -1153,6 +1179,8 @@ var SN360_I18N = {
       "Bağlantılara tıklamayın, ekleri açmayın. Bu iletiyi beklemiyorduysanız bildirin ve silin.",
     open_action_proceed:
       "Okuyabilirsiniz — yalnızca emin olana kadar parola, ödeme bilgisi veya kod paylaşmayın.",
+    open_generic_flagged:
+      "Bu ileti işaretlendi — dikkatli açın.",
   },
 };
 

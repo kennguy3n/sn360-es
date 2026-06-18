@@ -375,6 +375,25 @@ test("localizedMessage_ returns the localized bundle for supported locales", fun
   assert.match(fr, /acme\.com/);
 });
 
+test("open_generic_flagged is present and localized across the bundle", function () {
+  // The pre-open fallback (unknown tier + empty server message) renders
+  // localizedMessage_("open_generic_flagged", ...). It must resolve to a
+  // distinct localized line on every supported locale — never empty.
+  const presend = loadPresend(makeStubs().globals);
+  assert.equal(
+    presend.localizedMessage_("open_generic_flagged", "en-US", {}),
+    "This message was flagged — open it with care."
+  );
+  // A non-English locale must return its own translation, not English.
+  const de = presend.localizedMessage_("open_generic_flagged", "de-DE", {});
+  assert.match(de, /Diese Nachricht wurde markiert/);
+  // Unknown locale falls back to English (never empty).
+  assert.equal(
+    presend.localizedMessage_("open_generic_flagged", "zz-ZZ", {}),
+    "This message was flagged — open it with care."
+  );
+});
+
 // === Full flow: pre-send trigger ======================================
 
 function composeEvent(opts) {
