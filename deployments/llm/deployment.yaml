@@ -130,7 +130,7 @@ spec:
         # boot. Idempotent: skips the download when a non-zero file is
         # already present on the PVC, so pod restarts are cheap.
         - name: download-model
-          image: curlimages/curl:8.10.1
+          image: curlimages/curl:8.20.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "/scripts/download-model.sh"]
           env:
